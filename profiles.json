@@ -1,0 +1,300 @@
+{
+  "_comment": "按前台进程名/窗口标题匹配，命中第一个即用；都不中则用 default",
+  "profiles": [
+    {
+      "name": "browser",
+      "match": {
+        "process": [
+          "chrome.exe",
+          "msedge.exe",
+          "firefox.exe",
+          "brave.exe"
+        ]
+      },
+      "keys": {
+        "38": "scroll_up",
+        "40": "scroll_down",
+        "37": "back",
+        "39": "forward",
+        "13": "enter",
+        "27": "esc",
+        "36": "new_tab",
+        "93": "menu"
+      },
+      "actions": {
+        "scroll_up": {
+          "type": "scroll",
+          "delta": -360
+        },
+        "scroll_down": {
+          "type": "scroll",
+          "delta": 360
+        },
+        "back": {
+          "type": "key",
+          "vk": 37,
+          "mods": [
+            "alt"
+          ]
+        },
+        "forward": {
+          "type": "key",
+          "vk": 39,
+          "mods": [
+            "alt"
+          ]
+        },
+        "enter": {
+          "type": "key",
+          "vk": 13
+        },
+        "esc": {
+          "type": "key",
+          "vk": 27
+        },
+        "new_tab": {
+          "type": "key",
+          "vk": 84,
+          "mods": [
+            "ctrl"
+          ]
+        },
+        "menu": {
+          "type": "key",
+          "vk": 93
+        }
+      }
+    },
+    {
+      "name": "editor",
+      "match": {
+        "process": [
+          "code.exe",
+          "cursor.exe",
+          "windsurf.exe",
+          "devenv.exe"
+        ]
+      },
+      "keys": {
+        "38": "prev_editor",
+        "40": "next_editor",
+        "37": "prev_tab",
+        "39": "next_tab",
+        "13": "enter",
+        "27": "esc",
+        "36": "palette",
+        "93": "menu"
+      },
+      "actions": {
+        "prev_editor": {
+          "type": "key",
+          "vk": 33,
+          "mods": [
+            "ctrl"
+          ]
+        },
+        "next_editor": {
+          "type": "key",
+          "vk": 34,
+          "mods": [
+            "ctrl"
+          ]
+        },
+        "prev_tab": {
+          "type": "key",
+          "vk": 9,
+          "mods": [
+            "ctrl",
+            "shift"
+          ]
+        },
+        "next_tab": {
+          "type": "key",
+          "vk": 9,
+          "mods": [
+            "ctrl"
+          ]
+        },
+        "enter": {
+          "type": "key",
+          "vk": 13
+        },
+        "esc": {
+          "type": "key",
+          "vk": 27
+        },
+        "palette": {
+          "type": "key",
+          "vk": 80,
+          "mods": [
+            "ctrl",
+            "shift"
+          ]
+        },
+        "menu": {
+          "type": "key",
+          "vk": 93
+        }
+      }
+    },
+    {
+      "name": "terminal",
+      "match": {
+        "process": [
+          "windowsterminal.exe",
+          "cmd.exe",
+          "powershell.exe",
+          "pwsh.exe",
+          "conhost.exe"
+        ]
+      },
+      "keys": {
+        "38": "hist_prev",
+        "40": "hist_next",
+        "37": "word_left",
+        "39": "word_right",
+        "13": "enter",
+        "27": "esc",
+        "36": "clear"
+      },
+      "actions": {
+        "hist_prev": {
+          "type": "key",
+          "vk": 38
+        },
+        "hist_next": {
+          "type": "key",
+          "vk": 40
+        },
+        "word_left": {
+          "type": "key",
+          "vk": 37,
+          "mods": [
+            "ctrl"
+          ]
+        },
+        "word_right": {
+          "type": "key",
+          "vk": 39,
+          "mods": [
+            "ctrl"
+          ]
+        },
+        "enter": {
+          "type": "key",
+          "vk": 13
+        },
+        "esc": {
+          "type": "key",
+          "vk": 27
+        },
+        "clear": {
+          "type": "key",
+          "vk": 76,
+          "mods": [
+            "ctrl"
+          ]
+        }
+      }
+    },
+    {
+      "name": "agent",
+      "match": {
+        "process": [
+          "workbuddyai.exe"
+        ],
+        "title": [
+          "workbuddy"
+        ]
+      },
+      "keys": {
+        "38": "scroll_up",
+        "40": "scroll_down",
+        "13": "send",
+        "27": "esc",
+        "36": "top",
+        "93": "newline"
+      },
+      "actions": {
+        "scroll_up": {
+          "type": "scroll",
+          "delta": -360
+        },
+        "scroll_down": {
+          "type": "scroll",
+          "delta": 360
+        },
+        "send": {
+          "type": "key",
+          "vk": 13
+        },
+        "esc": {
+          "type": "key",
+          "vk": 27
+        },
+        "top": {
+          "type": "key",
+          "vk": 36,
+          "mods": [
+            "ctrl"
+          ]
+        },
+        "newline": {
+          "type": "key",
+          "vk": 13,
+          "mods": [
+            "shift"
+          ]
+        }
+      }
+    },
+    {
+      "name": "default",
+      "match": {},
+      "keys": {
+        "38": "up",
+        "40": "down",
+        "37": "left",
+        "39": "right",
+        "13": "confirm",
+        "27": "back",
+        "93": "menu",
+        "36": "home"
+      },
+      "actions": {
+        "up": {
+          "type": "key",
+          "vk": 38
+        },
+        "down": {
+          "type": "key",
+          "vk": 40
+        },
+        "left": {
+          "type": "key",
+          "vk": 37
+        },
+        "right": {
+          "type": "key",
+          "vk": 39
+        },
+        "confirm": {
+          "type": "key",
+          "vk": 13
+        },
+        "back": {
+          "type": "key",
+          "vk": 27
+        },
+        "menu": {
+          "type": "key",
+          "vk": 93
+        },
+        "home": {
+          "type": "key",
+          "vk": 91
+        }
+      }
+    }
+  ]
+}

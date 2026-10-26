@@ -1,0 +1,62 @@
+{
+  "device_mark": "01000d_pid&3838",
+  "voice_key": {
+    "vkey": 116,
+    "confirm_window_ms": 250,
+    "min_repeats": 2,
+    "silence_stop_ms": 700,
+    "min_record_ms": 300
+  },
+  "keys": {
+    "38": "up",
+    "40": "down",
+    "37": "left",
+    "39": "right",
+    "13": "confirm",
+    "27": "back",
+    "93": "menu",
+    "36": "home"
+  },
+  "actions": {
+    "up": {
+      "type": "key",
+      "vk": 38
+    },
+    "down": {
+      "type": "key",
+      "vk": 40
+    },
+    "left": {
+      "type": "key",
+      "vk": 37
+    },
+    "right": {
+      "type": "key",
+      "vk": 39
+    },
+    "confirm": {
+      "type": "key",
+      "vk": 13
+    },
+    "back": {
+      "type": "key",
+      "vk": 27
+    },
+    "menu": {
+      "type": "key",
+      "vk": 93
+    },
+    "home": {
+      "type": "key",
+      "vk": 91
+    }
+  },
+  "voice": {
+    "input_device": null,
+    "sample_rate": 16000,
+    "asr_model": "small",
+    "asr_language": "zh",
+    "paste": true,
+    "auto_enter": false
+  }
+}

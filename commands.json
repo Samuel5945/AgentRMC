@@ -1,0 +1,117 @@
+{
+  "_comment": "match 是关键词列表，命中任一即触发。action.type 支持 run / key / volume / paste / enter",
+  "rules": [
+    {
+      "match": [
+        "打开浏览器",
+        "开浏览器",
+        "上网"
+      ],
+      "action": {
+        "type": "run",
+        "cmd": "start msedge"
+      }
+    },
+    {
+      "match": [
+        "打开记事本",
+        "记事本"
+      ],
+      "action": {
+        "type": "run",
+        "cmd": "notepad"
+      }
+    },
+    {
+      "match": [
+        "打开计算器",
+        "计算器"
+      ],
+      "action": {
+        "type": "run",
+        "cmd": "calc"
+      }
+    },
+    {
+      "match": [
+        "打开资源管理器",
+        "我的电脑",
+        "文件管理"
+      ],
+      "action": {
+        "type": "run",
+        "cmd": "explorer"
+      }
+    },
+    {
+      "match": [
+        "截图",
+        "截屏"
+      ],
+      "action": {
+        "type": "key",
+        "vk": 83,
+        "mods": [
+          "win",
+          "shift"
+        ]
+      }
+    },
+    {
+      "match": [
+        "静音",
+        "取消静音"
+      ],
+      "action": {
+        "type": "key",
+        "vk": 173
+      }
+    },
+    {
+      "match": [
+        "音量加",
+        "大声点",
+        "音量调高"
+      ],
+      "action": {
+        "type": "key",
+        "vk": 175,
+        "repeat": 3
+      }
+    },
+    {
+      "match": [
+        "音量减",
+        "小声点",
+        "音量调低"
+      ],
+      "action": {
+        "type": "key",
+        "vk": 174,
+        "repeat": 3
+      }
+    },
+    {
+      "match": [
+        "播放",
+        "暂停",
+        "继续播放"
+      ],
+      "action": {
+        "type": "key",
+        "vk": 179
+      }
+    },
+    {
+      "match": [
+        "锁屏",
+        "锁定电脑"
+      ],
+      "action": {
+        "type": "run",
+        "cmd": "rundll32.exe user32.dll,LockWorkStation"
+      }
+    }
+  ],
+  "fallback": "paste"
+}

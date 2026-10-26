@@ -182,6 +182,62 @@ def press_combo(mods: list, vk: int, repeat: int = 1) -> None:
         time.sleep(0.05)
 
 
+# ---- SendInput：比 keybd_event 更贴近真实按键（带扫描码，Chromium/Electron 才认） ----
+KEYEVENTF_SCANCODE = 0x0008
+INPUT_KEYBOARD = 1
+MAPVK_VK_TO_VSC = 0
+
+
+class KEYBDINPUT(ctypes.Structure):
+    _fields_ = [("wVk", wt.WORD), ("wScan", wt.WORD), ("dwFlags", wt.DWORD),
+                ("time", wt.DWORD), ("dwExtraInfo", ctypes.c_size_t)]
+
+
+class _INPUTunion(ctypes.Union):
+    _fields_ = [("ki", KEYBDINPUT), ("pad", ctypes.c_byte * 32)]
+
+
+class INPUT(ctypes.Structure):
+    _fields_ = [("type", wt.DWORD), ("u", _INPUTunion)]
+
+
+user32.SendInput.argtypes = [wt.UINT, ctypes.POINTER(INPUT), ctypes.c_int]
+user32.SendInput.restype = wt.UINT
+user32.MapVirtualKeyW.argtypes = [wt.UINT, wt.UINT]
+user32.MapVirtualKeyW.restype = wt.UINT
+
+
+def _send_key(vk: int, up: bool = False, extra: int = 0) -> None:
+    scan = user32.MapVirtualKeyW(vk, MAPVK_VK_TO_VSC) & 0xFF
+    flags = KEYEVENTF_SCANCODE | (KEYEVENTF_KEYUP if up else 0)
+    inp = INPUT()
+    inp.type = INPUT_KEYBOARD
+    inp.u.ki = KEYBDINPUT(wVk=0, wScan=scan, dwFlags=flags, time=0, dwExtraInfo=extra)
+    user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(INPUT))
+
+
+def hold_combo(mods: list, vk: int) -> None:
+    """按住不放：修饰键和主键都只发 keydown，等 release_combo 收尾。
+
+    用 SendInput + 扫描码，Electron/Chromium 这类应用才认（keybd_event 只给 vk
+    时，Chromium 可能拿不到正确的 code，表现为"按了没反应"）。
+    """
+    for m in mods:
+        mv = MOD_VK.get(m.lower())
+        if mv:
+            _send_key(mv)
+            time.sleep(0.01)
+    _send_key(vk)
+
+
+def release_combo(mods: list, vk: int) -> None:
+    _send_key(vk, up=True)
+    for m in reversed(mods):
+        mv = MOD_VK.get(m.lower())
+        if mv:
+            _send_key(mv, up=True)
+
+
 # --------------------------------------------------------------------------
 # 前台窗口识别 + 场景 Profile
 # --------------------------------------------------------------------------
@@ -239,8 +295,8 @@ DEFAULT_PROFILES = {
             "keys": {"38": "scroll_up", "40": "scroll_down", "37": "back", "39": "forward",
                      "13": "enter", "27": "esc", "36": "new_tab", "93": "menu"},
             "actions": {
-                "scroll_up": {"type": "scroll", "delta": -360},
-                "scroll_down": {"type": "scroll", "delta": 360},
+                "scroll_up": {"type": "scroll", "delta": 360},
+                "scroll_down": {"type": "scroll", "delta": -360},
                 "back": {"type": "key", "vk": 0x25, "mods": ["alt"]},
                 "forward": {"type": "key", "vk": 0x27, "mods": ["alt"]},
                 "enter": {"type": "key", "vk": 0x0D},
@@ -288,8 +344,8 @@ DEFAULT_PROFILES = {
             "keys": {"38": "scroll_up", "40": "scroll_down", "13": "send",
                      "27": "esc", "36": "top", "93": "newline"},
             "actions": {
-                "scroll_up": {"type": "scroll", "delta": -360},
-                "scroll_down": {"type": "scroll", "delta": 360},
+                "scroll_up": {"type": "scroll", "delta": 360},
+                "scroll_down": {"type": "scroll", "delta": -360},
                 "send": {"type": "key", "vk": 0x0D},
                 "esc": {"type": "key", "vk": 0x1B},
                 "top": {"type": "key", "vk": 0x24, "mods": ["ctrl"]},
@@ -314,6 +370,12 @@ DEFAULT_PROFILES = {
         }
     ]
 }
+
+# 变焦/对焦键（vkey 122 = F11）：所有 profile 统一补一条，按下即切全屏
+for _prof in DEFAULT_PROFILES["profiles"]:
+    _prof.setdefault("keys", {})["122"] = "fullscreen"
+    _prof.setdefault("actions", {})["fullscreen"] = {"type": "none",
+                                                    "note": "原生 F11 直通"}
 
 
 def load_profiles() -> list:
@@ -758,6 +820,15 @@ class App:
         self.rules = RuleEngine(load_commands())
         self.profiles = ProfileManager(load_profiles())
 
+        # 语音键有两种用法：
+        #   local  —— 自己录音 + 本地 whisper 转写（默认）
+        #   hotkey —— 长按期间按住目标程序的"按住说话"快捷键，让 Agent 自己识别
+        self.voice_mode = str(CFG["voice"].get("mode", "local")).lower()
+        hk = CFG["voice"].get("hotkey") or {}
+        self.hk_vk = int(hk.get("vk", 0x20))
+        self.hk_mods = list(hk.get("mods", []))
+        self.holding = False
+
         self.state = "idle"          # idle | pending | recording
         self.pending_since = 0.0
         self.record_started = 0.0
@@ -777,7 +848,12 @@ class App:
                 self.state = "recording"
                 self.record_started = now
                 self.last_voice_event = now
-                if self.recorder.start():
+                if self.voice_mode == "hotkey":
+                    hold_combo(self.hk_mods, self.hk_vk)
+                    self.holding = True
+                    beep(1180, 60)
+                    print(f"● 按住语音快捷键 {self.hk_mods}+0x{self.hk_vk:02X}")
+                elif self.recorder.start():
                     beep(1180, 70)
                     print("● 录音中...")
                 else:
@@ -793,6 +869,9 @@ class App:
             tap_key(self.voice_vk)
         elif self.state == "recording":
             self.last_voice_event = now
+            if self.voice_mode == "hotkey":
+                # 松手就放开快捷键，不等静音判定
+                self.finish_recording((now - self.record_started) * 1000)
 
     def tick(self, now: float) -> None:
         if self.state == "pending" and (now - self.pending_since) * 1000 > self.confirm_ms:
@@ -808,6 +887,13 @@ class App:
 
     def finish_recording(self, dur_ms: float) -> None:
         self.state = "idle"
+        if self.voice_mode == "hotkey":
+            if self.holding:
+                release_combo(self.hk_mods, self.hk_vk)
+                self.holding = False
+            beep(760, 70)
+            print("● 已放开语音快捷键")
+            return
         audio = self.recorder.stop()
         beep(760, 70)
         if audio is None or dur_ms < self.min_record_ms:

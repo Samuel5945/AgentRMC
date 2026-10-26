@@ -15,7 +15,8 @@
     "13": "confirm",
     "27": "back",
     "93": "menu",
-    "36": "home"
+    "36": "home",
+    "122": "fullscreen"
   },
   "actions": {
     "up": {
@@ -49,6 +50,10 @@
     "home": {
       "type": "key",
       "vk": 91
+    },
+    "fullscreen": {
+      "type": "none",
+      "note": "原生 F11 直通：不拦截"
     }
   },
   "voice": {
@@ -57,6 +62,14 @@
     "asr_model": "small",
     "asr_language": "zh",
     "paste": true,
-    "auto_enter": false
+    "auto_enter": false,
+    "mode": "hotkey",
+    "hotkey": {
+      "vk": 86,
+      "mods": [
+        "ctrl",
+        "shift"
+      ]
+    }
   }
 }

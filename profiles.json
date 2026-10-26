@@ -19,16 +19,17 @@
         "13": "enter",
         "27": "esc",
         "36": "new_tab",
-        "93": "menu"
+        "93": "menu",
+        "122": "fullscreen"
       },
       "actions": {
         "scroll_up": {
           "type": "scroll",
-          "delta": -360
+          "delta": 360
         },
         "scroll_down": {
           "type": "scroll",
-          "delta": 360
+          "delta": -360
         },
         "back": {
           "type": "key",
@@ -62,6 +63,10 @@
         "menu": {
           "type": "key",
           "vk": 93
+        },
+        "fullscreen": {
+          "type": "none",
+          "note": "原生 F11 直通：不拦截，避免和系统那一次重复触发"
         }
       }
     },
@@ -83,7 +88,8 @@
         "13": "enter",
         "27": "esc",
         "36": "palette",
-        "93": "menu"
+        "93": "menu",
+        "122": "fullscreen"
       },
       "actions": {
         "prev_editor": {
@@ -134,6 +140,10 @@
         "menu": {
           "type": "key",
           "vk": 93
+        },
+        "fullscreen": {
+          "type": "none",
+          "note": "原生 F11 直通：不拦截，避免和系统那一次重复触发"
         }
       }
     },
@@ -155,7 +165,8 @@
         "39": "word_right",
         "13": "enter",
         "27": "esc",
-        "36": "clear"
+        "36": "clear",
+        "122": "fullscreen"
       },
       "actions": {
         "hist_prev": {
@@ -194,6 +205,10 @@
           "mods": [
             "ctrl"
           ]
+        },
+        "fullscreen": {
+          "type": "none",
+          "note": "原生 F11 直通：不拦截，避免和系统那一次重复触发"
         }
       }
     },
@@ -213,16 +228,17 @@
         "13": "send",
         "27": "esc",
         "36": "top",
-        "93": "newline"
+        "93": "newline",
+        "122": "fullscreen"
       },
       "actions": {
         "scroll_up": {
           "type": "scroll",
-          "delta": -360
+          "delta": 360
         },
         "scroll_down": {
           "type": "scroll",
-          "delta": 360
+          "delta": -360
         },
         "send": {
           "type": "key",
@@ -245,6 +261,10 @@
           "mods": [
             "shift"
           ]
+        },
+        "fullscreen": {
+          "type": "none",
+          "note": "原生 F11 直通：不拦截，避免和系统那一次重复触发"
         }
       }
     },
@@ -259,7 +279,8 @@
         "13": "confirm",
         "27": "back",
         "93": "menu",
-        "36": "home"
+        "36": "home",
+        "122": "fullscreen"
       },
       "actions": {
         "up": {
@@ -293,6 +314,10 @@
         "home": {
           "type": "key",
           "vk": 91
+        },
+        "fullscreen": {
+          "type": "none",
+          "note": "原生 F11 直通：不拦截，避免和系统那一次重复触发"
         }
       }
     }

@@ -13,8 +13,7 @@ env/
 models/
 
 # ---------- 构建产物 ----------
-build/
-build_release/
+build*/
 dist/
 release/
 *.spec

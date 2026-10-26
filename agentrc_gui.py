@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+import json
 import sys
 import threading
 import time
@@ -17,14 +18,15 @@ from pathlib import Path
 from PySide6.QtCore import QPoint, Qt, QTimer
 from PySide6.QtGui import QColor, QFont, QLinearGradient, QPainter, QPen
 from PySide6.QtWidgets import (
-    QApplication, QFrame, QHBoxLayout, QLabel, QMainWindow, QPushButton,
-    QScrollArea, QSizePolicy, QVBoxLayout, QWidget,
+    QApplication, QComboBox, QFrame, QHBoxLayout, QLabel, QMainWindow, QPushButton,
+    QScrollArea, QSizePolicy, QTabWidget, QVBoxLayout, QWidget,
 )
 
 if getattr(sys, "frozen", False):
     HERE = Path(sys.executable).resolve().parent
 else:
     HERE = Path(__file__).resolve().parent
+EVENT_LOG = HERE / "rc_probe" / "gui_events.log"
 sys.path.insert(0, str(HERE))
 
 import agentrc as core  # noqa: E402
@@ -100,6 +102,33 @@ QPushButton#winBtn {{
 }}
 QPushButton#winBtn:hover {{ background: rgba(255,255,255,20); color: {TEXT}; }}
 QPushButton#winBtn[close="true"]:hover {{ background: {RED}; color: white; }}
+QPushButton#ghostSmall {{
+    background: rgba(255,255,255,13); color: {TEXT};
+    border: 1px solid rgba(255,255,255,18); border-radius: 8px;
+    font-size: 11.5px; padding: 5px 12px;
+}}
+QPushButton#ghostSmall:hover {{ background: rgba(255,255,255,26); }}
+QComboBox#combo {{
+    background: rgba(255,255,255,13); color: {TEXT};
+    border: 1px solid rgba(255,255,255,18); border-radius: 8px;
+    font-size: 11.5px; padding: 4px 10px; min-width: 104px;
+}}
+QComboBox#combo:hover {{ background: rgba(255,255,255,26); }}
+QComboBox#combo QAbstractItemView {{
+    background: #161d2a; color: {TEXT}; border: 1px solid rgba(255,255,255,26);
+    selection-background-color: rgba(79,140,255,72); outline: none;
+}}
+QTabWidget::pane {{ border: none; background: transparent; }}
+QTabBar::tab {{
+    background: rgba(255,255,255,13); color: {MUTED};
+    padding: 6px 15px; border-radius: 9px; margin-right: 6px;
+    font-size: 12px; border: 1px solid transparent;
+}}
+QTabBar::tab:selected {{
+    background: rgba(79,140,255,46); color: {TEXT};
+    border: 1px solid rgba(79,140,255,96);
+}}
+QTabBar::tab:hover {{ color: {TEXT}; }}
 QScrollArea {{ background: transparent; border: none; }}
 QScrollBar:vertical {{ background: transparent; width: 8px; margin: 4px 2px; }}
 QScrollBar::handle:vertical {{ background: rgba(255,255,255,26); border-radius: 4px; min-height: 24px; }}
@@ -141,10 +170,23 @@ class Controller:
         self.last_text = ""
         self.model_ready = False
 
+        # 语音键两种用法：local=自己录音转写；hotkey=长按期间按住目标程序的"按住说话"键
+        self.voice_mode = str(core.CFG["voice"].get("mode", "local")).lower()
+        hk = core.CFG["voice"].get("hotkey") or {}
+        self.hk_vk = int(hk.get("vk", 0x20))
+        self.hk_mods = list(hk.get("mods", []))
+        self.holding = False
+
     def emit(self, kind: str, **data) -> None:
         self.seq += 1
-        self.events.append({"id": self.seq, "ts": time.strftime("%H:%M:%S"),
-                            "kind": kind, **data})
+        rec = {"id": self.seq, "ts": time.strftime("%H:%M:%S"), "kind": kind, **data}
+        self.events.append(rec)
+        # 落盘一份，界面里看不到的细节（按键、状态机）靠这个排查
+        try:
+            with open(EVENT_LOG, "a", encoding="utf-8") as f:
+                f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        except OSError:
+            pass
 
     def drain(self, since: int) -> list:
         return [e for e in self.events if e["id"] > since]
@@ -170,6 +212,10 @@ class Controller:
         self.emit("status", text="监听已停止")
 
     def _load_model(self) -> None:
+        if self.voice_mode == "hotkey":
+            # 语音键交给 Agent 自己识别，本地模型就不用加载了（省 462MB 内存 + 1s 启动）
+            self.emit("status", text="hotkey 模式，跳过本地模型")
+            return
         self.emit("status", text="加载语音模型…")
         self.asr.load()
         self.model_ready = self.asr._model is not None
@@ -236,7 +282,12 @@ class Controller:
                 self.state = "recording"
                 self.record_started = now
                 self.last_voice_event = now
-                if self.recorder.start():
+                if self.voice_mode == "hotkey":
+                    core.hold_combo(self.hk_mods, self.hk_vk)
+                    self.holding = True
+                    core.beep(1180, 60)
+                    self.emit("voice_start", mode="hotkey")
+                elif self.recorder.start():
                     core.beep(1180, 60)
                     self.emit("voice_start")
                 else:
@@ -250,6 +301,8 @@ class Controller:
             core.tap_key(self.voice_vk)
         elif self.state == "recording":
             self.last_voice_event = now
+            if self.voice_mode == "hotkey":
+                self._finish((now - self.record_started) * 1000)
 
     def _tick(self, now: float) -> None:
         if self.state == "pending" and (now - self.pending_since) * 1000 > self.confirm_ms:
@@ -264,6 +317,14 @@ class Controller:
 
     def _finish(self, dur_ms: float) -> None:
         self.state = "idle"
+        if self.voice_mode == "hotkey":
+            if self.holding:
+                core.release_combo(self.hk_mods, self.hk_vk)
+                self.holding = False
+            self.level = 0.0
+            core.beep(760, 60)
+            self.emit("voice_stop", dur=round(dur_ms / 1000, 1), mode="hotkey")
+            return
         audio = self.recorder.stop()
         self.level = 0.0
         core.beep(760, 60)
@@ -401,6 +462,54 @@ ACCENT = {
 }
 
 
+KEY_LABEL = {
+    38: "↑", 40: "↓", 37: "←", 39: "→",
+    13: "OK", 27: "返回", 93: "菜单", 36: "主页",
+    116: "语音", 122: "变焦",
+}
+
+
+VK_NAME = {18: "ALT", 17: "CTRL", 16: "SHIFT", 91: "WIN", 32: "SPACE",
+           13: "ENTER", 9: "TAB", 27: "ESC", 86: "V", 65: "A", 192: "`"}
+
+
+def describe_hotkey(mods: list, vk: int) -> str:
+    """把 (mods, vk) 说成人话，比如 长按 ALT / 长按 CTRL+SHIFT+V。"""
+    names = [str(m).upper() for m in mods or []]
+    names.append(VK_NAME.get(int(vk), f"VK 0x{int(vk):02X}"))
+    return "长按 " + "+".join(names)
+
+
+def describe_action(act: dict) -> str:
+    """把动作描述成人话，给按键映射表用。"""
+    if not act:
+        return "无动作"
+    kind = act.get("type")
+    if kind == "key":
+        mods = "+".join(str(m).upper() for m in act.get("mods", []) or [])
+        vk = int(act.get("vk", 0))
+        text = f"{mods}+" if mods else ""
+        text += f"VK 0x{vk:02X}"
+        rep = int(act.get("repeat", 1) or 1)
+        if rep > 1:
+            text += f" ×{rep}"
+        return text
+    if kind == "scroll":
+        d = int(act.get("delta", 0))
+        return f"滚轮{'↑' if d > 0 else '↓'} {abs(d)}"
+    if kind == "run":
+        cmd = str(act.get("cmd", ""))
+        return f"启动 {cmd}" if cmd else "启动"
+    if kind == "paste":
+        return "粘贴" + ("并回车" if act.get("enter") else "")
+    if kind == "enter":
+        return "粘贴并回车"
+    if kind == "none":
+        note = str(act.get("note", "")).strip()
+        return note or "直通（不拦截）"
+    return str(kind)
+
+
 class Dot(QLabel):
     """事件条左侧小圆点。用背景色画，不依赖字体里有没有 emoji 字形。"""
 
@@ -451,7 +560,7 @@ class EventRow(QFrame):
         if k == "paste":
             return "已粘贴到前台窗口"
         if k == "voice_start":
-            return "开始录音"
+            return "已按住语音快捷键" if ev.get("mode") == "hotkey" else "开始录音"
         if k == "voice_stop":
             return f"录音结束 {ev.get('dur')}s" if ev.get("dur") else str(ev.get("text", ""))
         if k == "battery":
@@ -469,6 +578,7 @@ class MainWindow(QMainWindow):
         self._seq = 0
         self._drag = None
         self._rows: list = []
+        self._last_profile = ""
 
         self.setWindowTitle("AgentRMC")
         self.resize(1020, 700)
@@ -507,9 +617,16 @@ class MainWindow(QMainWindow):
         leftw.setLayout(left)
         leftw.setFixedWidth(400)
         grid.addWidget(leftw)
-        grid.addWidget(self._build_log_card(), 1)
+        grid.addWidget(self._build_right(), 1)
 
         outer.addWidget(body, 1)
+
+    def _build_right(self) -> QWidget:
+        self.tabs = QTabWidget()
+        self.tabs.setDocumentMode(True)
+        self.tabs.addTab(self._build_log_card(), "事件流")
+        self.tabs.addTab(self._build_keymap_card(), "按键映射")
+        return self.tabs
 
     def _build_header(self) -> QWidget:
         bar = QFrame()
@@ -616,7 +733,7 @@ class MainWindow(QMainWindow):
 
         self.info_vals = {}
         for key, label in [("device", "设备"), ("vk", "语音键"),
-                           ("model", "模型"), ("rules", "指令")]:
+                           ("vmode", "语音模式"), ("model", "模型"), ("rules", "指令")]:
             row = QHBoxLayout()
             k = QLabel(label)
             k.setObjectName("rowKey")
@@ -664,12 +781,178 @@ class MainWindow(QMainWindow):
         self.log_lay.insertWidget(0, self.empty_hint)
         return card
 
+    def _build_keymap_card(self) -> QWidget:
+        card = QFrame()
+        card.setObjectName("card")
+        lay = QVBoxLayout(card)
+        lay.setContentsMargins(14, 12, 14, 12)
+        lay.setSpacing(9)
+
+        head = QHBoxLayout()
+        title = QLabel("按键映射")
+        title.setObjectName("cardTitle")
+        self.map_combo = QComboBox()
+        self.map_combo.setObjectName("combo")
+        self.map_combo.setCursor(Qt.PointingHandCursor)
+        self.map_combo.addItem("跟随前台", None)
+        for p in self.ctl.profiles.profiles:
+            self.map_combo.addItem(p.get("name", "?"), p.get("name"))
+        self.map_combo.currentIndexChanged.connect(self._refresh_keymap)
+        head.addWidget(title)
+        head.addStretch(1)
+        head.addWidget(self.map_combo)
+        lay.addLayout(head)
+
+        self.map_match = QLabel("")
+        self.map_match.setWordWrap(True)
+        self.map_match.setStyleSheet(f"color: {MUTED}; font-size: 11.5px;")
+        lay.addWidget(self.map_match)
+
+        self.map_scroll = QScrollArea()
+        self.map_scroll.setWidgetResizable(True)
+        holder = QWidget()
+        holder.setStyleSheet("background: transparent;")
+        self.map_grid = QVBoxLayout(holder)
+        self.map_grid.setContentsMargins(0, 0, 4, 0)
+        self.map_grid.setSpacing(5)
+        self.map_scroll.setWidget(holder)
+        lay.addWidget(self.map_scroll, 1)
+
+        foot = QHBoxLayout()
+        foot.setSpacing(8)
+        path = QLabel("profiles.json · 顺序即优先级")
+        path.setStyleSheet("color: #5b6472; font-size: 11px;")
+        btn_open = QPushButton("打开配置")
+        btn_open.setObjectName("ghostSmall")
+        btn_open.setCursor(Qt.PointingHandCursor)
+        btn_open.clicked.connect(self._open_profiles)
+        btn_reload = QPushButton("重新加载")
+        btn_reload.setObjectName("ghostSmall")
+        btn_reload.setCursor(Qt.PointingHandCursor)
+        btn_reload.clicked.connect(self._reload_profiles)
+        foot.addWidget(path)
+        foot.addStretch(1)
+        foot.addWidget(btn_open)
+        foot.addWidget(btn_reload)
+        lay.addLayout(foot)
+
+        self._refresh_keymap()
+        return card
+
+    # ---------- 按键映射 ----------
+    def _current_map_profile(self) -> tuple[dict, bool]:
+        name = self.map_combo.currentData()
+        if name is None:
+            return self.ctl.profiles.current(), True
+        for p in self.ctl.profiles.profiles:
+            if p.get("name") == name:
+                return p, False
+        return self.ctl.profiles.current(), True
+
+    def _refresh_keymap(self) -> None:
+        while self.map_grid.count():
+            item = self.map_grid.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
+
+        prof, auto = self._current_map_profile()
+        match = prof.get("match", {}) or {}
+        bits = []
+        if match.get("process"):
+            bits.append("进程 " + " / ".join(match["process"]))
+        if match.get("title"):
+            bits.append("标题含 " + " / ".join(match["title"]))
+        rule = " · ".join(bits) if bits else "兜底，无匹配条件"
+        self.map_match.setText(
+            f"{'跟随前台 → ' if auto else '预览 '}{prof.get('name', '?')}　{rule}")
+
+        keys = prof.get("keys", {}) or {}
+        actions = prof.get("actions", {}) or {}
+        if not keys:
+            hint = QLabel("这个 profile 没有配置按键")
+            hint.setStyleSheet(f"color: {MUTED}; font-size: 12px; padding: 16px;")
+            self.map_grid.addWidget(hint)
+            self.map_grid.addStretch(1)
+            return
+        for vk_s, sem in keys.items():
+            try:
+                vk = int(vk_s)
+            except (TypeError, ValueError):
+                continue
+            self.map_grid.addWidget(self._map_row(vk, sem, actions.get(sem, {})))
+        self.map_grid.addStretch(1)
+
+    def _map_row(self, vk: int, sem: str, act: dict) -> QWidget:
+        row = QFrame()
+        row.setStyleSheet("background: rgba(255,255,255,7); border-radius: 8px;")
+        lay = QHBoxLayout(row)
+        lay.setContentsMargins(9, 6, 10, 6)
+        lay.setSpacing(10)
+
+        chip = QLabel(KEY_LABEL.get(vk, f"0x{vk:02X}"))
+        chip.setFixedWidth(46)
+        chip.setAlignment(Qt.AlignCenter)
+        chip.setStyleSheet("color: #e6edf3; font-size: 11.5px; font-weight: 600;"
+                           "background: rgba(255,255,255,18); border-radius: 6px;"
+                           "padding: 3px 0;")
+
+        name = QLabel(str(sem))
+        name.setStyleSheet("color: #c9d1d9; font-size: 12.5px;")
+
+        desc = QLabel(describe_action(act))
+        desc.setStyleSheet(f"color: {MUTED}; font-size: 11.5px;")
+        desc.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+
+        lay.addWidget(chip)
+        lay.addWidget(name)
+        lay.addStretch(1)
+        lay.addWidget(desc)
+        return row
+
+    def _open_profiles(self) -> None:
+        path = HERE / "profiles.json"
+        try:
+            import os
+
+            os.startfile(str(path))  # noqa: S606
+            self._append({"kind": "status",
+                          "text": "已打开 profiles.json，改完点『重新加载』",
+                          "ts": time.strftime("%H:%M:%S")})
+        except Exception as e:  # noqa: BLE001
+            self._append({"kind": "error", "text": f"打开失败: {e}",
+                          "ts": time.strftime("%H:%M:%S")})
+
+    def _reload_profiles(self) -> None:
+        try:
+            self.ctl.profiles = core.ProfileManager(core.load_profiles())
+            self.map_combo.blockSignals(True)
+            self.map_combo.clear()
+            self.map_combo.addItem("跟随前台", None)
+            for p in self.ctl.profiles.profiles:
+                self.map_combo.addItem(p.get("name", "?"), p.get("name"))
+            self.map_combo.blockSignals(False)
+            self._refresh_keymap()
+            self._append({"kind": "status", "text": "按键映射已重新加载",
+                          "ts": time.strftime("%H:%M:%S")})
+        except Exception as e:  # noqa: BLE001
+            self._append({"kind": "error", "text": f"重载失败: {e}",
+                          "ts": time.strftime("%H:%M:%S")})
+
     # ---------- 行为 ----------
     def _refresh_info(self) -> None:
         c = self.ctl
         self.info_vals["device"].setText(core.CFG.get("device_mark", "-"))
         self.info_vals["vk"].setText(f"0x{c.voice_vk:02X}")
-        self.info_vals["model"].setText("whisper " + core.CFG["voice"]["asr_model"])
+        mode = c.voice_mode
+        if mode == "hotkey":
+            self.info_vals["vmode"].setText(describe_hotkey(c.hk_mods, c.hk_vk))
+        else:
+            self.info_vals["vmode"].setText("本地 whisper")
+        if c.voice_mode == "hotkey":
+            self.info_vals["model"].setText("不加载（hotkey）")
+        else:
+            self.info_vals["model"].setText("whisper " + core.CFG["voice"]["asr_model"])
         self.info_vals["rules"].setText(f"{len(c.rules.rules)} 条")
 
     def _toggle(self) -> None:
@@ -738,7 +1021,12 @@ class MainWindow(QMainWindow):
                 self._set_result("live", ev.get("text", "出错了"), "")
 
         self.wave.push(c.level, c.state == "recording")
-        self.pill_profile.setText(c.profiles.current().get("name", "?"))
+        pname = c.profiles.current().get("name", "?")
+        self.pill_profile.setText(pname)
+        if pname != self._last_profile:
+            self._last_profile = pname
+            if self.map_combo.currentData() is None:   # 跟随前台时才自动刷
+                self._refresh_keymap()
         if c.battery is not None:
             self.pill_battery.setText(f"{c.battery}%")
         if c.running != (self.btn_toggle.text() == "停止监听"):
@@ -778,6 +1066,12 @@ def main() -> None:
 
     # --shot 路径：渲染一帧存 PNG 后退出，用于无人值守验收界面
     shot = _arg("--shot")
+    tab = _arg("--tab")
+    if tab is not None:
+        try:
+            win.tabs.setCurrentIndex(1 if tab == "keymap" else int(tab))
+        except (ValueError, IndexError):
+            pass
     if shot:
         def _grab() -> None:
             win.grab().save(shot)
@@ -785,6 +1079,10 @@ def main() -> None:
             app.quit()
 
         QTimer.singleShot(1500, _grab)
+
+    # --autostart：启动就自动开始监听（不想每次手点按钮时用）
+    if "--autostart" in sys.argv:
+        QTimer.singleShot(500, win._toggle)
 
     # --selftest：真的拉起监听、等模型加载、读电量，然后截图退出
     if "--selftest" in sys.argv:

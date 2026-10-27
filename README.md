@@ -2,12 +2,13 @@
 
 把极米/小米系 BLE 遥控器改造成电脑 Agent 的输入终端。
 
-按键走标准 HID（零驱动），语音用本地 whisper 转写，按前台窗口自动切换键映射。
+按键走标准 HID（零驱动），语音可以本地 whisper 转写、也可以转给 Agent 自己的语音键，
+按前台窗口自动切换键映射。
 
 ```
-遥控器 → HID → Raw Input ─┬→ 按键 → 场景 Profile → 动作（模拟按键/滚动/启动程序）
-                          └→ 语音键 → 录音 → whisper ─┬→ 本地指令表 → 直接执行
-                                                       └→ 粘贴给 Agent
+遥控器 → HID → Raw Input ─┬→ 按键 → 场景 Profile → 动作（模拟按键/滚动/长按手势/启动程序）
+                          └→ 语音键 → ┬→ 本地 whisper → 指令表 / 粘贴给 Agent
+                                      └→ 转给 Agent 自己的语音键（hold / toggle）
 ```
 
 ## 快速开始
@@ -33,11 +34,14 @@ tools\build_exe.bat        # 产物 release\AgentRMC\AgentRMC.exe，约 348MB
 
 ```
 AgentRMC/
-├── agentrc.py              核心：Raw Input 监听、语音状态机、ASR、场景、指令
+├── agentrc.py              核心：Raw Input 监听、语音状态机、按键路由、ASR、场景、指令
 ├── agentrc_gui.py          Qt 图形界面
 ├── config.json             语音键码、麦克风、ASR 参数
-├── commands.json           语音指令表（说"打开浏览器"直接执行）
-├── profiles.json           场景表（按前台窗口切换键映射）
+├── profiles.json           场景表（按前台窗口切换键映射，支持 extends / 长按手势）
+├── commands.json           语音指令表（说"打开浏览器"直接执行，仅 local 模式）
+├── tests/
+│   ├── test_keyrouter.py   无头测试：长按连滚 / 双动作 / extends / 语音接法
+│   └── test_gui_geometry.py 无头测试：跨屏/小屏窗口回夹
 ├── requirements.txt
 ├── assets/icon.ico         应用图标
 ├── tools/
@@ -54,6 +58,9 @@ AgentRMC/
 │   ├── hid_caps.py            读 HID 报告能力
 │   ├── learn_keys.py          交互式按键学习
 │   ├── analyze_raw.py         分析原始报告
+│   ├── nolegacy_probe.py      NOLEGACY + SendInput 行为（单进程）
+│   ├── nolegacy_probe2.py     NOLEGACY 的抑制范围（跨进程）
+│   ├── uia_probe.py           读 Electron 窗口的 UIA 树（TTS 前置调研）
 │   └── rawreport.py           提权读 256 字节透传包
 ├── legacy/                 早期 pywebview 方案（WebView2 不兼容，已弃用）
 └── models/                 模型目录（git 忽略，需自行下载）
@@ -114,7 +121,12 @@ keydown  keydown  keydown  ...  keydown   keyup
   0ms     31ms     62ms          2.4s
 ```
 
-程序利用它做判定：第一次 keydown 先挂起 250ms，若期间收到第二次，判定为遥控器长按并开始录音；否则判定为实体键盘单击，把这次按键补发出去。
+程序利用它做判定：第一次 keydown 先挂起 250ms，若期间收到第二次，判定为长按并开始语音；
+否则说明只是轻点了一下，**什么都不做**——原生 F5 已经由 Windows 送给前台窗口了，
+再补发一次只会让浏览器刷新两下。
+
+> 这里很容易误判成"要帮实体键盘转发 F5"。不会：Raw Input 已经按设备路径过滤，
+> 只收遥控器的报文，实体键盘的 F5 根本不进这个状态机。
 
 ## 改造架构
 
@@ -164,22 +176,31 @@ tools\download_model.bat # 下载 whisper small 模型（约 480MB，走 7897 �
 界面包含：
 
 - **顶部状态** —— 运行状态、遥控器电量、当前命中的 Profile
-- **语音面板** —— 实时波形（录音时变红）、识别结果、耗时
-- **事件流** —— 按键 / 识别 / 指令 / 粘贴的实时记录，按类型着色
+- **语音面板** —— 录音时的波形/脉冲、识别结果、耗时
+- **事件流** —— 按键 / 识别 / 指令 / 粘贴的实时记录，按类型着色；长按只在松手时记一条（带时长和连发次数），语音也只记一条结束记录
 - **按键映射** —— 和事件流并列的第二个标签页，见下
-- **信息栏** —— 设备、语音键码、模型、指令条数
+- **信息栏** —— 设备、语音键码、**当前 profile 的语音接法**、模型、指令条数
 
 两个按钮：`开始监听` / `测试麦克风`（录 4 秒并转写，用来验证麦克风选对了没）。
+`config.json` 里的 `ui.auto_listen` 为 `true` 时，程序启动后自动开始监听；
+同时只允许一个实例（第二个会弹窗退出，避免每个键注入两次）。
+`ui.start_minimized` 为 `true` 时窗口启动即最小化，不去抢 Qoder 的焦点；要用界面就点任务栏图标。
+
+窗口跨屏/缩放：启用了 Qt 的 `PassThrough` DPI 策略（175%/225% 不取整）、用
+`startSystemMove` 走系统原生拖动，切屏后把窗口回夹到当前屏幕的可用区域（小于最小尺寸
+的屏幕会缩到能放下），并在退出时把几何存进 `QSettings("AgentRMC","AgentRMC")`，
+下次启动恢复后同样回夹。
 
 #### 按键映射页
 
 右侧标签切到 **按键映射**，会列出当前 Profile 的完整映射表：物理键 → 语义名 → 实际动作。
+第一行是**语音键**的接法（`开关 CTRL+SHIFT+V（按下开 / 松手关）` 或 `按住 …`），下面才是 8 个物理键。
 
 | 元素 | 说明 |
 |---|---|
 | 下拉框 | 默认 `跟随前台`，切窗口时表格自动跟着变；也可以钉住某个 profile 预览 |
 | 第二行 | 当前 profile 的匹配规则（进程名 / 窗口标题），一眼看出为什么命中它 |
-| 表格 | 每行一个键：`↑` `↓` `←` `→` `OK` `返回` `菜单` `主页`，右侧是解析后的动作，如 `滚轮 ↑ 360`、`CTRL+VK 0x24`、`启动 start msedge` |
+| 表格 | 每行一个键：`↑` `↓` `←` `→` `OK` `返回` `菜单` `主页`，右侧是解析后的动作，如 `滚轮 ↑ 300 · 按住连滚`、`原生 Enter 发送`、`滚到顶 · 长按 滚到底` |
 | `打开配置` | 用默认编辑器打开 `profiles.json` |
 | `重新加载` | 改完 json 不用重启程序，点一下热加载 |
 
@@ -188,6 +209,13 @@ tools\download_model.bat # 下载 whisper small 模型（约 480MB，走 7897 �
 ```bash
 .venv\Scripts\python.exe agentrc_gui.py
 .venv\Scripts\python.exe agentrc_gui.py --tab keymap   # 启动直接停在按键映射页
+.venv\Scripts\python.exe agentrc_gui.py --tab keymap --pin qoder   # 固定预览 qoder
+```
+
+截图/验收（不启动监听、不弹第二个实例）：
+
+```bash
+.venv\Scripts\python.exe agentrc_gui.py --shot out.png --tab keymap --pin qoder
 ```
 
 ### 命令行方式
@@ -213,6 +241,7 @@ tools\download_model.bat # 下载 whisper small 模型（约 480MB，走 7897 �
 ```bash
 .venv\Scripts\python.exe -m PyInstaller --noconfirm --windowed ^
   --name AgentRMC --onedir --icon=assets/icon.ico ^
+  --collect-data faster_whisper ^
   --distpath release --workpath build_release ^
   --exclude-module tkinter ^
   --exclude-module PySide6.QtWebEngineCore ^
@@ -233,7 +262,9 @@ New-Item -ItemType Junction -Path release\AgentRMC\models -Target D:\githubrepos
 
 程序启动时从 **exe 所在目录**读配置和模型（`_app_dir()` 里判断了 `sys.frozen`）。
 
-按住语音键说话，松手后约 1 秒，识别结果会自动粘贴到当前焦点窗口。
+按住语音键说话，松手结束：当前用 `hotkey` 模式，把语音交给 Qoder 自己的 Ctrl+Shift+V
+（toggle：按下开始、松手停止；先把焦点点进 Qoder 输入框）。`local` 模式则自己录音转写
+再粘贴，见下文。
 
 ### 实测性能
 
@@ -244,9 +275,19 @@ New-Item -ItemType Junction -Path release\AgentRMC\models -Target D:\githubrepos
 | 中文准确率 | 测试句 100% 正确 |
 | 硬件 | CPU / int8 量化 |
 
+### 无头测试
+
+不碰真实键盘、不注入任何按键，验证长按连滚、点击/长按双动作、
+`extends` 合并和 Qoder 开关式语音的时序：
+
+```bash
+.venv\Scripts\python.exe tests\test_keyrouter.py
+```
+
 ## 语音指令
 
-识别出的文本会**先过一遍本地指令表**，命中就直接执行；没命中才粘贴给 Agent。这样常用操作不用绕一圈 Agent。
+只在 `voice.mode: local` 下生效：识别出的文本会**先过一遍本地指令表**，命中就直接执行；
+没命中才粘贴给 Agent。当前 `hotkey` 模式把语音直接交给 Qoder 自己的识别，不走这张表。
 
 | 说 | 动作 |
 |---|---|
@@ -299,10 +340,25 @@ New-Item -ItemType Junction -Path release\AgentRMC\models -Target D:\githubrepos
 | `browser` | chrome / msedge / firefox / brave | 滚动 | 后退 / 前进 | Enter | Esc | 新建标签 |
 | `editor` | code / cursor / windsurf / devenv | 上/下一个编辑器 | 上/下一个标签 | Enter | Esc | 命令面板 |
 | `terminal` | windowsterminal / cmd / powershell / pwsh | 历史命令 | 按词跳转 | Enter | Esc | 清屏 |
-| `agent` | workbuddyai | 滚动对话 | — | **发送** | Esc | 跳到顶部 |
-| `default` | 其他 | ↑ / ↓ | ← / → | Enter | Esc | Win |
+| `qoder` | qoder / qoder cn | 滚轮（按住连滚） | 原生光标移动 | **原生 Enter 发送** | **原生 Esc 停止** | 点击滚到顶 / 长按滚到底 |
+| `agent` | workbuddyai / 标题含 workbuddy | 滚轮（按住连滚） | 原生光标移动 | **原生 Enter 发送** | **原生 Esc 停止** | 点击滚到顶 / 长按滚到底 |
+| `default` | 其他 | ↑ / ↓ | ← / → | Enter | Esc | 原生 Home |
 
-`agent` 这个 profile 是给你和 WorkBuddy 对话用的：上下翻聊天记录、OK 直接发送、菜单键换行（`Shift+Enter`）。
+`qoder` 用 `extends` 继承 `agent` 的全部键位，只改了匹配进程和语音接法（后者只在 `hotkey` 模式下用）。
+Qoder 的语音快捷键 Ctrl+Shift+V 在 webview 里是 **keydown 开关**（正在录就停，否则开始）。
+所以这里写 `"voice": {"trigger": "toggle"}`：遥控器按下时发一次组合键开始录音，松手再发一次
+停止；不用再点第二下。
+
+> Qoder 的 `workbench.action.toggleVoiceInput` 虽然是窗口级快捷键，但处理函数里有一句
+> `composerFocused ? start : ignore`——焦点不在输入框时它**直接忽略**。所以目前仍然需要
+> 先把焦点点进 Qoder 输入框。
+>
+> 曾试过 `voice.focus_click: [0.68, 120]`（按窗口相对位置自动点一下输入区，再发快捷键），
+> 但窗口位置/缩放/DPI 一变就会点空，反而把焦点点丢，导致语音完全不出来；**默认已关闭**。
+> 这个字段还留着，后续做一次性校准（把鼠标放到输入框，记录相对位置）再接上。
+
+`Menu`（菜单键）在 agent/qoder 里是换行（`Shift+Enter`）；`F11`（变焦）保持原生直通。
+`default` 的 Home 也改成了原生——之前它注入 Win 键，按一下就会弹开始菜单/任务栏。
 
 ### 加自己的场景
 
@@ -326,14 +382,48 @@ New-Item -ItemType Junction -Path release\AgentRMC\models -Target D:\githubrepos
 - `match.process` —— 可执行文件名，不区分大小写
 - `match.title` —— 窗口标题包含任一关键词
 - 两个都为空 → 只能作为兜底（像 `default`）
+- `extends` —— 继承另一个 profile 的 `keys` / `actions` / `voice`，再覆盖；
+  顺序仍然是优先级。`qoder` 就是这样继承 `agent` 的。
+
+每个 profile 还可以带 `"voice": {"trigger": "hold" | "toggle"}` 覆盖全局语音接法。
+`focus_click` 是可选实验项（相对坐标自动点输入区），默认不用，等做校准。
+
+### 长按手势
+
+动作里加这几个字段，就能用一个键做出两种操作：
+
+| 字段 | 说明 |
+|---|---|
+| `hold_repeat` | 毫秒。按住时每隔这么久重复执行一次；`scroll` 就是"按住连滚" |
+| `hold_accel` | `true` 时每重复一次间隔 ×0.86，最低 45ms（越按越快） |
+| `hold_action` | 长按达到阈值后执行的动作 |
+| `hold_ms` | 长按判定阈值，默认 450–600ms |
+| `hold_defer` | `true` 时按下先不执行普通动作，松手才执行；这样"点击"不会先触发一次 |
+| `repeat` | 一次执行里重复几次（`key` / `scroll` 都支持） |
+| `label` | 映射页/事件流里显示的人话，比如 `"滚到顶"` |
+
+事件流不再按键连发逐条刷屏：按键动作本身立即执行，但只会在**松手**时记录一条汇总，
+例如 `长按 1.4s · 滚轮 ↓ 300 ×12`；轻点就是动作本身，语音则记一条 `语音 3.2s · 已停录`。
+
+agent/qoder 的实际用法：
+
+```jsonc
+"scroll_down": { "type": "scroll", "delta": -300,
+                 "hold_repeat": 100, "hold_accel": true },   // 按住 ↓ 连续滚
+"chat_top": { "type": "scroll", "delta": 9000, "repeat": 3, "label": "滚到顶",
+              "hold_action": { "type": "scroll", "delta": -9000, "repeat": 3,
+                               "label": "滚到底" },
+              "hold_ms": 450, "hold_defer": true }           // 点主页到顶，长按到底
+```
 
 ### 动作类型
 
 | type | 字段 | 说明 |
 |---|---|---|
 | `key` | `vk`、`mods`、`repeat` | 模拟按键，`mods` 可为 `win`/`ctrl`/`alt`/`shift` |
-| `scroll` | `delta` | 滚轮，一格 120，正数向上 |
+| `scroll` | `delta`、`repeat` | 滚轮，一格 120，正数向上；作用于鼠标所在窗口 |
 | `run` | `cmd` | 执行命令或启动程序 |
+| `none` | `note` | 不注入任何键，原生行为直通（OK/返回/F11 用它避免双触发） |
 
 ## 配置 `config.json`
 
@@ -344,8 +434,8 @@ New-Item -ItemType Junction -Path release\AgentRMC\models -Target D:\githubrepos
     "vkey": 116,                       // 语音键的 vkey
     "confirm_window_ms": 250,          // 判定连发的时间窗
     "min_repeats": 2,                  // 至少几次才算长按
-    "silence_stop_ms": 700,            // 静音多久算说完
-    "min_record_ms": 300               // 短于此视为误触
+    "silence_stop_ms": 700,            // 静音多久算说完（local 模式）
+    "min_record_ms": 300               // 短于此视为误触（local 模式）
   },
   "keys": { "38": "up", "40": "down" },        // vkey -> 语义名
   "actions": { "up": { "type": "key", "vk": 38 } },  // 语义名 -> 动作
@@ -356,37 +446,71 @@ New-Item -ItemType Junction -Path release\AgentRMC\models -Target D:\githubrepos
     "asr_language": "zh",
     "paste": true,
     "auto_enter": false,
-    "mode": "hotkey",                          // local=自己录音转写；hotkey=转给别的程序的按住说话键
-    "hotkey": { "vk": 86, "mods": ["ctrl", "shift"] }   // vk 86 = V，即 Ctrl+Shift+V
+    "mode": "hotkey",                  // local=自己录音转写（可选）；hotkey=转给 Agent
+    "hotkey": {
+      "vk": 86,                        // vk 86 = V，即 Ctrl+Shift+V（Qoder 的语音键）
+      "mods": ["ctrl", "shift"],
+      "trigger": "hold"                // hold=按住；toggle=按下开、松手再按一次关
+    }
+  },
+  "ui": {
+    "auto_listen": true                // 启动即监听
   }
 }
 ```
+
+profile 里的 `voice.trigger` 只在 `hotkey` 模式下生效（当前）；`qoder` 是 `toggle`
+（按下开、松手关），`agent`（WorkBuddy）是 `hold`（按住说话）。`local` 模式下这些都不参与。
 
 ### 语音键的两种用法
 
 | mode | 行为 | 适用 |
 |---|---|---|
-| `local` | 遥控器语音键 → 电脑麦克风录音 → 本地 whisper 转写 → 粘贴 | 想完全离线、不依赖别的程序 |
-| `hotkey`（当前默认） | 遥控器语音键 → **长按期间按住**配置的快捷键，松手放开 | 让 Agent / 输入法自己录音识别，省掉 462MB 模型，延迟更低 |
+| `local` | 遥控器语音键 → 电脑麦克风录音 → 本地 whisper 转写 → 粘贴 | 完全离线；识别效果视模型而定（实测本机不如 Qoder） |
+| `hotkey`（当前） | 遥控器语音键 → 转给 Agent 自己的语音快捷键 | 省掉 462MB 模型，用 Qoder 自己的识别 |
 
-`hotkey` 模式下，按键映射页的「语音模式」会显示成 `转给 VK 0x12` 这种形式，启动时
-**不会加载本地 whisper 模型**（省 462MB 内存）。
+`hotkey` 再分两种触发方式，写在 `voice.hotkey.trigger`（或 profile 的 `voice.trigger`）：
 
-原理：遥控器语音键按住时会持续发 F5（判定为长按）→ 程序对目标热键发 keydown 不松手
-→ 目标程序一直处于"按住说话"状态 → 松手时补 keyup。实测 `hold_combo` / `release_combo`
-能把组合键稳定按住 0.6 秒再干净放开。
+| trigger | 注入 | 适用 |
+|---|---|---|
+| `hold` | 按下发 keydown 不松手，松手才发 keyup | 目标程序是"按住说话" |
+| `toggle` | 按下完整按一次组合键，松手再完整按一次 | Qoder 的语音是"按一下开始 / 再按一下停止" |
 
-当前配置是 **Ctrl+Shift+V**（`vk 86` + ctrl/shift）。换成别的组合只改一行，比如长按 Alt：
+Qoder 的 `voiceInputComboShortcut` 只在 **keydown** 上做切换（webview 里 `handlePressed`
+判断"正在录音就停，否则开始"），keyup 不生效。`qoder` profile 里写的是：
 
 ```jsonc
-"hotkey": { "vk": 18, "mods": [] }   // vk 18 = Alt
+"voice": { "trigger": "toggle" }
 ```
 
-> 实测记录：先试的长按 Alt，注入的 Alt 事件**没能触发**目标 Agent 的语音输入（`GetAsyncKeyState`
+程序会在按下时完整按一次 Ctrl+Shift+V（开始录音）、松手再完整按一次（停止并出字）；
+短于 300ms 的按住会等满 300ms 再发停止，避免第二次按下被 Qoder 当成"还没开始"。
+`hold` 也保留，适合目标程序是"按住说话"的场景（WorkBuddy）。
+
+> 两种方式都假设 Qoder 起始状态是 idle。如果它已经停在录音态，先手动点一下停止，
+> 否则第一次按下会被当成"停止"。
+>
+> 副屏任务栏闪动：实测“测试麦克风”不按遥控器也会闪，所以是 **Windows 10 的麦克风使用
+> 指示器**（`Shell_SecondaryTrayWnd`）在录音开始/结束时让任务栏露一下，不是 Qoder 浮层，
+> 也不是 F5。任何用麦的程序都会触发；AgentRMC 关不掉。要消掉只能从 Windows 侧：
+> 任务栏设置里关掉麦克风系统图标（如果有），或者关掉“自动隐藏任务栏”。
+
+`hotkey` 模式下，按键映射页第一行会显示实际接法，启动时**不会加载本地 whisper 模型**
+（省 462MB 内存），当前就是这一种。切到 `local` 模式则会在启动时加载
+`models/faster-whisper-small`，按键映射页第一行显示「本地 whisper · 按住录音」。
+
+切回 `hotkey` 时默认组合是 **Ctrl+Shift+V**（`vk 86` + ctrl/shift），也就是 Qoder 的语音键。
+换成别的组合只改一行：
+
+```jsonc
+"hotkey": { "vk": 18, "mods": [], "trigger": "hold" }   // vk 18 = Alt
+```
+
+> 实测记录：先试的长按 Alt，注入的 Alt 事件**没能触发**目标的语音输入（`GetAsyncKeyState`
 > 能查到 Alt 处于按下状态，说明注入本身没问题，是那个快捷键没被识别）；换 Ctrl+Shift+V 后
 > 一次就通了。所以默认用 Ctrl+Shift+V。
 >
-> 另外注入方式从 `keybd_event` 换成了 **`SendInput` + 扫描码**（`MapVirtualKeyW` 取 scan code），
+> 注入方式从 `keybd_event` 换成了 **`SendInput` + 扫描码**（`MapVirtualKeyW` 取 scan code），
 > Chromium/Electron 这类应用更认这个——`keybd_event` 只给 vk 时，Chromium 可能拿不到正确的
 > `code`，表现就是"按了没反应"。
 
@@ -465,6 +589,9 @@ New-Item -ItemType Junction -Path release\AgentRMC\models -Target D:\githubrepos
 
 这颗键（`vkey 122` / `0x7A`）实测就是遥控器上的**变焦（对焦）键**，发标准 `F11`，
 所以在应用里按下去就是全屏 / 还原。
+
+> 如果 Qoder 正处全屏，按一下这颗键会退回窗口，Windows 任务栏就会露出来。
+> 它和语音键（F5）是两颗不同的键，位置挨着，容易误按成"按语音键弹任务栏"。
 
 但**不能给它配映射**。实测：一次按键只产生 **1 个 keydown + 1 个 keyup**（`rc_probe/keyprobe.py`
 抓的，没有连发），可是配上 `{"type":"key","vk":122}` 之后按一下会**切两次全屏、看起来像没反应**。
@@ -572,17 +699,42 @@ python rc_probe\atvv_probe.py --seconds 40
 | 映射成别的键（如 主页→Ctrl+T） | 原生 Home + Ctrl+T 都触发 |
 | 映射成 `none` | 只有原生那一次，正常 |
 
-这不是 bug，是 Windows 的机制：`RIDEV_NOLEGACY` 是**按 usage page 全局生效**的，
-一开就把你的实体键盘也一起废掉，不能只屏蔽遥控器。
+所以 agent/qoder 里 OK、返回、F11 全是 `none`：**原生 Enter / Esc / F11 本来就是对的，
+不再多注入一次**。上下滚轮和主页手势是"叠加"，原生方向键/Home 也会落到聊天输入框里
+（最多移动一下光标，无害）。
+
+#### NOLEGACY 实测：为什么不能做真替换（2026-10-27 补测）
+
+之前写过"`RIDEV_NOLEGACY` 会把实体键盘一起废掉"，这次实测证明**那句话是错的**，
+但结论仍然是——用户态做不了真替换：
+
+| 探测 | 做法 | 结果 |
+|---|---|---|
+| `rc_probe/nolegacy_probe.py` | 本进程注册 NOLEGACY，然后 `SendInput` F13 给自己的窗口 | 只收到 `WM_INPUT`，**没有 `WM_KEYDOWN`** |
+| `rc_probe/nolegacy_probe2.py` | A 进程注册 NOLEGACY；B 进程建窗口并抢焦点；A 注入一次、B 自己注入一次 | B 收到 **down/up/down/up 四组**，全部正常 |
+
+结论：
+
+- `RIDEV_NOLEGACY` 只抑制**注册它的进程**的传统消息，不是全系统；
+- 因此前台程序照样收到遥控器的原生按键，开关它没有任何拦截效果；
+- 同时别的进程用 `SendInput` 注入的键也完全不受影响，所以"重注入"不是问题所在。
+
+想在用户态真正"吞掉"遥控器的某个键，只剩内核过滤驱动（比如 Interception，
+要管理员、要签名驱动、按设备句柄过滤）或硬件桥接。这个项目不走这两条路，宁可把
+映射设计成"原生行为可接受"的叠加。
+
+还有两个绕不开的副作用：
+
+- **滚轮作用于鼠标所在窗口**，不是前台窗口。用遥控器时把鼠标停在聊天区。
+- **语音键的原生 F5 仍会送到前台**：浏览器里可能刷新，IDE 里可能触发 F5 绑定。
+  用语音时建议焦点停在 Agent/Qoder 的聊天输入框。
 
 三条出路，按侵入性排序：
 
-1. **只映射"原生行为无害"的键**（现在这条路）：变焦键已改成 `none`；语音键的 F5 在
-   浏览器里会触发刷新，用语音时最好别停在浏览器上。
-2. **`RIDEV_NOLEGACY` + 真实键盘重注入**：注册时关掉传统消息，然后在 Raw Input 里
-   把非遥控器的按键用 `SendInput` 补发（用 `dwExtraInfo` 打标记避免自环）。能做到
-   真正的"替换"，代价是**提权窗口（UAC、任务管理器）里注入会被 UIPI 拦掉，键盘会失灵**，
-   而且所有按键多一跳注入，IME/快捷键可能有边界问题。
+1. **只映射"原生行为无害"的键**（现在这条路）：OK/返回/F11 用 `none`；需要额外动作时
+   用长按或原生重复无害的键（如主页）。
+2. **内核过滤驱动**（Interception 等）：按设备吞键、再注入，代价是管理员权限 + 驱动签名，
+   以及提权窗口的 UIPI 问题。
 3. **硬件桥接**：ESP32-C6 / CH585D 从 BLE 空口直接抓，根本不进 Windows 键盘栈
    （参考 `flydog555/xiaomi-remote-voice-assistant` 的做法）。
 
@@ -613,7 +765,13 @@ python rc_probe\atvv_probe.py --seconds 40
 - [x] 查清音量键为何不能映射（三路 Raw Input 零报文 + 系统音量无变化 → 报文没进 Windows）
 - [ ] 确认 `F11` 对应物理键
 - [ ] 用手机摄像头确认音量键是不是红外（是则电脑端彻底无解）
-- [x] 语音键 hotkey 模式：长按遥控器语音键 = 按住 Agent 的说话键（当前长按 Alt）
-- [ ] 实测长按 Alt 在 WorkBuddy 里能否稳定触发语音输入（松手是否干净退出）
+- [x] 语音键 hotkey 模式：转给 Qoder 的 Ctrl+Shift+V（按下开、松手关）
+- [x] 多 Agent profile：Qoder / Qoder CN 继承 agent 键位，语音用 toggle
+- [x] 长按连滚 + 主页"点击到顶 / 长按到底"双动作
+- [ ] Qoder 语音前自动聚焦输入框（盲点不可靠，待做一次性校准）
+- [x] default 的 Home 不再注入 Win（按一下弹开始菜单/任务栏的坑）
+- [x] 跨屏移动/缩放：PassThrough DPI + 原生拖动 + 切屏回夹 + 几何记忆
+- [x] 启动即监听 + 单实例保护 + 启动最小化（不抢焦点）
+- [x] 实测 NOLEGACY 的真正语义（按应用生效，用户态无法拦截原生键）
 - [ ] TTS 播报 Agent 回复，形成语音闭环
 - [ ] 若换 ATVV 遥控器（RC003-MS / 遥控器 2 Pro），把 `rc_probe/atvv_probe.py` 的解码链并进主程序

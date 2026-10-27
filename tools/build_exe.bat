@@ -17,6 +17,7 @@ if not exist "assets\icon.ico" (
   --noconfirm --windowed ^
   --name AgentRMC --onedir ^
   --icon=assets\icon.ico ^
+  --collect-data faster_whisper ^
   --distpath release --workpath build_release ^
   --exclude-module tkinter ^
   --exclude-module PySide6.QtWebEngineCore ^

@@ -4,10 +4,13 @@
 --------
 1. 用 Raw Input 按设备路径过滤，只接收遥控器的按键，不干扰真实键盘鼠标。
 2. 语音键被按住时会以 ~31ms 间隔连发同一个键值（默认 F5），据此判定"长按"：
-   - 第一次 keydown 先挂起，250ms 内等到第二次 → 确认是遥控器，开始录音
-   - 等不到 → 判定为真实键盘单击，把这次按键补发出去
-3. 松手后录音送本地 whisper 转写，结果写入剪贴板并粘贴到当前焦点窗口。
-4. 其余按键按 config.json 里的映射，转成系统动作（默认模拟方向键/回车/ESC）。
+   - 第一次 keydown 先挂起，250ms 内等到第二次 → 开始语音
+   - 等不到 → 单击，什么都不做（原生 F5 已经由 Windows 发给前台窗口了）
+3. 语音有两种接法：
+   - hold   —— 按住目标程序的"按住说话"键，松手放开（老式 PTT）
+   - toggle —— 按下发一次快捷键、松手再发一次（Qoder 的语音是"再按一次停止"的开关）
+4. 松手后录音送本地 whisper 转写，结果写入剪贴板并粘贴到当前焦点窗口。
+5. 其余按键按 profiles.json 的映射转成系统动作，支持长按连发、点击/长按双动作。
 
 用法
 ----
@@ -83,6 +86,10 @@ DEFAULT_CONFIG = {
         "proxy": "http://127.0.0.1:7897",
         "paste": True,
         "auto_enter": False,
+    },
+    "ui": {
+        "auto_listen": True,
+        "start_minimized": True,
     },
 }
 
@@ -238,6 +245,25 @@ def release_combo(mods: list, vk: int) -> None:
             _send_key(mv, up=True)
 
 
+def tap_combo(mods: list, vk: int, hold_ms: int = 18) -> None:
+    """完整按一下组合键（按下 + 松开）。
+
+    开关式语音（Qoder）需要的是两次独立的 keydown：按下开始、再按一次停止。
+    """
+    for m in mods:
+        mv = MOD_VK.get(m.lower())
+        if mv:
+            _send_key(mv)
+            time.sleep(0.008)
+    _send_key(vk)
+    time.sleep(max(0.01, hold_ms / 1000))
+    _send_key(vk, up=True)
+    for m in reversed(mods):
+        mv = MOD_VK.get(m.lower())
+        if mv:
+            _send_key(mv, up=True)
+
+
 # --------------------------------------------------------------------------
 # 前台窗口识别 + 场景 Profile
 # --------------------------------------------------------------------------
@@ -282,6 +308,86 @@ def foreground_info() -> tuple[str, str]:
 def scroll(delta: int) -> None:
     """滚轮，正数向上。一格 120。"""
     user32.mouse_event(MOUSEEVENTF_WHEEL, 0, 0, delta, 0)
+
+
+# --------------------------------------------------------------------------
+# 点击前台窗口里的相对位置（把焦点送回 Qoder 聊天框）
+# --------------------------------------------------------------------------
+MOUSEEVENTF_LEFTDOWN = 0x0002
+MOUSEEVENTF_LEFTUP = 0x0004
+
+user32.GetClientRect.argtypes = [wt.HWND, ctypes.POINTER(wt.RECT)]
+user32.ClientToScreen.argtypes = [wt.HWND, ctypes.POINTER(wt.POINT)]
+user32.GetCursorPos.argtypes = [ctypes.POINTER(wt.POINT)]
+user32.SetCursorPos.argtypes = [ctypes.c_int, ctypes.c_int]
+user32.GetDpiForWindow.argtypes = [wt.HWND]
+user32.GetDpiForWindow.restype = wt.UINT
+
+
+def click_foreground(rel_x: float = 0.68, from_bottom: float = 70) -> bool:
+    """在前台窗口里点一下，用于把焦点放回聊天输入框。
+
+    rel_x       —— 客户区宽度比例（0~1），默认偏右，避开左侧编辑器
+    from_bottom —— 距客户区底部的逻辑像素，按窗口 DPI 换算成物理像素
+    """
+    hwnd = user32.GetForegroundWindow()
+    if not hwnd:
+        return False
+    rect = wt.RECT()
+    if not user32.GetClientRect(hwnd, ctypes.byref(rect)):
+        return False
+    w = rect.right - rect.left
+    h = rect.bottom - rect.top
+    if w < 40 or h < 40:
+        return False
+    origin = wt.POINT(0, 0)
+    if not user32.ClientToScreen(hwnd, ctypes.byref(origin)):
+        return False
+    try:
+        dpi = user32.GetDpiForWindow(hwnd) or 96
+    except Exception:  # noqa: BLE001
+        dpi = 96
+    offset = int(round(max(1.0, from_bottom) * dpi / 96.0))
+    x = origin.x + int(w * max(0.0, min(1.0, rel_x)))
+    y = origin.y + h - max(1, offset)
+    # 不把光标挪回原位：如果你的任务栏在屏幕边缘且自动隐藏，挪回去会把任务栏蹭出来。
+    # 光标留在聊天输入区正好是下一次说话的位置。
+    user32.SetCursorPos(x, y)
+    time.sleep(0.012)
+    user32.mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
+    time.sleep(0.012)
+    user32.mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+    time.sleep(0.012)
+    return True
+
+
+def voice_focus_click(profile: dict | None = None) -> tuple[float, float] | None:
+    """profile 里 voice.focus_click = [rel_x, from_bottom]；没有就返回 None。"""
+    v = (profile or {}).get("voice") or {}
+    fc = v.get("focus_click")
+    if not fc:
+        return None
+    try:
+        return float(fc[0]), float(fc[1])
+    except (TypeError, ValueError, IndexError):
+        return None
+
+
+user32.FindWindowW.restype = wt.HWND
+user32.FindWindowW.argtypes = [wt.LPCWSTR, wt.LPCWSTR]
+user32.GetWindowRect.argtypes = [wt.HWND, ctypes.POINTER(wt.RECT)]
+
+
+def taskbar_state() -> str:
+    """任务栏窗口的可见标志和矩形，用来排查"按语音键弹任务栏"。"""
+    h = user32.FindWindowW("Shell_TrayWnd", None)
+    if not h:
+        return ""
+    r = wt.RECT()
+    if not user32.GetWindowRect(h, ctypes.byref(r)):
+        return ""
+    return (f"vis={int(bool(user32.IsWindowVisible(h)))}"
+            f":{r.left},{r.top},{r.right},{r.bottom}")
 
 
 PROFILES_PATH = HERE / "profiles.json"
@@ -339,17 +445,51 @@ DEFAULT_PROFILES = {
             }
         },
         {
+            "name": "qoder",
+            "extends": "agent",
+            "match": {"process": ["qoder.exe", "qoder cn.exe"]},
+            "nav": {"exit_key": 36,
+                    "keys": {"38": "nav_top", "40": "nav_bottom",
+                             "37": "nav_prev", "39": "nav_next"}},
+            "actions": {
+                "nav_top": {"type": "key", "vk": 0x21, "label": "上翻一页"},
+                "nav_bottom": {"type": "key", "vk": 0x22, "label": "下翻一页"},
+                "nav_prev": {"type": "key", "vk": 0x09, "mods": ["shift"],
+                             "label": "上一个控件"},
+                "nav_next": {"type": "key", "vk": 0x09, "label": "下一个控件"},
+                "nav_exit": {"type": "nav_exit", "label": "退出导航"},
+                "chat_top": {
+                    "type": "scroll", "delta": 9000, "repeat": 3, "label": "滚到顶",
+                    "hold_action": {"type": "nav_toggle", "label": "导航模式"},
+                    "hold_ms": 450, "hold_defer": True
+                },
+            },
+            "voice": {"trigger": "toggle"}
+        },
+        {
             "name": "agent",
             "match": {"process": ["workbuddyai.exe"], "title": ["workbuddy"]},
-            "keys": {"38": "scroll_up", "40": "scroll_down", "13": "send",
-                     "27": "esc", "36": "top", "93": "newline"},
+            "voice": {"trigger": "toggle"},
+            "keys": {"38": "scroll_up", "40": "scroll_down", "37": "cursor_left",
+                     "39": "cursor_right", "13": "send", "27": "back",
+                     "93": "newline", "36": "chat_top", "122": "fullscreen"},
             "actions": {
-                "scroll_up": {"type": "scroll", "delta": 360},
-                "scroll_down": {"type": "scroll", "delta": -360},
-                "send": {"type": "key", "vk": 0x0D},
-                "esc": {"type": "key", "vk": 0x1B},
-                "top": {"type": "key", "vk": 0x24, "mods": ["ctrl"]},
-                "newline": {"type": "key", "vk": 0x0D, "mods": ["shift"]}
+                "scroll_up": {"type": "scroll", "delta": 300,
+                              "hold_repeat": 100, "hold_accel": True},
+                "scroll_down": {"type": "scroll", "delta": -300,
+                                "hold_repeat": 100, "hold_accel": True},
+                "cursor_left": {"type": "none", "note": "原生 ← 移动光标"},
+                "cursor_right": {"type": "none", "note": "原生 → 移动光标"},
+                "send": {"type": "none", "note": "原生 Enter 发送"},
+                "back": {"type": "none", "note": "原生 Esc 停止/返回"},
+                "chat_top": {
+                    "type": "scroll", "delta": 9000, "repeat": 3, "label": "滚到顶",
+                    "hold_action": {"type": "scroll", "delta": -9000, "repeat": 3,
+                                    "label": "滚到底"},
+                    "hold_ms": 450, "hold_defer": True
+                },
+                "newline": {"type": "key", "vk": 0x0D, "mods": ["shift"]},
+                "fullscreen": {"type": "none", "note": "原生 F11 直通"}
             }
         },
         {
@@ -365,7 +505,7 @@ DEFAULT_PROFILES = {
                 "confirm": {"type": "key", "vk": 0x0D},
                 "back": {"type": "key", "vk": 0x1B},
                 "menu": {"type": "key", "vk": 0x5D},
-                "home": {"type": "key", "vk": 0x5B}
+                "home": {"type": "none", "note": "原生 Home（不再注入 Win）"}
             }
         }
     ]
@@ -378,18 +518,46 @@ for _prof in DEFAULT_PROFILES["profiles"]:
                                                     "note": "原生 F11 直通"}
 
 
+def resolve_profiles(profiles: list) -> list:
+    """解析 extends：子 profile 继承父 profile 的 keys/actions/voice，再覆盖。
+
+    顺序仍然是优先级，extends 只负责合并字段，不改变匹配顺序。
+    """
+    by_name = {p.get("name"): p for p in profiles if p.get("name")}
+    resolved: dict = {}
+
+    def resolve(p: dict, depth: int = 0) -> dict:
+        name = p.get("name")
+        if name in resolved:
+            return resolved[name]
+        base: dict = {}
+        parent = by_name.get(p.get("extends")) if depth < 4 else None
+        if parent is not None and parent is not p:
+            base = resolve(parent, depth + 1)
+        merged = {**base, **p}
+        merged["keys"] = {**(base.get("keys") or {}), **(p.get("keys") or {})}
+        merged["actions"] = {**(base.get("actions") or {}), **(p.get("actions") or {})}
+        if base.get("voice") and p.get("voice"):
+            merged["voice"] = {**base["voice"], **p["voice"]}
+        if name:
+            resolved[name] = merged
+        return merged
+
+    return [resolve(p) for p in profiles]
+
+
 def load_profiles() -> list:
     if not PROFILES_PATH.exists():
         PROFILES_PATH.write_text(json.dumps(DEFAULT_PROFILES, ensure_ascii=False, indent=2),
                                  encoding="utf-8")
         print(f"[i] 已生成默认场景表 {PROFILES_PATH}")
-        return DEFAULT_PROFILES["profiles"]
+        return resolve_profiles(DEFAULT_PROFILES["profiles"])
     try:
         data = json.loads(PROFILES_PATH.read_text(encoding="utf-8"))
-        return data.get("profiles", [])
+        return resolve_profiles(data.get("profiles", []))
     except Exception as e:  # noqa: BLE001
         print(f"[!] profiles.json 解析失败，用内置默认: {e}")
-        return DEFAULT_PROFILES["profiles"]
+        return resolve_profiles(DEFAULT_PROFILES["profiles"])
 
 
 class ProfileManager:
@@ -404,9 +572,9 @@ class ProfileManager:
         self._ts = 0.0
         self._prof = self.default
 
-    def current(self) -> dict:
+    def current(self, force: bool = False) -> dict:
         now = time.time()
-        if now - self._ts < self.CACHE_TTL:
+        if not force and now - self._ts < self.CACHE_TTL:
             return self._prof
         self._exe, self._title = foreground_info()
         for p in self.profiles:
@@ -467,6 +635,287 @@ class RuleEngine:
             print(f"[!] 执行失败: {e}")
             return False
         return True
+
+# --------------------------------------------------------------------------
+# 语音键的接法：按住（hold）或开关（toggle）
+# --------------------------------------------------------------------------
+DEFAULT_HOTKEY = {"vk": 0x56, "mods": ["ctrl", "shift"], "trigger": "hold"}
+
+
+def voice_hotkey(profile: dict | None = None) -> tuple[list, int, str]:
+    """返回 (mods, vk, trigger)。
+
+    profile 里的 voice 可以覆盖全局配置，例如 Qoder 的语音是"再按一次停止"：
+        "voice": {"trigger": "toggle"}
+    """
+    base = {**DEFAULT_HOTKEY, **(CFG["voice"].get("hotkey") or {})}
+    over = (profile or {}).get("voice") or {}
+    hk = {**base, **(over.get("hotkey") or {})}
+    trigger = str(over.get("trigger", hk.get("trigger", "hold"))).lower()
+    if trigger not in ("hold", "toggle"):
+        trigger = "hold"
+    return [str(m).lower() for m in hk.get("mods", [])], int(hk.get("vk", 0x56)), trigger
+
+
+# --------------------------------------------------------------------------
+# 动作描述（按键映射页 / 事件流共用）
+# --------------------------------------------------------------------------
+VK_LABEL = {
+    0x08: "BACKSPACE", 0x09: "TAB", 0x0D: "ENTER", 0x1B: "ESC", 0x20: "SPACE",
+    0x21: "PGUP", 0x22: "PGDN", 0x23: "END", 0x24: "HOME",
+    0x25: "LEFT", 0x26: "UP", 0x27: "RIGHT", 0x28: "DOWN", 0x2E: "DELETE",
+    0x5B: "WIN", 0x5D: "APPS", 0xAD: "MUTE", 0xAE: "VOL-", 0xAF: "VOL+",
+    0xB3: "PLAY",
+}
+
+
+def describe_action(act: dict, hold_info: bool = True) -> str:
+    """把动作描述成人话，给按键映射页和事件流用。"""
+    if not act:
+        return "无动作"
+    kind = act.get("type")
+    label = str(act.get("label") or "").strip()
+    if label:
+        text = label
+    elif kind == "key":
+        mods = "+".join(str(m).upper() for m in act.get("mods", []) or [])
+        vk = int(act.get("vk", 0))
+        text = f"{mods}+" if mods else ""
+        text += VK_LABEL.get(vk, f"VK 0x{vk:02X}")
+        rep = int(act.get("repeat", 1) or 1)
+        if rep > 1:
+            text += f" ×{rep}"
+    elif kind == "scroll":
+        d = int(act.get("delta", 0))
+        text = f"滚轮 {'↑' if d > 0 else '↓'} {abs(d)}"
+        rep = int(act.get("repeat", 1) or 1)
+        if rep > 1:
+            text += f" ×{rep}"
+    elif kind == "run":
+        cmd = str(act.get("cmd", ""))
+        text = f"启动 {cmd}" if cmd else "启动"
+    elif kind == "paste":
+        text = "粘贴" + ("并回车" if act.get("enter") else "")
+    elif kind == "enter":
+        text = "粘贴并回车"
+    elif kind == "none":
+        text = str(act.get("note", "")).strip() or "直通（不拦截）"
+    else:
+        text = str(kind)
+
+    if hold_info:
+        hold = act.get("hold_action")
+        if hold:
+            text += " · 长按 " + describe_action(hold, hold_info=False)
+        elif act.get("hold_repeat"):
+            text += " · 按住连滚" if kind == "scroll" else " · 按住连发"
+    return text
+
+
+# --------------------------------------------------------------------------
+# 按键路由：CLI 与 GUI 共用
+# --------------------------------------------------------------------------
+class KeyRouter:
+    """按键 → Profile → 动作；带长按连发和"点击 / 长按"双动作。
+
+    - hold_repeat: 毫秒，按住时每隔这么久重复一次（可加速）
+    - hold_action + hold_defer: 按住超过 hold_ms 才执行长按动作，
+      否则松手时执行普通动作（单击不延迟触发）
+
+    事件流只在松手时记一条：单击是动作本身，长按带时长和连发次数。
+    """
+
+    MAX_HOLD_S = 8.0
+
+    def __init__(self, profiles: ProfileManager, emit=None):
+        self.profiles = profiles
+        self.emit = emit
+        self._active: dict[int, dict] = {}
+        self._held: dict[int, dict] = {}
+        self._deferred: dict[int, dict] = {}
+        self.nav_mode = False
+
+    def reset(self) -> None:
+        """停止监听 / 重载配置时清掉按住的键，否则重启后会一直连发。"""
+        self._active.clear()
+        self._held.clear()
+        self._deferred.clear()
+        self.nav_mode = False
+
+    def key_down(self, vkey: int, now: float) -> None:
+        if vkey in self._active:
+            return  # 按住期间设备连发的 keydown 不重复触发
+        prof = self.profiles.current()
+        pname = prof.get("name", "?")
+        nav = prof.get("nav") or {}
+        if self.nav_mode:
+            name = (nav.get("keys") or {}).get(str(vkey))
+            if str(vkey) == str(nav.get("exit_key", "")):
+                name = "nav_exit"
+            if name:
+                action = prof.get("actions", {}).get(name)
+                if action:
+                    self._active[vkey] = {
+                        "started": now, "action": action, "name": name,
+                        "profile": pname, "count": 1, "fired": "base",
+                        "hold_action": None, "deferred": False,
+                    }
+                    self._dispatch(pname, name, action)
+                    return
+
+        name = prof.get("keys", {}).get(str(vkey))
+        if not name:
+            return
+        action = prof.get("actions", {}).get(name)
+        if not action:
+            return
+
+        st = {"started": now, "action": action, "name": name, "profile": pname,
+              "count": 0, "fired": None, "hold_action": action.get("hold_action"),
+              "deferred": False}
+        self._active[vkey] = st
+        hold_action = st["hold_action"]
+
+        if hold_action and action.get("hold_defer"):
+            st["deferred"] = True
+            due = now + float(action.get("hold_ms", 500)) / 1000
+            self._deferred[vkey] = {"due": due, "st": st}
+            return
+
+        self._dispatch(pname, name, action)
+        st["fired"] = "base"
+        st["count"] = 1
+        hold_ms = float(action.get("hold_ms", 600)) / 1000
+        if hold_action:
+            self._held[vkey] = {"due": now + hold_ms, "once": True, "st": st}
+            return
+        repeat_ms = float(action.get("hold_repeat", 0) or 0)
+        if repeat_ms > 0:
+            interval = repeat_ms / 1000
+            self._held[vkey] = {"due": now + interval, "interval": interval,
+                                "accel": bool(action.get("hold_accel")), "st": st}
+
+    def key_up(self, vkey: int, now: float) -> None:
+        st = self._active.pop(vkey, None)
+        self._held.pop(vkey, None)
+        d = self._deferred.pop(vkey, None)
+        if st is None:
+            return
+        if d is not None:
+            # 还没到长按阈值：松手时才执行单击动作
+            self._dispatch(st["profile"], st["name"], st["action"])
+            st["fired"] = "base"
+            st["count"] += 1
+        self._emit_press(st, max(0.0, (now - st["started"]) * 1000))
+
+    def tick(self, now: float) -> None:
+        for vk, d in list(self._deferred.items()):
+            if now >= d["due"]:
+                del self._deferred[vk]
+                st = d["st"]
+                self._dispatch(st["profile"], st["name"], st["hold_action"])
+                st["fired"] = "hold"
+                st["count"] += 1
+
+        for vk, h in list(self._held.items()):
+            st = h["st"]
+            if now - st["started"] > self.MAX_HOLD_S:
+                del self._held[vk]
+                continue
+            if now < h["due"]:
+                continue
+            if h.get("once"):
+                del self._held[vk]
+                self._dispatch(st["profile"], st["name"], st["hold_action"])
+                st["fired"] = "hold"
+                st["count"] += 1
+                continue
+            n = 0
+            while now >= h["due"] and n < 3:
+                self._dispatch(st["profile"], st["name"], st["action"])
+                st["count"] += 1
+                n += 1
+                if h["accel"]:
+                    h["interval"] = max(0.045, h["interval"] * 0.86)
+                h["due"] += h["interval"]
+
+        # keyup 丢了的兜底：8 秒后收尾，别让状态卡死
+        for vk, st in list(self._active.items()):
+            if now - st["started"] > self.MAX_HOLD_S:
+                self._active.pop(vk, None)
+                self._held.pop(vk, None)
+                self._deferred.pop(vk, None)
+                self._emit_press(st, self.MAX_HOLD_S * 1000)
+
+    def _emit_press(self, st: dict, dur_ms: float) -> None:
+        if self.emit is None:
+            return
+        if st.get("fired") == "hold":
+            detail = "长按 · " + describe_action(st["hold_action"], hold_info=False)
+        else:
+            detail = describe_action(st["action"], hold_info=False)
+            n = int(st.get("count", 1) or 1)
+            if n > 1:
+                detail = f"长按 {dur_ms / 1000:.1f}s · {detail} ×{n}"
+            elif dur_ms >= 250 and not st.get("deferred"):
+                detail = f"长按 {dur_ms / 1000:.1f}s · {detail}"
+        self.emit("key", name=st["name"], profile=st["profile"], detail=detail)
+
+    def _dispatch(self, profile: str, name: str, action: dict) -> None:
+        kind = action.get("type")
+        try:
+            if kind == "key":
+                press_combo(action.get("mods", []), int(action["vk"]),
+                            int(action.get("repeat", 1)))
+            elif kind == "scroll":
+                reps = max(1, int(action.get("repeat", 1) or 1))
+                for i in range(reps):
+                    scroll(int(action["delta"]))
+                    if i + 1 < reps:
+                        time.sleep(0.02)
+            elif kind == "run":
+                subprocess.Popen(action["cmd"], shell=True)
+            elif kind == "nav_toggle":
+                self.nav_mode = not self.nav_mode
+                if self.emit:
+                    self.emit("status",
+                              text="导航模式 " + ("开" if self.nav_mode else "关"))
+            elif kind == "nav_exit":
+                self.nav_mode = False
+                if self.emit:
+                    self.emit("status", text="导航模式 关")
+            elif kind == "none":
+                pass
+            else:
+                return
+        except Exception as e:  # noqa: BLE001
+            if self.emit:
+                self.emit("error", text=f"动作执行失败: {e}")
+
+
+# --------------------------------------------------------------------------
+# 单实例：两个进程同时监听会把每个按键注入两次
+# --------------------------------------------------------------------------
+ERROR_ALREADY_EXISTS = 183
+_mutex_handle = None
+
+
+def acquire_single_instance(name: str = "Local\\AgentRMC.SingleInstance") -> bool:
+    global _mutex_handle
+    if _mutex_handle:
+        return True
+    kernel32.CreateMutexW.restype = wt.HANDLE
+    kernel32.CreateMutexW.argtypes = [wt.LPVOID, wt.BOOL, wt.LPCWSTR]
+    kernel32.CloseHandle.argtypes = [wt.HANDLE]
+    h = kernel32.CreateMutexW(None, False, name)
+    if not h:
+        return True  # 拿不到互斥量时放行，不挡用户
+    if ctypes.get_last_error() == ERROR_ALREADY_EXISTS:
+        kernel32.CloseHandle(h)
+        return False
+    _mutex_handle = h
+    return True
+
 
 # --------------------------------------------------------------------------
 # Raw Input 监听
@@ -570,17 +1019,20 @@ def _wndproc(hwnd, msg, wparam, lparam):
 
 # 必须保持引用：局部变量被 GC 回收后，Windows 回调会指向已释放内存导致 access violation
 _WNDPROC_REF = None
+_listener_hwnd = None
 
 
 def start_listener() -> wt.HWND:
-    global _WNDPROC_REF
+    global _WNDPROC_REF, _listener_hwnd
+    if _listener_hwnd:
+        return _listener_hwnd
     wc = WNDCLASSW()
     _WNDPROC_REF = WNDPROC(_wndproc)
     wc.lpfnWndProc = _WNDPROC_REF
     wc.lpszClassName = "AgentRMCWnd"
     wc.hInstance = kernel32.GetModuleHandleW(None)
     atom = user32.RegisterClassW(ctypes.byref(wc))
-    if not atom:
+    if not atom and ctypes.get_last_error() != 1410:   # 1410 = 类已注册
         raise RuntimeError(f"RegisterClassW 失败 err={ctypes.get_last_error()}")
     hwnd = user32.CreateWindowExW(0, "AgentRMCWnd", "AgentRMC", 0, 0, 0, 0, 0,
                                   HWND_MESSAGE, None, wc.hInstance, None)
@@ -589,6 +1041,7 @@ def start_listener() -> wt.HWND:
     rid = RAWINPUTDEVICE(0x01, 0x06, RIDEV_INPUTSINK, hwnd)
     if not user32.RegisterRawInputDevices(ctypes.byref(rid), 1, ctypes.sizeof(rid)):
         raise RuntimeError(f"RegisterRawInputDevices 失败 err={ctypes.get_last_error()}")
+    _listener_hwnd = hwnd
     return hwnd
 
 
@@ -822,12 +1275,11 @@ class App:
 
         # 语音键有两种用法：
         #   local  —— 自己录音 + 本地 whisper 转写（默认）
-        #   hotkey —— 长按期间按住目标程序的"按住说话"快捷键，让 Agent 自己识别
+        #   hotkey —— 把语音键转给目标程序（Qoder 的 Ctrl+Shift+V 等）
         self.voice_mode = str(CFG["voice"].get("mode", "local")).lower()
-        hk = CFG["voice"].get("hotkey") or {}
-        self.hk_vk = int(hk.get("vk", 0x20))
-        self.hk_mods = list(hk.get("mods", []))
+        self.active_voice: tuple[list, int, str] = voice_hotkey(self.profiles.current())
         self.holding = False
+        self.router = KeyRouter(self.profiles, emit=self._on_router_event)
 
         self.state = "idle"          # idle | pending | recording
         self.pending_since = 0.0
@@ -835,6 +1287,13 @@ class App:
         self.last_voice_event = 0.0
         self.repeat_count = 0
         self.busy_transcribing = False
+
+    # ---- 普通按键 ----
+    def _on_router_event(self, kind: str, **data) -> None:
+        if kind == "error":
+            print(f"[!] {data.get('text')}")
+        elif kind == "key":
+            print(f"· [{data.get('profile')}] {data.get('name')} -> {data.get('detail')}")
 
     # ---- 语音键状态机 ----
     def on_voice_down(self, now: float) -> None:
@@ -849,10 +1308,23 @@ class App:
                 self.record_started = now
                 self.last_voice_event = now
                 if self.voice_mode == "hotkey":
-                    hold_combo(self.hk_mods, self.hk_vk)
+                    prof = self.profiles.current(force=True)
+                    mods, vk, trigger = voice_hotkey(prof)
+                    self.active_voice = (mods, vk, trigger)
+                    fc = voice_focus_click(prof)
+                    if fc:
+                        ok = click_foreground(*fc)
+                        print(f"· 点击聊天框聚焦 {'✓' if ok else '✗'}")
+                        if ok:
+                            time.sleep(0.02)
+                    if trigger == "toggle":
+                        tap_combo(mods, vk)      # Qoder：按下先开录，松手再按一次停
+                    else:
+                        hold_combo(mods, vk)
                     self.holding = True
                     beep(1180, 60)
-                    print(f"● 按住语音快捷键 {self.hk_mods}+0x{self.hk_vk:02X}")
+                    how = "开关" if trigger == "toggle" else "按住"
+                    print(f"● 语音快捷键（{how}）{mods}+0x{vk:02X}  tray={taskbar_state()}")
                 elif self.recorder.start():
                     beep(1180, 70)
                     print("● 录音中...")
@@ -863,21 +1335,18 @@ class App:
 
     def on_voice_up(self, now: float) -> None:
         if self.state == "pending":
-            # 单次按下 → 不是遥控器语音键，补发
+            # 遥控器短按一下：原生 F5 已经发给前台，这里不再补发（否则刷新两次）
             self.state = "idle"
-            print("· 单次 F5，已转发")
-            tap_key(self.voice_vk)
+            print("· 单击语音键")
         elif self.state == "recording":
             self.last_voice_event = now
             if self.voice_mode == "hotkey":
-                # 松手就放开快捷键，不等静音判定
+                # 松手就结束，不等静音判定
                 self.finish_recording((now - self.record_started) * 1000)
 
     def tick(self, now: float) -> None:
         if self.state == "pending" and (now - self.pending_since) * 1000 > self.confirm_ms:
-            # 等不到第二次连发，认定是真实键盘
             self.state = "idle"
-            tap_key(self.voice_vk)
 
         if self.state == "recording":
             idle_ms = (now - self.last_voice_event) * 1000
@@ -885,14 +1354,30 @@ class App:
             if idle_ms > self.silence_ms:
                 self.finish_recording(dur_ms)
 
+        self.router.tick(now)
+
+    def release_holding(self, dur_ms: float = 0) -> None:
+        """万一程序停止 / 退出时手还按着，别把目标程序留在录音状态。"""
+        if not self.holding:
+            return
+        mods, vk, trigger = self.active_voice
+        if trigger == "toggle":
+            # 给目标程序一点时间进入 recording，避免第二次 keydown 被当成"又开始"
+            wait = max(0.0, 300.0 - dur_ms) / 1000
+            if wait:
+                time.sleep(wait)
+            tap_combo(mods, vk)
+        else:
+            release_combo(mods, vk)
+        self.holding = False
+
     def finish_recording(self, dur_ms: float) -> None:
         self.state = "idle"
         if self.voice_mode == "hotkey":
-            if self.holding:
-                release_combo(self.hk_mods, self.hk_vk)
-                self.holding = False
+            fg = foreground_info()[0]
+            self.release_holding(dur_ms)
             beep(760, 70)
-            print("● 已放开语音快捷键")
+            print(f"● 语音快捷键已结束（前台 {fg or '?'} tray={taskbar_state()}）")
             return
         audio = self.recorder.stop()
         beep(760, 70)
@@ -921,27 +1406,6 @@ class App:
                 self.busy_transcribing = False
 
         threading.Thread(target=worker, daemon=True).start()
-
-    # ---- 普通按键 ----
-    def on_key(self, vkey: int) -> None:
-        prof = self.profiles.current()
-        name = prof.get("keys", {}).get(str(vkey))
-        if not name:
-            return
-        action = prof.get("actions", {}).get(name)
-        if not action:
-            return
-        kind = action.get("type")
-        pname = prof.get("name", "?")
-        if kind == "key":
-            press_combo(action.get("mods", []), int(action["vk"]), int(action.get("repeat", 1)))
-            print(f"· [{pname}] {name} -> vk 0x{int(action['vk']):02X}")
-        elif kind == "scroll":
-            scroll(int(action["delta"]))
-            print(f"· [{pname}] {name} -> scroll {action['delta']}")
-        elif kind == "run":
-            subprocess.Popen(action["cmd"], shell=True)
-            print(f"· [{pname}] {name} -> run {action['cmd']}")
 
 
 def list_mics() -> None:
@@ -986,22 +1450,30 @@ def main() -> None:
     if args.test_mic:
         test_mic(args.seconds)
         return
+    if not args.list_keys and not acquire_single_instance():
+        print("AgentRMC 已经在运行（单实例保护，避免按键注入两次）")
+        return
 
     hwnd = start_listener()
     app = App()
+    _mods, _vk, _trigger = voice_hotkey(app.profiles.current())
 
     print("=" * 62)
     print("  AgentRMC 已启动")
     print(f"  设备过滤: {CFG['device_mark']}")
-    print(f"  语音键: vkey={app.voice_vk} (0x{app.voice_vk:02X})，长按触发录音")
-    print(f"  ASR: {CFG['voice']['asr_model']} / {CFG['voice']['asr_language']}"
-          f"{'' if app.asr.available() else '  [未安装 faster-whisper]'}")
+    print(f"  语音键: vkey={app.voice_vk} (0x{app.voice_vk:02X})，长按触发语音")
+    print(f"  语音接法: {_trigger}  {'+'.join(_mods)}+0x{_vk:02X}")
+    if app.voice_mode == "hotkey":
+        print("  ASR: 不加载（hotkey 模式交给 Agent）")
+    else:
+        print(f"  ASR: {CFG['voice']['asr_model']} / {CFG['voice']['asr_language']}"
+              f"{'' if app.asr.available() else '  [未安装 faster-whisper]'}")
     print(f"  场景: {len(app.profiles.profiles)} 个 profile，当前 {app.profiles.describe()}")
     print(f"  指令: {len(app.rules.rules)} 条")
     print("  Ctrl+C 退出")
     print("=" * 62)
 
-    if not args.list_keys and app.asr.available():
+    if not args.list_keys and app.voice_mode != "hotkey" and app.asr.available():
         threading.Thread(target=app.asr.load, daemon=True).start()
 
     try:
@@ -1020,12 +1492,15 @@ def main() -> None:
                     else:
                         app.on_voice_up(now)
                 elif ev["down"]:
-                    app.on_key(ev["vkey"])
+                    app.router.key_down(ev["vkey"], now)
+                else:
+                    app.router.key_up(ev["vkey"], now)
             if not args.list_keys:
                 app.tick(now)
             time.sleep(0.005)
     except KeyboardInterrupt:
         print("\n退出")
+        app.release_holding()
         user32.DestroyWindow(hwnd)
 
 

@@ -48,8 +48,8 @@
       "vk": 93
     },
     "home": {
-      "type": "key",
-      "vk": 91
+      "type": "none",
+      "note": "原生 Home（不再注入 Win）"
     },
     "fullscreen": {
       "type": "none",
@@ -69,7 +69,12 @@
       "mods": [
         "ctrl",
         "shift"
-      ]
+      ],
+      "trigger": "hold"
     }
+  },
+  "ui": {
+    "auto_listen": true,
+    "start_minimized": true
   }
 }

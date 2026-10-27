@@ -213,6 +213,69 @@
       }
     },
     {
+      "name": "qoder",
+      "extends": "agent",
+      "match": {
+        "process": [
+          "qoder.exe",
+          "qoder cn.exe"
+        ]
+      },
+      "nav": {
+        "exit_key": 36,
+        "keys": {
+          "38": "nav_top",
+          "40": "nav_bottom",
+          "37": "nav_prev",
+          "39": "nav_next"
+        }
+      },
+      "actions": {
+        "nav_top": {
+          "type": "key",
+          "vk": 33,
+          "label": "上翻一页"
+        },
+        "nav_bottom": {
+          "type": "key",
+          "vk": 34,
+          "label": "下翻一页"
+        },
+        "nav_prev": {
+          "type": "key",
+          "vk": 9,
+          "mods": [
+            "shift"
+          ],
+          "label": "上一个控件"
+        },
+        "nav_next": {
+          "type": "key",
+          "vk": 9,
+          "label": "下一个控件"
+        },
+        "nav_exit": {
+          "type": "nav_exit",
+          "label": "退出导航"
+        },
+        "chat_top": {
+          "type": "scroll",
+          "delta": 9000,
+          "repeat": 3,
+          "label": "滚到顶",
+          "hold_action": {
+            "type": "nav_toggle",
+            "label": "导航模式"
+          },
+          "hold_ms": 450,
+          "hold_defer": true
+        }
+      },
+      "voice": {
+        "trigger": "toggle"
+      }
+    },
+    {
       "name": "agent",
       "match": {
         "process": [
@@ -225,35 +288,48 @@
       "keys": {
         "38": "scroll_up",
         "40": "scroll_down",
+        "37": "cursor_left",
+        "39": "cursor_right",
         "13": "send",
-        "27": "esc",
-        "36": "top",
+        "27": "back",
         "93": "newline",
+        "36": "chat_top",
         "122": "fullscreen"
       },
       "actions": {
         "scroll_up": {
           "type": "scroll",
-          "delta": 360
+          "delta": 300,
+          "hold_repeat": 100,
+          "hold_accel": true
         },
         "scroll_down": {
           "type": "scroll",
-          "delta": -360
+          "delta": -300,
+          "hold_repeat": 100,
+          "hold_accel": true
         },
         "send": {
-          "type": "key",
-          "vk": 13
+          "type": "none",
+          "note": "原生 Enter 发送"
         },
-        "esc": {
-          "type": "key",
-          "vk": 27
+        "back": {
+          "type": "none",
+          "note": "原生 Esc 停止/返回"
         },
-        "top": {
-          "type": "key",
-          "vk": 36,
-          "mods": [
-            "ctrl"
-          ]
+        "chat_top": {
+          "type": "scroll",
+          "delta": 9000,
+          "repeat": 3,
+          "label": "滚到顶",
+          "hold_action": {
+            "type": "scroll",
+            "delta": -9000,
+            "repeat": 3,
+            "label": "滚到底"
+          },
+          "hold_ms": 450,
+          "hold_defer": true
         },
         "newline": {
           "type": "key",
@@ -264,8 +340,19 @@
         },
         "fullscreen": {
           "type": "none",
-          "note": "原生 F11 直通：不拦截，避免和系统那一次重复触发"
+          "note": "原生 F11 直通"
+        },
+        "cursor_left": {
+          "type": "none",
+          "note": "原生 ← 移动光标"
+        },
+        "cursor_right": {
+          "type": "none",
+          "note": "原生 → 移动光标"
         }
+      },
+      "voice": {
+        "trigger": "hold"
       }
     },
     {
@@ -312,8 +399,8 @@
           "vk": 93
         },
         "home": {
-          "type": "key",
-          "vk": 91
+          "type": "none",
+          "note": "原生 Home（不再注入 Win，避免弹开始菜单/任务栏）"
         },
         "fullscreen": {
           "type": "none",

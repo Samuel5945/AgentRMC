@@ -15,11 +15,11 @@ import traceback
 from collections import deque
 from pathlib import Path
 
-from PySide6.QtCore import QPoint, Qt, QTimer
-from PySide6.QtGui import QColor, QFont, QLinearGradient, QPainter, QPen
+from PySide6.QtCore import QPoint, QRect, QSettings, QSize, Qt, QTimer
+from PySide6.QtGui import QColor, QFont, QGuiApplication, QLinearGradient, QPainter, QPen
 from PySide6.QtWidgets import (
-    QApplication, QComboBox, QFrame, QHBoxLayout, QLabel, QMainWindow, QPushButton,
-    QScrollArea, QSizePolicy, QTabWidget, QVBoxLayout, QWidget,
+    QApplication, QComboBox, QFrame, QHBoxLayout, QLabel, QMainWindow, QMessageBox,
+    QPushButton, QScrollArea, QSizePolicy, QTabWidget, QVBoxLayout, QWidget,
 )
 
 if getattr(sys, "frozen", False):
@@ -170,12 +170,11 @@ class Controller:
         self.last_text = ""
         self.model_ready = False
 
-        # 语音键两种用法：local=自己录音转写；hotkey=长按期间按住目标程序的"按住说话"键
+        # 语音键两种用法：local=自己录音转写；hotkey=转给目标程序（Qoder 的 Ctrl+Shift+V）
         self.voice_mode = str(core.CFG["voice"].get("mode", "local")).lower()
-        hk = core.CFG["voice"].get("hotkey") or {}
-        self.hk_vk = int(hk.get("vk", 0x20))
-        self.hk_mods = list(hk.get("mods", []))
+        self.active_voice = core.voice_hotkey(self.profiles.current())
         self.holding = False
+        self.router = core.KeyRouter(self.profiles, emit=self.emit)
 
     def emit(self, kind: str, **data) -> None:
         self.seq += 1
@@ -200,6 +199,8 @@ class Controller:
             self.emit("error", text=f"监听启动失败: {e}")
             return False, str(e)
         self.running = True
+        core.key_events.clear()          # 丢掉停止期间积压的按键
+        self.router.reset()
         self.emit("status", text="监听已启动")
         self._thread = threading.Thread(target=self._loop, daemon=True)
         self._thread.start()
@@ -209,6 +210,12 @@ class Controller:
 
     def stop(self) -> None:
         self.running = False
+        self._release_holding(0)
+        t = self._thread
+        if t is not None and t is not threading.current_thread():
+            t.join(timeout=0.6)
+        self._thread = None
+        self.router.reset()
         self.emit("status", text="监听已停止")
 
     def _load_model(self) -> None:
@@ -264,7 +271,9 @@ class Controller:
                         else:
                             self._voice_up(now)
                     elif ev["down"]:
-                        self._on_key(ev["vkey"])
+                        self.router.key_down(ev["vkey"], now)
+                    else:
+                        self.router.key_up(ev["vkey"], now)
                 self._tick(now)
                 time.sleep(0.004)
             except Exception:  # noqa: BLE001
@@ -283,13 +292,28 @@ class Controller:
                 self.record_started = now
                 self.last_voice_event = now
                 if self.voice_mode == "hotkey":
-                    core.hold_combo(self.hk_mods, self.hk_vk)
+                    prof = self.profiles.current(force=True)
+                    mods, vk, trigger = core.voice_hotkey(prof)
+                    self.active_voice = (mods, vk, trigger)
+                    exe, title = core.foreground_info()
+                    fc = core.voice_focus_click(prof)
+                    focused = None
+                    if fc:
+                        focused = core.click_foreground(*fc)
+                        if focused:
+                            time.sleep(0.02)
+                    if trigger == "toggle":
+                        core.tap_combo(mods, vk)   # Qoder：按下开录
+                    else:
+                        core.hold_combo(mods, vk)
                     self.holding = True
                     core.beep(1180, 60)
-                    self.emit("voice_start", mode="hotkey")
+                    self.emit("voice_start", mode="hotkey", trigger=trigger,
+                              focus_click=focused, fg=f"{exe}|{title[:24]}",
+                              tray=core.taskbar_state(), quiet=True)
                 elif self.recorder.start():
                     core.beep(1180, 60)
-                    self.emit("voice_start")
+                    self.emit("voice_start", quiet=True)
                 else:
                     self.state = "idle"
         elif self.state == "recording":
@@ -297,8 +321,8 @@ class Controller:
 
     def _voice_up(self, now: float) -> None:
         if self.state == "pending":
+            # 短按一下：原生 F5 已经放行，不再补发，避免闪两次
             self.state = "idle"
-            core.tap_key(self.voice_vk)
         elif self.state == "recording":
             self.last_voice_event = now
             if self.voice_mode == "hotkey":
@@ -307,31 +331,49 @@ class Controller:
     def _tick(self, now: float) -> None:
         if self.state == "pending" and (now - self.pending_since) * 1000 > self.confirm_ms:
             self.state = "idle"
-            core.tap_key(self.voice_vk)
         if self.state == "recording":
-            self.level = self.recorder.level
+            if self.voice_mode == "hotkey":
+                self.level = 0.0
+            else:
+                self.level = self.recorder.level
             if (now - self.last_voice_event) * 1000 > self.silence_ms:
                 self._finish((now - self.record_started) * 1000)
         else:
             self.level = 0.0
+        self.router.tick(now)
+
+    def _release_holding(self, dur_ms: float = 0) -> None:
+        if not self.holding:
+            return
+        mods, vk, trigger = self.active_voice
+        if trigger == "toggle":
+            # 目标程序是"再按一次停止"，松手必须再发一次；给它一点时间进入录音态
+            wait = max(0.0, 300.0 - dur_ms) / 1000
+            if wait:
+                time.sleep(wait)
+            core.tap_combo(mods, vk)
+        else:
+            core.release_combo(mods, vk)
+        self.holding = False
 
     def _finish(self, dur_ms: float) -> None:
         self.state = "idle"
         if self.voice_mode == "hotkey":
-            if self.holding:
-                core.release_combo(self.hk_mods, self.hk_vk)
-                self.holding = False
+            trigger = self.active_voice[2]
+            fg = core.foreground_info()[0]
+            self._release_holding(dur_ms)
             self.level = 0.0
             core.beep(760, 60)
-            self.emit("voice_stop", dur=round(dur_ms / 1000, 1), mode="hotkey")
+            self.emit("voice_stop", dur=round(dur_ms / 1000, 1), mode="hotkey",
+                      trigger=trigger, fg=fg, tray=core.taskbar_state())
             return
         audio = self.recorder.stop()
         self.level = 0.0
         core.beep(760, 60)
         if audio is None or dur_ms < self.min_record_ms:
-            self.emit("voice_stop", dur=0, text="录音太短")
+            self.emit("voice_stop", dur=0, text="录音太短", mode="local", quiet=True)
             return
-        self.emit("voice_stop", dur=round(dur_ms / 1000, 1))
+        self.emit("voice_stop", dur=round(dur_ms / 1000, 1), mode="local", quiet=True)
         threading.Thread(target=self._transcribe, args=(audio,), daemon=True).start()
 
     def _transcribe(self, audio) -> None:  # noqa: ANN001
@@ -351,34 +393,9 @@ class Controller:
                           act=rule.get("action", {}).get("type", "?"))
             elif core.CFG["voice"]["paste"]:
                 core.paste_text(text, core.CFG["voice"]["auto_enter"])
-                self.emit("paste", text=text)
+                self.emit("paste", text=text, quiet=True)
         except Exception as e:  # noqa: BLE001
             self.emit("error", text=f"转写失败: {str(e)[:90]}")
-
-    def _on_key(self, vkey: int) -> None:
-        prof = self.profiles.current()
-        name = prof.get("keys", {}).get(str(vkey))
-        if not name:
-            return
-        action = prof.get("actions", {}).get(name)
-        if not action:
-            return
-        kind = action.get("type")
-        pname = prof.get("name", "?")
-        try:
-            if kind == "key":
-                core.press_combo(action.get("mods", []), int(action["vk"]),
-                                 int(action.get("repeat", 1)))
-                self.emit("key", name=name, profile=pname, detail=f"vk 0x{int(action['vk']):02X}")
-            elif kind == "scroll":
-                core.scroll(int(action["delta"]))
-                self.emit("key", name=name, profile=pname, detail=f"scroll {action['delta']}")
-            elif kind == "run":
-                import subprocess
-                subprocess.Popen(action["cmd"], shell=True)
-                self.emit("key", name=name, profile=pname, detail="run")
-        except Exception as e:  # noqa: BLE001
-            self.emit("error", text=f"动作执行失败: {e}")
 
     def test_mic(self, seconds: float = 4.0) -> None:
         threading.Thread(target=self._test_mic_worker, args=(seconds,), daemon=True).start()
@@ -408,6 +425,7 @@ class Waveform(QWidget):
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.data = deque([0.0] * 72, maxlen=72)
         self.active = False
+        self.hint = "按住遥控器语音键 · 松手结束"
 
     def push(self, v: float, active: bool) -> None:
         self.data.append(v)
@@ -425,11 +443,25 @@ class Waveform(QWidget):
             f = p.font()
             f.setPointSizeF(9.5)
             p.setFont(f)
-            p.drawText(self.rect(), Qt.AlignCenter, "按住遥控器语音键 · 松手出字")
+            p.drawText(self.rect(), Qt.AlignCenter, self.hint)
             return
 
         p.setPen(QPen(QColor(255, 255, 255, 12), 1))
         p.drawLine(0, int(mid), w, int(mid))
+
+        # hotkey 模式没有本地音频数据：用一颗来回移动的红点表示"正在录"
+        if self.active and max(self.data, default=0.0) < 0.004:
+            phase = (time.monotonic() * 0.75) % 1.0
+            x = 10 + phase * (w - 20)
+            for k in range(3):
+                alpha = 230 - k * 70
+                r = 4.5 - k
+                p.setBrush(QColor(248, 81, 73, alpha))
+                p.setPen(Qt.NoPen)
+                p.drawEllipse(int(x) - int(r), int(mid) - int(r), int(r * 2), int(r * 2))
+            p.setPen(QPen(QColor(248, 81, 73, 110), 1))
+            p.drawLine(0, int(mid), int(x) - 8, int(mid))
+            return
 
         n = len(self.data)
         gap = 2
@@ -457,7 +489,7 @@ class Waveform(QWidget):
 # --------------------------------------------------------------------------
 ACCENT = {
     "key": BLUE, "text": GREEN, "action": ORANGE, "paste": PURPLE,
-    "error": RED, "voice_start": RED, "voice_stop": "#30363d",
+    "error": RED, "voice_start": RED, "voice_stop": GREEN,
     "status": "#30363d", "log": "#30363d", "battery": BLUE,
 }
 
@@ -473,41 +505,14 @@ VK_NAME = {18: "ALT", 17: "CTRL", 16: "SHIFT", 91: "WIN", 32: "SPACE",
            13: "ENTER", 9: "TAB", 27: "ESC", 86: "V", 65: "A", 192: "`"}
 
 
-def describe_hotkey(mods: list, vk: int) -> str:
-    """把 (mods, vk) 说成人话，比如 长按 ALT / 长按 CTRL+SHIFT+V。"""
+def describe_voice(mods: list, vk: int, trigger: str, short: bool = False) -> str:
+    """把语音键接法说成人话，比如 开关 CTRL+SHIFT+V（按下开 / 松手关）。"""
     names = [str(m).upper() for m in mods or []]
     names.append(VK_NAME.get(int(vk), f"VK 0x{int(vk):02X}"))
-    return "长按 " + "+".join(names)
-
-
-def describe_action(act: dict) -> str:
-    """把动作描述成人话，给按键映射表用。"""
-    if not act:
-        return "无动作"
-    kind = act.get("type")
-    if kind == "key":
-        mods = "+".join(str(m).upper() for m in act.get("mods", []) or [])
-        vk = int(act.get("vk", 0))
-        text = f"{mods}+" if mods else ""
-        text += f"VK 0x{vk:02X}"
-        rep = int(act.get("repeat", 1) or 1)
-        if rep > 1:
-            text += f" ×{rep}"
-        return text
-    if kind == "scroll":
-        d = int(act.get("delta", 0))
-        return f"滚轮{'↑' if d > 0 else '↓'} {abs(d)}"
-    if kind == "run":
-        cmd = str(act.get("cmd", ""))
-        return f"启动 {cmd}" if cmd else "启动"
-    if kind == "paste":
-        return "粘贴" + ("并回车" if act.get("enter") else "")
-    if kind == "enter":
-        return "粘贴并回车"
-    if kind == "none":
-        note = str(act.get("note", "")).strip()
-        return note or "直通（不拦截）"
-    return str(kind)
+    combo = "+".join(names)
+    if trigger == "toggle":
+        return f"开关 {combo}" if short else f"开关 {combo}（按下开 / 松手关）"
+    return f"按住 {combo}"
 
 
 class Dot(QLabel):
@@ -560,8 +565,17 @@ class EventRow(QFrame):
         if k == "paste":
             return "已粘贴到前台窗口"
         if k == "voice_start":
-            return "已按住语音快捷键" if ev.get("mode") == "hotkey" else "开始录音"
+            if ev.get("mode") != "hotkey":
+                return "开始录音"
+            text = ("已发送开始录音（开关）" if ev.get("trigger") == "toggle"
+                    else "已按住语音快捷键")
+            if ev.get("focus_click") is not None:
+                text += " · 已点聊天框" + ("✓" if ev.get("focus_click") else "✗")
+            return text
         if k == "voice_stop":
+            if ev.get("mode") == "hotkey" and ev.get("dur"):
+                how = "已停录" if ev.get("trigger") == "toggle" else "已放开"
+                return f"语音 {ev.get('dur')}s · {how}"
             return f"录音结束 {ev.get('dur')}s" if ev.get("dur") else str(ev.get("text", ""))
         if k == "battery":
             return f"电量 {ev.get('value')}%"
@@ -584,8 +598,11 @@ class MainWindow(QMainWindow):
         self.resize(1020, 700)
         self.setMinimumSize(900, 620)
         self.setWindowFlags(Qt.Window | Qt.FramelessWindowHint)
+        self._settings = QSettings("AgentRMC", "AgentRMC")
+        self._screen_hooked = False
         self._build()
         self._refresh_info()
+        self._restore_geometry()
 
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._tick)
@@ -733,7 +750,7 @@ class MainWindow(QMainWindow):
 
         self.info_vals = {}
         for key, label in [("device", "设备"), ("vk", "语音键"),
-                           ("vmode", "语音模式"), ("model", "模型"), ("rules", "指令")]:
+                           ("vmode", "语音（当前）"), ("model", "模型"), ("rules", "指令")]:
             row = QHBoxLayout()
             k = QLabel(label)
             k.setObjectName("rowKey")
@@ -869,8 +886,31 @@ class MainWindow(QMainWindow):
 
         keys = prof.get("keys", {}) or {}
         actions = prof.get("actions", {}) or {}
+
+        # 语音键先单独一行：它不走 keys 表，接法由 profile.voice 决定
+        if self.ctl.voice_mode == "hotkey":
+            mods, hk_vk, trigger = core.voice_hotkey(prof)
+            voice_desc = describe_voice(mods, hk_vk, trigger)
+        else:
+            voice_desc = "本地 whisper · 按住录音"
+        self.map_grid.addWidget(self._map_row(116, "语音输入", {}, voice_desc))
+
+        nav = prof.get("nav") or {}
+        if nav.get("keys"):
+            self.map_grid.addWidget(self._map_row(
+                "nav", "导航模式", {}, "长按 Home 开关 · 导航中 ←→ 选择控件",
+                chip_text="导航"))
+            for vk_s, sem in nav["keys"].items():
+                try:
+                    vk = int(vk_s)
+                except (TypeError, ValueError):
+                    continue
+                self.map_grid.addWidget(self._map_row(
+                    vk, f"导航 · {KEY_LABEL.get(vk, vk)}", actions.get(sem, {}),
+                    chip_text="导航"))
+
         if not keys:
-            hint = QLabel("这个 profile 没有配置按键")
+            hint = QLabel("这个 profile 没有配置其他按键")
             hint.setStyleSheet(f"color: {MUTED}; font-size: 12px; padding: 16px;")
             self.map_grid.addWidget(hint)
             self.map_grid.addStretch(1)
@@ -883,14 +923,17 @@ class MainWindow(QMainWindow):
             self.map_grid.addWidget(self._map_row(vk, sem, actions.get(sem, {})))
         self.map_grid.addStretch(1)
 
-    def _map_row(self, vk: int, sem: str, act: dict) -> QWidget:
+    def _map_row(self, vk: int | str, sem: str, act: dict,
+                 desc_override: str | None = None,
+                 chip_text: str | None = None) -> QWidget:
         row = QFrame()
         row.setStyleSheet("background: rgba(255,255,255,7); border-radius: 8px;")
         lay = QHBoxLayout(row)
         lay.setContentsMargins(9, 6, 10, 6)
         lay.setSpacing(10)
 
-        chip = QLabel(KEY_LABEL.get(vk, f"0x{vk:02X}"))
+        chip = QLabel(chip_text or (KEY_LABEL.get(vk, f"0x{vk:02X}")
+                                    if isinstance(vk, int) else "组合"))
         chip.setFixedWidth(46)
         chip.setAlignment(Qt.AlignCenter)
         chip.setStyleSheet("color: #e6edf3; font-size: 11.5px; font-weight: 600;"
@@ -900,7 +943,8 @@ class MainWindow(QMainWindow):
         name = QLabel(str(sem))
         name.setStyleSheet("color: #c9d1d9; font-size: 12.5px;")
 
-        desc = QLabel(describe_action(act))
+        desc = QLabel(desc_override if desc_override is not None
+                      else core.describe_action(act))
         desc.setStyleSheet(f"color: {MUTED}; font-size: 11.5px;")
         desc.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
 
@@ -926,6 +970,8 @@ class MainWindow(QMainWindow):
     def _reload_profiles(self) -> None:
         try:
             self.ctl.profiles = core.ProfileManager(core.load_profiles())
+            self.ctl.router.profiles = self.ctl.profiles
+            self.ctl.router.reset()
             self.map_combo.blockSignals(True)
             self.map_combo.clear()
             self.map_combo.addItem("跟随前台", None)
@@ -946,9 +992,13 @@ class MainWindow(QMainWindow):
         self.info_vals["vk"].setText(f"0x{c.voice_vk:02X}")
         mode = c.voice_mode
         if mode == "hotkey":
-            self.info_vals["vmode"].setText(describe_hotkey(c.hk_mods, c.hk_vk))
+            mods, hk_vk, trigger = core.voice_hotkey(c.profiles.current())
+            self.info_vals["vmode"].setText(describe_voice(mods, hk_vk, trigger, short=True))
+            self.wave.hint = ("按住遥控器语音键 · 松手停录（Qoder）"
+                              if trigger == "toggle" else "按住遥控器语音键 · 松手结束")
         else:
             self.info_vals["vmode"].setText("本地 whisper")
+            self.wave.hint = "按住遥控器语音键 · 松手出字"
         if c.voice_mode == "hotkey":
             self.info_vals["model"].setText("不加载（hotkey）")
         else:
@@ -1007,24 +1057,44 @@ class MainWindow(QMainWindow):
         c = self.ctl
         for ev in c.drain(self._seq):
             self._seq = ev["id"]
-            self._append(ev)
+            if not ev.get("quiet"):
+                self._append(ev)
             k = ev.get("kind")
-            if k == "text" and ev.get("text"):
-                self._set_result("done", ev["text"], f"识别耗时 {ev.get('cost')}s")
+            if k == "text":
+                if ev.get("text"):
+                    self._set_result("done", ev["text"], f"识别耗时 {ev.get('cost')}s")
+                else:
+                    self._set_result("done", ev.get("note") or "没有识别到内容", "")
                 self.rec_label.setText("")
             elif k == "voice_start":
-                self._set_result("live", "正在聆听…", "松手后自动转写")
+                if ev.get("mode") == "hotkey":
+                    meta = ("松手停录 · Qoder 开关式" if ev.get("trigger") == "toggle"
+                            else "松手结束")
+                    self._set_result("live", "正在聆听…", meta)
+                else:
+                    self._set_result("live", "正在聆听…", "松手后自动转写")
                 self.rec_label.setText("● REC")
             elif k == "voice_stop":
                 self.rec_label.setText("")
+                if ev.get("mode") == "hotkey":
+                    self._set_result("done", "已停止 · 等 Agent 出字",
+                                     f"本次 {ev.get('dur')}s")
+                elif ev.get("text") == "录音太短":
+                    self._set_result("done", "录音太短", "")
+                else:
+                    self._set_result("live", "转写中…", f"录音 {ev.get('dur')}s")
             elif k == "error":
                 self._set_result("live", ev.get("text", "出错了"), "")
 
         self.wave.push(c.level, c.state == "recording")
+        if c.state == "recording" and c.voice_mode == "hotkey":
+            held = max(0.0, time.time() - c.record_started)
+            self.meta.setText(f"已录 {held:.1f}s · 松手结束")
         pname = c.profiles.current().get("name", "?")
         self.pill_profile.setText(pname)
         if pname != self._last_profile:
             self._last_profile = pname
+            self._refresh_info()
             if self.map_combo.currentData() is None:   # 跟随前台时才自动刷
                 self._refresh_keymap()
         if c.battery is not None:
@@ -1032,9 +1102,67 @@ class MainWindow(QMainWindow):
         if c.running != (self.btn_toggle.text() == "停止监听"):
             self._set_running(c.running)
 
+    # ---------- 跨屏 / 缩放 ----------
+    @staticmethod
+    def fit_rect(frame: QRect, avail: QRect) -> QRect:
+        """把 frame 收进 avail：放不下就缩到屏幕大小，再贴边。"""
+        w = min(frame.width(), avail.width())
+        h = min(frame.height(), avail.height())
+        if w >= avail.width():
+            x = avail.left()
+        else:
+            x = min(max(frame.left(), avail.left()), avail.right() - w + 1)
+        if h >= avail.height():
+            y = avail.top()
+        else:
+            y = min(max(frame.top(), avail.top()), avail.bottom() - h + 1)
+        return QRect(x, y, w, h)
+
+    def _restore_geometry(self) -> None:
+        raw = self._settings.value("window/geometry")
+        if raw:
+            self.restoreGeometry(raw)
+        else:
+            scr = QGuiApplication.primaryScreen()
+            if scr is not None:
+                avail = scr.availableGeometry()
+                self.resize(min(1020, avail.width()), min(700, avail.height()))
+                self.move(avail.center().x() - self.width() // 2,
+                          avail.center().y() - self.height() // 2)
+        self._fit_to_screen()
+
+    def _fit_to_screen(self) -> None:
+        scr = QGuiApplication.screenAt(self.frameGeometry().center())
+        if scr is None:
+            scr = QGuiApplication.primaryScreen()
+        if scr is None:
+            return
+        avail = scr.availableGeometry()
+        target = self.fit_rect(self.frameGeometry(), avail)
+        if target.size() != self.size():
+            self.resize(target.size())
+            target = self.fit_rect(self.frameGeometry(), avail)
+        if target.topLeft() != self.pos():
+            self.move(target.topLeft())
+
+    def _on_screen_changed(self, _screen=None) -> None:
+        QTimer.singleShot(250, self._fit_to_screen)
+
+    def showEvent(self, e) -> None:  # noqa: N802
+        super().showEvent(e)
+        if not self._screen_hooked:
+            wh = self.windowHandle()
+            if wh is not None:
+                wh.screenChanged.connect(self._on_screen_changed)
+                self._screen_hooked = True
+
     # ---------- 无边框拖动 ----------
     def mousePressEvent(self, e) -> None:  # noqa: N802
         if e.button() == Qt.LeftButton and e.position().y() < 52:
+            wh = self.windowHandle()
+            if wh is not None and wh.startSystemMove():
+                QTimer.singleShot(250, self._fit_to_screen)
+                return
             self._drag = e.globalPosition().toPoint() - self.frameGeometry().topLeft()
         super().mousePressEvent(e)
 
@@ -1048,15 +1176,19 @@ class MainWindow(QMainWindow):
         super().mouseReleaseEvent(e)
 
     def closeEvent(self, e) -> None:  # noqa: N802
+        try:
+            self._settings.setValue("window/geometry", self.saveGeometry())
+        except Exception:  # noqa: BLE001
+            pass
         self.ctl.stop()
         super().closeEvent(e)
 
 
 def main() -> None:
+    QApplication.setHighDpiScaleFactorRoundingPolicy(
+        Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
     app = QApplication(sys.argv)
     app.setStyleSheet(QSS)
-    win = MainWindow()
-    win.show()
 
     def _arg(name: str) -> str | None:
         for i, a in enumerate(sys.argv):
@@ -1064,15 +1196,38 @@ def main() -> None:
                 return sys.argv[i + 1]
         return None
 
-    # --shot 路径：渲染一帧存 PNG 后退出，用于无人值守验收界面
     shot = _arg("--shot")
+    # 截图 / 诊断可以绕过单实例；正常启动必须唯一，否则每个键会注入两次
+    if not shot and "--allow-multi" not in sys.argv:
+        if not core.acquire_single_instance():
+            QMessageBox.information(
+                None, "AgentRMC",
+                "AgentRMC 已经在运行。\n\n同一时间只允许一个实例，避免按键被注入两次。")
+            return
+
+    win = MainWindow()
+    start_minimized = bool((core.CFG.get("ui") or {}).get("start_minimized"))
+    if start_minimized and not shot and "--selftest" not in sys.argv:
+        win.showMinimized()
+    else:
+        win.show()
+
+    # --pin qoder：固定看某个 profile 的按键映射（配合 --shot 做验收）
+    pin = _arg("--pin")
+    if pin:
+        idx = win.map_combo.findData(pin)
+        if idx >= 0:
+            win.map_combo.setCurrentIndex(idx)
+            win.tabs.setCurrentIndex(1)
+
+    # --shot 路径：渲染一帧存 PNG 后退出，用于无人值守验收界面
     tab = _arg("--tab")
     if tab is not None:
         try:
             win.tabs.setCurrentIndex(1 if tab == "keymap" else int(tab))
         except (ValueError, IndexError):
             pass
-    if shot:
+    if shot and "--selftest" not in sys.argv:
         def _grab() -> None:
             win.grab().save(shot)
             print(f"[shot] saved {shot}", flush=True)
@@ -1080,9 +1235,16 @@ def main() -> None:
 
         QTimer.singleShot(1500, _grab)
 
-    # --autostart：启动就自动开始监听（不想每次手点按钮时用）
-    if "--autostart" in sys.argv:
-        QTimer.singleShot(500, win._toggle)
+    # 默认启动即监听（config.json 的 ui.auto_listen）；截图/自测默认不自动开，
+    # 但显式 --autostart 仍然生效（用于验收"启动即监听"这条路径）
+    auto_listen = bool((core.CFG.get("ui") or {}).get("auto_listen"))
+    if ("--autostart" in sys.argv
+            or (not shot and "--selftest" not in sys.argv and auto_listen)):
+        def _auto_start() -> None:
+            if not win.ctl.running:
+                win._toggle()
+
+        QTimer.singleShot(450, _auto_start)
 
     # --selftest：真的拉起监听、等模型加载、读电量，然后截图退出
     if "--selftest" in sys.argv:

@@ -537,6 +537,38 @@ def taskbar_state() -> str:
             f":{r.left},{r.top},{r.right},{r.bottom}")
 
 
+def remote_present() -> bool:
+    """遥控器 HID 接口在位 = 已连接可用（BLE 连上后不再广播，只能这样判断）。"""
+    try:
+        import hid
+
+        vid, pid = remote_vid_pid()
+        if not vid:
+            return False
+        return bool(hid.enumerate(vid, pid))
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def remote_vid_pid() -> tuple[int, int]:
+    """从 config 的 device_mark（形如 01000d_pid&3838）解析 VID/PID。"""
+    mark = str(CFG.get("device_mark", ""))
+    try:
+        head, _, tail = mark.partition("_pid&")
+        return int(head[-4:], 16), int(tail, 16)
+    except (ValueError, IndexError):
+        return 0, 0
+
+
+def open_bluetooth_settings() -> bool:
+    """打开系统蓝牙设置页（Windows 不允许第三方程序静默配对 BLE HID）。"""
+    try:
+        os.startfile("ms-settings:bluetooth")  # noqa: S606
+        return True
+    except OSError:
+        return False
+
+
 PROFILES_PATH = HERE / "profiles.json"
 
 DEFAULT_PROFILES = {
@@ -985,7 +1017,8 @@ class KeyRouter:
                                    {"type": "mode", "mode": target,
                                     "label": MODE_LABELS[target]})
                 return
-            st = {"started": now, "action": action, "name": name, "profile": pname,
+            st = {"started": now, "vkey": vkey, "action": action, "name": name,
+                  "profile": pname,
                   "count": 0, "fired": None, "hold_action": None, "deferred": False}
             self._active[vkey] = st
             self._tap_pending[vkey] = {"due": now + TAP_WINDOW, "last": now, "st": st}
@@ -994,7 +1027,8 @@ class KeyRouter:
 
     def _begin(self, vkey: int, now: float, pname: str, name: str,
                action: dict) -> None:
-        st = {"started": now, "action": action, "name": name, "profile": pname,
+        st = {"started": now, "vkey": vkey, "action": action, "name": name,
+              "profile": pname,
               "count": 0, "fired": None, "hold_action": action.get("hold_action"),
               "deferred": False}
         self._active[vkey] = st
@@ -1103,7 +1137,8 @@ class KeyRouter:
                 detail = f"长按 {dur_ms / 1000:.1f}s · {detail} ×{n}"
             elif dur_ms >= 250 and not st.get("deferred"):
                 detail = f"长按 {dur_ms / 1000:.1f}s · {detail}"
-        self.emit("key", name=st["name"], profile=st["profile"], detail=detail)
+        self.emit("key", name=st["name"], profile=st["profile"], detail=detail,
+                  vk=st.get("vkey", 0))
 
     def _dispatch(self, profile: str, name: str, action: dict) -> None:
         kind = action.get("type")

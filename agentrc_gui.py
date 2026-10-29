@@ -193,6 +193,8 @@ class Controller:
         self.record_started = 0.0
         self.last_voice_event = 0.0
         self.repeat_count = 0
+        self.media_voice = False     # 当前语音会话由耳机播放键发起（无 keyup，只能 toggle）
+        self.last_media_voice = 0.0
         self.level = 0.0
         self.battery = None
         self.last_text = ""
@@ -229,8 +231,17 @@ class Controller:
             return False, str(e)
         self.running = True
         core.key_events.clear()          # 丢掉停止期间积压的按键
+        core.media_events.clear()
+        self.media_voice = False
         self.router.reset()
         self.emit("status", text="监听已启动")
+        if ((core.CFG.get("media_voice") or {}).get("enabled", True)
+                and self.voice_mode == "hotkey"):
+            if core.media_hook_start(lambda: core.media_voice_gate(self.profiles,
+                                                                   self.voice_mode)):
+                self.emit("log", text="耳机播放键：Qoder/WorkBuddy 前台时开关语音")
+            else:
+                self.emit("log", text="耳机播放键接管失败（低层钩子没装上）")
         self._thread = threading.Thread(target=self._loop, daemon=True)
         self._thread.start()
         threading.Thread(target=self._load_model, daemon=True).start()
@@ -240,6 +251,8 @@ class Controller:
     def stop(self) -> None:
         self.running = False
         self._release_holding(0)
+        core.media_hook_stop()
+        self.media_voice = False
         t = self._thread
         if t is not None and t is not threading.current_thread():
             t.join(timeout=0.6)
@@ -292,6 +305,9 @@ class Controller:
             try:
                 core.pump()
                 now = time.time()
+                while core.media_events:
+                    core.media_events.popleft()
+                    self._media_voice_press(now)
                 while core.key_events:
                     ev = core.key_events.popleft()
                     if ev["vkey"] == self.voice_vk:
@@ -357,6 +373,42 @@ class Controller:
             if self.voice_mode == "hotkey":
                 self._finish((now - self.record_started) * 1000)
 
+    def _media_voice_press(self, now: float) -> None:
+        """耳机播放键：按一下开、再按一下关；没有 keyup，不能走按住逻辑。"""
+        if not core.media_voice_gate(self.profiles, self.voice_mode):
+            return
+        if now - self.last_media_voice < 0.35:      # 双击手势别开又关
+            return
+        self.last_media_voice = now
+        if self.state == "recording":
+            if self.media_voice:
+                self._finish((now - self.record_started) * 1000)
+            return
+        if self.state == "pending":
+            self.state = "idle"
+        prof = self.profiles.current(force=True)
+        mods, vk, trigger = core.voice_hotkey(prof)
+        if trigger != "toggle":
+            return
+        exe, title = core.foreground_info()
+        fc = core.voice_focus_click(prof)
+        focused = None
+        if fc:
+            focused = core.click_foreground(*fc)
+            if focused:
+                time.sleep(0.02)
+        core.tap_combo(mods, vk)
+        self.active_voice = (mods, vk, trigger)
+        self.holding = True
+        self.media_voice = True
+        self.state = "recording"
+        self.record_started = now
+        self.last_voice_event = now
+        core.beep(1180, 60)
+        self.emit("voice_start", mode="hotkey", trigger=trigger, source="headset",
+                  focus_click=focused, fg=f"{exe}|{title[:24]}",
+                  tray=core.taskbar_state())
+
     def _tick(self, now: float) -> None:
         if self.state == "pending" and (now - self.pending_since) * 1000 > self.confirm_ms:
             self.state = "idle"
@@ -365,7 +417,7 @@ class Controller:
                 self.level = 0.0
             else:
                 self.level = self.recorder.level
-            if (now - self.last_voice_event) * 1000 > self.silence_ms:
+            if not self.media_voice and (now - self.last_voice_event) * 1000 > self.silence_ms:
                 self._finish((now - self.record_started) * 1000)
         else:
             self.level = 0.0
@@ -386,7 +438,9 @@ class Controller:
         self.holding = False
 
     def _finish(self, dur_ms: float) -> None:
+        was_media = self.media_voice
         self.state = "idle"
+        self.media_voice = False
         if self.voice_mode == "hotkey":
             trigger = self.active_voice[2]
             fg = core.foreground_info()[0]
@@ -394,7 +448,8 @@ class Controller:
             self.level = 0.0
             core.beep(760, 60)
             self.emit("voice_stop", dur=round(dur_ms / 1000, 1), mode="hotkey",
-                      trigger=trigger, fg=fg, tray=core.taskbar_state())
+                      trigger=trigger, source="headset" if was_media else "",
+                      fg=fg, tray=core.taskbar_state())
             return
         audio = self.recorder.stop()
         self.level = 0.0
@@ -597,6 +652,8 @@ class EventRow(QFrame):
         if k == "paste":
             return "已粘贴到前台窗口"
         if k == "voice_start":
+            if ev.get("source") == "headset":
+                return "耳机播放键 · 已开语音（再按一次停止）"
             if ev.get("mode") != "hotkey":
                 return "开始录音"
             text = ("已发送开始录音（开关）" if ev.get("trigger") == "toggle"
@@ -605,6 +662,8 @@ class EventRow(QFrame):
                 text += " · 已点聊天框" + ("✓" if ev.get("focus_click") else "✗")
             return text
         if k == "voice_stop":
+            if ev.get("source") == "headset" and ev.get("dur"):
+                return f"耳机语音 {ev.get('dur')}s · 已停"
             if ev.get("mode") == "hotkey" and ev.get("dur"):
                 how = "已停录" if ev.get("trigger") == "toggle" else "已放开"
                 return f"语音 {ev.get('dur')}s · {how}"
@@ -1536,8 +1595,11 @@ class MainWindow(QMainWindow):
             wire = "本地 whisper"
             self.wave.hint = "按住遥控器语音键 · 松手出字"
             model = "whisper " + core.CFG["voice"]["asr_model"]
+        media_hint = (" · 耳机播放键开/关"
+                      if (core.CFG.get("media_voice") or {}).get("enabled", True)
+                      and c.voice_mode == "hotkey" else "")
         self.info_line.setText(
-            f"语音接法 {wire} · 模型 {model} · 指令 {len(c.rules.rules)} 条\n"
+            f"语音接法 {wire}{media_hint} · 模型 {model} · 指令 {len(c.rules.rules)} 条\n"
             f"设备 {core.CFG.get('device_mark', '-')}",
         )
 
@@ -1630,7 +1692,9 @@ class MainWindow(QMainWindow):
                 self.rec_label.setText("")
             elif k == "voice_start":
                 self.panel.flash(116)
-                if ev.get("mode") == "hotkey":
+                if ev.get("source") == "headset":
+                    self._set_result("live", "正在聆听…", "再按耳机播放键停止")
+                elif ev.get("mode") == "hotkey":
                     meta = ("松手停录 · Qoder 开关式" if ev.get("trigger") == "toggle"
                             else "松手结束")
                     self._set_result("live", "正在聆听…", meta)
@@ -1657,7 +1721,8 @@ class MainWindow(QMainWindow):
             self._refresh_bt_state()
         if c.state == "recording" and c.voice_mode == "hotkey":
             held = max(0.0, time.time() - c.record_started)
-            self.meta.setText(f"已录 {held:.1f}s · 松手结束")
+            tail = "再按耳机播放键停止" if c.media_voice else "松手结束"
+            self.meta.setText(f"已录 {held:.1f}s · {tail}")
         pname = c.profiles.current().get("name", "?")
         self.pill_profile.setText(pname)
         if pname != self._last_profile:

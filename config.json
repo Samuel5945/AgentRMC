@@ -7,6 +7,11 @@
     "silence_stop_ms": 700,
     "min_record_ms": 300
   },
+  "media_voice": {
+    "enabled": true,
+    "vkey": 179,
+    "swallow_in": ["qoder", "agent"]
+  },
   "keys": {
     "38": "up",
     "40": "down",

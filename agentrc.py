@@ -11,6 +11,7 @@
    - toggle —— 按下发一次快捷键、松手再发一次（Qoder 的语音是"再按一次停止"的开关）
 4. 松手后录音送本地 whisper 转写，结果写入剪贴板并粘贴到当前焦点窗口。
 5. 其余按键按 profiles.json 的映射转成系统动作，支持长按连发、点击/长按双动作。
+6. 蓝牙耳机的播放/暂停键：Qoder/WorkBuddy 前台时接管为语音开关（AVRCP 只有 keydown）。
 
 用法
 ----
@@ -63,6 +64,13 @@ DEFAULT_CONFIG = {
         "min_repeats": 2,
         "silence_stop_ms": 700,
         "min_record_ms": 300,
+    },
+    # 蓝牙耳机播放/暂停键：Qoder/WorkBuddy 前台时接管为语音开关。
+    # 耳机走 AVRCP，只有注入的 keydown，没有 keyup，所以只能做 toggle。
+    "media_voice": {
+        "enabled": True,
+        "vkey": 0xB3,          # VK_MEDIA_PLAY_PAUSE
+        "swallow_in": ["qoder", "agent"],
     },
     "keys": {
         "38": "up", "40": "down", "37": "left", "39": "right",
@@ -458,6 +466,86 @@ def cursor_hook_stop() -> None:
 
 
 # --------------------------------------------------------------------------
+# 耳机播放/暂停键：AVRCP 只送注入的 keydown，没有 keyup，也没有设备名。
+# Qoder / WorkBuddy 前台时把它吞掉并入队，其他地方照常放行给系统媒体控制。
+# 钩子跑在独立线程里（自带消息泵），不依赖 Qt / 主线程的节奏。
+# --------------------------------------------------------------------------
+MEDIA_VOICE_CFG = CFG.get("media_voice") or {}
+MEDIA_VKEY = int(MEDIA_VOICE_CFG.get("vkey", 0xB3))
+_media_hook = None
+_media_hook_proc = None
+_media_gate = None
+_media_thread: threading.Thread | None = None
+_media_thread_stop = threading.Event()
+_media_ready = threading.Event()
+media_events: deque = deque(maxlen=64)
+
+
+def _media_hook_cb(nCode, wParam, lParam):
+    if nCode == 0 and _media_gate is not None:
+        kb = ctypes.cast(lParam, ctypes.POINTER(_KBDLLHOOKSTRUCT)).contents
+        if int(kb.vkCode) == MEDIA_VKEY and (kb.flags & LLKHF_INJECTED):
+            try:
+                take = bool(_media_gate())
+            except Exception:  # noqa: BLE001
+                take = False
+            if take:
+                if wParam in (WM_KEYDOWN, WM_SYSKEYDOWN):
+                    media_events.append(time.time())
+                return 1
+    return user32.CallNextHookEx(None, nCode, wParam, lParam)
+
+
+def _media_hook_loop() -> None:
+    global _media_hook, _media_hook_proc
+    _media_hook_proc = _HOOKPROC(_media_hook_cb)
+    _media_hook = user32.SetWindowsHookExW(WH_KEYBOARD_LL, _media_hook_proc, None, 0)
+    _media_ready.set()
+    msg = wt.MSG()
+    try:
+        while not _media_thread_stop.is_set():
+            while user32.PeekMessageW(ctypes.byref(msg), None, 0, 0, 1):
+                user32.TranslateMessage(ctypes.byref(msg))
+                user32.DispatchMessageW(ctypes.byref(msg))
+            time.sleep(0.004)
+    finally:
+        if _media_hook:
+            user32.UnhookWindowsHookEx(_media_hook)
+            _media_hook = None
+
+
+def media_hook_start(gate) -> bool:
+    """gate() 返回 True 时吞掉耳机播放键；只在目标 profile 前台时调用。"""
+    global _media_thread, _media_gate
+    if not MEDIA_VOICE_CFG.get("enabled", True):
+        return False
+    if _media_thread is not None and _media_thread.is_alive():
+        _media_gate = gate
+        return True
+    _media_gate = gate
+    _media_thread_stop.clear()
+    _media_ready.clear()
+    _media_thread = threading.Thread(target=_media_hook_loop, daemon=True,
+                                     name="AgentRMC-media-hook")
+    _media_thread.start()
+    _media_ready.wait(0.5)
+    if not _media_hook:
+        media_hook_stop()
+        return False
+    return True
+
+
+def media_hook_stop() -> None:
+    global _media_thread
+    _media_thread_stop.set()
+    t = _media_thread
+    if t is not None and t.is_alive() and t is not threading.current_thread():
+        t.join(0.6)
+    _media_thread = None
+    _media_gate = None
+
+
+# --------------------------------------------------------------------------
 # 点击前台窗口里的相对位置（把焦点送回 Qoder 聊天框）
 # --------------------------------------------------------------------------
 MOUSEEVENTF_LEFTDOWN = 0x0002
@@ -827,6 +915,18 @@ def voice_hotkey(profile: dict | None = None) -> tuple[list, int, str]:
     if trigger not in ("hold", "toggle"):
         trigger = "hold"
     return [str(m).lower() for m in hk.get("mods", [])], int(hk.get("vk", 0x56)), trigger
+
+
+def media_voice_gate(profiles, voice_mode: str) -> bool:
+    """耳机播放键是否该被接管：hotkey 模式 + 目标 profile 在前台。"""
+    cfg = CFG.get("media_voice") or {}
+    if not cfg.get("enabled", True) or str(voice_mode).lower() != "hotkey":
+        return False
+    names = cfg.get("swallow_in") or ["qoder", "agent"]
+    try:
+        return profiles.current(force=True).get("name") in names
+    except Exception:  # noqa: BLE001
+        return False
 
 
 # --------------------------------------------------------------------------
@@ -1592,6 +1692,8 @@ class App:
         self.last_voice_event = 0.0
         self.repeat_count = 0
         self.busy_transcribing = False
+        self.media_voice = False     # 当前语音会话由耳机播放键发起（toggle，无 keyup）
+        self.last_media_voice = 0.0
 
     # ---- 普通按键 ----
     def _on_router_event(self, kind: str, **data) -> None:
@@ -1649,11 +1751,41 @@ class App:
                 # 松手就结束，不等静音判定
                 self.finish_recording((now - self.record_started) * 1000)
 
+    def on_media_voice(self, now: float) -> None:
+        """耳机播放键：按一下开、再按一下关（AVRCP 没有 keyup，只能 toggle）。"""
+        if not media_voice_gate(self.profiles, self.voice_mode):
+            return
+        if now - self.last_media_voice < 0.35:
+            return
+        self.last_media_voice = now
+        if self.state == "recording":
+            if self.media_voice:
+                self.finish_recording((now - self.record_started) * 1000)
+            return
+        if self.state == "pending":
+            self.state = "idle"
+        prof = self.profiles.current(force=True)
+        mods, vk, trigger = voice_hotkey(prof)
+        if trigger != "toggle":
+            return
+        fc = voice_focus_click(prof)
+        if fc:
+            click_foreground(*fc)
+        tap_combo(mods, vk)
+        self.active_voice = (mods, vk, trigger)
+        self.holding = True
+        self.media_voice = True
+        self.state = "recording"
+        self.record_started = now
+        self.last_voice_event = now
+        beep(1180, 60)
+        print(f"● 耳机播放键：语音开（{'/'.join(mods)}+0x{vk:02X}）")
+
     def tick(self, now: float) -> None:
         if self.state == "pending" and (now - self.pending_since) * 1000 > self.confirm_ms:
             self.state = "idle"
 
-        if self.state == "recording":
+        if self.state == "recording" and not self.media_voice:
             idle_ms = (now - self.last_voice_event) * 1000
             dur_ms = (now - self.record_started) * 1000
             if idle_ms > self.silence_ms:
@@ -1677,12 +1809,16 @@ class App:
         self.holding = False
 
     def finish_recording(self, dur_ms: float) -> None:
+        was_media = self.media_voice
         self.state = "idle"
+        self.media_voice = False
         if self.voice_mode == "hotkey":
             fg = foreground_info()[0]
             self.release_holding(dur_ms)
             beep(760, 70)
             print(f"● 语音快捷键已结束（前台 {fg or '?'} tray={taskbar_state()}）")
+            if was_media:
+                print("· 耳机播放键：语音关")
             return
         audio = self.recorder.stop()
         beep(760, 70)
@@ -1762,11 +1898,18 @@ def main() -> None:
     hwnd = start_listener()
     app = App()
     _mods, _vk, _trigger = voice_hotkey(app.profiles.current())
+    media_on = ((CFG.get("media_voice") or {}).get("enabled", True)
+                and app.voice_mode == "hotkey")
+    if not args.list_keys and media_on:
+        if not media_hook_start(lambda: media_voice_gate(app.profiles, app.voice_mode)):
+            print("[!] 耳机播放键接管失败（低层钩子没装上）")
 
     print("=" * 62)
     print("  AgentRMC 已启动")
     print(f"  设备过滤: {CFG['device_mark']}")
     print(f"  语音键: vkey={app.voice_vk} (0x{app.voice_vk:02X})，长按触发语音")
+    if media_on:
+        print("  耳机播放键: Qoder/WorkBuddy 前台时开关语音")
     print(f"  语音接法: {_trigger}  {'+'.join(_mods)}+0x{_vk:02X}")
     if app.voice_mode == "hotkey":
         print("  ASR: 不加载（hotkey 模式交给 Agent）")
@@ -1785,6 +1928,10 @@ def main() -> None:
         while True:
             pump()
             now = time.time()
+            while media_events:
+                media_events.popleft()
+                if not args.list_keys:
+                    app.on_media_voice(now)
             while key_events:
                 ev = key_events.popleft()
                 if args.list_keys:
@@ -1806,6 +1953,7 @@ def main() -> None:
     except KeyboardInterrupt:
         print("\n退出")
         app.release_holding()
+        media_hook_stop()
         user32.DestroyWindow(hwnd)
 
 

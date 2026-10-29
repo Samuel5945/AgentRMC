@@ -80,6 +80,7 @@
   },
   "ui": {
     "auto_listen": true,
-    "start_minimized": true
+    "start_minimized": true,
+    "close_to_tray": true
   }
 }

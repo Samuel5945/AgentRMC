@@ -264,6 +264,121 @@ def test_mode_media_and_cursor() -> None:
     print("PASS 长按返回=音量/亮度、双击菜单=鼠标，单击/超时退出")
 
 
+def test_generic_double() -> None:
+    r = setup()
+    p = r.profiles.profile
+    p["double"] = {"13": "dbl_esc"}
+    p["actions"]["dbl_esc"] = {"type": "key", "vk": 27, "label": "双击 Esc"}
+
+    # 第一次按下：等双击窗口，不执行单击
+    r.key_down(13, 0.0)
+    r.key_up(13, 0.05)
+    assert KEYS == [], "双击等待期间不该先执行 Enter"
+    # 窗口内第二次按下：执行双击动作，取消单击
+    r.key_down(13, 0.2)
+    r.key_up(13, 0.25)
+    assert KEYS == [((), 27, 1)], KEYS
+    assert EVENTS[-1]["detail"].startswith("双击 · "), EVENTS
+    r.tick(1.0)
+    assert len(EVENTS) == 1, f"双击后不该再补单击: {EVENTS}"
+    print("PASS 通用双击：第二击执行预设并取消单击")
+
+
+def test_double_none_disables_builtin() -> None:
+    r = setup()
+    r.profiles.profile["double"] = {"27": "none"}
+
+    # 不再等双击窗口，单击立即执行；连按两次也不进音量模式
+    r.key_down(27, 0.0)
+    r.key_up(27, 0.05)
+    assert EVENTS[-1]["detail"] == "原生 Esc 停止/返回", EVENTS
+    r.key_down(27, 0.2)
+    r.key_up(27, 0.25)
+    assert r.mode is None
+    assert not any("音量/亮度模式" in e.get("text", "") for e in EVENTS), EVENTS
+    print("PASS 双击设为 none：关掉内置模式，单击不再延迟")
+
+
+def test_hold_spec_action() -> None:
+    r = setup()
+    p = r.profiles.profile
+    p["hold"] = {"13": "hold_mute"}
+    p["actions"]["hold_mute"] = {"type": "key", "vk": 0xAD, "label": "静音"}
+
+    # 短按不触发长按动作
+    r.key_down(13, 0.0)
+    r.key_up(13, 0.05)
+    r.tick(1.0)
+    assert KEYS == [], KEYS
+    # 按住 0.6s 触发静音
+    r.key_down(13, 2.0)
+    r.tick(2.7)
+    assert KEYS == [((), 0xAD, 1)], KEYS
+    r.key_up(13, 2.8)
+    assert EVENTS[-1]["detail"].startswith("长按 · 静音"), EVENTS
+    print("PASS 长按动作预设：按住 0.6s 执行，短按不触发")
+
+
+def test_hold_repeat_spec() -> None:
+    r = setup()
+    p = r.profiles.profile
+    p["hold"] = {"13": "repeat"}
+    p["keys"]["13"] = "send_key"
+    p["actions"]["send_key"] = {"type": "key", "vk": 0x41, "label": "A"}
+
+    r.key_down(13, 0.0)
+    assert KEYS == [((), 0x41, 1)], KEYS
+    r.tick(0.15)
+    assert len(KEYS) == 2, f"按住应重复触发: {KEYS}"
+    r.key_up(13, 0.2)
+    print("PASS 长按重复预设：按住重复当前动作")
+
+
+def test_hold_none_overrides_legacy() -> None:
+    r = setup()
+    r.profiles.profile["hold"] = {"38": "none"}
+    r.key_down(38, 0.0)
+    r.tick(0.5)
+    r.key_up(38, 0.6)
+    assert DELTAS == [300], f"none 应覆盖动作自带的 hold_repeat: {DELTAS}"
+    print("PASS 长按 none：覆盖旧的 hold_repeat")
+
+
+def test_double_with_hold() -> None:
+    r = setup()
+    p = r.profiles.profile
+    p["double"] = {"13": "dbl_esc"}
+    p["hold"] = {"13": "hold_mute"}
+    p["actions"]["dbl_esc"] = {"type": "key", "vk": 27, "label": "双击 Esc"}
+    p["actions"]["hold_mute"] = {"type": "key", "vk": 0xAD, "label": "静音"}
+
+    # 单击窗口过后：先执行单击，再进入长按计时；双击不触发
+    r.key_down(13, 0.0)
+    r.tick(0.4)
+    assert not any(k[1] == 27 for k in KEYS), "还没到双击，不该执行 Esc"
+    r.tick(0.7)
+    assert KEYS == [((), 0xAD, 1)], KEYS
+    r.key_up(13, 0.8)
+    print("PASS 双击键也能长按：单击窗口后接长按动作")
+
+
+def test_extend_double_hold() -> None:
+    raw = [
+        {"name": "base", "keys": {"13": "a"},
+         "actions": {"a": {"type": "key", "vk": 65},
+                     "d": {"type": "key", "vk": 66},
+                     "h": {"type": "key", "vk": 67}},
+         "double": {"13": "d"}, "hold": {"13": "h"}},
+        {"name": "child", "extends": "base",
+         "double": {"27": "none"}, "hold": {"27": "repeat"}},
+    ]
+    by = {p["name"]: p for p in core.resolve_profiles(raw)}
+    child = by["child"]
+    assert child["double"] == {"13": "d", "27": "none"}, child["double"]
+    assert child["hold"] == {"13": "h", "27": "repeat"}, child["hold"]
+    print("PASS extends 合并 double/hold")
+
+
 def test_profiles_extend() -> None:
     import json
 
@@ -292,6 +407,8 @@ def test_describe() -> None:
     h = profile()["actions"]["home"]
     assert core.describe_action(h) == "滚到顶 · 长按 滚到底", core.describe_action(h)
     assert core.describe_action({"type": "none", "note": "原生 Enter 发送"}) == "原生 Enter 发送"
+    assert core.describe_action({"type": "click"}) == "鼠标左键"
+    assert core.describe_action({"type": "key", "vk": 0x7A}) == "F11"
     print("PASS 映射页文案")
 
 
@@ -373,6 +490,13 @@ if __name__ == "__main__":
     test_quick_tap_one_event()
     test_nav_mode()
     test_mode_media_and_cursor()
+    test_generic_double()
+    test_double_none_disables_builtin()
+    test_hold_spec_action()
+    test_hold_repeat_spec()
+    test_hold_none_overrides_legacy()
+    test_double_with_hold()
+    test_extend_double_hold()
     test_profiles_extend()
     test_describe()
     test_tap_combo()

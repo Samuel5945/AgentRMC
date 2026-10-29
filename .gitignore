@@ -26,6 +26,10 @@ rc_probe/*
 .workbuddy-ai/
 *.log
 
+# 映射页自动保存的备份/临时文件
+profiles.json.bak
+profiles.json.tmp
+
 # ---------- 系统 ----------
 .DS_Store
 Thumbs.db

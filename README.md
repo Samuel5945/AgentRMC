@@ -163,9 +163,11 @@ keydown  keydown  keydown  ...  keydown   keyup
 ```bash
 tools\setup.bat          # 建 venv + 装依赖
 tools\download_model.bat # 下载 whisper small 模型（约 480MB，走 7897 代理）
+tools\download_model.bat medium   # 可选：medium / large（=large-v3）
 ```
 
-模型放在 `models/faster-whisper-small/`，程序会优先加载本地目录，不需要联网。
+模型放在 `models/faster-whisper-<尺寸>/`，程序会优先加载本地目录，不需要联网。
+图形界面的「本地模型」开关和尺寸下拉可以直接切换，详见下文。
 
 遥控器第一次配对：把它靠近要连接的设备，**同时长按「返回」+「主页」约 3 秒**，指示灯快闪后
 在系统蓝牙列表里点它。配对过一次之后不用再配，按一下任意键就会自动回连。
@@ -177,22 +179,37 @@ tools\download_model.bat # 下载 whisper small 模型（约 480MB，走 7897 �
 
 ### 图形界面（推荐）
 
-双击 **`release\AgentRMC\AgentRMC.exe`**。窗口三栏：
+双击 **`release\AgentRMC\AgentRMC.exe`**。窗口两栏，左栏上下两块：
 
-- **左 · 遥控器** —— 按真实键位画的键位图：按下哪个键就实时高亮，进入模式时可用键描边，
+- **左上 · 遥控器** —— 按真实键位画的键位图：按下哪个键就实时高亮，进入模式时可用键描边，
   电源键与音量拨杆标灰（红外，电脑收不到）。下方是**连接状态灯**
   （绿=已连接 · HID 在位 / 橙=未连接，按一下任意键回连 / 灰=未发现）和 `蓝牙设置` 按钮
-- **中 · 语音** —— 波形/脉冲、识别结果、耗时，下面两个按钮和一行运行信息
-  （语音接法、模型、指令条数、设备）
+- **左下 · 语音** —— 细电平/录音脉冲、两行识别结果、`开始监听`（监听中变红）、
+  右上角 `试麦`（录 4 秒并转写），以及一行 **`本地模型` 开关 + small/medium/large + 状态**。
+  语音接法、指令条数、设备号收进「语音」标题的悬停提示，不占版面
 - **右 · 三页签** —— `事件流`（可清空）、`按键映射`、`使用引导`
 
 顶栏是一行状态文字：`● 监听中 · 76% · default`，右侧 `使用引导` 随时弹图文引导窗口。
 
-两个按钮：`开始监听` / `测试麦克风`（录 4 秒并转写，用来验证麦克风选对了没）。
+两个按钮：`开始监听` / `试麦`。
 `config.json` 里的 `ui.auto_listen` 为 `true` 时，程序启动后自动开始监听；
 同时只允许一个实例（第二个会弹窗退出，避免每个键注入两次）。
-`ui.start_minimized` 为 `true` 时窗口启动即最小化，不去抢 Qoder 的焦点；
+`ui.start_minimized` 为 `true` 时窗口启动就藏在托盘里，不占屏幕也不抢 Qoder 的焦点
+（无边框窗口用 `showMinimized()` 会在屏幕上闪一个最小化残影，所以直接不显示）；
 **第一次启动例外**——会正常开窗口并自动弹出图文引导，看过一次（切页签或关窗）才记住。
+
+**托盘常驻**：右下角托盘图标（`assets/icon.ico`）就是后台监听的入口。
+
+| 操作 | 行为 |
+|---|---|
+| 左键点托盘图标 | 唤回主界面并置前（窗口已经在前台时不会把它藏掉） |
+| 右键托盘 → 显示主界面 / 隐藏到托盘 | 手动开关界面 |
+| 右键托盘 → 开始监听 / 停止监听 | 不打开窗口也能停掉接管 |
+| 右键托盘 → 退出 AgentRMC | 真退出：先 `ctl.stop()` 再结束进程 |
+| 窗口右上角 `✕` | **只是收进托盘，监听继续**（第一次会弹一条气泡提示） |
+
+`ui.close_to_tray` 设为 `false` 可以退回老行为（关窗即退出）；系统托盘不可用时也自动退回。
+托盘提示文字实时显示状态：`AgentRMC · 监听中 · qoder`。
 
 窗口跨屏/缩放：启用了 Qt 的 `PassThrough` DPI 策略（175%/225% 不取整）、用
 `startSystemMove` 走系统原生拖动，切屏后把窗口回夹到当前屏幕的可用区域（小于最小尺寸
@@ -201,16 +218,31 @@ tools\download_model.bat # 下载 whisper small 模型（约 480MB，走 7897 �
 
 #### 按键映射页
 
-右侧标签切到 **按键映射**，会列出当前 Profile 的完整映射表：物理键 → 中文动作 → 实际效果。
-第一行是**语音键**的接法（`开关 CTRL+SHIFT+V` 或 `按住 …`），下面才是其它物理键。
+右侧标签切到 **按键映射**，按物理键列出当前 Profile 的完整映射。顶部场景行用
+**绿点 = 跟随前台命中 / 橙点 = 下拉框钉住**，后面是命中该场景的进程或标题；
+下面是 `键位 / 单击 / 双击 / 长按` 四列，分成 方向键、功能键、语音与直通 三组。
+
+**单击、双击、长按三个单元格都可以直接点**，弹出常用动作预设（导航键、滚动、浏览器、
+编辑器、系统、鼠标、双击模式、按住重复/按住动作）。选完立刻写回 `profiles.json` 并热重载，
+同时保留上一版 `profiles.json.bak`；不碰 JSON 也能改键。语音键和对焦键是固定行为
+（语音接法 / F11 原生直通），单元格不可编辑。
 
 | 元素 | 说明 |
 |---|---|
+| 场景行 | 绿色点 = 跟随前台自动命中；橙色点 = 固定预览。后面的匹配规则说明为什么命中（进程名 / 窗口标题，悬停看完整列表） |
 | 下拉框 | 默认 `跟随前台`，切窗口时表格自动跟着变；也可以钉住某个 profile 预览 |
-| 第二行 | 当前 profile 的匹配规则（进程名 / 窗口标题），一眼看出为什么命中它 |
-| 表格 | 每行一个键：`↑` `↓` `←` `→` `OK` `返回` `菜单` `主页`，右侧是解析后的动作，如 `滚轮 ↑ 300`、`Enter 发送`、`滚到顶 · 双击=导航` |
-| `打开配置` | 用默认编辑器打开 `profiles.json` |
+| `键位` | 遥控器物理键：`↑ ↓ ← → OK 返回 菜单 主页 语音 对焦` |
+| `单击` | Profile 解析后的动作，下面一行是实际按键/效果，如 `滚轮 ↑ 300`、`Enter 直通`、`CTRL+T`；点格改动作 |
+| `双击` | 默认是 Router 内置手势：返回=`音量/亮度模式`、菜单=`鼠标模式`、主页=`导航模式`。点格可以改成任意预设，或 `关闭双击`；改成其它动作后单击会延迟 0.3s 等第二击 |
+| `长按` | 默认继承动作自带的 `hold_repeat` / `hold_action`；点格可以改成 `连续触发`、`连续加速`、`按住某动作` 或关闭。语音键固定 `按住说话` |
+| 行联动 | 点选或悬停一行，左侧遥控器图上的对应键会亮起蓝环，眼不用在两个面板之间找 |
+| `高级配置` | 用默认编辑器打开 `profiles.json`（匹配规则、自定义动作等） |
 | `重新加载` | 改完 json 不用重启程序，点一下热加载 |
+
+导航模式（qoder / agent）：默认双击主页进入，`↑↓` 翻页、`←→` 切换控件，单击主页退出；
+也可以在上面的双击格里改成其它动作。
+
+窗口变矮时表格纵向滚动；窗口极窄时保持四列不挤压，横向滚动兜底。正常 1000×680 窗口没有滚动条。
 
 源码方式启动：
 
@@ -348,11 +380,11 @@ New-Item -ItemType Junction -Path release\AgentRMC\models -Target D:\githubrepos
 | `browser` | chrome / msedge / firefox / brave | 滚动 | 后退 / 前进 | Enter | Esc | 新建标签 |
 | `editor` | code / cursor / windsurf / devenv | 上/下一个编辑器 | 上/下一个标签 | Enter | Esc | 命令面板 |
 | `terminal` | windowsterminal / cmd / powershell / pwsh | 历史命令 | 按词跳转 | Enter | Esc | 清屏 |
-| `qoder` | qoder / qoder cn | 滚轮（按住连滚） | 原生光标移动 | **原生 Enter 发送** | **原生 Esc 停止** | 点击滚到顶 / 长按滚到底 |
-| `agent` | workbuddyai / 标题含 workbuddy | 滚轮（按住连滚） | 原生光标移动 | **原生 Enter 发送** | **原生 Esc 停止** | 点击滚到顶 / 长按滚到底 |
+| `qoder` | qoder / qoder cn | 滚轮（按住连滚） | 原生光标移动 | **原生 Enter 发送** | **原生 Esc 停止** | 点击滚到顶；双击切导航 |
+| `agent` | workbuddyai / 标题含 workbuddy | 滚轮（按住连滚） | 原生光标移动 | **原生 Enter 发送** | **原生 Esc 停止** | 点击滚到顶；双击切导航 |
 | `default` | 其他 | ↑ / ↓ | ← / → | Enter | Esc | 原生 Home |
 
-`qoder` 用 `extends` 继承 `agent` 的全部键位，只改了匹配进程和语音接法（后者只在 `hotkey` 模式下用）。
+`agent` 用 `extends` 继承 `qoder` 的全部键位，只改了匹配进程、标题和语音接法（后者只在 `hotkey` 模式下用）。
 Qoder 的语音快捷键 Ctrl+Shift+V 在 webview 里是 **keydown 开关**（正在录就停，否则开始）。
 所以这里写 `"voice": {"trigger": "toggle"}`：遥控器按下时发一次组合键开始录音，松手再发一次
 停止；不用再点第二下。
@@ -390,11 +422,34 @@ Qoder 的语音快捷键 Ctrl+Shift+V 在 webview 里是 **keydown 开关**（�
 - `match.process` —— 可执行文件名，不区分大小写
 - `match.title` —— 窗口标题包含任一关键词
 - 两个都为空 → 只能作为兜底（像 `default`）
-- `extends` —— 继承另一个 profile 的 `keys` / `actions` / `voice`，再覆盖；
-  顺序仍然是优先级。`qoder` 就是这样继承 `agent` 的。
+- `extends` —— 继承另一个 profile 的 `keys` / `actions` / `double` / `hold` / `voice`，再覆盖；
+  顺序仍然是优先级。`agent` 就是这样继承 `qoder` 的。
 
 每个 profile 还可以带 `"voice": {"trigger": "hold" | "toggle"}` 覆盖全局语音接法。
 `focus_click` 是可选实验项（相对坐标自动点输入区），默认不用，等做校准。
+
+### 双击 / 长按表
+
+映射页的单元格保存成 profile 顶层的两张表，也可以手写：
+
+```jsonc
+"double": {
+  "13": "k13_d_mode_media",   // 双击动作名；"none" 关闭内置双击
+  "27": "none"
+},
+"hold": {
+  "38": "repeat_accel",       // none / repeat / repeat_accel / 动作名
+  "13": "k13_h_mute"
+}
+```
+
+- `double`：第二次按下时执行这个动作；单击会延迟 0.3s 等第二击。没有 `double` 表的键保持原行为；
+  27/36/93（返回/主页/菜单）没有覆盖时仍回落到内置的 音量亮度 / 导航 / 鼠标 模式。
+  `"none"` 会关掉该键的内置双击，单击不再延迟。
+- `hold`：`none` 关闭长按；`repeat` 按住重复当前动作；`repeat_accel` 按住重复并越来越快；
+  其它值当动作名，按住 0.6s 后执行。没有 `hold` 表的键继续看动作自带的
+  `hold_repeat` / `hold_action`，老配置仍然兼容。
+- 两张表都会跟着 `extends` 合并。
 
 ### 长按手势
 
@@ -476,7 +531,7 @@ agent/qoder 的实际用法：
   "voice": {
     "input_device": null,              // null=系统默认，或填设备序号
     "sample_rate": 16000,
-    "asr_model": "small",              // tiny/base/small/medium
+    "asr_model": "small",              // small/medium/large，界面里的尺寸下拉会写这里
     "asr_language": "zh",
     "paste": true,
     "auto_enter": false,
@@ -488,7 +543,9 @@ agent/qoder 的实际用法：
     }
   },
   "ui": {
-    "auto_listen": true                // 启动即监听
+    "auto_listen": true,               // 启动即监听
+    "start_minimized": true,           // 启动藏在托盘，不闪窗口
+    "close_to_tray": true              // 关窗只隐藏继续监听；false = 关窗即退出
   }
 }
 ```
@@ -543,9 +600,22 @@ Qoder 的 `voiceInputComboShortcut` 只在 **keydown** 上做切换（webview �
 
 > 音量键不产生任何键码（AVRCP 绝对音量），接不了；耳机麦克风在系统里也没有录音端点。
 
+#### 图形界面里的本地模型开关与尺寸
+
+语音卡片中间那行 `本地模型 [开关] [small ▾] 状态` 就是 `voice.mode` / `voice.asr_model`：
+
+- **关**（默认，hotkey）：启动和切换时都不加载 whisper，语音键转给 Qoder / WorkBuddy 自己识别；
+  尺寸下拉只把选择写进配置，不占内存。
+- **开**（local）：立即在后台加载所选尺寸，右侧状态显示 `加载中… / 就绪 / 失败`，
+  事件流里能看到加载日志；关闭开关会释放模型（约 462MB）。
+- 尺寸切换立刻生效：开着就重新加载，关着只记下选择。`large` 实际就是 `large-v3`。
+- 两个选择都直接写回 `config.json`，下次启动照旧。`models/` 里没有对应目录时会先联网下载
+  （走 `voice.proxy`）；网络不稳就用 `tools\download_model.bat medium` 先下好再切换。
+- `测试麦克风` 需要本地模型转写一次：开关关着时临时加载，测完自动释放。
+
 `hotkey` 模式下，按键映射页第一行会显示实际接法，启动时**不会加载本地 whisper 模型**
-（省 462MB 内存），当前就是这一种。切到 `local` 模式则会在启动时加载
-`models/faster-whisper-small`，按键映射页第一行显示「本地 whisper · 按住录音」。
+（省 462MB 内存），默认就是这一种。切到 `local` 模式则会在启动时加载
+`models/faster-whisper-<尺寸>`，按键映射页第一行显示「本地 whisper · 按住录音」。
 
 切回 `hotkey` 时默认组合是 **Ctrl+Shift+V**（`vk 86` + ctrl/shift），也就是 Qoder 的语音键。
 换成别的组合只改一行：
@@ -819,8 +889,9 @@ python rc_probe\atvv_probe.py --seconds 40
 - [ ] Qoder 语音前自动聚焦输入框（盲点不可靠，待做一次性校准）
 - [x] default 的 Home 不再注入 Win（按一下弹开始菜单/任务栏的坑）
 - [x] 跨屏移动/缩放：PassThrough DPI + 原生拖动 + 切屏回夹 + 几何记忆
-- [x] 启动即监听 + 单实例保护 + 启动最小化（不抢焦点）
+- [x] 启动即监听 + 单实例保护 + 托盘常驻（关窗只隐藏、启动不闪窗）
 - [x] 实测 NOLEGACY 的真正语义（按应用生效，用户态无法拦截原生键）
 - [x] 耳机播放键接管语音（Qoder/WorkBuddy 前台时吞键；AVRCP 无 keyup，只能 toggle）
+- [x] 图形界面切换本地模型开关与 small/medium/large 尺寸（写回 config.json，热加载/释放）
 - [ ] TTS 播报 Agent 回复，形成语音闭环
 - [ ] 若换 ATVV 遥控器（RC003-MS / 遥控器 2 Pro），把 `rc_probe/atvv_probe.py` 的解码链并进主程序

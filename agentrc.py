@@ -124,6 +124,30 @@ def load_config() -> dict:
 
 CFG = load_config()
 
+
+def save_voice_config(**updates) -> bool:
+    """把 GUI 改动的语音设置写回 config.json，并同步内存里的 CFG。
+
+    只覆盖 voice 下的指定键，其它配置（含未知字段）原样保留。
+    """
+    try:
+        data = (json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+                if CONFIG_PATH.exists() else {})
+    except Exception:  # noqa: BLE001
+        data = {}
+    voice = dict(data.get("voice") or {})
+    voice.update(updates)
+    data["voice"] = voice
+    try:
+        CONFIG_PATH.write_text(
+            json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    except OSError as e:
+        print(f"[!] 写 config.json 失败: {e}")
+        return False
+    CFG["voice"].update(updates)
+    return True
+
+
 # --------------------------------------------------------------------------
 # 语音指令规则：识别出的文本先过一遍本地规则，命中就直接执行，否则交给 Agent
 # --------------------------------------------------------------------------
@@ -797,6 +821,8 @@ def resolve_profiles(profiles: list) -> list:
         merged = {**base, **p}
         merged["keys"] = {**(base.get("keys") or {}), **(p.get("keys") or {})}
         merged["actions"] = {**(base.get("actions") or {}), **(p.get("actions") or {})}
+        merged["double"] = {**(base.get("double") or {}), **(p.get("double") or {})}
+        merged["hold"] = {**(base.get("hold") or {}), **(p.get("hold") or {})}
         if base.get("voice") and p.get("voice"):
             merged["voice"] = {**base["voice"], **p["voice"]}
         if name:
@@ -939,6 +965,10 @@ VK_LABEL = {
     0x5B: "WIN", 0x5D: "APPS", 0xAD: "MUTE", 0xAE: "VOL-", 0xAF: "VOL+",
     0xB3: "PLAY",
 }
+# 字母/数字直接按字符显示：映射页里 "CTRL+VK 0x54" 不如 "CTRL+T"
+VK_LABEL.update({c: chr(c) for c in range(0x30, 0x3A)})
+VK_LABEL.update({c: chr(c) for c in range(0x41, 0x5B)})
+VK_LABEL.update({0x70 + i: f"F{i + 1}" for i in range(12)})
 
 
 def describe_action(act: dict, hold_info: bool = True) -> str:
@@ -970,6 +1000,8 @@ def describe_action(act: dict, hold_info: bool = True) -> str:
         text = "粘贴" + ("并回车" if act.get("enter") else "")
     elif kind == "enter":
         text = "粘贴并回车"
+    elif kind == "click":
+        text = "鼠标左键"
     elif kind == "none":
         text = str(act.get("note", "")).strip() or "直通（不拦截）"
     else:
@@ -1081,7 +1113,7 @@ class KeyRouter:
             action = actions.get(name) or MODE_ACTIONS.get(name or "")
             if name and action:
                 self.mode_last = now
-                self._begin(vkey, now, pname, name, action)
+                self._begin(vkey, now, pname, name, action, apply_hold=False)
                 return
 
         if self.nav_mode:
@@ -1091,7 +1123,7 @@ class KeyRouter:
             if name:
                 action = actions.get(name)
                 if action:
-                    self._begin(vkey, now, pname, name, action)
+                    self._begin(vkey, now, pname, name, action, apply_hold=False)
                     return
 
         name = prof.get("keys", {}).get(str(vkey))
@@ -1100,33 +1132,124 @@ class KeyRouter:
             # 未映射的返回/菜单键也能双击进模式
             action = {"type": "none", "note": "直通（不拦截）"}
             name = f"mode_{MODE_TRIGGERS[str(vkey)]}"
+
+        # profile 里显式写的双击动作；"none" = 关掉内置双击
+        double_sem = (prof.get("double") or {}).get(str(vkey))
+        double_off = double_sem == "none"
+        double_action = actions.get(double_sem) if double_sem and not double_off else None
+        tap_builtin = str(vkey) in TAP_TARGETS and not double_off
+        needs_tap = bool(double_action) or tap_builtin
+
         if not name or not action:
-            return
-        # 返回/主页/菜单统一双击进模式；第一击延迟 0.3s 执行，等第二击。
-        if str(vkey) in TAP_TARGETS:
+            if not double_action:
+                return
+            action = {"type": "none", "note": "直通（不拦截）"}
+            name = f"double_wait_{vkey}"
+
+        # 返回/主页/菜单或自定义双击：第一击延迟 0.3s 执行，等第二击。
+        if needs_tap:
             p = self._tap_pending.get(vkey)
             if p and now - p["last"] <= 0.45:
                 del self._tap_pending[vkey]
                 self._active.pop(vkey, None)
-                target = TAP_TARGETS[str(vkey)]
-                if target == "nav":
-                    self._dispatch(pname, "nav_toggle",
-                                   {"type": "nav_toggle", "label": "导航模式"})
+                self._held.pop(vkey, None)
+                self._deferred.pop(vkey, None)
+                if double_action:
+                    self._dispatch(pname, double_sem, double_action)
+                    if (self.emit and double_action.get("type")
+                            not in ("mode", "nav_toggle", "nav_exit", "none")):
+                        shown = dict(double_action)
+                        shown.pop("label", None)
+                        self.emit(
+                            "key",
+                            name=double_action.get("label") or double_sem or f"double_{vkey}",
+                            profile=pname,
+                            detail="双击 · " + describe_action(shown, hold_info=False),
+                            vk=vkey)
                 else:
-                    self._dispatch(pname, f"mode_{target}",
-                                   {"type": "mode", "mode": target,
-                                    "label": MODE_LABELS[target]})
+                    target = TAP_TARGETS[str(vkey)]
+                    if target == "nav":
+                        self._dispatch(pname, "nav_toggle",
+                                       {"type": "nav_toggle", "label": "导航模式"})
+                    else:
+                        self._dispatch(pname, f"mode_{target}",
+                                       {"type": "mode", "mode": target,
+                                        "label": MODE_LABELS[target]})
                 return
+
+            # 新增的 hold 规格对双击键也生效；旧 profile 的 hold_action
+            # 只在非双击键上按老逻辑处理，避免改变主页原有行为。
+            hold_spec = bool((prof.get("hold") or {}).get(str(vkey)))
+            if hold_spec:
+                action = self._with_hold(prof, vkey, action)
             st = {"started": now, "vkey": vkey, "action": action, "name": name,
                   "profile": pname,
-                  "count": 0, "fired": None, "hold_action": None, "deferred": False}
+                  "count": 0, "fired": None, "hold_action": action.get("hold_action"),
+                  "deferred": False,
+                  "tap_hold": hold_spec or str(vkey) not in TAP_TARGETS}
             self._active[vkey] = st
             self._tap_pending[vkey] = {"due": now + TAP_WINDOW, "last": now, "st": st}
             return
         self._begin(vkey, now, pname, name, action)
 
+    def _with_hold(self, prof: dict, vkey: int, action: dict) -> dict:
+        """把 profile.hold 的规格套到这次按键的动作副本上。
+
+        hold 值：
+          none           关闭长按（覆盖 extends 来的行为）
+          repeat         按住重复当前动作
+          repeat_accel   按住重复并加速
+          <动作名>       按住 0.6s 执行这个动作
+        """
+        spec = (prof.get("hold") or {}).get(str(vkey))
+        if not spec:
+            return action
+        a = dict(action)
+        if spec == "none":
+            for k in ("hold_action", "hold_repeat", "hold_accel", "hold_defer"):
+                a.pop(k, None)
+            return a
+        if spec in ("repeat", "repeat_accel"):
+            a.pop("hold_action", None)
+            a.pop("hold_defer", None)
+            a["hold_repeat"] = int(action.get("hold_repeat") or 100)
+            a["hold_accel"] = spec == "repeat_accel"
+            return a
+        hold = (prof.get("actions") or {}).get(str(spec))
+        if not hold:
+            return action
+        a["hold_action"] = hold
+        a["hold_ms"] = int(action.get("hold_ms") or 600)
+        a.pop("hold_repeat", None)
+        a.pop("hold_accel", None)
+        a.pop("hold_defer", None)
+        return a
+
+    def _queue_hold(self, vkey: int, now: float, st: dict) -> None:
+        action = st["action"]
+        hold_action = st.get("hold_action")
+        if hold_action:
+            hold_ms = float(action.get("hold_ms", 600)) / 1000
+            self._held[vkey] = {"due": max(now, st["started"] + hold_ms),
+                                "once": True, "st": st}
+            return
+        repeat_ms = float(action.get("hold_repeat", 0) or 0)
+        if repeat_ms > 0:
+            interval = repeat_ms / 1000
+            self._held[vkey] = {"due": max(now + interval, st["started"] + interval),
+                                "interval": interval,
+                                "accel": bool(action.get("hold_accel")), "st": st}
+
     def _begin(self, vkey: int, now: float, pname: str, name: str,
-               action: dict) -> None:
+               action: dict, apply_hold: bool = True) -> None:
+        if apply_hold:
+            profiles = getattr(self.profiles, "profiles", None)
+            if profiles:
+                prof = next((p for p in profiles if p.get("name") == pname), None)
+            else:
+                prof = self.profiles.current()
+            if prof:
+                action = self._with_hold(prof, vkey, action)
         st = {"started": now, "vkey": vkey, "action": action, "name": name,
               "profile": pname,
               "count": 0, "fired": None, "hold_action": action.get("hold_action"),
@@ -1143,15 +1266,7 @@ class KeyRouter:
         self._dispatch(pname, name, action)
         st["fired"] = "base"
         st["count"] = 1
-        hold_ms = float(action.get("hold_ms", 600)) / 1000
-        if hold_action:
-            self._held[vkey] = {"due": now + hold_ms, "once": True, "st": st}
-            return
-        repeat_ms = float(action.get("hold_repeat", 0) or 0)
-        if repeat_ms > 0:
-            interval = repeat_ms / 1000
-            self._held[vkey] = {"due": now + interval, "interval": interval,
-                                "accel": bool(action.get("hold_accel")), "st": st}
+        self._queue_hold(vkey, now, st)
 
     def key_up(self, vkey: int, now: float) -> None:
         if vkey in self._tap_pending:
@@ -1187,6 +1302,8 @@ class KeyRouter:
                 st["fired"] = "base"
                 st["count"] = 1
                 self._emit_press(st, 0.0)  # 双击窗口的等待不算长按
+                if st.get("tap_hold") and vk in self._active:
+                    self._queue_hold(vk, now, st)
         for vk, d in list(self._deferred.items()):
             if now >= d["due"]:
                 del self._deferred[vk]
@@ -1599,6 +1716,8 @@ class Transcriber:
         self.language = language
         self._model = None
         self._failed = False
+        self._lock = threading.Lock()
+        self.error = ""
 
     def available(self) -> bool:
         try:
@@ -1608,6 +1727,11 @@ class Transcriber:
             return False
 
     def load(self):
+        """开关/测试麦克风/转写可能同时触发加载，串行化避免重复占内存。"""
+        with self._lock:
+            return self._load()
+
+    def _load(self):
         if self._model is not None or self._failed:
             return self._model
         os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
@@ -1622,6 +1746,7 @@ class Transcriber:
                 print("[i] 模型就绪")
                 return self._model
             except Exception as e:  # noqa: BLE001
+                self.error = str(e).splitlines()[0][:160]
                 print(f"[!] 本地模型加载失败: {e}")
 
         proxy = CFG["voice"].get("proxy")
@@ -1642,7 +1767,8 @@ class Transcriber:
                 print("[i] 模型就绪")
                 return self._model
             except Exception as e:  # noqa: BLE001
-                print(f"[!] {label} 失败: {str(e).splitlines()[0][:120]}")
+                self.error = str(e).splitlines()[0][:160]
+                print(f"[!] {label} 失败: {self.error}")
         print("[!] whisper 加载失败。可用 tools\\download_model.bat 手动下载模型")
         self._failed = True
         return None

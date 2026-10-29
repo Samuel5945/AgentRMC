@@ -191,8 +191,12 @@ def press_combo(mods: list, vk: int, repeat: int = 1) -> None:
 
 # ---- SendInput：比 keybd_event 更贴近真实按键（带扫描码，Chromium/Electron 才认） ----
 KEYEVENTF_SCANCODE = 0x0008
+KEYEVENTF_EXTENDEDKEY = 0x0001
 INPUT_KEYBOARD = 1
 MAPVK_VK_TO_VSC = 0
+EXTENDED_VKS = {0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28,
+                0x2D, 0x2E, 0x5B, 0x5C, 0x5D, 0x6F, 0x90, 0x91,
+                0xA3, 0xA5, 0xAD, 0xAE, 0xAF, 0xB0, 0xB1, 0xB3}
 
 
 class KEYBDINPUT(ctypes.Structure):
@@ -217,9 +221,11 @@ user32.MapVirtualKeyW.restype = wt.UINT
 def _send_key(vk: int, up: bool = False, extra: int = 0) -> None:
     scan = user32.MapVirtualKeyW(vk, MAPVK_VK_TO_VSC) & 0xFF
     flags = KEYEVENTF_SCANCODE | (KEYEVENTF_KEYUP if up else 0)
+    if vk in EXTENDED_VKS:
+        flags |= KEYEVENTF_EXTENDEDKEY
     inp = INPUT()
     inp.type = INPUT_KEYBOARD
-    inp.u.ki = KEYBDINPUT(wVk=0, wScan=scan, dwFlags=flags, time=0, dwExtraInfo=extra)
+    inp.u.ki = KEYBDINPUT(wVk=vk, wScan=scan, dwFlags=flags, time=0, dwExtraInfo=extra)
     user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(INPUT))
 
 
@@ -308,6 +314,147 @@ def foreground_info() -> tuple[str, str]:
 def scroll(delta: int) -> None:
     """滚轮，正数向上。一格 120。"""
     user32.mouse_event(MOUSEEVENTF_WHEEL, 0, 0, delta, 0)
+
+
+# --------------------------------------------------------------------------
+# 显示器亮度（DDC/CI，主显示器）与鼠标相对移动
+# --------------------------------------------------------------------------
+MOUSEEVENTF_MOVE = 0x0001
+
+user32.MonitorFromPoint.restype = wt.HMONITOR
+user32.MonitorFromPoint.argtypes = [wt.POINT, wt.DWORD]
+
+
+class _PHYSICAL_MONITOR(ctypes.Structure):
+    _fields_ = [("hPhysicalMonitor", wt.HANDLE),
+                ("szPhysicalMonitorDescription", wt.WCHAR * 128)]
+
+
+try:
+    _dxva2 = ctypes.WinDLL("dxva2")
+    _dxva2.GetPhysicalMonitorsFromHMONITOR.argtypes = [
+        wt.HMONITOR, wt.DWORD, ctypes.POINTER(_PHYSICAL_MONITOR)]
+    _dxva2.GetPhysicalMonitorsFromHMONITOR.restype = wt.BOOL
+    _dxva2.GetNumberOfPhysicalMonitorsFromHMONITOR.argtypes = [
+        wt.HMONITOR, ctypes.POINTER(wt.DWORD)]
+    _dxva2.GetNumberOfPhysicalMonitorsFromHMONITOR.restype = wt.BOOL
+    _dxva2.GetVCPFeatureAndVCPFeatureReply.argtypes = [
+        wt.HANDLE, wt.BYTE, ctypes.POINTER(wt.DWORD),
+        ctypes.POINTER(wt.DWORD), ctypes.POINTER(wt.DWORD)]
+    _dxva2.GetVCPFeatureAndVCPFeatureReply.restype = wt.BOOL
+    _dxva2.SetVCPFeature.argtypes = [wt.HANDLE, wt.BYTE, wt.DWORD]
+    _dxva2.SetVCPFeature.restype = wt.BOOL
+except OSError:  # 没有 dxva2 时亮度动作静默失效
+    _dxva2 = None
+
+_brightness_monitor = None
+
+
+def _primary_monitor() -> int | None:
+    global _brightness_monitor
+    if _brightness_monitor:
+        return _brightness_monitor
+    if _dxva2 is None:
+        return None
+    hmon = user32.MonitorFromPoint(wt.POINT(0, 0), 1)  # PRIMARY
+    if not hmon:
+        return None
+    n = wt.DWORD()
+    if not _dxva2.GetNumberOfPhysicalMonitorsFromHMONITOR(hmon, ctypes.byref(n)) or not n.value:
+        return None
+    arr = (_PHYSICAL_MONITOR * n.value)()
+    if not _dxva2.GetPhysicalMonitorsFromHMONITOR(hmon, n.value, arr):
+        return None
+    _brightness_monitor = arr[0].hPhysicalMonitor
+    return _brightness_monitor
+
+
+def brightness(delta: int) -> bool:
+    """主显示器亮度 ±delta（0~100），不支持 DDC/CI 时返回 False。"""
+    h = _primary_monitor()
+    if not h:
+        return False
+    for _ in range(2):  # DDC/CI 偶发超时，重试一次
+        cur, mx, typ = wt.DWORD(), wt.DWORD(), wt.DWORD()
+        if _dxva2.GetVCPFeatureAndVCPFeatureReply(
+                h, 0x10, ctypes.byref(typ), ctypes.byref(cur), ctypes.byref(mx)):
+            top = mx.value or 100
+            val = max(0, min(top, cur.value + delta))
+            return bool(_dxva2.SetVCPFeature(h, 0x10, val))
+        time.sleep(0.02)
+    return False
+
+
+def mouse_move(dx: int, dy: int) -> None:
+    user32.mouse_event(MOUSEEVENTF_MOVE, dx, dy, 0, 0)
+
+
+def mouse_click() -> None:
+    user32.mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
+    time.sleep(0.02)
+    user32.mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+
+
+# --------------------------------------------------------------------------
+# 鼠标模式的全局低层键盘钩子：吞掉原生方向键/Enter，并直接驱动鼠标。
+# 只拦方向键与 Enter；返回/菜单放行，退出仍由 Raw Input 处理。
+# --------------------------------------------------------------------------
+WH_KEYBOARD_LL = 13
+WM_KEYDOWN, WM_KEYUP = 0x0100, 0x0101
+WM_SYSKEYDOWN, WM_SYSKEYUP = 0x0104, 0x0105
+LLKHF_INJECTED = 0x10
+CURSOR_KEYS = {0x25: (-8, 0), 0x26: (0, -8), 0x27: (8, 0), 0x28: (0, 8)}
+
+
+class _KBDLLHOOKSTRUCT(ctypes.Structure):
+    _fields_ = [("vkCode", wt.DWORD), ("scanCode", wt.DWORD),
+                ("flags", wt.DWORD), ("time", wt.DWORD),
+                ("dwExtraInfo", ctypes.c_size_t)]
+
+
+_HOOKPROC = ctypes.WINFUNCTYPE(ctypes.c_ssize_t, ctypes.c_int, wt.WPARAM, wt.LPARAM)
+_cursor_hook = None
+_cursor_proc = None
+_cursor_last = 0.0
+
+user32.SetWindowsHookExW.restype = wt.HHOOK
+user32.SetWindowsHookExW.argtypes = [ctypes.c_int, _HOOKPROC, wt.HINSTANCE, wt.DWORD]
+user32.UnhookWindowsHookEx.argtypes = [wt.HHOOK]
+user32.CallNextHookEx.argtypes = [wt.HHOOK, ctypes.c_int, wt.WPARAM, wt.LPARAM]
+user32.CallNextHookEx.restype = ctypes.c_ssize_t
+
+
+def _cursor_hook_cb(nCode, wParam, lParam):
+    global _cursor_last
+    if nCode == 0:
+        kb = ctypes.cast(lParam, ctypes.POINTER(_KBDLLHOOKSTRUCT)).contents
+        if not (kb.flags & LLKHF_INJECTED):
+            vk = int(kb.vkCode)
+            if vk in CURSOR_KEYS or vk == 0x0D:
+                if wParam in (WM_KEYDOWN, WM_SYSKEYDOWN):
+                    _cursor_last = time.time()
+                    if vk == 0x0D:
+                        mouse_click()
+                    else:
+                        mouse_move(*CURSOR_KEYS[vk])
+                return 1
+    return user32.CallNextHookEx(None, nCode, wParam, lParam)
+
+
+def cursor_hook_start() -> bool:
+    global _cursor_hook, _cursor_proc
+    if _cursor_hook:
+        return True
+    _cursor_proc = _HOOKPROC(_cursor_hook_cb)
+    _cursor_hook = user32.SetWindowsHookExW(WH_KEYBOARD_LL, _cursor_proc, None, 0)
+    return bool(_cursor_hook)
+
+
+def cursor_hook_stop() -> None:
+    global _cursor_hook
+    if _cursor_hook:
+        user32.UnhookWindowsHookEx(_cursor_hook)
+        _cursor_hook = None
 
 
 # --------------------------------------------------------------------------
@@ -471,9 +618,7 @@ DEFAULT_PROFILES = {
                 "nav_next": {"type": "key", "vk": 0x09, "label": "下一个控件"},
                 "nav_exit": {"type": "nav_exit", "label": "退出导航"},
                 "chat_top": {
-                    "type": "scroll", "delta": 9000, "repeat": 3, "label": "滚到顶",
-                    "hold_action": {"type": "nav_toggle", "label": "导航模式"},
-                    "hold_ms": 450, "hold_defer": True
+                    "type": "scroll", "delta": 9000, "repeat": 3, "label": "滚到顶"
                 },
             },
             "voice": {"hotkey": {"mods": ["ctrl", "shift"], "vk": 0x56,
@@ -710,6 +855,38 @@ def describe_action(act: dict, hold_info: bool = True) -> str:
 # --------------------------------------------------------------------------
 # 按键路由：CLI 与 GUI 共用
 # --------------------------------------------------------------------------
+# --------------------------------------------------------------------------
+# 临时模式：长按返回 → 音量/亮度，长按菜单 → 鼠标；单击任一个退出
+# --------------------------------------------------------------------------
+MODE_IDLE_S = 12.0
+TAP_WINDOW = 0.30
+TAP_TARGETS = {"27": "media", "36": "nav", "93": "cursor"}
+MODE_TRIGGERS = {"27": "media", "93": "cursor"}
+MODE_LABELS = {"media": "音量/亮度模式", "cursor": "鼠标模式"}
+MODE_KEYS = {
+    "media": {"38": "volume_up", "40": "volume_down",
+              "37": "brightness_down", "39": "brightness_up"},
+    "cursor": {},
+}
+MODE_ACTIONS = {
+    "volume_up": {"type": "key", "vk": 0xAF, "hold_repeat": 120, "label": "音量 +"},
+    "volume_down": {"type": "key", "vk": 0xAE, "hold_repeat": 120, "label": "音量 -"},
+    "brightness_up": {"type": "brightness", "delta": 10, "hold_repeat": 160,
+                      "label": "亮度 +"},
+    "brightness_down": {"type": "brightness", "delta": -10, "hold_repeat": 160,
+                        "label": "亮度 -"},
+    "mouse_up": {"type": "mouse", "dx": 0, "dy": -8, "hold_repeat": 45,
+                 "hold_accel": True, "label": "鼠标 ↑"},
+    "mouse_down": {"type": "mouse", "dx": 0, "dy": 8, "hold_repeat": 45,
+                   "hold_accel": True, "label": "鼠标 ↓"},
+    "mouse_left": {"type": "mouse", "dx": -8, "dy": 0, "hold_repeat": 45,
+                   "hold_accel": True, "label": "鼠标 ←"},
+    "mouse_right": {"type": "mouse", "dx": 8, "dy": 0, "hold_repeat": 45,
+                    "hold_accel": True, "label": "鼠标 →"},
+    "mouse_click": {"type": "click", "label": "鼠标左键"},
+}
+
+
 class KeyRouter:
     """按键 → Profile → 动作；带长按连发和"点击 / 长按"双动作。
 
@@ -729,6 +906,9 @@ class KeyRouter:
         self._held: dict[int, dict] = {}
         self._deferred: dict[int, dict] = {}
         self.nav_mode = False
+        self.mode: str | None = None
+        self.mode_last = 0.0
+        self._tap_pending: dict[int, dict] = {}
 
     def reset(self) -> None:
         """停止监听 / 重载配置时清掉按住的键，否则重启后会一直连发。"""
@@ -736,35 +916,84 @@ class KeyRouter:
         self._held.clear()
         self._deferred.clear()
         self.nav_mode = False
+        self.mode = None
+        self._tap_pending.clear()
+        cursor_hook_stop()
+
+    def _exit_mode(self) -> None:
+        if not self.mode:
+            return
+        label = MODE_LABELS.get(self.mode, "模式")
+        self.mode = None
+        cursor_hook_stop()
+        beep(560, 70)
+        if self.emit:
+            self.emit("status", text=f"{label} 关")
 
     def key_down(self, vkey: int, now: float) -> None:
         if vkey in self._active:
             return  # 按住期间设备连发的 keydown 不重复触发
         prof = self.profiles.current()
         pname = prof.get("name", "?")
+        actions = prof.get("actions", {}) or {}
         nav = prof.get("nav") or {}
+
+        if self.mode:
+            if str(vkey) in MODE_TRIGGERS:
+                self._exit_mode()
+                return
+            if self.mode == "cursor" and (vkey in CURSOR_KEYS or vkey == 0x0D):
+                return  # 由低层钩子处理并吞掉，Raw Input 不应再响应
+            name = ((prof.get("modes", {}).get(self.mode)
+                     or MODE_KEYS.get(self.mode, {})).get(str(vkey)))
+            action = actions.get(name) or MODE_ACTIONS.get(name or "")
+            if name and action:
+                self.mode_last = now
+                self._begin(vkey, now, pname, name, action)
+                return
+
         if self.nav_mode:
             name = (nav.get("keys") or {}).get(str(vkey))
             if str(vkey) == str(nav.get("exit_key", "")):
                 name = "nav_exit"
             if name:
-                action = prof.get("actions", {}).get(name)
+                action = actions.get(name)
                 if action:
-                    self._active[vkey] = {
-                        "started": now, "action": action, "name": name,
-                        "profile": pname, "count": 1, "fired": "base",
-                        "hold_action": None, "deferred": False,
-                    }
-                    self._dispatch(pname, name, action)
+                    self._begin(vkey, now, pname, name, action)
                     return
 
         name = prof.get("keys", {}).get(str(vkey))
-        if not name:
+        action = actions.get(name) if name else None
+        if action is None and str(vkey) in MODE_TRIGGERS:
+            # 未映射的返回/菜单键也能双击进模式
+            action = {"type": "none", "note": "直通（不拦截）"}
+            name = f"mode_{MODE_TRIGGERS[str(vkey)]}"
+        if not name or not action:
             return
-        action = prof.get("actions", {}).get(name)
-        if not action:
+        # 返回/主页/菜单统一双击进模式；第一击延迟 0.3s 执行，等第二击。
+        if str(vkey) in TAP_TARGETS:
+            p = self._tap_pending.get(vkey)
+            if p and now - p["last"] <= 0.45:
+                del self._tap_pending[vkey]
+                self._active.pop(vkey, None)
+                target = TAP_TARGETS[str(vkey)]
+                if target == "nav":
+                    self._dispatch(pname, "nav_toggle",
+                                   {"type": "nav_toggle", "label": "导航模式"})
+                else:
+                    self._dispatch(pname, f"mode_{target}",
+                                   {"type": "mode", "mode": target,
+                                    "label": MODE_LABELS[target]})
+                return
+            st = {"started": now, "action": action, "name": name, "profile": pname,
+                  "count": 0, "fired": None, "hold_action": None, "deferred": False}
+            self._active[vkey] = st
+            self._tap_pending[vkey] = {"due": now + TAP_WINDOW, "last": now, "st": st}
             return
+        self._begin(vkey, now, pname, name, action)
 
+    def _begin(self, vkey: int, now: float, pname: str, name: str,
+               action: dict) -> None:
         st = {"started": now, "action": action, "name": name, "profile": pname,
               "count": 0, "fired": None, "hold_action": action.get("hold_action"),
               "deferred": False}
@@ -791,6 +1020,12 @@ class KeyRouter:
                                 "accel": bool(action.get("hold_accel")), "st": st}
 
     def key_up(self, vkey: int, now: float) -> None:
+        if vkey in self._tap_pending:
+            # 菜单键第一击：等双击窗口结束再决定
+            self._active.pop(vkey, None)
+            self._held.pop(vkey, None)
+            self._deferred.pop(vkey, None)
+            return
         st = self._active.pop(vkey, None)
         self._held.pop(vkey, None)
         d = self._deferred.pop(vkey, None)
@@ -804,6 +1039,20 @@ class KeyRouter:
         self._emit_press(st, max(0.0, (now - st["started"]) * 1000))
 
     def tick(self, now: float) -> None:
+        if self.mode:
+            if not self.mode_last:
+                self.mode_last = now
+            last = max(self.mode_last, _cursor_last if self.mode == "cursor" else 0.0)
+            if now - last > MODE_IDLE_S:
+                self._exit_mode()
+        for vk, p in list(self._tap_pending.items()):
+            if now >= p["due"]:
+                del self._tap_pending[vk]
+                st = p["st"]
+                self._dispatch(st["profile"], st["name"], st["action"])
+                st["fired"] = "base"
+                st["count"] = 1
+                self._emit_press(st, 0.0)  # 双击窗口的等待不算长按
         for vk, d in list(self._deferred.items()):
             if now >= d["due"]:
                 del self._deferred[vk]
@@ -872,6 +1121,7 @@ class KeyRouter:
                 subprocess.Popen(action["cmd"], shell=True)
             elif kind == "nav_toggle":
                 self.nav_mode = not self.nav_mode
+                beep(900 if self.nav_mode else 560, 70)
                 if self.emit:
                     self.emit("status",
                               text="导航模式 " + ("开" if self.nav_mode else "关"))
@@ -879,6 +1129,31 @@ class KeyRouter:
                 self.nav_mode = False
                 if self.emit:
                     self.emit("status", text="导航模式 关")
+            elif kind == "mode":
+                m = str(action.get("mode") or "")
+                if m in MODE_KEYS:
+                    if self.mode == m:
+                        self._exit_mode()
+                    else:
+                        self.mode = m
+                        self.mode_last = 0.0
+                        self.nav_mode = False
+                        if m == "cursor":
+                            global _cursor_last
+                            _cursor_last = 0.0
+                        if m == "cursor" and not cursor_hook_start() and self.emit:
+                            self.emit("error", text="鼠标模式钩子安装失败")
+                        beep(900, 70)
+                        if self.emit:
+                            self.emit("status",
+                                      text=f"{MODE_LABELS[m]} 开（单击返回/菜单退出）")
+            elif kind == "brightness":
+                if not brightness(int(action.get("delta", 10))) and self.emit:
+                    self.emit("error", text="亮度调节失败：显示器不支持 DDC/CI")
+            elif kind == "mouse":
+                mouse_move(int(action.get("dx", 0)), int(action.get("dy", 0)))
+            elif kind == "click":
+                mouse_click()
             elif kind == "none":
                 pass
             else:

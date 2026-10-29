@@ -59,6 +59,9 @@ def setup() -> core.KeyRouter:
     reset()
     core.scroll = lambda d: DELTAS.append(d)              # type: ignore[assignment]
     core.press_combo = lambda mods, vk, rep=1: KEYS.append((tuple(mods), vk, rep))  # type: ignore[assignment]
+    core.beep = lambda *a, **k: None                       # type: ignore[assignment]
+    core.cursor_hook_start = lambda: True                 # type: ignore[assignment]
+    core.cursor_hook_stop = lambda: None                  # type: ignore[assignment]
     core.time.sleep = lambda _s: None                     # type: ignore[assignment]
     return core.KeyRouter(FakeProfiles(profile()), emit=emit)
 
@@ -87,25 +90,13 @@ def test_tap_home() -> None:
     r.key_down(36, 0.0)
     assert DELTAS == [], "defer 动作按下时不该立即执行"
     r.key_up(36, 0.15)
+    assert DELTAS == [], "双击窗口内先不动作"
+    r.tick(0.5)
     assert DELTAS == [9000, 9000, 9000], DELTAS
     r.tick(1.0)
     assert DELTAS == [9000, 9000, 9000], "单击不该再触发长按动作"
     assert EVENTS[-1]["detail"] == "滚到顶", EVENTS
-    print("PASS 主页单击 = 滚到顶")
-
-
-def test_hold_home() -> None:
-    r = setup()
-    r.key_down(36, 0.0)
-    r.tick(0.44)
-    assert DELTAS == [], "450ms 前不该触发"
-    r.tick(0.46)
-    assert DELTAS == [-9000, -9000, -9000], DELTAS
-    r.key_up(36, 0.6)
-    r.tick(1.0)
-    assert DELTAS == [-9000, -9000, -9000], "长按已触发，松手不该再补单击"
-    assert EVENTS[-1]["detail"].startswith("长按"), EVENTS
-    print("PASS 主页长按 = 滚到底")
+    print("PASS 主页单击 = 滚到顶（延迟判定双击）")
 
 
 def test_none_action() -> None:
@@ -114,6 +105,7 @@ def test_none_action() -> None:
     r.key_up(13, 0.05)
     r.key_down(27, 0.1)
     r.key_up(27, 0.15)
+    r.tick(0.6)   # 返回是双击候选项，单独单击延迟执行
     assert KEYS == [], "none 动作不应注入任何按键"
     assert [e["detail"] for e in EVENTS] == ["原生 Enter 发送", "原生 Esc 停止/返回"], EVENTS
     print("PASS 原生透传动作不注入")
@@ -158,14 +150,16 @@ def test_nav_mode() -> None:
         "nav_next": {"type": "key", "vk": 9, "label": "下一个控件"},
         "nav_exit": {"type": "nav_exit", "label": "退出导航"},
     })
-    r.profiles.profile["actions"]["home"]["hold_action"] = {
-        "type": "nav_toggle", "label": "导航模式"}
 
+    # 双击 Home 进导航模式
     r.key_down(36, 0.0)
-    r.tick(0.46)
-    r.key_up(36, 0.6)
-    assert r.nav_mode and DELTAS == [], "长按 Home 应进导航模式，不再滚到底"
-    assert EVENTS[-2]["kind"] == "status" and EVENTS[-2]["text"] == "导航模式 开", EVENTS
+    r.key_up(36, 0.05)
+    r.tick(0.1)
+    r.key_down(36, 0.2)
+    r.key_up(36, 0.25)
+    assert r.nav_mode, "双击 Home 应进导航模式"
+    assert DELTAS == [], "双击不该先滚到顶"
+    assert any(e.get("text", "") == "导航模式 开" for e in EVENTS), EVENTS
 
     r.key_down(39, 1.0)
     r.key_up(39, 1.1)
@@ -180,10 +174,94 @@ def test_nav_mode() -> None:
     assert not r.nav_mode, "导航中单击 Home 应退出"
     assert DELTAS == [], "退出不该补滚到顶"
 
+    # 普通单击：延迟判定后仍滚到顶
     r.key_down(36, 3.0)
-    r.key_up(36, 3.1)
+    r.key_up(36, 3.05)
+    assert DELTAS == [], "双击窗口内先不动作"
+    r.tick(3.4)
     assert DELTAS == [9000, 9000, 9000], "普通单击仍滚到顶"
-    print("PASS 导航模式：长按开关、←→ 选择、↑↓ 翻页")
+    print("PASS 导航模式：双击开关、←→ 选择、↑↓ 翻页")
+
+
+def test_mode_media_and_cursor() -> None:
+    r = setup()
+    r.profiles.profile["keys"]["93"] = "menu"
+    r.profiles.profile["actions"]["menu"] = {"type": "none", "note": "原生菜单"}
+    bright: list[int] = []
+    moves: list[tuple[int, int]] = []
+    core.brightness = lambda d: bright.append(d) or True   # type: ignore[assignment]
+    core.mouse_move = lambda dx, dy: moves.append((dx, dy))  # type: ignore[assignment]
+
+    # 双击返回 → 音量/亮度模式
+    r.key_down(27, 0.0)
+    r.key_up(27, 0.05)
+    r.key_down(27, 0.2)
+    r.key_up(27, 0.25)
+    assert r.mode == "media", r.mode
+    assert any(e.get("text", "").startswith("音量/亮度模式 开") for e in EVENTS), EVENTS
+
+    r.key_down(38, 1.0)
+    r.key_up(38, 1.05)
+    r.key_down(40, 1.1)
+    r.key_up(40, 1.15)
+    assert KEYS[-2:] == [((), 0xAF, 1), ((), 0xAE, 1)], KEYS
+    r.key_down(37, 1.2)
+    r.key_up(37, 1.25)
+    r.key_down(39, 1.3)
+    r.key_up(39, 1.35)
+    assert bright == [-10, 10], bright
+    assert DELTAS == [], "模式里 ↑↓ 不应再滚轮"
+
+    # 单击返回退出，且不再执行返回键本身
+    n_events = len(EVENTS)
+    r.key_down(27, 2.0)
+    r.key_up(27, 2.1)
+    assert r.mode is None
+    assert len(EVENTS) == n_events + 1, "退出只记一条状态"
+
+    # 单击菜单：0.35s 后执行原动作
+    r.key_down(93, 3.0)
+    r.key_up(93, 3.05)
+    r.tick(3.4)
+    assert EVENTS[-1]["detail"] == "原生菜单", EVENTS
+
+    # 双击菜单 → 鼠标模式
+    r.key_down(93, 4.0)
+    r.key_up(93, 4.05)
+    r.key_down(93, 4.2)
+    r.key_up(93, 4.25)
+    assert r.mode == "cursor", r.mode
+    r.key_down(39, 5.0)
+    r.key_up(39, 5.05)
+    assert moves == [], "鼠标模式下原生方向键交给钩子，Raw 不再移动"
+
+    clicks: list[int] = []
+    core.mouse_click = lambda: clicks.append(1)   # type: ignore[assignment]
+    r.key_down(13, 5.1)
+    r.key_up(13, 5.15)
+    assert clicks == [], "OK 也交给钩子，Raw 不再点击"
+
+    # 钩子直接驱动鼠标并吞掉事件
+    import ctypes
+
+    kb = core._KBDLLHOOKSTRUCT(vkCode=39, scanCode=0, flags=0, time=0,
+                               dwExtraInfo=0)
+    ret = core._cursor_hook_cb(0, core.WM_KEYDOWN, ctypes.addressof(kb))
+    assert ret == 1 and moves[-1] == (8, 0), (ret, moves)
+    kb = core._KBDLLHOOKSTRUCT(vkCode=13, scanCode=0, flags=0, time=0,
+                               dwExtraInfo=0)
+    ret = core._cursor_hook_cb(0, core.WM_KEYDOWN, ctypes.addressof(kb))
+    assert ret == 1 and clicks == [1], (ret, clicks)
+    kb = core._KBDLLHOOKSTRUCT(vkCode=39, scanCode=0, flags=0x10, time=0,
+                               dwExtraInfo=0)
+    core._cursor_hook_cb(0, core.WM_KEYDOWN, ctypes.addressof(kb))
+    assert moves[-1] == (8, 0), "注入事件不该被钩子处理"
+    # 空闲超时自动退出（钩子活动时间清掉，走 tick 时钟）
+    core._cursor_last = 0.0
+    r.tick(6.0)
+    r.tick(6.0 + core.MODE_IDLE_S + 1)
+    assert r.mode is None
+    print("PASS 长按返回=音量/亮度、双击菜单=鼠标，单击/超时退出")
 
 
 def test_profiles_extend() -> None:
@@ -197,10 +275,10 @@ def test_profiles_extend() -> None:
     assert q["actions"]["send"]["type"] == "none"
     assert q["nav"]["keys"]["39"] == "nav_next"
     assert q["actions"]["nav_next"]["vk"] == 9
-    assert q["actions"]["chat_top"]["hold_action"]["type"] == "nav_toggle"
+    assert "hold_action" not in q["actions"]["chat_top"], "Home 不再用长按"
     a = by["agent"]
     assert a["nav"]["keys"] == q["nav"]["keys"], "WorkBuddy 与 Qoder 按键一致"
-    assert a["actions"]["chat_top"]["hold_action"]["type"] == "nav_toggle"
+    assert "hold_action" not in a["actions"]["chat_top"]
     assert "workbuddy.exe" in a["match"]["process"]
     assert core.voice_hotkey(q) == (["ctrl", "shift"], 86, "toggle")
     assert core.voice_hotkey(a) == (["ctrl"], 68, "toggle"), \
@@ -289,12 +367,12 @@ def test_voice_hold() -> None:
 if __name__ == "__main__":
     test_hold_scroll()
     test_tap_home()
-    test_hold_home()
     test_none_action()
     test_repeat_keydown_ignored()
     test_plain_hold_one_event()
     test_quick_tap_one_event()
     test_nav_mode()
+    test_mode_media_and_cursor()
     test_profiles_extend()
     test_describe()
     test_tap_combo()

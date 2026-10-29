@@ -16,7 +16,8 @@ from collections import deque
 from pathlib import Path
 
 from PySide6.QtCore import QPoint, QRect, QSettings, QSize, Qt, QTimer
-from PySide6.QtGui import QColor, QFont, QGuiApplication, QLinearGradient, QPainter, QPen
+from PySide6.QtGui import (QColor, QCursor, QFont, QGuiApplication,
+                           QLinearGradient, QPainter, QPen)
 from PySide6.QtWidgets import (
     QApplication, QComboBox, QFrame, QHBoxLayout, QLabel, QMainWindow, QMessageBox,
     QPushButton, QScrollArea, QSizePolicy, QTabWidget, QVBoxLayout, QWidget,
@@ -182,6 +183,7 @@ class Controller:
         self.events.append(rec)
         # 落盘一份，界面里看不到的细节（按键、状态机）靠这个排查
         try:
+            EVENT_LOG.parent.mkdir(parents=True, exist_ok=True)
             with open(EVENT_LOG, "a", encoding="utf-8") as f:
                 f.write(json.dumps(rec, ensure_ascii=False) + "\n")
         except OSError:
@@ -585,10 +587,44 @@ class EventRow(QFrame):
 # --------------------------------------------------------------------------
 # 主窗口
 # --------------------------------------------------------------------------
+class ModeToast(QWidget):
+    """屏幕底部居中的轻提示：进/退音量、鼠标、导航模式时显示。"""
+
+    def __init__(self):
+        super().__init__(None, Qt.FramelessWindowHint | Qt.Tool
+                         | Qt.WindowStaysOnTopHint | Qt.WindowDoesNotAcceptFocus)
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        self.setAttribute(Qt.WA_ShowWithoutActivating)
+        self.setAttribute(Qt.WA_TransparentForMouseEvents)
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        self.label = QLabel("")
+        self.label.setStyleSheet(
+            "background: rgba(18,23,34,235); color: #e6edf3;"
+            "border: 1px solid rgba(255,255,255,30); border-radius: 10px;"
+            "padding: 10px 18px; font-size: 14px;")
+        lay.addWidget(self.label)
+        self._timer = QTimer(self)
+        self._timer.setSingleShot(True)
+        self._timer.timeout.connect(self.hide)
+
+    def show_text(self, text: str) -> None:
+        self.label.setText(text)
+        self.adjustSize()
+        scr = QGuiApplication.screenAt(QCursor.pos()) or QGuiApplication.primaryScreen()
+        g = scr.availableGeometry()
+        self.move(g.x() + (g.width() - self.width()) // 2,
+                  g.y() + g.height() - self.height() - 56)
+        self.show()
+        self.raise_()
+        self._timer.start(1400)
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.ctl = Controller()
+        self.toast = ModeToast()
         self._seq = 0
         self._drag = None
         self._rows: list = []
@@ -920,7 +956,15 @@ class MainWindow(QMainWindow):
                 vk = int(vk_s)
             except (TypeError, ValueError):
                 continue
-            self.map_grid.addWidget(self._map_row(vk, sem, actions.get(sem, {})))
+            act = actions.get(sem, {})
+            tap_note = {27: "双击=音量/亮度模式", 36: "双击=导航模式",
+                        93: "双击=鼠标模式"}.get(vk)
+            if tap_note:
+                desc = core.describe_action(act) + " · " + tap_note
+                self.map_grid.addWidget(self._map_row(vk, sem, act,
+                                                      desc_override=desc))
+                continue
+            self.map_grid.addWidget(self._map_row(vk, sem, act))
         self.map_grid.addStretch(1)
 
     def _map_row(self, vk: int | str, sem: str, act: dict,
@@ -1060,6 +1104,10 @@ class MainWindow(QMainWindow):
             if not ev.get("quiet"):
                 self._append(ev)
             k = ev.get("kind")
+            if k == "status":
+                text = str(ev.get("text", ""))
+                if "模式 开" in text or "模式 关" in text:
+                    self.toast.show_text(text.split("（")[0])
             if k == "text":
                 if ev.get("text"):
                     self._set_result("done", ev["text"], f"识别耗时 {ev.get('cost')}s")

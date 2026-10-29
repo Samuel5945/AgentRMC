@@ -311,13 +311,7 @@
           "type": "scroll",
           "delta": 9000,
           "repeat": 3,
-          "label": "滚到顶",
-          "hold_action": {
-            "type": "nav_toggle",
-            "label": "导航模式"
-          },
-          "hold_ms": 450,
-          "hold_defer": true
+          "label": "滚到顶"
         }
       },
       "voice": {

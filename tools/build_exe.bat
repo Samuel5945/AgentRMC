@@ -45,6 +45,10 @@ copy /y config.json release\AgentRMC\ >nul
 copy /y commands.json release\AgentRMC\ >nul
 copy /y profiles.json release\AgentRMC\ >nul
 
+echo Copying assets...
+if exist "release\AgentRMC\assets" rmdir /s /q "release\AgentRMC\assets"
+xcopy /y /i /e /q assets release\AgentRMC\assets\ >nul
+
 echo.
 echo Done -^> release\AgentRMC\AgentRMC.exe
 dir release\AgentRMC\AgentRMC.exe

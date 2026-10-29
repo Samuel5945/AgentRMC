@@ -466,6 +466,11 @@ agent/qoder 的实际用法：
     "silence_stop_ms": 700,            // 静音多久算说完（local 模式）
     "min_record_ms": 300               // 短于此视为误触（local 模式）
   },
+  "media_voice": {                     // 耳机播放/暂停键 = 语音开关
+    "enabled": true,
+    "vkey": 179,                       // VK_MEDIA_PLAY_PAUSE
+    "swallow_in": ["qoder", "agent"]   // 这些 profile 在前台时接管
+  },
   "keys": { "38": "up", "40": "down" },        // vkey -> 语义名
   "actions": { "up": { "type": "key", "vk": 38 } },  // 语义名 -> 动作
   "voice": {
@@ -488,8 +493,8 @@ agent/qoder 的实际用法：
 }
 ```
 
-profile 里的 `voice.trigger` 只在 `hotkey` 模式下生效（当前）；`qoder` 是 `toggle`
-（按下开、松手关），`agent`（WorkBuddy）是 `hold`（按住说话）。`local` 模式下这些都不参与。
+profile 里的 `voice.trigger` 只在 `hotkey` 模式下生效（当前）；`qoder` 和 `agent`
+（WorkBuddy）都是 `toggle`（Ctrl+Shift+V / Ctrl+D，每按一次切换开/关）。`local` 模式下这些都不参与。
 
 ### 语音键的两种用法
 
@@ -514,7 +519,7 @@ Qoder 的 `voiceInputComboShortcut` 只在 **keydown** 上做切换（webview �
 
 程序会在按下时完整按一次 Ctrl+Shift+V（开始录音）、松手再完整按一次（停止并出字）；
 短于 300ms 的按住会等满 300ms 再发停止，避免第二次按下被 Qoder 当成"还没开始"。
-`hold` 也保留，适合目标程序是"按住说话"的场景（WorkBuddy）。
+`hold` 也保留，适合目标程序是"按住说话"的场景。
 
 > 两种方式都假设 Qoder 起始状态是 idle。如果它已经停在录音态，先手动点一下停止，
 > 否则第一次按下会被当成"停止"。
@@ -523,6 +528,20 @@ Qoder 的 `voiceInputComboShortcut` 只在 **keydown** 上做切换（webview �
 > 指示器**（`Shell_SecondaryTrayWnd`）在录音开始/结束时让任务栏露一下，不是 Qoder 浮层，
 > 也不是 F5。任何用麦的程序都会触发；AgentRMC 关不掉。要消掉只能从 Windows 侧：
 > 任务栏设置里关掉麦克风系统图标（如果有），或者关掉“自动隐藏任务栏”。
+
+#### 耳机播放键也能开关语音
+
+仅在 `voice.mode = hotkey` 时生效：Qoder / WorkBuddy 在前台时，蓝牙耳机的
+**播放/暂停键**会被接管为语音开关：按一下开、再按一下关。
+实测耳机走 AVRCP，系统只注入 **keydown**（带 `INJ` 标记、没有设备名、没有 keyup），
+所以不能走按住逻辑，只能做 toggle；上一曲/下一曲仍然控制媒体。
+
+- 只在 `qoder` / `agent` 是前台窗口时吞键，其他应用里播放键照常控制音乐。
+- 低层键盘钩子单独跑一个线程（`media_hook_start`），不占 Qt 主线程，收不到就退回普通媒体行为。
+- 想关掉或换键，改 `config.json` 的 `media_voice`：`enabled`、`vkey`（179 = 播放/暂停）、
+  `swallow_in`（哪些 profile 前台时接管）。
+
+> 音量键不产生任何键码（AVRCP 绝对音量），接不了；耳机麦克风在系统里也没有录音端点。
 
 `hotkey` 模式下，按键映射页第一行会显示实际接法，启动时**不会加载本地 whisper 模型**
 （省 462MB 内存），当前就是这一种。切到 `local` 模式则会在启动时加载
@@ -802,5 +821,6 @@ python rc_probe\atvv_probe.py --seconds 40
 - [x] 跨屏移动/缩放：PassThrough DPI + 原生拖动 + 切屏回夹 + 几何记忆
 - [x] 启动即监听 + 单实例保护 + 启动最小化（不抢焦点）
 - [x] 实测 NOLEGACY 的真正语义（按应用生效，用户态无法拦截原生键）
+- [x] 耳机播放键接管语音（Qoder/WorkBuddy 前台时吞键；AVRCP 无 keyup，只能 toggle）
 - [ ] TTS 播报 Agent 回复，形成语音闭环
 - [ ] 若换 ATVV 遥控器（RC003-MS / 遥控器 2 Pro），把 `rc_probe/atvv_probe.py` 的解码链并进主程序

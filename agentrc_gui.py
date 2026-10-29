@@ -134,6 +134,15 @@ QPushButton#ghostText {{
     font-size: 11.5px; padding: 3px 8px; border-radius: 6px;
 }}
 QPushButton#ghostText:hover {{ background: rgba(255,255,255,16); color: {TEXT}; }}
+QPushButton#guideLink {{
+    background: rgba(79,140,255,14); color: #9cc0ff;
+    border: 1px solid rgba(79,140,255,72); border-radius: 8px;
+    font-size: 11.5px; font-weight: 600; padding: 6px 12px;
+}}
+QPushButton#guideLink:hover {{
+    background: rgba(79,140,255,32); color: #cfe0ff;
+    border-color: rgba(79,140,255,120);
+}}
 QScrollArea {{ background: transparent; border: none; }}
 QScrollBar:vertical {{ background: transparent; width: 8px; margin: 4px 2px; }}
 QScrollBar::handle:vertical {{ background: rgba(255,255,255,26); border-radius: 4px; min-height: 24px; }}
@@ -809,6 +818,36 @@ class RemotePanel(QWidget):
                        Qt.AlignCenter, glyph)
 
 
+class ScaledImageLabel(QLabel):
+    """按控件实际物理像素重绘原图。
+
+    不能先缩成 px 逻辑像素再交给 QLabel：高 DPI 屏会把那张小图再放大一次，
+    细线就糊了。这里保留原图，paintEvent 里按控件物理尺寸做一次平滑缩放。
+    """
+
+    def __init__(self, path: Path | None = None, parent=None):
+        super().__init__(parent)
+        self._pm = QPixmap(str(path)) if path is not None and path.exists() else QPixmap()
+        self.setAlignment(Qt.AlignCenter)
+
+    def paintEvent(self, e) -> None:  # noqa: N802
+        super().paintEvent(e)             # QSS 背景/圆角边框
+        if self._pm.isNull():
+            return
+        r = self.rect().adjusted(7, 7, -7, -7)
+        if r.width() <= 0 or r.height() <= 0:
+            return
+        p = QPainter(self)
+        p.setRenderHint(QPainter.SmoothPixmapTransform)
+        size = self._pm.size().scaled(r.size(), Qt.KeepAspectRatio)
+        p.drawPixmap(
+            QRect(r.x() + (r.width() - size.width()) // 2,
+                  r.y() + (r.height() - size.height()) // 2,
+                  size.width(), size.height()),
+            self._pm,
+        )
+
+
 def image_tile(name: str, px: int, caption: str, py: int | None = None) -> QWidget:
     """产品图/示意图：按图片自身明暗配深浅“纸片”，避免深底上刺眼。"""
     box = QWidget()
@@ -816,9 +855,6 @@ def image_tile(name: str, px: int, caption: str, py: int | None = None) -> QWidg
     lay.setContentsMargins(0, 0, 0, 0)
     lay.setSpacing(6)
     ph = py or px
-    pic = QLabel()
-    pic.setFixedSize(px, ph)
-    pic.setAlignment(Qt.AlignCenter)
     path = HERE / "assets" / "remote" / name
     paper = "#f2f4f7"
     if path.exists():
@@ -826,13 +862,11 @@ def image_tile(name: str, px: int, caption: str, py: int | None = None) -> QWidg
         c = img.pixelColor(3, 3)
         if c.red() * 0.3 + c.green() * 0.6 + c.blue() * 0.1 < 90:
             paper = "#0f1420"          # 深色底图配深色纸片，不刺眼
+    pic = ScaledImageLabel(path)
+    pic.setFixedSize(px, ph)
     pic.setStyleSheet(f"background: {paper}; border: 1px solid rgba(255,255,255,26);"
                       "border-radius: 12px;")
-    if path.exists():
-        pm = QPixmap(str(path))
-        pic.setPixmap(pm.scaled(px - 14, ph - 14, Qt.KeepAspectRatio,
-                                Qt.SmoothTransformation))
-    else:
+    if not path.exists():
         pic.setText("缺图\n" + name)
         pic.setStyleSheet(pic.styleSheet() + f"color: {MUTED};")
     cap = QLabel(caption)
@@ -885,7 +919,7 @@ class GuideDialog(QWidget):
 
         row = QHBoxLayout()
         row.setSpacing(20)
-        row.addWidget(image_tile("pairing.png", 300,
+        row.addWidget(image_tile("pairing-earbuds.png", 300,
                                  "长按「返回」+「主页」进入配对", py=358),
                       0, Qt.AlignTop)
 
@@ -923,7 +957,8 @@ class GuideDialog(QWidget):
         cap2 = QLabel("常用手势")
         cap2.setObjectName("secTitle")
         tlay.addWidget(cap2)
-        for k, v in [("语音键", "按住说话、松手结束"),
+        for k, v in [("耳机播放", "Qoder / WorkBuddy 前台时开 / 关语音"),
+                     ("语音键", "按住说话、松手结束"),
                      ("方向 / OK", "浏览与发送；导航模式内翻页"),
                      ("双击", "返回=音量·亮度 菜单=鼠标 主页=导航"),
                      ("红外键", "电源与音量拨杆电脑收不到")]:
@@ -941,12 +976,16 @@ class GuideDialog(QWidget):
             tlay.addLayout(line)
         rlay.addWidget(tips)
 
-        btn_bt = QPushButton("打开蓝牙设置")
-        btn_bt.setObjectName("ghost")
+        btn_bt = QPushButton("打开蓝牙设置  ↗")
+        btn_bt.setObjectName("guideLink")
         btn_bt.setCursor(Qt.PointingHandCursor)
         btn_bt.clicked.connect(core.open_bluetooth_settings)
-        rlay.addWidget(btn_bt, 0, Qt.AlignLeft)
-        rlay.addStretch(1)
+        rlay.addStretch(1)               # 按钮贴右列底部，避免下方留一大块空
+        foot = QHBoxLayout()
+        foot.setContentsMargins(0, 0, 0, 0)
+        foot.addStretch(1)
+        foot.addWidget(btn_bt)
+        rlay.addLayout(foot)
         row.addWidget(right, 1)
         lay.addLayout(row)
 

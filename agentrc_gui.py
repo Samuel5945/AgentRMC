@@ -236,7 +236,7 @@ QFrame#mapCell:hover {{
 QLabel#mapCellTitle {{ color: #dbe4ee; font-size: 11px; font-weight: 600; }}
 QLabel#mapCellEffect {{ color: #5b6472; font-size: 9.5px; }}
 QLabel#mapCellDash {{ color: #3d4653; font-size: 11px; }}
-QLabel#mapCellChev {{ color: #3d4653; font-size: 10px; }}
+QLabel#mapCellChev {{ color: transparent; font-size: 10px; }}
 QFrame#mapCell:hover QLabel#mapCellChev {{ color: #8b949e; }}
 QFrame#mapKeyRow[sel="true"] QLabel#mapCellEffect {{ color: #8b949e; }}
 QFrame#mapKeyRow[sel="true"] QLabel#mapCellChev {{ color: #8b949e; }}
@@ -1808,11 +1808,11 @@ class MapCell(QFrame):
         title_lab.setObjectName("mapCellDash" if title == "—" else "mapCellTitle")
         title_lab.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
         col.addWidget(title_lab)
-        if effect:
-            eff = ElidedLabel(effect)
-            eff.setObjectName("mapCellEffect")
-            eff.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
-            col.addWidget(eff)
+        # 效果行空着也保留：同一行三个格的标题基线才齐
+        eff = ElidedLabel(effect)
+        eff.setObjectName("mapCellEffect")
+        eff.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+        col.addWidget(eff)
         col.addStretch(1)
         chev = QLabel("⌄")
         chev.setObjectName("mapCellChev")
@@ -2430,8 +2430,22 @@ class MainWindow(QMainWindow):
         for p in self.ctl.profiles.profiles:
             self.map_combo.addItem(p.get("name", "?"), p.get("name"))
         self.map_combo.currentIndexChanged.connect(self._refresh_keymap)
+
+        btn_open = QPushButton("高级配置")
+        btn_open.setObjectName("ghostSmall")
+        btn_open.setToolTip("直接编辑 profiles.json（匹配规则、语音接法等）")
+        btn_open.setCursor(Qt.PointingHandCursor)
+        btn_open.clicked.connect(self._open_profiles)
+        btn_reload = QPushButton("重新加载")
+        btn_reload.setObjectName("ghostSmall")
+        btn_reload.setCursor(Qt.PointingHandCursor)
+        btn_reload.clicked.connect(self._reload_profiles)
+
         head.addLayout(left, 1)
         head.addWidget(self.map_combo, 0, Qt.AlignTop)
+        head.addSpacing(2)
+        head.addWidget(btn_open, 0, Qt.AlignTop)
+        head.addWidget(btn_reload, 0, Qt.AlignTop)
         lay.addLayout(head)
 
         # 表头也放进滚动区：和行共用同一列宽，不会被滚动条挤出对齐
@@ -2440,7 +2454,8 @@ class MainWindow(QMainWindow):
         hv.setContentsMargins(0, 0, 0, 0)
         hv.setSpacing(2)
         hlay = QHBoxLayout()
-        hlay.setContentsMargins(6, 1, 10, 0)
+        # 行的 QSS 边框各占 1px：表头边距补齐后列线才跟手势格对上
+        hlay.setContentsMargins(7, 1, 11, 0)
         hlay.setSpacing(8)
         for text, width, stretch in (("键位", 88, 0), ("单击", 0, 1),
                                      ("双击", 0, 1), ("长按", 0, 1)):
@@ -2480,19 +2495,7 @@ class MainWindow(QMainWindow):
         self._map_hint_timer = QTimer(self)
         self._map_hint_timer.setSingleShot(True)
         self._map_hint_timer.timeout.connect(self._reset_map_hint)
-
-        btn_open = QPushButton("高级配置")
-        btn_open.setObjectName("ghostSmall")
-        btn_open.setToolTip("直接编辑 profiles.json（匹配规则、语音接法等）")
-        btn_open.setCursor(Qt.PointingHandCursor)
-        btn_open.clicked.connect(self._open_profiles)
-        btn_reload = QPushButton("重新加载")
-        btn_reload.setObjectName("ghostSmall")
-        btn_reload.setCursor(Qt.PointingHandCursor)
-        btn_reload.clicked.connect(self._reload_profiles)
         foot.addWidget(self.map_foot_hint, 1)
-        foot.addWidget(btn_open)
-        foot.addWidget(btn_reload)
         lay.addLayout(foot)
 
         self._refresh_keymap()

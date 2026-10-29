@@ -193,13 +193,18 @@ def test_profiles_extend() -> None:
     profs = core.resolve_profiles(data["profiles"])
     by = {p["name"]: p for p in profs}
     q = by["qoder"]
-    assert set(q["keys"]) == set(by["agent"]["keys"]), "qoder 应继承 agent 的按键"
+    assert set(q["keys"]) == set(by["agent"]["keys"]), "agent 应继承 qoder 的按键"
     assert q["actions"]["send"]["type"] == "none"
     assert q["nav"]["keys"]["39"] == "nav_next"
     assert q["actions"]["nav_next"]["vk"] == 9
     assert q["actions"]["chat_top"]["hold_action"]["type"] == "nav_toggle"
+    a = by["agent"]
+    assert a["nav"]["keys"] == q["nav"]["keys"], "WorkBuddy 与 Qoder 按键一致"
+    assert a["actions"]["chat_top"]["hold_action"]["type"] == "nav_toggle"
+    assert "workbuddy.exe" in a["match"]["process"]
     assert core.voice_hotkey(q) == (["ctrl", "shift"], 86, "toggle")
-    assert core.voice_hotkey(by["agent"])[2] == "hold"
+    assert core.voice_hotkey(a) == (["ctrl"], 68, "toggle"), \
+        "WorkBuddy 语音 = Ctrl+D 开关式"
     print("PASS qoder extends agent + 语音接法（toggle）")
 
 

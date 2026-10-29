@@ -446,12 +446,24 @@ DEFAULT_PROFILES = {
         },
         {
             "name": "qoder",
-            "extends": "agent",
             "match": {"process": ["qoder.exe", "qoder cn.exe"]},
+            "keys": {"38": "scroll_up", "40": "scroll_down", "37": "cursor_left",
+                     "39": "cursor_right", "13": "send", "27": "back",
+                     "93": "newline", "36": "chat_top", "122": "fullscreen"},
             "nav": {"exit_key": 36,
                     "keys": {"38": "nav_top", "40": "nav_bottom",
                              "37": "nav_prev", "39": "nav_next"}},
             "actions": {
+                "scroll_up": {"type": "scroll", "delta": 300,
+                              "hold_repeat": 100, "hold_accel": True},
+                "scroll_down": {"type": "scroll", "delta": -300,
+                                "hold_repeat": 100, "hold_accel": True},
+                "cursor_left": {"type": "none", "note": "原生 ← 移动光标"},
+                "cursor_right": {"type": "none", "note": "原生 → 移动光标"},
+                "send": {"type": "none", "note": "原生 Enter 发送"},
+                "back": {"type": "none", "note": "原生 Esc 停止/返回"},
+                "newline": {"type": "key", "vk": 0x0D, "mods": ["shift"]},
+                "fullscreen": {"type": "none", "note": "原生 F11 直通"},
                 "nav_top": {"type": "key", "vk": 0x21, "label": "上翻一页"},
                 "nav_bottom": {"type": "key", "vk": 0x22, "label": "下翻一页"},
                 "nav_prev": {"type": "key", "vk": 0x09, "mods": ["shift"],
@@ -464,33 +476,16 @@ DEFAULT_PROFILES = {
                     "hold_ms": 450, "hold_defer": True
                 },
             },
-            "voice": {"trigger": "toggle"}
+            "voice": {"hotkey": {"mods": ["ctrl", "shift"], "vk": 0x56,
+                                 "trigger": "toggle"}}
         },
         {
             "name": "agent",
-            "match": {"process": ["workbuddyai.exe"], "title": ["workbuddy"]},
-            "voice": {"trigger": "toggle"},
-            "keys": {"38": "scroll_up", "40": "scroll_down", "37": "cursor_left",
-                     "39": "cursor_right", "13": "send", "27": "back",
-                     "93": "newline", "36": "chat_top", "122": "fullscreen"},
-            "actions": {
-                "scroll_up": {"type": "scroll", "delta": 300,
-                              "hold_repeat": 100, "hold_accel": True},
-                "scroll_down": {"type": "scroll", "delta": -300,
-                                "hold_repeat": 100, "hold_accel": True},
-                "cursor_left": {"type": "none", "note": "原生 ← 移动光标"},
-                "cursor_right": {"type": "none", "note": "原生 → 移动光标"},
-                "send": {"type": "none", "note": "原生 Enter 发送"},
-                "back": {"type": "none", "note": "原生 Esc 停止/返回"},
-                "chat_top": {
-                    "type": "scroll", "delta": 9000, "repeat": 3, "label": "滚到顶",
-                    "hold_action": {"type": "scroll", "delta": -9000, "repeat": 3,
-                                    "label": "滚到底"},
-                    "hold_ms": 450, "hold_defer": True
-                },
-                "newline": {"type": "key", "vk": 0x0D, "mods": ["shift"]},
-                "fullscreen": {"type": "none", "note": "原生 F11 直通"}
-            }
+            "extends": "qoder",
+            "match": {"process": ["workbuddyai.exe", "workbuddy.exe"],
+                      "title": ["workbuddy"]},
+            "voice": {"hotkey": {"mods": ["ctrl"], "vk": 0x44,
+                                 "trigger": "toggle"}},
         },
         {
             "name": "default",

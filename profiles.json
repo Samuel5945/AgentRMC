@@ -214,12 +214,22 @@
     },
     {
       "name": "qoder",
-      "extends": "agent",
       "match": {
         "process": [
           "qoder.exe",
           "qoder cn.exe"
         ]
+      },
+      "keys": {
+        "38": "scroll_up",
+        "40": "scroll_down",
+        "37": "cursor_left",
+        "39": "cursor_right",
+        "13": "send",
+        "27": "back",
+        "93": "newline",
+        "36": "chat_top",
+        "122": "fullscreen"
       },
       "nav": {
         "exit_key": 36,
@@ -231,6 +241,45 @@
         }
       },
       "actions": {
+        "scroll_up": {
+          "type": "scroll",
+          "delta": 300,
+          "hold_repeat": 100,
+          "hold_accel": true
+        },
+        "scroll_down": {
+          "type": "scroll",
+          "delta": -300,
+          "hold_repeat": 100,
+          "hold_accel": true
+        },
+        "cursor_left": {
+          "type": "none",
+          "note": "原生 ← 移动光标"
+        },
+        "cursor_right": {
+          "type": "none",
+          "note": "原生 → 移动光标"
+        },
+        "send": {
+          "type": "none",
+          "note": "原生 Enter 发送"
+        },
+        "back": {
+          "type": "none",
+          "note": "原生 Esc 停止/返回"
+        },
+        "newline": {
+          "type": "key",
+          "vk": 13,
+          "mods": [
+            "shift"
+          ]
+        },
+        "fullscreen": {
+          "type": "none",
+          "note": "原生 F11 直通"
+        },
         "nav_top": {
           "type": "key",
           "vk": 33,
@@ -272,87 +321,36 @@
         }
       },
       "voice": {
-        "trigger": "toggle"
+        "hotkey": {
+          "mods": [
+            "ctrl",
+            "shift"
+          ],
+          "vk": 86,
+          "trigger": "toggle"
+        }
       }
     },
     {
       "name": "agent",
+      "extends": "qoder",
       "match": {
         "process": [
-          "workbuddyai.exe"
+          "workbuddyai.exe",
+          "workbuddy.exe"
         ],
         "title": [
           "workbuddy"
         ]
       },
-      "keys": {
-        "38": "scroll_up",
-        "40": "scroll_down",
-        "37": "cursor_left",
-        "39": "cursor_right",
-        "13": "send",
-        "27": "back",
-        "93": "newline",
-        "36": "chat_top",
-        "122": "fullscreen"
-      },
-      "actions": {
-        "scroll_up": {
-          "type": "scroll",
-          "delta": 300,
-          "hold_repeat": 100,
-          "hold_accel": true
-        },
-        "scroll_down": {
-          "type": "scroll",
-          "delta": -300,
-          "hold_repeat": 100,
-          "hold_accel": true
-        },
-        "send": {
-          "type": "none",
-          "note": "原生 Enter 发送"
-        },
-        "back": {
-          "type": "none",
-          "note": "原生 Esc 停止/返回"
-        },
-        "chat_top": {
-          "type": "scroll",
-          "delta": 9000,
-          "repeat": 3,
-          "label": "滚到顶",
-          "hold_action": {
-            "type": "scroll",
-            "delta": -9000,
-            "repeat": 3,
-            "label": "滚到底"
-          },
-          "hold_ms": 450,
-          "hold_defer": true
-        },
-        "newline": {
-          "type": "key",
-          "vk": 13,
-          "mods": [
-            "shift"
-          ]
-        },
-        "fullscreen": {
-          "type": "none",
-          "note": "原生 F11 直通"
-        },
-        "cursor_left": {
-          "type": "none",
-          "note": "原生 ← 移动光标"
-        },
-        "cursor_right": {
-          "type": "none",
-          "note": "原生 → 移动光标"
-        }
-      },
       "voice": {
-        "trigger": "hold"
+        "hotkey": {
+          "mods": [
+            "ctrl"
+          ],
+          "vk": 68,
+          "trigger": "toggle"
+        }
       }
     },
     {

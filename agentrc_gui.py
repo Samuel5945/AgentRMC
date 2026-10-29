@@ -22,8 +22,8 @@ from PySide6.QtCore import (Property, QEasingCurve, QPoint, QPropertyAnimation,
 from PySide6.QtGui import (QColor, QCursor, QFont, QGuiApplication, QIcon,
                            QImage, QLinearGradient, QPainter, QPen, QPixmap)
 from PySide6.QtWidgets import (
-    QApplication, QComboBox, QFrame, QHBoxLayout, QLabel, QMainWindow, QMenu,
-    QMessageBox, QPushButton, QScrollArea, QSizePolicy, QSystemTrayIcon,
+    QApplication, QComboBox, QDialog, QFrame, QHBoxLayout, QLabel, QMainWindow,
+    QMenu, QMessageBox, QPushButton, QScrollArea, QSizePolicy, QSystemTrayIcon,
     QTabWidget, QVBoxLayout, QWidget,
 )
 
@@ -255,6 +255,16 @@ QMenu::item:disabled {{ color: #5b6472; }}
 QMenu::separator {{
     height: 1px; background: rgba(255,255,255,14); margin: 4px 8px;
 }}
+QDialog#comboCapture {{
+    background: {CARD_TOP}; border: 1px solid rgba(255,255,255,24); border-radius: 10px;
+}}
+QLabel#captureTitle {{ color: {TEXT}; font-size: 13px; font-weight: 700; }}
+QLabel#captureCombo {{
+    color: {BLUE}; font-size: 15px; font-weight: 700;
+    background: rgba(255,255,255,10); border: 1px solid rgba(255,255,255,18);
+    border-radius: 8px; padding: 8px 12px;
+}}
+QLabel#captureHint {{ color: {MUTED}; font-size: 10px; }}
 """
 
 
@@ -1498,8 +1508,12 @@ def preset_action(pid: str, vk: int, gesture: str = "single") -> dict | None:
 
 
 def apply_mapping_preset(raw: dict, profile_name: str, vk: int,
-                         gesture: str, kind: str) -> bool:
-    """把单元格预设写进原始 profiles 数据；不改磁盘。返回是否改动。"""
+                         gesture: str, kind: str,
+                         custom: dict | None = None) -> bool:
+    """把单元格预设写进原始 profiles 数据；不改磁盘。返回是否改动。
+
+    custom 传入时（自定义组合键）忽略 kind 对应的预设，直接写这个动作。
+    """
     profile = next((p for p in (raw.get("profiles") or [])
                     if p.get("name") == profile_name), None)
     if profile is None:
@@ -1511,13 +1525,21 @@ def apply_mapping_preset(raw: dict, profile_name: str, vk: int,
     if not isinstance(keys, dict):
         keys = profile["keys"] = {}
 
+    def native_if_same(act: dict) -> dict:
+        """单击绑定的就是本键原生 VK：等价于直通，别注入两遍。"""
+        if (act.get("type") == "key" and not (act.get("mods") or [])
+                and int(act.get("vk", -1)) == int(vk)):
+            return {"type": "none", "label": str(act.get("label") or ""),
+                    "note": "原生 " + NATIVE_LABEL.get(int(vk), vk_name(int(vk)))}
+        return act
+
     if gesture == "single":
-        action = preset_action(kind, vk, "single")
-        if action is None:
+        act = native_if_same(custom) if custom else preset_action(kind, vk, "single")
+        if act is None:
             return False
         sem = f"k{vk}_{kind}"
         keys[str(vk)] = sem
-        actions[sem] = action
+        actions[sem] = act
         return True
 
     double = profile.get("double")
@@ -1531,24 +1553,24 @@ def apply_mapping_preset(raw: dict, profile_name: str, vk: int,
         if kind == "none":
             double[str(vk)] = "none"
             return True
-        action = preset_action(kind, vk, "double")
-        if action is None:
+        act = custom or preset_action(kind, vk, "double")
+        if act is None:
             return False
         sem = f"k{vk}_d_{kind}"
         double[str(vk)] = sem
-        actions[sem] = action
+        actions[sem] = act
         return True
 
     if gesture == "hold":
         if kind in ("none", "repeat", "repeat_accel"):
             hold[str(vk)] = kind
             return True
-        action = preset_action(kind, vk, "hold")
-        if action is None:
+        act = custom or preset_action(kind, vk, "hold")
+        if act is None:
             return False
         sem = f"k{vk}_h_{kind}"
         hold[str(vk)] = sem
-        actions[sem] = action
+        actions[sem] = act
         return True
     return False
 
@@ -1658,6 +1680,84 @@ class ElidedLabel(QLabel):
                 self._full, Qt.ElideRight, max(0, w - 1)))
         else:
             super().setText(self._full)
+
+
+# --------------------------------------------------------------------------
+# 自定义组合键：按下键盘直接录入
+# --------------------------------------------------------------------------
+QT_KEY_TO_VK = {
+    Qt.Key_Up: 0x26, Qt.Key_Down: 0x28, Qt.Key_Left: 0x25, Qt.Key_Right: 0x27,
+    Qt.Key_Enter: 0x0D, Qt.Key_Return: 0x0D, Qt.Key_Space: 0x20,
+    Qt.Key_Tab: 0x09, Qt.Key_Backspace: 0x08, Qt.Key_Delete: 0x2E,
+    Qt.Key_Home: 0x24, Qt.Key_End: 0x23, Qt.Key_Insert: 0x2D,
+    Qt.Key_PageUp: 0x21, Qt.Key_PageDown: 0x22, Qt.Key_Print: 0x2C,
+}
+QT_KEY_TO_VK.update({Qt.Key_F1 + i: 0x70 + i for i in range(12)})
+BARE_MOD_KEYS = {Qt.Key_Control, Qt.Key_Shift, Qt.Key_Alt, Qt.Key_AltGr,
+                 Qt.Key_Meta}
+
+
+def combo_text(mods: list[str], vk: int) -> str:
+    """组合键统一文案（动作 label / 单元格标题 / 保存提示共用）：CTRL+SHIFT+T。"""
+    prefix = "+".join(str(m).upper() for m in mods)
+    return (f"{prefix}+" if prefix else "") + core.VK_LABEL.get(
+        int(vk), f"VK 0x{int(vk):02X}")
+
+
+class ComboCaptureDialog(QDialog):
+    """按下键盘任意组合键直接录入；只按住修饰键时实时预览，Esc 取消。"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent, Qt.Dialog | Qt.FramelessWindowHint)
+        self.setObjectName("comboCapture")
+        self.setModal(True)
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        self.setFixedSize(380, 122)
+        self.mods: list[str] = []
+        self.vk: int = 0
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(18, 14, 18, 12)
+        lay.setSpacing(8)
+        title = QLabel("自定义组合键")
+        title.setObjectName("captureTitle")
+        self.cap = QLabel("按下要绑定的按键组合…")
+        self.cap.setObjectName("captureCombo")
+        self.cap.setAlignment(Qt.AlignCenter)
+        hint = QLabel("支持 Ctrl / Shift / Alt / Win；按下即录入，Esc 取消")
+        hint.setObjectName("captureHint")
+        lay.addWidget(title)
+        lay.addWidget(self.cap, 1)
+        lay.addWidget(hint)
+
+    def _mod_names(self, m) -> list[str]:
+        out = []
+        for flag, name in ((Qt.ControlModifier, "ctrl"),
+                           (Qt.ShiftModifier, "shift"),
+                           (Qt.AltModifier, "alt"),
+                           (Qt.MetaModifier, "win")):
+            if m & flag:
+                out.append(name)
+        return out
+
+    def keyPressEvent(self, e) -> None:  # noqa: N802
+        k = e.key()
+        if k == Qt.Key_Escape and not int(e.modifiers()):
+            self.reject()
+            return
+        if k in (Qt.Key_unknown, 0):
+            return
+        mods = self._mod_names(e.modifiers())
+        if k in BARE_MOD_KEYS:
+            self.cap.setText(("+".join(m.upper() for m in mods) + "+…") if mods
+                             else "按下要绑定的按键组合…")
+            return
+        vk = int(e.nativeVirtualKey() or 0) or QT_KEY_TO_VK.get(k, int(k))
+        self.mods = mods
+        self.vk = int(vk)
+        self.cap.setText(combo_text(mods, self.vk))
+        self.accept()
+        super().keyPressEvent(e)
 
 
 def map_section(title: str) -> QWidget:
@@ -2658,12 +2758,18 @@ class MainWindow(QMainWindow):
         menu.addSeparator()
 
         if gesture == "single":
+            act = menu.addAction("自定义组合键…")
+            act.triggered.connect(
+                lambda _=False: self._capture_custom_combo(pname, vk, "single"))
             act = menu.addAction("原生直通")
             act.triggered.connect(
                 lambda _=False: self._apply_mapping(pname, vk, "single", "pass"))
             menu.addSeparator()
             self._add_preset_menu_groups(menu, pname, vk, "single")
         elif gesture == "double":
+            act = menu.addAction("自定义组合键…")
+            act.triggered.connect(
+                lambda _=False: self._capture_custom_combo(pname, vk, "double"))
             act = menu.addAction("关闭双击")
             act.triggered.connect(
                 lambda _=False: self._apply_mapping(pname, vk, "double", "none"))
@@ -2682,6 +2788,9 @@ class MainWindow(QMainWindow):
             menu.addSeparator()
             self._add_preset_menu_groups(menu, pname, vk, "double")
         else:
+            act = menu.addAction("自定义组合键…")
+            act.triggered.connect(
+                lambda _=False: self._capture_custom_combo(pname, vk, "hold"))
             act = menu.addAction("关闭长按")
             act.triggered.connect(
                 lambda _=False: self._apply_mapping(pname, vk, "hold", "none"))
@@ -2722,13 +2831,15 @@ class MainWindow(QMainWindow):
         os.replace(tmp, path)
 
     def _apply_mapping(self, pname: str, vk: int, gesture: str,
-                       kind: str) -> None:
+                       kind: str, action: dict | None = None,
+                       display: str | None = None) -> None:
         path = self.profiles_path
         try:
             raw = json.loads(path.read_text(encoding="utf-8"))
             if not isinstance(raw, dict) or not isinstance(raw.get("profiles"), list):
                 raise ValueError("profiles.json 结构不对")
-            if not apply_mapping_preset(raw, pname, vk, gesture, kind):
+            if not apply_mapping_preset(raw, pname, vk, gesture, kind,
+                                        custom=action):
                 raise ValueError("没有找到这个场景或预设")
             self._write_raw_profiles(path, raw)
         except Exception as e:  # noqa: BLE001
@@ -2741,12 +2852,26 @@ class MainWindow(QMainWindow):
         self.ctl.router.reset()
         self._refresh_info()
         self._refresh_keymap()
-        label = self._gesture_label(gesture, kind)
+        label = display or self._gesture_label(gesture, kind)
         text = (f"已保存 · {pname} · {MAP_NAME.get(vk, vk)} "
                 f"{GESTURE_CN.get(gesture, gesture)} → {label}")
         self._flash_map_hint(text, GREEN)
         self._append({"kind": "status", "text": text,
                       "ts": time.strftime("%H:%M:%S")})
+
+    def _capture_custom_combo(self, pname: str, vk: int, gesture: str) -> None:
+        dlg = ComboCaptureDialog(self)
+        if dlg.exec() != QDialog.Accepted or not dlg.vk:
+            return
+        self._apply_captured(pname, vk, gesture, dlg)
+
+    def _apply_captured(self, pname: str, vk: int, gesture: str,
+                        dlg: ComboCaptureDialog) -> None:
+        text = combo_text(dlg.mods, dlg.vk)
+        self._apply_mapping(pname, vk, gesture, "custom",
+                            action={"type": "key", "mods": list(dlg.mods),
+                                    "vk": int(dlg.vk), "label": text},
+                            display=text)
 
     def _build_guide_card(self) -> QWidget:
         card = QFrame()

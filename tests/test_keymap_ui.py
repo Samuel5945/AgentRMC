@@ -18,7 +18,7 @@ sys.path.insert(0, str(ROOT))
 
 from PySide6.QtCore import Qt, QTimer  # noqa: E402
 from PySide6.QtTest import QTest  # noqa: E402
-from PySide6.QtWidgets import QApplication  # noqa: E402
+from PySide6.QtWidgets import QApplication, QDialog  # noqa: E402
 
 import agentrc as core  # noqa: E402
 import agentrc_gui as gui  # noqa: E402
@@ -147,8 +147,75 @@ def test_cell_click_opens_menu() -> None:
         tmp.unlink(missing_ok=True)
 
 
+def test_custom_combo_capture() -> None:
+    tmp = Path(tempfile.gettempdir()) / "agentrmc_ui_custom.json"
+    shutil.copy2(ROOT / "profiles.json", tmp)
+    win = _make_window(tmp)
+    try:
+        idx = win.map_combo.findData("qoder")
+        win.map_combo.setCurrentIndex(idx)      # 预览固定到 qoder，断言界面回显
+        win.tabs.setCurrentIndex(1)
+        _spin()
+
+        # 三个手势菜单都有「自定义组合键…」入口
+        for gesture in ("single", "double", "hold"):
+            menu = win._build_preset_menu(38, gesture)
+            labels = [a.text() for a in menu.actions()]
+            assert "自定义组合键…" in labels, (gesture, labels)
+            menu.deleteLater()
+
+        # 捕捉对话框：合成 Ctrl+T，按下即录入
+        dlg = gui.ComboCaptureDialog(win)
+        dlg.setAttribute(Qt.WA_DontShowOnScreen)
+        dlg.show()
+        QTest.keyClick(dlg, Qt.Key_T, Qt.ControlModifier)
+        assert dlg.mods == ["ctrl"] and dlg.vk == 0x54, (dlg.mods, dlg.vk)
+        assert dlg.result() == QDialog.Accepted
+
+        # 写回 profiles.json，单元格文案同步
+        win._apply_captured("qoder", 38, "single", dlg)
+        _spin()
+        raw = json.loads(tmp.read_text(encoding="utf-8"))
+        prof = next(p for p in raw["profiles"] if p["name"] == "qoder")
+        assert prof["keys"]["38"] == "k38_custom", prof["keys"].get("38")
+        assert prof["actions"]["k38_custom"]["mods"] == ["ctrl"]
+        assert prof["actions"]["k38_custom"]["vk"] == 0x54
+        assert win.map_rows[38].cells["single"].title_text == "CTRL+T"
+
+        # 长按自定义：Shift+Alt+X
+        dlg2 = gui.ComboCaptureDialog(win)
+        dlg2.setAttribute(Qt.WA_DontShowOnScreen)
+        dlg2.show()
+        QTest.keyClick(dlg2, Qt.Key_X, Qt.ShiftModifier | Qt.AltModifier)
+        win._apply_captured("qoder", 40, "hold", dlg2)
+        _spin()
+        raw = json.loads(tmp.read_text(encoding="utf-8"))
+        prof = next(p for p in raw["profiles"] if p["name"] == "qoder")
+        assert prof["hold"]["40"] == "k40_h_custom", prof.get("hold")
+        assert prof["actions"]["k40_h_custom"]["label"] == "SHIFT+ALT+X"
+        assert win.map_rows[40].cells["hold"].title_text == "SHIFT+ALT+X"
+
+        # 单击绑到本键原生 VK：等价直通，不再注入
+        dlg3 = gui.ComboCaptureDialog(win)
+        dlg3.setAttribute(Qt.WA_DontShowOnScreen)
+        dlg3.show()
+        QTest.keyClick(dlg3, Qt.Key_Up)        # 遥控器上键 vk 38 = VK 0x26
+        win._apply_captured("qoder", 38, "single", dlg3)
+        _spin()
+        raw = json.loads(tmp.read_text(encoding="utf-8"))
+        prof = next(p for p in raw["profiles"] if p["name"] == "qoder")
+        assert prof["actions"]["k38_custom"]["type"] == "none", \
+            prof["actions"]["k38_custom"]
+        print("PASS 自定义组合键：菜单入口 / 按键直接录入 / 写回 profiles.json")
+    finally:
+        win.deleteLater()
+        _spin()
+        tmp.unlink(missing_ok=True)
+
+
 if __name__ == "__main__":
     test_rows_visible_after_tab_switch()
     test_preset_edit_roundtrip()
     test_cell_click_opens_menu()
+    test_custom_combo_capture()
     print("\n全部通过")

@@ -1073,6 +1073,7 @@ class KeyRouter:
         self.mode: str | None = None
         self.mode_last = 0.0
         self._tap_pending: dict[int, dict] = {}
+        self._mode_enter_vk: int | None = None
 
     def reset(self) -> None:
         """停止监听 / 重载配置时清掉按住的键，否则重启后会一直连发。"""
@@ -1082,6 +1083,7 @@ class KeyRouter:
         self.nav_mode = False
         self.mode = None
         self._tap_pending.clear()
+        self._mode_enter_vk = None
         cursor_hook_stop()
 
     def _exit_mode(self) -> None:
@@ -1104,6 +1106,8 @@ class KeyRouter:
 
         if self.mode:
             if str(vkey) in MODE_TRIGGERS:
+                if vkey == self._mode_enter_vk:
+                    return  # 双击进模式那一击还按着，连发 keydown 不算退出
                 self._exit_mode()
                 return
             if self.mode == "cursor" and (vkey in CURSOR_KEYS or vkey == 0x0D):
@@ -1118,7 +1122,8 @@ class KeyRouter:
 
         if self.nav_mode:
             name = (nav.get("keys") or {}).get(str(vkey))
-            if str(vkey) == str(nav.get("exit_key", "")):
+            if (str(vkey) == str(nav.get("exit_key", ""))
+                    and vkey != self._mode_enter_vk):
                 name = "nav_exit"
             if name:
                 action = actions.get(name)
@@ -1155,6 +1160,8 @@ class KeyRouter:
                 self._held.pop(vkey, None)
                 self._deferred.pop(vkey, None)
                 if double_action:
+                    if double_action.get("type") in ("mode", "nav_toggle"):
+                        self._mode_enter_vk = vkey
                     self._dispatch(pname, double_sem, double_action)
                     if (self.emit and double_action.get("type")
                             not in ("mode", "nav_toggle", "nav_exit", "none")):
@@ -1167,6 +1174,7 @@ class KeyRouter:
                             detail="双击 · " + describe_action(shown, hold_info=False),
                             vk=vkey)
                 else:
+                    self._mode_enter_vk = vkey
                     target = TAP_TARGETS[str(vkey)]
                     if target == "nav":
                         self._dispatch(pname, "nav_toggle",
@@ -1269,6 +1277,8 @@ class KeyRouter:
         self._queue_hold(vkey, now, st)
 
     def key_up(self, vkey: int, now: float) -> None:
+        if vkey == self._mode_enter_vk:
+            self._mode_enter_vk = None  # 进模式那一击松手了，恢复退出键语义
         if vkey in self._tap_pending:
             # 菜单键第一击：等双击窗口结束再决定
             self._active.pop(vkey, None)

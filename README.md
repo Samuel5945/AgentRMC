@@ -195,7 +195,9 @@ tools\download_model.bat medium   # 可选：medium / large（=large-v3）
 `config.json` 里的 `ui.auto_listen` 为 `true` 时，程序启动后自动开始监听；
 同时只允许一个实例（第二个会弹窗退出，避免每个键注入两次）。
 `ui.start_minimized` 为 `true` 时窗口启动就藏在托盘里，不占屏幕也不抢 Qoder 的焦点
-（无边框窗口用 `showMinimized()` 会在屏幕上闪一个最小化残影，所以直接不显示）；
+（无边框窗口用 `showMinimized()` 会在屏幕上闪一个最小化残影，所以直接不显示；
+启动时已对该窗口禁用 DWM 过渡动画，点标题栏「─」最小化也不会再闪残影，
+代价是最小化/还原没有动画）；
 **第一次启动例外**——会正常开窗口并自动弹出图文引导，看过一次（切页签或关窗）才记住。
 
 **托盘常驻**：右下角托盘图标（`assets/icon.ico`）就是后台监听的入口。

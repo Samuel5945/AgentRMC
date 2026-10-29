@@ -1843,6 +1843,7 @@ class MainWindow(QMainWindow):
         self._build()
         self._refresh_info()
         self._restore_geometry()
+        self._stop_minimize_ghost()
 
         # 关窗 = 隐藏到托盘继续监听；真正退出走托盘菜单。系统没有托盘时
         # 退回老行为（关窗即退出），否则窗口就再也叫不回来了。
@@ -3038,6 +3039,24 @@ class MainWindow(QMainWindow):
             target = self.fit_rect(self.frameGeometry(), avail)
         if target.topLeft() != self.pos():
             self.move(target.topLeft())
+
+    def _stop_minimize_ghost(self) -> None:
+        """无边框窗口最小化/还原时 DWM 会闪一个 137x51 的残影（启动路径已绕过，
+        点标题栏「─」和无托盘启动仍会踩到）。关掉本窗口的 DWM 过渡动画后
+        最小化瞬时完成，残影消失；代价是还原时也没有动画。"""
+        if sys.platform != "win32":
+            return
+        try:
+            import ctypes
+            from ctypes import wintypes
+            DWMWA_TRANSITIONS_FORCEDISABLED = 3
+            off = wintypes.BOOL(True)
+            ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                wintypes.HWND(int(self.winId())),
+                DWMWA_TRANSITIONS_FORCEDISABLED,
+                ctypes.byref(off), ctypes.sizeof(off))
+        except Exception:  # noqa: BLE001
+            pass
 
     def _on_screen_changed(self, _screen=None) -> None:
         QTimer.singleShot(250, self._fit_to_screen)

@@ -264,6 +264,36 @@ def test_mode_media_and_cursor() -> None:
     print("PASS 长按返回=音量/亮度、双击菜单=鼠标，单击/超时退出")
 
 
+def test_mode_enter_repeat_keeps_mode() -> None:
+    """双击进模式那一击按得稍久，设备连发的 keydown 不应立刻退出模式
+    （否则弹窗「开→关」闪一下就没了）。"""
+    r = setup()
+    r.profiles.profile["keys"]["93"] = "menu"
+    r.profiles.profile["actions"]["menu"] = {"type": "none", "note": "原生菜单"}
+
+    # 双击返回 → 音量/亮度模式；第二击按住期间连发两次
+    r.key_down(27, 0.0)
+    r.key_up(27, 0.05)
+    r.key_down(27, 0.2)
+    assert r.mode == "media", r.mode
+    r.key_down(27, 0.4)            # 设备连发
+    r.key_down(27, 0.6)            # 设备连发
+    assert r.mode == "media", "进模式那一击的连发不应退出模式"
+    assert sum("音量/亮度模式 开" in e.get("text", "") for e in EVENTS) == 1
+    assert not any("音量/亮度模式 关" in e.get("text", "") for e in EVENTS), EVENTS
+    r.key_up(27, 0.7)              # 松手后恢复退出键语义
+    r.key_down(27, 1.5)
+    assert r.mode is None, "松手后的单击应正常退出模式"
+
+    # 双击主页 → 导航模式，同样吞掉连发
+    r.key_down(36, 2.0)
+    r.key_up(36, 2.05)
+    r.key_down(36, 2.2)
+    r.key_up(36, 2.25)
+    assert r.nav_mode, r.nav_mode
+    print("PASS 双击进模式：连发 keydown 不再导致立刻退出")
+
+
 def test_generic_double() -> None:
     r = setup()
     p = r.profiles.profile
@@ -490,6 +520,7 @@ if __name__ == "__main__":
     test_quick_tap_one_event()
     test_nav_mode()
     test_mode_media_and_cursor()
+    test_mode_enter_repeat_keeps_mode()
     test_generic_double()
     test_double_none_disables_builtin()
     test_hold_spec_action()

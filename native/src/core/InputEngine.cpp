@@ -1,8 +1,11 @@
 #include "InputEngine.h"
 
 #include <QCoreApplication>
+#include <QDateTime>
 #include <QMetaObject>
 #include <QTimer>
+
+#include "core/VoiceSettings.h"
 
 #include <chrono>
 #include <vector>
@@ -124,7 +127,7 @@ bool InputEngine::start(QString *error) {
 
     hooks_ = new NativeHooks(
         &injector_, [this](int vk, bool down) { pushRaw({vk, down}); },
-        &cursorMode_, &cursorLast_);
+        &cursorMode_, &cursorLast_, [this] { notifyMedia(); });
     if (!hooks_->start()) {
         if (error) *error = QStringLiteral("低层键盘钩子安装失败");
         cleanup();
@@ -215,6 +218,18 @@ void InputEngine::refreshProfile() {
         takeoverEnabled_ = enabled;
         takeoverVks_ = vks;
     }
+
+    const VoiceOptions voice =
+        resolveVoiceOptions(store_->config(), current.voice,
+                            QCoreApplication::applicationDirPath());
+    voiceVk_.store(voice.voiceVk);
+    mediaVk_.store(voice.mediaVk);
+    const bool mediaGate =
+        voice.mediaEnabled && voice.mediaProfiles.contains(current.name.toLower());
+    mediaGate_.store(mediaGate);
+    if (hooks_ != nullptr) {
+        hooks_->setMediaVoice(voice.mediaVk, mediaGate);
+    }
 }
 
 void InputEngine::workerLoop() {
@@ -247,7 +262,20 @@ void InputEngine::workerLoop() {
         }
         router_->setTakeover(takeover, takeoverVks);
         if (hasEvent) {
-            if (event.down) {
+            if (event.vk == voiceVk_.load()) {
+                QMetaObject::invokeMethod(
+                    this,
+                    [this, down = event.down] {
+                        if (down) {
+                            emit voiceDown();
+                        } else {
+                            emit voiceUp();
+                        }
+                    },
+                    Qt::QueuedConnection);
+            } else if (event.vk == mediaVk_.load() && mediaGate_.load()) {
+                notifyMedia();
+            } else if (event.down) {
                 router_->keyDown(event.vk);
             } else {
                 router_->keyUp(event.vk);
@@ -310,4 +338,15 @@ void InputEngine::pushRaw(const RawEvent &event) {
     if (queue_.size() < 256) {
         queue_.push_back(event);
     }
+}
+
+void InputEngine::notifyMedia() {
+    // 低层钩子和 Raw Input 可能都送来同一个 B3，200ms 内只认一次。
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    const qint64 previous = mediaLastMs_.exchange(now);
+    if (now - previous < 200) {
+        return;
+    }
+    QMetaObject::invokeMethod(
+        this, [this] { emit mediaVoice(); }, Qt::QueuedConnection);
 }

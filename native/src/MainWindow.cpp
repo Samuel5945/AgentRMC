@@ -1,8 +1,10 @@
 #include "MainWindow.h"
 
 #include "ui/KeymapPage.h"
+#include "ui/VoiceSettingsDialog.h"
 
 #include "core/InputEngine.h"
+#include "core/VoiceController.h"
 
 #include <QAbstractItemView>
 #include <QAction>
@@ -10,8 +12,11 @@
 #include <QColor>
 #include <QIcon>
 #include <QCloseEvent>
+#include <QComboBox>
 #include <QCoreApplication>
+#include <QJsonObject>
 #include <QListWidget>
+#include <QSignalBlocker>
 #include <QTime>
 #include <QFont>
 #include <QFrame>
@@ -142,9 +147,26 @@ MainWindow::MainWindow(bool withTray, const QString &pin, QWidget *parent)
         store_->setPinned(pin);
     }
     engine_ = new InputEngine(store_.get(), this);
+    voice_ = new VoiceController(store_.get(), this);
     connect(engine_, &InputEngine::eventReady, this, &MainWindow::onEngineEvent);
     connect(engine_, &InputEngine::runningChanged, this,
             &MainWindow::onEngineRunning);
+    connect(engine_, &InputEngine::runningChanged, this,
+            [this](bool running, const QString &) {
+                voice_->setListening(running);
+            });
+    connect(engine_, &InputEngine::voiceDown, voice_, &VoiceController::voiceDown);
+    connect(engine_, &InputEngine::voiceUp, voice_, &VoiceController::voiceUp);
+    connect(engine_, &InputEngine::mediaVoice, voice_,
+            &VoiceController::mediaToggle);
+    connect(voice_, &VoiceController::stateChanged, this,
+            &MainWindow::onVoiceState);
+    connect(voice_, &VoiceController::transcribed, this,
+            &MainWindow::onVoiceTranscribed);
+    connect(voice_, &VoiceController::eventReady, this,
+            [this](const QString &kind, const QString &text) {
+                appendEvent(kind, QString(), QString(), text, 0);
+            });
     setWindowTitle("AgentRMC Native");
     setWindowIcon(QIcon(":/icons/icon.ico"));
     setWindowFlags(Qt::Window | Qt::FramelessWindowHint);
@@ -206,7 +228,7 @@ QWidget *MainWindow::buildHeader() {
     auto *brand = new QLabel("AgentRMC");
     brand->setObjectName("brand");
 
-    auto *tag = new QLabel("NATIVE · M4");
+    auto *tag = new QLabel("NATIVE · M5");
     tag->setObjectName("tag");
 
     lay->addWidget(logo);
@@ -320,23 +342,63 @@ QWidget *MainWindow::buildVoiceCard() {
 
     auto *lay = new QVBoxLayout(card);
     lay->setContentsMargins(16, 13, 16, 13);
-    lay->setSpacing(8);
+    lay->setSpacing(7);
 
     auto *head = new QHBoxLayout;
     auto *title = new QLabel(QString::fromUtf8("语音"));
     title->setObjectName("cardTitle");
-    auto *badge = new QLabel("M4");
+    auto *badge = new QLabel("M5");
     badge->setObjectName("badge");
     head->addWidget(title);
     head->addStretch(1);
     head->addWidget(badge);
     lay->addLayout(head);
 
-    auto *box = new QLabel(QString::fromUtf8("语音输入 · hotkey 模式 / 里程碑 5 选 Qoder 语音或本地 whisper"));
-    box->setObjectName("voiceBox");
-    box->setWordWrap(true);
-    box->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
-    lay->addWidget(box, 1);
+    voiceBackend_ = new QComboBox;
+    voiceBackend_->addItem(QString::fromUtf8("Qoder 热键 · 0 模型"), "hotkey");
+    voiceBackend_->addItem(QString::fromUtf8("本地 SenseVoice"), "sensevoice");
+    voiceBackend_->addItem(QString::fromUtf8("本地 Qwen3-ASR"), "qwen3");
+    voiceBackend_->setCursor(Qt::PointingHandCursor);
+    const int backendIndex = voiceBackend_->findData(
+        voiceBackendKey(voice_->options().backend));
+    voiceBackend_->setCurrentIndex(backendIndex >= 0 ? backendIndex : 0);
+    connect(voiceBackend_, &QComboBox::currentIndexChanged, this,
+            [this](int index) {
+                const QString key = voiceBackend_->itemData(index).toString();
+                store_->updateVoice(QJsonObject{{"backend", key}});
+                voice_->reload();
+                refreshVoiceUi();
+                appendEvent(QStringLiteral("status"), QString(),
+                            QString(),
+                            QString::fromUtf8("语音后端切换为 ") +
+                                voiceBackend_->itemText(index),
+                            0);
+            });
+    lay->addWidget(voiceBackend_);
+
+    voiceState_ = new QLabel;
+    voiceState_->setObjectName("voiceBox");
+    voiceState_->setWordWrap(true);
+    voiceState_->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+    voiceState_->setMinimumHeight(48);
+    lay->addWidget(voiceState_, 1);
+
+    auto *tools = new QHBoxLayout;
+    tools->setSpacing(6);
+    voiceTest_ = new QPushButton(QString::fromUtf8("测试 3 秒"));
+    voiceTest_->setObjectName("ghostSmall");
+    voiceTest_->setCursor(Qt::PointingHandCursor);
+    connect(voiceTest_, &QPushButton::clicked, voice_,
+            &VoiceController::startTest);
+    auto *settings = new QPushButton(QString::fromUtf8("模型设置"));
+    settings->setObjectName("ghostSmall");
+    settings->setCursor(Qt::PointingHandCursor);
+    connect(settings, &QPushButton::clicked, this,
+            &MainWindow::openVoiceSettings);
+    tools->addWidget(voiceTest_);
+    tools->addWidget(settings);
+    tools->addStretch(1);
+    lay->addLayout(tools);
 
     listenButton_ = new QPushButton(QString::fromUtf8("开始监听"));
     listenButton_->setObjectName("primary");
@@ -346,11 +408,13 @@ QWidget *MainWindow::buildVoiceCard() {
     lay->addWidget(listenButton_);
 
     auto *foot = new QHBoxLayout;
-    auto *state = new QLabel(QString::fromUtf8("本地模型：未接入"));
-    state->setObjectName("muted");
-    foot->addWidget(state);
+    voiceFoot_ = new QLabel;
+    voiceFoot_->setObjectName("muted");
+    foot->addWidget(voiceFoot_);
     foot->addStretch(1);
     lay->addLayout(foot);
+
+    refreshVoiceUi();
     return card;
 }
 
@@ -425,9 +489,10 @@ QWidget *MainWindow::buildGuidePage() {
         QString::fromUtf8("里程碑 1 已完成 · 窗口 / 主题 / 托盘 / 构建"),
         QString::fromUtf8("里程碑 2 已完成 · config + profiles + 可编辑映射表"),
         QString::fromUtf8("里程碑 3 已完成 · Raw Input + KeyRouter + 动作注入"),
-        QString::fromUtf8("里程碑 4（当前）· 原生键接管 / 鼠标模式"),
-        QString::fromUtf8("里程碑 5 · hotkey 语音 / 本地 whisper（停点，先选方案）"),
+        QString::fromUtf8("里程碑 4 已完成 · 原生键接管 / 鼠标模式"),
+        QString::fromUtf8("里程碑 5（当前）· 语音：Qoder 热键 / SenseVoice / Qwen3-ASR"),
         QString::fromUtf8("里程碑 6 · BLE 电量 / 跨屏 DPI / windeployqt 打包"),
+        QString::fromUtf8("Qt 6.8 没有 Multimedia 模块，录音走 WinMM；转写走 sherpa-onnx C API。"),
         QString::fromUtf8("Python 版继续保留，作为行为参照；两版共用 config/profiles 格式。"),
     };
     for (const QString &line : lines) {
@@ -468,7 +533,7 @@ void MainWindow::buildTray() {
         QApplication::quit();
     });
     tray_->setContextMenu(menu);
-    tray_->setToolTip("AgentRMC Native · 里程碑 1");
+    tray_->setToolTip("AgentRMC Native · 里程碑 5");
     tray_->show();
 
     connect(tray_, &QSystemTrayIcon::activated, this,
@@ -486,12 +551,12 @@ void MainWindow::showMilestones() {
     QMessageBox::information(
         this, "AgentRMC Native",
         QString::fromUtf8(
-            "C++/Qt + whisper.cpp 原生迁移\n\n"
+            "C++/Qt 原生迁移\n\n"
             "里程碑 1：窗口 / 主题 / 托盘 / 构建（已完成）\n"
             "2：config + profiles + 可编辑映射表（已完成）\n"
-            "3：Raw Input + Router + 注入（当前）\n"
-            "4：原生键接管 / 鼠标模式\n"
-            "5：hotkey 语音 / 本地 whisper（停点：先选 Qoder 语音还是本地模型）\n"
+            "3：Raw Input + Router + 注入（已完成）\n"
+            "4：原生键接管 / 鼠标模式（已完成）\n"
+            "5：语音（当前）· Qoder 热键 / SenseVoice / Qwen3-ASR\n"
             "6：BLE / DPI / 打包"));
 }
 
@@ -528,6 +593,84 @@ void MainWindow::updateListenUi() {
     }
 }
 
+void MainWindow::refreshVoiceUi() {
+    if (voice_ == nullptr || voiceState_ == nullptr) {
+        return;
+    }
+    const VoiceOptions options = voice_->options();
+    if (voiceBackend_ != nullptr) {
+        const int index = voiceBackend_->findData(voiceBackendKey(options.backend));
+        if (index >= 0 && index != voiceBackend_->currentIndex()) {
+            const QSignalBlocker blocker(voiceBackend_);
+            voiceBackend_->setCurrentIndex(index);
+        }
+    }
+    voiceState_->setText(voice_->statusText());
+    if (options.backend == VoiceBackend::Hotkey) {
+        voiceState_->setStyleSheet(QStringLiteral("color:#9ec1ff;"));
+        if (voiceFoot_ != nullptr) {
+            voiceFoot_->setText(QString::fromUtf8("0 模型 · 转发到前台窗口"));
+        }
+    } else {
+        const bool ready = voice_->modelReady();
+        voiceState_->setStyleSheet(ready ? QStringLiteral("color:#c9d1d9;")
+                                         : QStringLiteral("color:#d29922;"));
+        if (voiceFoot_ != nullptr) {
+            voiceFoot_->setText(ready
+                                    ? QString::fromUtf8("本地转写 · 音频不出本机")
+                                    : QString::fromUtf8("模型未安装 · 打开“模型设置”"));
+        }
+    }
+    if (voiceTest_ != nullptr) {
+        voiceTest_->setEnabled(options.backend != VoiceBackend::Hotkey &&
+                              !voice_->busy());
+    }
+}
+
+void MainWindow::openVoiceSettings() {
+    auto *dialog = new VoiceSettingsDialog(store_.get(), this);
+    connect(dialog, &VoiceSettingsDialog::saved, this, [this] {
+        voice_->reload();
+        refreshVoiceUi();
+        appendEvent(QStringLiteral("status"), QString(),
+                    QString(), QString::fromUtf8("语音设置已保存"), 0);
+    });
+    dialog->exec();
+    dialog->deleteLater();
+}
+
+void MainWindow::onVoiceState(const QString &state, const QString &detail) {
+    if (voiceState_ != nullptr) {
+        if (state == QStringLiteral("idle")) {
+            voiceState_->setText(detail == QStringLiteral("就绪") ||
+                                         detail == QStringLiteral("语音快捷键已结束")
+                                     ? voice_->statusText()
+                                     : detail);
+            voiceState_->setStyleSheet(
+                detail.contains(QString::fromUtf8("太短")) ||
+                        detail.contains(QString::fromUtf8("未"))
+                    ? QStringLiteral("color:#d29922;")
+                    : QStringLiteral("color:#c9d1d9;"));
+        } else {
+            voiceState_->setText(detail);
+            voiceState_->setStyleSheet(QStringLiteral("color:#7c9cff;"));
+        }
+    }
+    if (voiceTest_ != nullptr) {
+        voiceTest_->setEnabled(voice_->options().backend != VoiceBackend::Hotkey &&
+                              !voice_->busy());
+    }
+}
+
+void MainWindow::onVoiceTranscribed(const QString &text, int costMs) {
+    appendEvent(QStringLiteral("voice"), QString(), QString(),
+                QStringLiteral("✓ %1s · %2")
+                    .arg(costMs / 1000.0, 0, 'f', 1)
+                    .arg(text),
+                0);
+    refreshVoiceUi();
+}
+
 void MainWindow::onEngineEvent(const QString &kind, const QString &name,
                                const QString &profile, const QString &detail,
                                int vk) {
@@ -562,6 +705,8 @@ void MainWindow::appendEvent(const QString &kind, const QString &name,
     QColor color("#c9d1d9");
     if (kind == "error") {
         color = QColor("#f85149");
+    } else if (kind == "voice") {
+        color = QColor("#3fb950");
     } else if (kind == "status") {
         color = QColor("#8b949e");
     }

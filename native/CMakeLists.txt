@@ -26,35 +26,52 @@ qt_add_executable(AgentRMCNative
     src/core/InputEngine.h
     src/core/NativeHooks.cpp
     src/core/NativeHooks.h
+    src/core/VoiceSettings.cpp
+    src/core/VoiceSettings.h
+    src/core/AudioRecorder.cpp
+    src/core/AudioRecorder.h
+    src/core/AsrEngine.cpp
+    src/core/AsrEngine.h
+    src/core/VoiceController.cpp
+    src/core/VoiceController.h
     src/ui/MapWidgets.cpp
     src/ui/MapWidgets.h
     src/ui/KeymapPage.cpp
     src/ui/KeymapPage.h
     src/ui/ToggleSwitch.cpp
     src/ui/ToggleSwitch.h
+    src/ui/VoiceSettingsDialog.cpp
+    src/ui/VoiceSettingsDialog.h
     resources/app.qrc
 )
 
 target_include_directories(AgentRMCNative PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
-target_link_libraries(AgentRMCNative PRIVATE Qt6::Widgets)
+target_link_libraries(AgentRMCNative PRIVATE Qt6::Widgets winmm)
 target_compile_options(AgentRMCNative PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
 target_compile_definitions(AgentRMCNative PRIVATE AGENTRMC_VERSION="${PROJECT_VERSION}")
 
-# 里程碑 5 再接本地转写；默认关闭，先保证壳和输入链可构建。
-option(AGENTRMC_WITH_WHISPER "Build local whisper.cpp backend" OFF)
-if(AGENTRMC_WITH_WHISPER)
-    include(FetchContent)
-    FetchContent_Declare(
-        whisper_cpp
-        GIT_REPOSITORY https://github.com/ggml-org/whisper.cpp.git
-        GIT_TAG v1.7.4
-        GIT_SHALLOW TRUE
-    )
-    set(WHISPER_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-    set(WHISPER_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-    FetchContent_MakeAvailable(whisper_cpp)
-    target_link_libraries(AgentRMCNative PRIVATE whisper)
-    target_compile_definitions(AgentRMCNative PRIVATE AGENTRMC_WITH_WHISPER=1)
+# 本地转写：sherpa-onnx 预编译库放在 third_party/sherpa-onnx；没下载时仍可构建，
+# 语音页会提示“当前构建未包含运行库”。
+set(AGENTRMC_SHERPA_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/third_party/sherpa-onnx"
+    CACHE PATH "sherpa-onnx prebuilt root")
+option(AGENTRMC_ENABLE_SHERPA "Build the local sherpa-onnx ASR backend" ON)
+if(AGENTRMC_ENABLE_SHERPA
+   AND EXISTS "${AGENTRMC_SHERPA_ROOT}/include/sherpa-onnx/c-api/c-api.h"
+   AND EXISTS "${AGENTRMC_SHERPA_ROOT}/lib/sherpa-onnx-c-api.lib")
+    set(AGENTRMC_WITH_SHERPA ON)
+    target_include_directories(AgentRMCNative PRIVATE
+        "${AGENTRMC_SHERPA_ROOT}/include")
+    target_link_libraries(AgentRMCNative PRIVATE
+        "${AGENTRMC_SHERPA_ROOT}/lib/sherpa-onnx-c-api.lib")
+    target_compile_definitions(AgentRMCNative PRIVATE AGENTRMC_WITH_SHERPA=1)
+    add_custom_command(TARGET AgentRMCNative POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${AGENTRMC_SHERPA_ROOT}/lib/sherpa-onnx-c-api.dll"
+            "${AGENTRMC_SHERPA_ROOT}/lib/onnxruntime.dll"
+            "${AGENTRMC_SHERPA_ROOT}/lib/onnxruntime_providers_shared.dll"
+            "$<TARGET_FILE_DIR:AgentRMCNative>")
+else()
+    set(AGENTRMC_WITH_SHERPA OFF)
 endif()
 
 add_executable(AgentRMCStoreTest
@@ -95,3 +112,46 @@ add_executable(AgentRMCTakeoverTest
 target_include_directories(AgentRMCTakeoverTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(AgentRMCTakeoverTest PRIVATE Qt6::Core)
 target_compile_options(AgentRMCTakeoverTest PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
+
+add_executable(AgentRMCVoiceTest
+    tests/m5_voice_test.cpp
+    src/core/VoiceSettings.cpp
+    src/core/VoiceSettings.h
+)
+target_include_directories(AgentRMCVoiceTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(AgentRMCVoiceTest PRIVATE Qt6::Core)
+target_compile_options(AgentRMCVoiceTest PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
+
+add_executable(AgentRMCAudioTest
+    tests/m5_audio_cli.cpp
+    src/core/AudioRecorder.cpp
+    src/core/AudioRecorder.h
+    src/core/VoiceSettings.cpp
+    src/core/VoiceSettings.h
+)
+target_include_directories(AgentRMCAudioTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(AgentRMCAudioTest PRIVATE Qt6::Core winmm)
+target_compile_options(AgentRMCAudioTest PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
+
+if(AGENTRMC_WITH_SHERPA)
+    add_executable(AgentRMCAsrTest
+        tests/m5_asr_cli.cpp
+        src/core/AsrEngine.cpp
+        src/core/AsrEngine.h
+        src/core/VoiceSettings.cpp
+        src/core/VoiceSettings.h
+    )
+    target_include_directories(AgentRMCAsrTest PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        "${AGENTRMC_SHERPA_ROOT}/include")
+    target_link_libraries(AgentRMCAsrTest PRIVATE Qt6::Core
+        "${AGENTRMC_SHERPA_ROOT}/lib/sherpa-onnx-c-api.lib")
+    target_compile_definitions(AgentRMCAsrTest PRIVATE AGENTRMC_WITH_SHERPA=1)
+    target_compile_options(AgentRMCAsrTest PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
+    add_custom_command(TARGET AgentRMCAsrTest POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${AGENTRMC_SHERPA_ROOT}/lib/sherpa-onnx-c-api.dll"
+            "${AGENTRMC_SHERPA_ROOT}/lib/onnxruntime.dll"
+            "${AGENTRMC_SHERPA_ROOT}/lib/onnxruntime_providers_shared.dll"
+            "$<TARGET_FILE_DIR:AgentRMCAsrTest>")
+endif()

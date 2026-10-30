@@ -164,24 +164,45 @@ bool ProfileStore::uiBool(const QString &key, bool fallback) const {
 }
 
 bool ProfileStore::setUiBool(const QString &key, bool value) {
-    if (configPath_.isEmpty()) {
-        configPath_ = QFileInfo(path_).absolutePath() + "/config.json";
-    }
     QJsonObject root = config_;
     QJsonObject ui = root.value("ui").toObject();
     ui[key] = value;
     root["ui"] = ui;
+    if (!saveConfig(root)) {
+        return false;
+    }
+    config_ = root;
+    return true;
+}
 
+QJsonObject ProfileStore::voiceConfig() const {
+    return config_.value("voice").toObject();
+}
+
+bool ProfileStore::updateVoice(const QJsonObject &patch) {
+    QJsonObject root = config_;
+    QJsonObject voice = root.value("voice").toObject();
+    for (auto it = patch.begin(); it != patch.end(); ++it) {
+        voice[it.key()] = it.value();
+    }
+    root["voice"] = voice;
+    if (!saveConfig(root)) {
+        return false;
+    }
+    config_ = root;
+    return true;
+}
+
+bool ProfileStore::saveConfig(const QJsonObject &root) {
+    if (configPath_.isEmpty()) {
+        configPath_ = QFileInfo(path_).absolutePath() + "/config.json";
+    }
     QSaveFile out(configPath_);
     if (!out.open(QIODevice::WriteOnly)) {
         return false;
     }
     out.write(QJsonDocument(root).toJson(QJsonDocument::Indented));
-    if (!out.commit()) {
-        return false;
-    }
-    config_ = root;
-    return true;
+    return out.commit();
 }
 
 const Profile *ProfileStore::find(const QString &name) const {

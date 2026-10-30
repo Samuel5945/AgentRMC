@@ -7,12 +7,14 @@
 #include "core/Profiles.h"
 
 class QCloseEvent;
+class QComboBox;
 class QLabel;
 class QListWidget;
 class QPushButton;
 class QSystemTrayIcon;
 class InputEngine;
 class KeymapPage;
+class VoiceController;
 
 class MainWindow final : public QMainWindow {
     Q_OBJECT
@@ -40,6 +42,10 @@ private:
     void appendEvent(const QString &kind, const QString &name,
                      const QString &profile, const QString &detail, int vk);
     void clearLog();
+    void refreshVoiceUi();
+    void openVoiceSettings();
+    void onVoiceState(const QString &state, const QString &detail);
+    void onVoiceTranscribed(const QString &text, int costMs);
 
     std::unique_ptr<ProfileStore> store_;
     InputEngine *engine_ = nullptr;
@@ -50,6 +56,11 @@ private:
     QListWidget *logList_ = nullptr;
     QLabel *logCount_ = nullptr;
     QLabel *logEmpty_ = nullptr;
+    VoiceController *voice_ = nullptr;
+    QComboBox *voiceBackend_ = nullptr;
+    QLabel *voiceState_ = nullptr;
+    QLabel *voiceFoot_ = nullptr;
+    QPushButton *voiceTest_ = nullptr;
     QSystemTrayIcon *tray_ = nullptr;
     bool quitting_ = false;
 };

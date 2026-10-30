@@ -4,6 +4,8 @@
 #include <QProcess>
 #include <QThread>
 
+#include <cstring>
+
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
@@ -96,6 +98,77 @@ void WinInjector::key(const QStringList &mods, int vk, int repeat) {
         }
         QThread::msleep(50);
     }
+}
+
+void WinInjector::keyDown(const QStringList &mods, int vk) {
+    for (const QString &mod : mods) {
+        const int mv = modVk(mod);
+        if (mv) {
+            sendKey(mv, false);
+        }
+    }
+    sendKey(vk, false);
+}
+
+void WinInjector::keyUp(const QStringList &mods, int vk) {
+    sendKey(vk, true);
+    for (auto it = mods.crbegin(); it != mods.crend(); ++it) {
+        const int mv = modVk(*it);
+        if (mv) {
+            sendKey(mv, true);
+        }
+    }
+}
+
+bool WinInjector::copyText(const QString &text) {
+    for (int attempt = 0; attempt < 5; ++attempt) {
+        if (!OpenClipboard(nullptr)) {
+            QThread::msleep(20);
+            continue;
+        }
+        EmptyClipboard();
+        const size_t bytes = (size_t(text.size()) + 1) * sizeof(char16_t);
+        HGLOBAL memory = GlobalAlloc(GMEM_MOVEABLE, bytes);
+        if (memory == nullptr) {
+            CloseClipboard();
+            return false;
+        }
+        void *target = GlobalLock(memory);
+        if (target == nullptr) {
+            GlobalFree(memory);
+            CloseClipboard();
+            return false;
+        }
+        std::memcpy(target, text.utf16(), bytes);
+        GlobalUnlock(memory);
+        if (SetClipboardData(CF_UNICODETEXT, memory) == nullptr) {
+            GlobalFree(memory);
+            CloseClipboard();
+            return false;
+        }
+        CloseClipboard();
+        return true;
+    }
+    return false;
+}
+
+bool WinInjector::pasteText(const QString &text, bool autoEnter) {
+    if (text.isEmpty() || !copyText(text)) {
+        return false;
+    }
+    QThread::msleep(50);
+    sendKey(VK_CONTROL, false);
+    sendKey('V', false);
+    QThread::msleep(20);
+    sendKey('V', true);
+    sendKey(VK_CONTROL, true);
+    if (autoEnter) {
+        QThread::msleep(80);
+        sendKey(VK_RETURN, false);
+        QThread::msleep(20);
+        sendKey(VK_RETURN, true);
+    }
+    return true;
 }
 
 void WinInjector::scroll(int delta) {

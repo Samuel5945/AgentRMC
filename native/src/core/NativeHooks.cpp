@@ -37,6 +37,12 @@ LRESULT CALLBACK guardProc(int nCode, WPARAM wParam, LPARAM lParam) {
             s_instance->handleCursor(vk, down)) {
             return 1;
         }
+        if (s_instance->shouldSwallowMedia(vk, injected)) {
+            if (down) {
+                s_instance->notifyMedia();
+            }
+            return 1;
+        }
         if (s_instance->shouldSwallow(vk, injected)) {
             s_instance->feed(vk, down);
             return 1;
@@ -68,6 +74,11 @@ bool nativeShouldSwallow(int vk, bool injected, bool enabled,
     return enabled && !injected && vks.count(vk) > 0;
 }
 
+bool nativeShouldSwallowMedia(int vk, bool injected, bool enabled,
+                              int mediaVk) {
+    return enabled && !injected && mediaVk != 0 && vk == mediaVk;
+}
+
 int nativeCursorStep(int count) {
     return 8 + std::min(8, std::max(0, (count - 1) / 2)) * 2;
 }
@@ -75,9 +86,11 @@ int nativeCursorStep(int count) {
 NativeHooks::NativeHooks(Injector *injector,
                          std::function<void(int, bool)> feed,
                          std::atomic<bool> *cursorMode,
-                         std::atomic<double> *cursorLast)
+                         std::atomic<double> *cursorLast,
+                         std::function<void()> mediaSink)
     : injector_(injector),
       feed_(std::move(feed)),
+      mediaSink_(std::move(mediaSink)),
       cursorMode_(cursorMode),
       cursorLast_(cursorLast) {
     s_instance = this;
@@ -96,9 +109,26 @@ void NativeHooks::setTakeover(bool enabled, const std::set<int> &vks) {
     takeoverVks_ = vks;
 }
 
+void NativeHooks::setMediaVoice(int vk, bool enabled) {
+    std::lock_guard<std::mutex> lock(stateMutex_);
+    mediaVk_ = vk;
+    mediaEnabled_ = enabled;
+}
+
 bool NativeHooks::shouldSwallow(int vk, bool injected) const {
     std::lock_guard<std::mutex> lock(stateMutex_);
     return nativeShouldSwallow(vk, injected, takeoverEnabled_, takeoverVks_);
+}
+
+bool NativeHooks::shouldSwallowMedia(int vk, bool injected) const {
+    std::lock_guard<std::mutex> lock(stateMutex_);
+    return nativeShouldSwallowMedia(vk, injected, mediaEnabled_, mediaVk_);
+}
+
+void NativeHooks::notifyMedia() {
+    if (mediaSink_) {
+        mediaSink_();
+    }
 }
 
 bool NativeHooks::cursorMode() const {

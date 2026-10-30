@@ -39,3 +39,6 @@ desktop.ini
 # ---------- native Qt SDK / build ----------
 native/.qt/
 native/build/
+
+# ---------- native third-party (sherpa-onnx prebuilt) ----------
+native/third_party/

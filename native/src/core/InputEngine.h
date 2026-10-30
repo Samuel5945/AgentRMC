@@ -44,6 +44,9 @@ signals:
     void eventReady(const QString &kind, const QString &name,
                     const QString &profile, const QString &detail, int vk);
     void runningChanged(bool running, const QString &message);
+    void voiceDown();
+    void voiceUp();
+    void mediaVoice();
 
 private:
     friend class InputEngineFilter;
@@ -59,6 +62,7 @@ private:
     void refreshProfile();
     QString deviceName(void *handle);
     void cleanup();
+    void notifyMedia();
 
     ProfileStore *store_ = nullptr;
     WinInjector injector_;
@@ -81,4 +85,8 @@ private:
     std::mutex stateMutex_;
     bool takeoverEnabled_ = false;
     std::set<int> takeoverVks_;
+    std::atomic<int> voiceVk_{0x74};
+    std::atomic<int> mediaVk_{0xB3};
+    std::atomic<bool> mediaGate_{false};
+    std::atomic<qint64> mediaLastMs_{0};
 };

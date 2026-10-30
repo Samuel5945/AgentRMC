@@ -24,8 +24,14 @@ if errorlevel 1 exit /b 1
 if errorlevel 1 exit /b 1
 
 "%QT%\bin\windeployqt.exe" --release --no-translations --no-opengl-sw ^
+    --no-system-d3d-compiler --no-compiler-runtime ^
     "%ROOT%\native\build\Release\AgentRMCNative.exe" >nul
 if errorlevel 1 exit /b 1
+
+rem Widgets 版用不到 QRhi 的 D3D 着色器编译器和 VC 安装包，删掉省 ~34MB。
+for %%f in (vc_redist.x64.exe dxcompiler.dll dxil.dll d3dcompiler_47.dll) do (
+    if exist "%ROOT%\native\build\Release\%%f" del /q "%ROOT%\native\build\Release\%%f"
+)
 
 rem Keep the native data copy across rebuilds; seed it on first build.
 if not exist "%ROOT%\native\build\Release\config.json" copy /y "%ROOT%\config.json" "%ROOT%\native\build\Release\" >nul

@@ -122,6 +122,16 @@ int main() {
                     nativeCursorStep(17) == 24,
                 "cursor step accel");
 
+    // 耳机播放键：只吞物理键，注入键放行；开关关闭时不动。
+    ok &= check(nativeShouldSwallowMedia(0xB3, false, true, 0xB3),
+                "media swallow on");
+    ok &= check(!nativeShouldSwallowMedia(0xB3, true, true, 0xB3),
+                "media injected pass");
+    ok &= check(!nativeShouldSwallowMedia(0xB3, false, false, 0xB3),
+                "media disabled pass");
+    ok &= check(!nativeShouldSwallowMedia(0xB3, false, true, 0),
+                "media unset pass");
+
     if (!ok) {
         return 1;
     }

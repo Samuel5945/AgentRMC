@@ -1,10 +1,12 @@
 #include "KeymapPage.h"
 
 #include "core/Presets.h"
+#include "core/VoiceSettings.h"
 
 #include "ui/ToggleSwitch.h"
 
 #include <QComboBox>
+#include <QCoreApplication>
 #include <QCursor>
 #include <QDesktopServices>
 #include <QDialog>
@@ -401,8 +403,10 @@ bool KeymapPage::hasNav(const Profile &profile) const {
 
 MapCellData KeymapPage::singleCell(int vk, const Profile &profile) const {
     if (vk == 116) {
-        const QString mode = ProfileStore::voiceMode(store_->config());
-        if (mode == "hotkey") {
+        const VoiceOptions voice = resolveVoiceOptions(
+            store_->config(), profile.voice,
+            QCoreApplication::applicationDirPath());
+        if (voice.backend == VoiceBackend::Hotkey) {
             const QString combo = ProfileStore::voiceCombo(store_->config(),
                                                            profile);
             const QString trigger = triggerText(store_->config(), profile);
@@ -412,8 +416,12 @@ MapCellData KeymapPage::singleCell(int vk, const Profile &profile) const {
                     : QStringLiteral("按住式：按住说话、松手结束，交给 Qoder / WorkBuddy");
             return {QStringLiteral("语音输入"), combo, tip, false};
         }
-        return {QStringLiteral("语音输入"), QStringLiteral("本地 whisper"),
-                QStringLiteral("按住遥控器语音键说话，松手后自动转写"), false};
+        const bool qwen = voice.backend == VoiceBackend::Qwen3Asr;
+        return {QStringLiteral("语音输入"),
+                qwen ? QStringLiteral("本地 Qwen3-ASR")
+                     : QStringLiteral("本地 SenseVoice"),
+                QStringLiteral("按住遥控器语音键说话，松手后本地转写并粘贴"),
+                false};
     }
 
     const QString sem =

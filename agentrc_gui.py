@@ -17,8 +17,9 @@ import traceback
 from collections import deque
 from pathlib import Path
 
-from PySide6.QtCore import (Property, QEasingCurve, QPoint, QPropertyAnimation,
-                            QRect, QRectF, QSettings, QSize, Qt, QTimer, Signal)
+from PySide6.QtCore import (Property, QEasingCurve, QEvent, QPoint,
+                            QPropertyAnimation, QRect, QRectF, QSettings, QSize,
+                            Qt, QTimer, Signal)
 from PySide6.QtGui import (QColor, QCursor, QFont, QGuiApplication, QIcon,
                            QImage, QLinearGradient, QPainter, QPen, QPixmap)
 from PySide6.QtWidgets import (
@@ -1945,6 +1946,13 @@ class MainWindow(QMainWindow):
         self._restore_geometry()
         self._stop_minimize_ghost()
 
+        # 定时补设：窗口句柄在 show / 跨屏 DPI 变化时可能被 Qt 重建，属性不会
+        # 跟过去；别的进程也可能把它改回来（2026-10-30 现场：137x51 残影在
+        # 任务栏交互期间连闪了 177 次）。只在窗口可见时跑。
+        self._ghost_timer = QTimer(self)
+        self._ghost_timer.setInterval(250)
+        self._ghost_timer.timeout.connect(self._stop_minimize_ghost)
+
         # 关窗 = 隐藏到托盘继续监听；真正退出走托盘菜单。系统没有托盘时
         # 退回老行为（关窗即退出），否则窗口就再也叫不回来了。
         self.close_to_tray = bool((core.CFG.get("ui") or {}).get("close_to_tray", True))
@@ -2256,7 +2264,7 @@ class MainWindow(QMainWindow):
         btn_min = QPushButton("─")
         btn_min.setObjectName("winBtn")
         btn_min.setFixedSize(34, 30)
-        btn_min.clicked.connect(self.showMinimized)
+        btn_min.clicked.connect(self._minimize_window)
         btn_close = QPushButton("✕")
         btn_close.setObjectName("winBtn")
         btn_close.setProperty("close", "true")
@@ -3168,35 +3176,72 @@ class MainWindow(QMainWindow):
         if target.topLeft() != self.pos():
             self.move(target.topLeft())
 
-    def _stop_minimize_ghost(self) -> None:
-        """无边框窗口最小化/还原时 DWM 会闪一个 137x51 的残影（启动路径已绕过，
-        点标题栏「─」和无托盘启动仍会踩到）。关掉本窗口的 DWM 过渡动画后
-        最小化瞬时完成，残影消失；代价是还原时也没有动画。"""
+    def _stop_minimize_ghost(self) -> bool:
+        """关掉本窗口的 DWM 过渡动画（最小化/还原不再闪 137x51 残影）。
+
+        必须在**每一次句柄可能变化之后**重新设置：Qt 在 show / 跨屏 DPI 变化
+        时可能重建原生窗口，旧句柄上的属性不会跟过去；别的进程也可能把它改回
+        0。所以 showEvent / 跨屏 / 点「─」前 / 250ms 定时都要补设一次。
+        """
         if sys.platform != "win32":
-            return
+            return False
         try:
             import ctypes
             from ctypes import wintypes
             DWMWA_TRANSITIONS_FORCEDISABLED = 3
-            off = wintypes.BOOL(True)
-            ctypes.windll.dwmapi.DwmSetWindowAttribute(
+            disabled = wintypes.BOOL(True)
+            res = ctypes.windll.dwmapi.DwmSetWindowAttribute(
                 wintypes.HWND(int(self.winId())),
                 DWMWA_TRANSITIONS_FORCEDISABLED,
-                ctypes.byref(off), ctypes.sizeof(off))
+                ctypes.byref(disabled), ctypes.sizeof(disabled))
+            return int(res) == 0
         except Exception:  # noqa: BLE001
-            pass
+            return False
+
+    def _minimize_window(self) -> None:
+        """点「─」：先把 DWM 过渡关掉再最小化，否则会闪 137x51 残影。"""
+        if not self.isVisible() or self.isMinimized():
+            return
+        self._stop_minimize_ghost()
+        self.showMinimized()
 
     def _on_screen_changed(self, _screen=None) -> None:
         QTimer.singleShot(250, self._fit_to_screen)
+        # 跨屏可能换原生 HWND：等 _fit_to_screen 落定后再补设一次。
+        QTimer.singleShot(300, self._stop_minimize_ghost)
 
     def showEvent(self, e) -> None:  # noqa: N802
         super().showEvent(e)
+        self._stop_minimize_ghost()
+        QTimer.singleShot(0, self._stop_minimize_ghost)
+        timer = getattr(self, "_ghost_timer", None)
+        if timer is not None:
+            timer.start()
         self._update_tray()
         if not self._screen_hooked:
             wh = self.windowHandle()
             if wh is not None:
                 wh.screenChanged.connect(self._on_screen_changed)
                 self._screen_hooked = True
+
+    def hideEvent(self, e) -> None:  # noqa: N802
+        timer = getattr(self, "_ghost_timer", None)
+        if timer is not None:
+            timer.stop()
+        super().hideEvent(e)
+
+    def changeEvent(self, e) -> None:  # noqa: N802
+        super().changeEvent(e)
+        if e.type() != QEvent.WindowStateChange:
+            return
+        timer = getattr(self, "_ghost_timer", None)
+        if self.isMinimized():
+            if timer is not None:
+                timer.stop()
+        else:
+            self._stop_minimize_ghost()
+            if timer is not None and self.isVisible():
+                timer.start()
 
     # ---------- 无边框拖动 ----------
     def mousePressEvent(self, e) -> None:  # noqa: N802
@@ -3218,6 +3263,10 @@ class MainWindow(QMainWindow):
         super().mouseReleaseEvent(e)
 
     def closeEvent(self, e) -> None:  # noqa: N802
+        try:
+            self._ghost_timer.stop()
+        except Exception:  # noqa: BLE001
+            pass
         try:
             self._settings.setValue("window/geometry", self.saveGeometry())
             self._settings.setValue("guide/seen", "1")
@@ -3277,6 +3326,8 @@ def main() -> None:
             # 有托盘就干脆不显示，点托盘图标再叫出来。
             pass
         else:
+            # 无托盘启动也先关 DWM 过渡，否则 showMinimized 会闪 137x51 残影。
+            win._stop_minimize_ghost()
             win.showMinimized()
     else:
         win.show()

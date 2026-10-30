@@ -86,6 +86,8 @@ call "C:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\v
    预录，按住即说不会丢开头。支持按住说话、静音兜底、3 秒自测、转写后粘贴/复制。
    耳机播放键在 Qoder / WorkBuddy 前台时接管为开关，按一下开始、再按一下结束。
    语音卡片在状态下面显示最近一次转写（超长截断，悬停看全文），完整内容仍在事件流。
+   遥控器卡片按当前 profile 实时列出生效映射；按下实体键时对应键位和行高亮，底部显示
+   刚触发的「键位 · 动作」，改映射后立即刷新。
    AgentRMC 本身不接 LLM；真正的 LLM 在 Qoder / WorkBuddy 服务端。
 6. **收尾**：BLE 电量、跨屏 DPI、托盘菜单、windeployqt 打包、体积回归。
 

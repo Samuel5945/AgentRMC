@@ -8,9 +8,11 @@
 #include <deque>
 #include <memory>
 #include <mutex>
+#include <set>
 #include <thread>
 
 #include "core/Injector.h"
+#include "core/NativeHooks.h"
 #include "core/KeyRouter.h"
 #include "core/Profiles.h"
 
@@ -73,4 +75,10 @@ private:
     QHash<void *, QString> deviceNames_;
     QString deviceMark_;
     QTimer *profileTimer_ = nullptr;
+    NativeHooks *hooks_ = nullptr;
+    std::atomic<bool> cursorMode_{false};
+    std::atomic<double> cursorLast_{0};
+    std::mutex stateMutex_;
+    bool takeoverEnabled_ = false;
+    std::set<int> takeoverVks_;
 };

@@ -8,6 +8,7 @@
 #include "ui/MapWidgets.h"
 
 class QComboBox;
+class ToggleSwitch;
 class QLabel;
 class QScrollArea;
 class QTimer;
@@ -30,6 +31,7 @@ private:
     void applyPreset(int vk, const QString &gesture, const QString &kind);
     void captureCombo(int vk, const QString &gesture);
     void flashHint(const QString &text, const QString &color);
+    void syncTakeoverUi();
     void resetHint();
     void openProfiles();
     void reloadProfiles();
@@ -51,6 +53,8 @@ private:
     QLabel *sceneName_ = nullptr;
     QLabel *sceneRule_ = nullptr;
     QLabel *footHint_ = nullptr;
+    QLabel *takeoverLabel_ = nullptr;
+    ToggleSwitch *takeoverSwitch_ = nullptr;
     QScrollArea *scroll_ = nullptr;
     QWidget *holder_ = nullptr;
     QVBoxLayout *grid_ = nullptr;

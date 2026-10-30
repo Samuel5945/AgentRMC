@@ -2,6 +2,8 @@
 
 #include "core/Presets.h"
 
+#include "ui/ToggleSwitch.h"
+
 #include <QComboBox>
 #include <QCursor>
 #include <QDesktopServices>
@@ -241,11 +243,25 @@ void KeymapPage::buildUi() {
     footHint_->setObjectName("mapFoot");
     footHint_->setStyleSheet(
         "QLabel#mapFoot { color: #5b6472; font-size: 10px; }");
-    auto *m4 = new QLabel(QStringLiteral("接管开关 · 里程碑 4"));
-    m4->setObjectName("muted");
-    m4->setToolTip(QStringLiteral("原生键接管在里程碑 4 接入"));
+    const QString takeoverTip = QStringLiteral(
+        "开关打开后，当前前台场景生效：吞掉映射键原生事件再按映射注入。"
+        "实体键盘同名键也会按映射处理；双击键的单击延迟约 0.3 秒。");
+    takeoverLabel_ = new QLabel(QStringLiteral("接管原生键"));
+    takeoverLabel_->setObjectName("mapTakeover");
+    takeoverLabel_->setFixedWidth(58);
+    takeoverLabel_->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    takeoverLabel_->setToolTip(takeoverTip);
+    takeoverSwitch_ = new ToggleSwitch(store_->uiBool("native_takeover", false));
+    takeoverSwitch_->setToolTip(takeoverTip);
+    connect(takeoverSwitch_, &ToggleSwitch::toggled, this, [this](bool on) {
+        store_->setUiBool("native_takeover", on);
+        syncTakeoverUi();
+    });
     foot->addWidget(footHint_, 1);
-    foot->addWidget(m4);
+    foot->addSpacing(6);
+    foot->addWidget(takeoverLabel_);
+    foot->addWidget(takeoverSwitch_);
+    syncTakeoverUi();
     layout->addLayout(foot);
 
     hintTimer_ = new QTimer(this);
@@ -664,6 +680,18 @@ void KeymapPage::captureCombo(int vk, const QString &gesture) {
                   .arg(profileName, keyName(vk), gestureLabel(gesture),
                        dialog.combo()),
               QStringLiteral("#7ee2a8"));
+}
+
+void KeymapPage::syncTakeoverUi() {
+    if (takeoverSwitch_ == nullptr) {
+        return;
+    }
+    const bool on = store_->uiBool("native_takeover", false);
+    takeoverSwitch_->setChecked(on);
+    takeoverLabel_->setStyleSheet(
+        QStringLiteral("QLabel#mapTakeover { color: %1; font-size: 10px; }")
+            .arg(on ? QStringLiteral("#9ec1ff")
+                    : QStringLiteral("#6b7684")));
 }
 
 void KeymapPage::flashHint(const QString &text, const QString &color) {

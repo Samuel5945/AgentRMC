@@ -29,6 +29,8 @@ public:
     bool loadConfig(const QString &path, QString *error = nullptr);
 
     const QJsonObject &config() const { return config_; }
+    bool uiBool(const QString &key, bool fallback = false) const;
+    bool setUiBool(const QString &key, bool value);
     const QVector<Profile> &profiles() const { return profiles_; }
     const Profile &fallback() const { return fallback_; }
     const Profile *find(const QString &name) const;
@@ -50,6 +52,7 @@ public:
 
 private:
     QString path_;
+    QString configPath_;
     QJsonObject root_;
     QJsonArray rawProfiles_;
     QVector<Profile> profiles_;

@@ -3,8 +3,10 @@
 #include <QHash>
 #include <QJsonObject>
 #include <QString>
+#include <atomic>
 #include <functional>
 #include <memory>
+#include <set>
 
 #include "core/Injector.h"
 #include "core/Profiles.h"
@@ -23,6 +25,9 @@ public:
     void keyUp(int vk, double now = -1.0);
     void tick(double now = -1.0);
     void reset();
+    void setTakeover(bool enabled, const std::set<int> &vks);
+    void setCursorClocks(std::atomic<bool> *cursorMode,
+                         std::atomic<double> *cursorLast);
     QString mode() const { return mode_; }
     bool navMode() const { return navMode_; }
 
@@ -81,6 +86,10 @@ private:
     QHash<int, Tap> tapPending_;
     QHash<int, Deferred> deferred_;
     QHash<int, Held> held_;
+    bool takeover_ = false;
+    std::set<int> takeoverVks_;
+    std::atomic<bool> *cursorMode_ = nullptr;
+    std::atomic<double> *cursorLast_ = nullptr;
     QString mode_;
     double modeLast_ = 0;
     bool navMode_ = false;

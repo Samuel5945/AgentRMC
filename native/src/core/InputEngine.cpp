@@ -48,6 +48,8 @@ InputEngine::InputEngine(ProfileStore *store, QObject *parent)
                 Qt::QueuedConnection);
         });
 
+    router_->setCursorClocks(&cursorMode_, &cursorLast_);
+
     profileTimer_ = new QTimer(this);
     profileTimer_->setInterval(300);
     connect(profileTimer_, &QTimer::timeout, this, &InputEngine::refreshProfile);
@@ -120,6 +122,15 @@ bool InputEngine::start(QString *error) {
     filter_ = new InputEngineFilter(this);
     QCoreApplication::instance()->installNativeEventFilter(filter_);
 
+    hooks_ = new NativeHooks(
+        &injector_, [this](int vk, bool down) { pushRaw({vk, down}); },
+        &cursorMode_, &cursorLast_);
+    if (!hooks_->start()) {
+        if (error) *error = QStringLiteral("低层键盘钩子安装失败");
+        cleanup();
+        return false;
+    }
+
     refreshProfile();
     running_.store(true);
     worker_ = std::thread(&InputEngine::workerLoop, this);
@@ -132,10 +143,23 @@ void InputEngine::stop() {
     if (!running_.exchange(false)) {
         return;
     }
+    cleanup();
+    emit runningChanged(false, QStringLiteral("已停止"));
+}
+
+void InputEngine::cleanup() {
+    running_.store(false);
+    if (hooks_ != nullptr) {
+        hooks_->stop();
+        delete hooks_;
+        hooks_ = nullptr;
+    }
     if (worker_.joinable()) {
         worker_.join();
     }
-    profileTimer_->stop();
+    if (profileTimer_ != nullptr) {
+        profileTimer_->stop();
+    }
     if (filter_ != nullptr) {
         QCoreApplication::instance()->removeNativeEventFilter(filter_);
         delete filter_;
@@ -155,16 +179,42 @@ void InputEngine::stop() {
         CloseHandle(HANDLE(mutex_));
         mutex_ = nullptr;
     }
-    emit runningChanged(false, QStringLiteral("已停止"));
 }
 
 void InputEngine::refreshProfile() {
     if (store_ == nullptr) {
         return;
     }
-    auto snapshot = std::make_shared<Profile>(store_->current(true));
-    std::lock_guard<std::mutex> lock(profileMutex_);
-    profile_ = std::move(snapshot);
+    const Profile current = store_->current(true);
+    auto snapshot = std::make_shared<Profile>(current);
+    {
+        std::lock_guard<std::mutex> lock(profileMutex_);
+        profile_ = std::move(snapshot);
+    }
+
+    std::set<int> vks;
+    // 跟 Python 版一样从合并后的 profile 取表，extends 的键也要接管。
+    for (const QJsonObject *object : {&current.keys, &current.doubleMap,
+                                      &current.hold}) {
+        for (auto it = object->begin(); it != object->end(); ++it) {
+            bool okNumber = false;
+            const int vk = it.key().toInt(&okNumber);
+            if (okNumber) {
+                vks.insert(vk);
+            }
+        }
+    }
+
+    const bool enabled = store_->uiBool("native_takeover", false) &&
+                         !vks.empty();
+    if (hooks_ != nullptr) {
+        hooks_->setTakeover(enabled, vks);
+    }
+    {
+        std::lock_guard<std::mutex> lock(stateMutex_);
+        takeoverEnabled_ = enabled;
+        takeoverVks_ = vks;
+    }
 }
 
 void InputEngine::workerLoop() {
@@ -185,9 +235,17 @@ void InputEngine::workerLoop() {
             std::lock_guard<std::mutex> lock(profileMutex_);
             snapshot = profile_;
         }
+        bool takeover = false;
+        std::set<int> takeoverVks;
+        {
+            std::lock_guard<std::mutex> lock(stateMutex_);
+            takeover = takeoverEnabled_;
+            takeoverVks = takeoverVks_;
+        }
         if (snapshot) {
             router_->setProfile(snapshot);
         }
+        router_->setTakeover(takeover, takeoverVks);
         if (hasEvent) {
             if (event.down) {
                 router_->keyDown(event.vk);

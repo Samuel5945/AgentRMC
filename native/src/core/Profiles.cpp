@@ -154,6 +154,33 @@ bool ProfileStore::loadConfig(const QString &path, QString *error) {
         return false;
     }
     config_ = doc.object();
+    configPath_ = path;
+    return true;
+}
+
+bool ProfileStore::uiBool(const QString &key, bool fallback) const {
+    const QJsonObject ui = config_.value("ui").toObject();
+    return ui.contains(key) ? ui.value(key).toBool(fallback) : fallback;
+}
+
+bool ProfileStore::setUiBool(const QString &key, bool value) {
+    if (configPath_.isEmpty()) {
+        configPath_ = QFileInfo(path_).absolutePath() + "/config.json";
+    }
+    QJsonObject root = config_;
+    QJsonObject ui = root.value("ui").toObject();
+    ui[key] = value;
+    root["ui"] = ui;
+
+    QSaveFile out(configPath_);
+    if (!out.open(QIODevice::WriteOnly)) {
+        return false;
+    }
+    out.write(QJsonDocument(root).toJson(QJsonDocument::Indented));
+    if (!out.commit()) {
+        return false;
+    }
+    config_ = root;
     return true;
 }
 

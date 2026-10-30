@@ -77,6 +77,17 @@ KeyRouter::KeyRouter(Injector *injector, Event eventSink)
 
 KeyRouter::~KeyRouter() = default;
 
+void KeyRouter::setTakeover(bool enabled, const std::set<int> &vks) {
+    takeover_ = enabled;
+    takeoverVks_ = vks;
+}
+
+void KeyRouter::setCursorClocks(std::atomic<bool> *cursorMode,
+                                std::atomic<double> *cursorLast) {
+    cursorMode_ = cursorMode;
+    cursorLast_ = cursorLast;
+}
+
 double KeyRouter::nowSeconds() {
     using namespace std::chrono;
     return duration<double>(steady_clock::now().time_since_epoch()).count();
@@ -140,6 +151,9 @@ void KeyRouter::exitMode() {
     }
     const QString label = modeLabel(mode_);
     mode_.clear();
+    if (cursorMode_ != nullptr) {
+        cursorMode_->store(false);
+    }
     MessageBeep(MB_OK);
     if (emit_) {
         emit_("status", label, profile_ ? profile_->name : QString(),
@@ -163,6 +177,12 @@ void KeyRouter::keyDown(int vk, double now) {
         now = nowSeconds();
     }
     if (active_.contains(vk)) {
+        const State &st = active_.value(vk);
+        if (takeover_ && st.fired == "base" &&
+            st.action.value("type").toString() == "none" &&
+            takeoverVks_.count(vk) > 0) {
+            injector_->key(QStringList(), vk, 1);
+        }
         return;
     }
     const auto profile = profile_;
@@ -403,8 +423,14 @@ void KeyRouter::tick(double now) {
     if (now < 0) {
         now = nowSeconds();
     }
-    if (!mode_.isEmpty() && now - modeLast_ > kModeIdle) {
-        exitMode();
+    if (!mode_.isEmpty()) {
+        double last = modeLast_;
+        if (mode_ == "cursor" && cursorLast_ != nullptr) {
+            last = std::max(last, cursorLast_->load());
+        }
+        if (now - last > kModeIdle) {
+            exitMode();
+        }
     }
 
     for (auto it = tapPending_.begin(); it != tapPending_.end();) {
@@ -535,6 +561,9 @@ void KeyRouter::dispatch(const QString &profileName, const QString &name,
                 if (mode == "media" || mode == "cursor") {
                     mode_ = mode;
                     modeLast_ = nowSeconds();
+                    if (cursorMode_ != nullptr) {
+                        cursorMode_->store(mode == "cursor");
+                    }
                     MessageBeep(MB_OK);
                     if (emit_) {
                         emit_("status", modeLabel(mode), profileName,
@@ -554,6 +583,10 @@ void KeyRouter::dispatch(const QString &profileName, const QString &name,
             injector_->mouseClick();
         } else if (kind == "none") {
             // 默认叠加模式下什么都不做；原生键自己会到前台。
+            // 接管模式下原生键被钩子吞掉，直通动作由这里补发源键。
+            if (takeover_ && takeoverVks_.count(vk) > 0) {
+                injector_->key(QStringList(), vk, 1);
+            }
         } else {
             return;
         }

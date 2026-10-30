@@ -24,10 +24,14 @@ qt_add_executable(AgentRMCNative
     src/core/KeyRouter.h
     src/core/InputEngine.cpp
     src/core/InputEngine.h
+    src/core/NativeHooks.cpp
+    src/core/NativeHooks.h
     src/ui/MapWidgets.cpp
     src/ui/MapWidgets.h
     src/ui/KeymapPage.cpp
     src/ui/KeymapPage.h
+    src/ui/ToggleSwitch.cpp
+    src/ui/ToggleSwitch.h
     resources/app.qrc
 )
 
@@ -76,3 +80,18 @@ add_executable(AgentRMCRouterTest
 target_include_directories(AgentRMCRouterTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(AgentRMCRouterTest PRIVATE Qt6::Core)
 target_compile_options(AgentRMCRouterTest PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
+
+add_executable(AgentRMCTakeoverTest
+    tests/m4_takeover_test.cpp
+    src/core/KeyRouter.cpp
+    src/core/KeyRouter.h
+    src/core/Presets.cpp
+    src/core/Presets.h
+    src/core/Injector.cpp
+    src/core/Injector.h
+    src/core/NativeHooks.cpp
+    src/core/NativeHooks.h
+)
+target_include_directories(AgentRMCTakeoverTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(AgentRMCTakeoverTest PRIVATE Qt6::Core)
+target_compile_options(AgentRMCTakeoverTest PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)

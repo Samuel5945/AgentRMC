@@ -206,7 +206,7 @@ QWidget *MainWindow::buildHeader() {
     auto *brand = new QLabel("AgentRMC");
     brand->setObjectName("brand");
 
-    auto *tag = new QLabel("NATIVE · M3");
+    auto *tag = new QLabel("NATIVE · M4");
     tag->setObjectName("tag");
 
     lay->addWidget(logo);
@@ -261,7 +261,7 @@ QWidget *MainWindow::buildRemoteCard() {
     auto *head = new QHBoxLayout;
     auto *title = new QLabel(QString::fromUtf8("遥控器"));
     title->setObjectName("cardTitle");
-    auto *badge = new QLabel("M3");
+    auto *badge = new QLabel("M4");
     badge->setObjectName("badge");
     head->addWidget(title);
     head->addStretch(1);
@@ -325,14 +325,14 @@ QWidget *MainWindow::buildVoiceCard() {
     auto *head = new QHBoxLayout;
     auto *title = new QLabel(QString::fromUtf8("语音"));
     title->setObjectName("cardTitle");
-    auto *badge = new QLabel("M3");
+    auto *badge = new QLabel("M4");
     badge->setObjectName("badge");
     head->addWidget(title);
     head->addStretch(1);
     head->addWidget(badge);
     lay->addLayout(head);
 
-    auto *box = new QLabel(QString::fromUtf8("语音输入 · hotkey 模式 / 里程碑 5 接入 whisper.cpp"));
+    auto *box = new QLabel(QString::fromUtf8("语音输入 · hotkey 模式 / 里程碑 5 选 Qoder 语音或本地 whisper"));
     box->setObjectName("voiceBox");
     box->setWordWrap(true);
     box->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
@@ -424,8 +424,8 @@ QWidget *MainWindow::buildGuidePage() {
     const QStringList lines = {
         QString::fromUtf8("里程碑 1 已完成 · 窗口 / 主题 / 托盘 / 构建"),
         QString::fromUtf8("里程碑 2 已完成 · config + profiles + 可编辑映射表"),
-        QString::fromUtf8("里程碑 3（当前）· Raw Input + KeyRouter + 动作注入"),
-        QString::fromUtf8("里程碑 4 · 原生键接管 / 鼠标模式 / 耳机播放键"),
+        QString::fromUtf8("里程碑 3 已完成 · Raw Input + KeyRouter + 动作注入"),
+        QString::fromUtf8("里程碑 4（当前）· 原生键接管 / 鼠标模式"),
         QString::fromUtf8("里程碑 5 · hotkey 语音 / 本地 whisper（停点，先选方案）"),
         QString::fromUtf8("里程碑 6 · BLE 电量 / 跨屏 DPI / windeployqt 打包"),
         QString::fromUtf8("Python 版继续保留，作为行为参照；两版共用 config/profiles 格式。"),

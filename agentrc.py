@@ -111,6 +111,9 @@ DEFAULT_CONFIG = {
     "ui": {
         "auto_listen": True,
         "start_minimized": True,
+        # 开关打开时吞掉当前场景映射键的原生事件再按映射注入。
+        # 用户态只能按 VK 吞，实体键盘同名键也会一起被吞，默认关。
+        "native_takeover": False,
     },
 }
 
@@ -158,6 +161,26 @@ def save_voice_config(**updates) -> bool:
         print(f"[!] 写 config.json 失败: {e}")
         return False
     CFG["voice"].update(updates)
+    return True
+
+
+def save_ui_config(**updates) -> bool:
+    """把界面开关写回 config.json；只覆盖 ui 下的指定键。"""
+    try:
+        data = (json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+                if CONFIG_PATH.exists() else {})
+    except Exception:  # noqa: BLE001
+        data = {}
+    ui = dict(data.get("ui") or {})
+    ui.update(updates)
+    data["ui"] = ui
+    try:
+        CONFIG_PATH.write_text(
+            json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    except OSError as e:
+        print(f"[!] 写 config.json 失败: {e}")
+        return False
+    CFG.setdefault("ui", {}).update(updates)
     return True
 
 
@@ -448,7 +471,9 @@ WH_KEYBOARD_LL = 13
 WM_KEYDOWN, WM_KEYUP = 0x0100, 0x0101
 WM_SYSKEYDOWN, WM_SYSKEYUP = 0x0104, 0x0105
 LLKHF_INJECTED = 0x10
-CURSOR_KEYS = {0x25: (-8, 0), 0x26: (0, -8), 0x27: (8, 0), 0x28: (0, 8)}
+CURSOR_STEP = 8
+CURSOR_KEYS = {0x25: (-CURSOR_STEP, 0), 0x26: (0, -CURSOR_STEP),
+               0x27: (CURSOR_STEP, 0), 0x28: (0, CURSOR_STEP)}
 
 
 class _KBDLLHOOKSTRUCT(ctypes.Structure):
@@ -461,6 +486,56 @@ _HOOKPROC = ctypes.WINFUNCTYPE(ctypes.c_ssize_t, ctypes.c_int, wt.WPARAM, wt.LPA
 _cursor_hook = None
 _cursor_proc = None
 _cursor_last = 0.0
+# 长按加速：同一方向连续 keydown，第一下始终 8px，之后每两下 +2px，封顶 24px。
+_cursor_hold_vk = 0
+_cursor_hold_count = 0
+_cursor_hold_t = 0.0
+cursor_events: deque = deque(maxlen=64)
+
+user32.GetCursorPos.argtypes = [ctypes.POINTER(wt.POINT)]
+user32.GetCursorPos.restype = wt.BOOL
+
+
+def cursor_pos() -> tuple[int, int]:
+    p = wt.POINT()
+    if user32.GetCursorPos(ctypes.byref(p)):
+        return int(p.x), int(p.y)
+    return 0, 0
+
+
+def _cursor_handle(vk: int, down: bool) -> bool:
+    """鼠标模式的方向键/Enter：驱动鼠标并吞掉。两个钩子共用，避免链序问题。"""
+    global _cursor_last, _cursor_hold_vk, _cursor_hold_count, _cursor_hold_t
+    if vk not in CURSOR_KEYS and vk != 0x0D:
+        return False
+    if not down:
+        if vk == _cursor_hold_vk:
+            _cursor_hold_vk = 0
+            _cursor_hold_count = 0
+        return True
+    now = time.time()
+    if vk == _cursor_hold_vk and now - _cursor_hold_t <= 0.5:
+        _cursor_hold_count += 1
+    else:
+        _cursor_hold_count = 1
+    _cursor_hold_vk = vk
+    _cursor_hold_t = now
+    _cursor_last = now
+    if vk == 0x0D:
+        mouse_click()
+        kind = "click"
+    else:
+        base_dx, base_dy = CURSOR_KEYS[vk]
+        step = CURSOR_STEP + min(8, max(0, (_cursor_hold_count - 1) // 2)) * 2
+        mouse_move(base_dx // CURSOR_STEP * step,
+                   base_dy // CURSOR_STEP * step)
+        kind = "move"
+    if _cursor_hold_count == 1:   # 诊断只记第一下，避免长按刷屏
+        cursor_events.append({
+            "t": _cursor_last, "vk": vk, "pos": cursor_pos(),
+            "kind": kind,
+        })
+    return True
 
 user32.SetWindowsHookExW.restype = wt.HHOOK
 user32.SetWindowsHookExW.argtypes = [ctypes.c_int, _HOOKPROC, wt.HINSTANCE, wt.DWORD]
@@ -470,18 +545,11 @@ user32.CallNextHookEx.restype = ctypes.c_ssize_t
 
 
 def _cursor_hook_cb(nCode, wParam, lParam):
-    global _cursor_last
     if nCode == 0:
         kb = ctypes.cast(lParam, ctypes.POINTER(_KBDLLHOOKSTRUCT)).contents
         if not (kb.flags & LLKHF_INJECTED):
             vk = int(kb.vkCode)
-            if vk in CURSOR_KEYS or vk == 0x0D:
-                if wParam in (WM_KEYDOWN, WM_SYSKEYDOWN):
-                    _cursor_last = time.time()
-                    if vk == 0x0D:
-                        mouse_click()
-                    else:
-                        mouse_move(*CURSOR_KEYS[vk])
+            if _cursor_handle(vk, wParam in (WM_KEYDOWN, WM_SYSKEYDOWN)):
                 return 1
     return user32.CallNextHookEx(None, nCode, wParam, lParam)
 
@@ -500,6 +568,111 @@ def cursor_hook_stop() -> None:
     if _cursor_hook:
         user32.UnhookWindowsHookEx(_cursor_hook)
         _cursor_hook = None
+
+
+# --------------------------------------------------------------------------
+# 原生键接管（开关控制，所有场景）：钩子吞掉映射键的原生事件并直接喂给 Router。
+# Raw Input 在物理键被吞后不保证还会到，所以不能只依赖它。Windows 只给 VK，
+# 不告诉键来自哪台设备，实体键盘同名键也会按映射处理；开关默认关。
+# 钩子跑在独立线程，自带消息泵，不占用 Qt 主线程。
+# --------------------------------------------------------------------------
+_native_hook = None
+_native_proc = None
+_native_thread: threading.Thread | None = None
+_native_thread_stop = threading.Event()
+_native_ready = threading.Event()
+_native_enabled = False
+_native_vks: frozenset[int] = frozenset()
+# 钩子吞掉物理键后，Raw Input 不一定会再送来同一键；这里记下已喂给 Router 的
+# (vk, down) 时间，Raw Input 万一也到了就去重，避免一次按键执行两次。
+_native_fed_at: dict[tuple[int, bool], float] = {}
+
+
+def native_guard_should_swallow(vk: int, injected: bool) -> bool:
+    """纯判定，便于测试：钩子里只看这个。"""
+    vk = int(vk)
+    # 鼠标模式的方向键/Enter 必须留给 cursor hook 驱动鼠标；
+    # 钩子链顺序万一反过来，也在这里放行，不要吞进 Router。
+    if _cursor_hook and (vk in CURSOR_KEYS or vk == 0x0D):
+        return False
+    return bool(_native_enabled and not injected and vk in _native_vks)
+
+
+def _native_guard_cb(nCode, wParam, lParam):
+    if nCode == 0:
+        try:
+            kb = ctypes.cast(lParam, ctypes.POINTER(_KBDLLHOOKSTRUCT)).contents
+            vk = int(kb.vkCode)
+            down = wParam in (WM_KEYDOWN, WM_SYSKEYDOWN)
+            injected = bool(kb.flags & LLKHF_INJECTED)
+            # 鼠标模式：钩子链谁先到都直接驱动鼠标，不依赖 cursor hook 的顺序
+            if not injected and _cursor_hook and _cursor_handle(vk, down):
+                return 1
+            if native_guard_should_swallow(vk, injected):
+                now = time.time()
+                # 吞掉原生键后主动补给 Router；不能指望 Raw Input 还会到
+                key_events.append({"t": now, "vkey": vk, "scan": int(kb.scanCode),
+                                   "down": down, "native": True})
+                _native_fed_at[(vk, down)] = now
+                if len(_native_fed_at) > 16:
+                    for k, t in list(_native_fed_at.items()):
+                        if now - t > 0.2:
+                            _native_fed_at.pop(k, None)
+                return 1
+        except Exception:  # noqa: BLE001
+            pass
+    return user32.CallNextHookEx(None, nCode, wParam, lParam)
+
+
+def _native_guard_loop() -> None:
+    global _native_hook, _native_proc
+    _native_proc = _HOOKPROC(_native_guard_cb)
+    _native_hook = user32.SetWindowsHookExW(WH_KEYBOARD_LL, _native_proc, None, 0)
+    _native_ready.set()
+    msg = wt.MSG()
+    try:
+        while not _native_thread_stop.is_set():
+            while user32.PeekMessageW(ctypes.byref(msg), None, 0, 0, 1):
+                user32.TranslateMessage(ctypes.byref(msg))
+                user32.DispatchMessageW(ctypes.byref(msg))
+            time.sleep(0.001)
+    finally:
+        if _native_hook:
+            user32.UnhookWindowsHookEx(_native_hook)
+            _native_hook = None
+
+
+def native_guard_set(enabled: bool, vks=()) -> None:
+    """更新吞键状态；开关打开且当前场景有映射时 enabled=True。"""
+    global _native_enabled, _native_vks
+    _native_enabled = bool(enabled)
+    _native_vks = frozenset(int(v) for v in vks)
+
+
+def native_guard_start() -> bool:
+    global _native_thread
+    if _native_thread is not None and _native_thread.is_alive():
+        return bool(_native_hook)
+    _native_thread_stop.clear()
+    _native_ready.clear()
+    _native_thread = threading.Thread(target=_native_guard_loop, daemon=True,
+                                      name="AgentRMC-native-guard")
+    _native_thread.start()
+    _native_ready.wait(0.5)
+    if not _native_hook:
+        native_guard_stop()
+        return False
+    return True
+
+
+def native_guard_stop() -> None:
+    global _native_thread
+    native_guard_set(False, ())
+    _native_thread_stop.set()
+    t = _native_thread
+    if t is not None and t.is_alive() and t is not threading.current_thread():
+        t.join(0.6)
+    _native_thread = None
 
 
 # --------------------------------------------------------------------------
@@ -1052,13 +1225,13 @@ MODE_ACTIONS = {
                       "label": "亮度 +"},
     "brightness_down": {"type": "brightness", "delta": -10, "hold_repeat": 160,
                         "label": "亮度 -"},
-    "mouse_up": {"type": "mouse", "dx": 0, "dy": -8, "hold_repeat": 45,
+    "mouse_up": {"type": "mouse", "dx": 0, "dy": -CURSOR_STEP, "hold_repeat": 45,
                  "hold_accel": True, "label": "鼠标 ↑"},
-    "mouse_down": {"type": "mouse", "dx": 0, "dy": 8, "hold_repeat": 45,
+    "mouse_down": {"type": "mouse", "dx": 0, "dy": CURSOR_STEP, "hold_repeat": 45,
                    "hold_accel": True, "label": "鼠标 ↓"},
-    "mouse_left": {"type": "mouse", "dx": -8, "dy": 0, "hold_repeat": 45,
+    "mouse_left": {"type": "mouse", "dx": -CURSOR_STEP, "dy": 0, "hold_repeat": 45,
                    "hold_accel": True, "label": "鼠标 ←"},
-    "mouse_right": {"type": "mouse", "dx": 8, "dy": 0, "hold_repeat": 45,
+    "mouse_right": {"type": "mouse", "dx": CURSOR_STEP, "dy": 0, "hold_repeat": 45,
                     "hold_accel": True, "label": "鼠标 →"},
     "mouse_click": {"type": "click", "label": "鼠标左键"},
 }
@@ -1087,6 +1260,8 @@ class KeyRouter:
         self.mode_last = 0.0
         self._tap_pending: dict[int, dict] = {}
         self._mode_enter_vk: int | None = None
+        # 原生事件已被钩子吞掉的键：直通动作要由这里补发一次源键
+        self.takeover_vks: set[int] = set()
 
     def reset(self) -> None:
         """停止监听 / 重载配置时清掉按住的键，否则重启后会一直连发。"""
@@ -1097,6 +1272,7 @@ class KeyRouter:
         self.mode = None
         self._tap_pending.clear()
         self._mode_enter_vk = None
+        self.takeover_vks.clear()
         cursor_hook_stop()
 
     def _exit_mode(self) -> None:
@@ -1111,6 +1287,12 @@ class KeyRouter:
 
     def key_down(self, vkey: int, now: float) -> None:
         if vkey in self._active:
+            st = self._active[vkey]
+            # 设备连发：原生键被接管后不会自己重复，用源键 tap 还原按住效果。
+            # 双击窗口还没判定完时不补，等单击真正落地。
+            if (st.get("takeover_pass") and st.get("fired") == "base"
+                    and vkey in self.takeover_vks):
+                tap_key(vkey)
             return  # 按住期间设备连发的 keydown 不重复触发
         prof = self.profiles.current()
         pname = prof.get("name", "?")
@@ -1207,6 +1389,7 @@ class KeyRouter:
                   "profile": pname,
                   "count": 0, "fired": None, "hold_action": action.get("hold_action"),
                   "deferred": False,
+                  "takeover_pass": action.get("type") == "none" and vkey in self.takeover_vks,
                   "tap_hold": hold_spec or str(vkey) not in TAP_TARGETS}
             self._active[vkey] = st
             self._tap_pending[vkey] = {"due": now + TAP_WINDOW, "last": now, "st": st}
@@ -1274,7 +1457,8 @@ class KeyRouter:
         st = {"started": now, "vkey": vkey, "action": action, "name": name,
               "profile": pname,
               "count": 0, "fired": None, "hold_action": action.get("hold_action"),
-              "deferred": False}
+              "deferred": False,
+              "takeover_pass": action.get("type") == "none" and vkey in self.takeover_vks}
         self._active[vkey] = st
         hold_action = st["hold_action"]
 
@@ -1284,7 +1468,7 @@ class KeyRouter:
             self._deferred[vkey] = {"due": due, "st": st}
             return
 
-        self._dispatch(pname, name, action)
+        self._dispatch(pname, name, action, pass_vk=vkey)
         st["fired"] = "base"
         st["count"] = 1
         self._queue_hold(vkey, now, st)
@@ -1305,7 +1489,7 @@ class KeyRouter:
             return
         if d is not None:
             # 还没到长按阈值：松手时才执行单击动作
-            self._dispatch(st["profile"], st["name"], st["action"])
+            self._dispatch(st["profile"], st["name"], st["action"], pass_vk=vkey)
             st["fired"] = "base"
             st["count"] += 1
         self._emit_press(st, max(0.0, (now - st["started"]) * 1000))
@@ -1321,7 +1505,7 @@ class KeyRouter:
             if now >= p["due"]:
                 del self._tap_pending[vk]
                 st = p["st"]
-                self._dispatch(st["profile"], st["name"], st["action"])
+                self._dispatch(st["profile"], st["name"], st["action"], pass_vk=vk)
                 st["fired"] = "base"
                 st["count"] = 1
                 self._emit_press(st, 0.0)  # 双击窗口的等待不算长按
@@ -1350,7 +1534,7 @@ class KeyRouter:
                 continue
             n = 0
             while now >= h["due"] and n < 3:
-                self._dispatch(st["profile"], st["name"], st["action"])
+                self._dispatch(st["profile"], st["name"], st["action"], pass_vk=vk)
                 st["count"] += 1
                 n += 1
                 if h["accel"]:
@@ -1380,7 +1564,8 @@ class KeyRouter:
         self.emit("key", name=st["name"], profile=st["profile"], detail=detail,
                   vk=st.get("vkey", 0))
 
-    def _dispatch(self, profile: str, name: str, action: dict) -> None:
+    def _dispatch(self, profile: str, name: str, action: dict,
+                  pass_vk: int | None = None) -> None:
         kind = action.get("type")
         try:
             if kind == "key":
@@ -1430,7 +1615,9 @@ class KeyRouter:
             elif kind == "click":
                 mouse_click()
             elif kind == "none":
-                pass
+                # 直通：平时靠原生键，原生被接管后要补发一次源键
+                if pass_vk is not None and pass_vk in self.takeover_vks:
+                    tap_key(pass_vk)
             else:
                 return
         except Exception as e:  # noqa: BLE001
@@ -1555,10 +1742,15 @@ def _wndproc(hwnd, msg, wparam, lparam):
                     if hdr.dwType == RIM_TYPEKEYBOARD:
                         kb = ctypes.cast(ctypes.addressof(buf) + ctypes.sizeof(RAWINPUTHEADER),
                                          ctypes.POINTER(RAWKEYBOARD)).contents
-                        key_events.append({
-                            "t": time.time(), "vkey": kb.VKey, "scan": kb.MakeCode,
-                            "down": kb.Message in (WM_KEYDOWN, WM_SYSKEYDOWN),
-                        })
+                        vk = int(kb.VKey)
+                        down = kb.Message in (WM_KEYDOWN, WM_SYSKEYDOWN)
+                        now = time.time()
+                        last = _native_fed_at.pop((vk, down), None)
+                        if last is None or now - last > 0.05:
+                            key_events.append({
+                                "t": now, "vkey": vk, "scan": kb.MakeCode,
+                                "down": down,
+                            })
     return user32.DefWindowProcW(hwnd, msg, wparam, lparam)
 
 

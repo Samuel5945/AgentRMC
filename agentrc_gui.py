@@ -322,6 +322,8 @@ class Controller:
         self.active_voice = core.voice_hotkey(self.profiles.current())
         self.holding = False
         self.router = core.KeyRouter(self.profiles, emit=self.emit)
+        self.native_takeover = bool((core.CFG.get("ui") or {}).get("native_takeover"))
+        self.takeover_active = False
 
     def emit(self, kind: str, **data) -> None:
         self.seq += 1
@@ -353,6 +355,7 @@ class Controller:
         self.router.reset()
         self.emit("status", text="监听已启动")
         self._sync_media_hook()
+        self.sync_native_guard()
         self._thread = threading.Thread(target=self._loop, daemon=True)
         self._thread.start()
         self._start_model_load()
@@ -373,10 +376,63 @@ class Controller:
         else:
             self.emit("log", text="耳机播放键接管失败（低层钩子没装上）")
 
+    def set_native_takeover(self, on: bool) -> None:
+        """接管开关：写入 config.json，并按当前前台场景立即生效。"""
+        on = bool(on)
+        self.native_takeover = on
+        core.save_ui_config(native_takeover=on)
+        self.sync_native_guard()
+        self.emit("status", text="原生键接管 " + ("开 · 当前场景生效" if on else "关"))
+
+    @staticmethod
+    def _takeover_vks(prof: dict) -> set[int]:
+        """当前场景里被映射的物理键；包含 double/hold，单键没写 keys 也能接管。"""
+        out: set[int] = set()
+        for table in ("keys", "double", "hold"):
+            for k in (prof.get(table) or {}):
+                try:
+                    out.add(int(k))
+                except (TypeError, ValueError):
+                    continue
+        return out
+
+    def sync_native_guard(self, pname: str | None = None) -> None:
+        """按「监听中 + 开关 + 当前场景」决定是否吞原生键。
+
+        开关打开时对所有场景生效；切场景就换成新场景的键集合。
+        关掉开关立即停止吞键，实体键盘恢复。
+        """
+        self.takeover_active = False
+        if not self.running or not self.native_takeover:
+            core.native_guard_stop()
+            self.router.takeover_vks.clear()
+            return
+        prof = self.profiles.current()
+        name = str(prof.get("name") or "")
+        if pname is not None and pname != name:
+            # 允许按指定场景预演/测试；正常路径 pname 就是当前场景名
+            found = next((p for p in self.profiles.profiles
+                          if p.get("name") == pname), None)
+            if found:
+                prof, name = found, pname
+        vks = self._takeover_vks(prof)
+        if not vks:
+            core.native_guard_set(False, ())
+            self.router.takeover_vks.clear()
+            return
+        if not core.native_guard_start():
+            self.router.takeover_vks.clear()
+            self.emit("error", text="原生键接管失败：低层钩子没装上")
+            return
+        self.router.takeover_vks = vks
+        core.native_guard_set(True, vks)
+        self.takeover_active = True
+
     def stop(self) -> None:
         self.running = False
         self._release_holding(0)
         core.media_hook_stop()
+        core.native_guard_stop()
         self.media_voice = False
         t = self._thread
         if t is not None and t is not threading.current_thread():
@@ -526,6 +582,12 @@ class Controller:
                         self.router.key_down(ev["vkey"], now)
                     else:
                         self.router.key_up(ev["vkey"], now)
+                while core.cursor_events:
+                    ev = core.cursor_events.popleft()
+                    kind = "点击" if ev.get("kind") == "click" else "移动"
+                    self.emit("log", text=f"鼠标模式 · {kind} "
+                                          f"vk=0x{ev['vk']:02X} @ "
+                                          f"{ev['pos'][0]},{ev['pos'][1]}")
                 self._tick(now)
                 time.sleep(0.004)
             except Exception:  # noqa: BLE001
@@ -2030,6 +2092,8 @@ class MainWindow(QMainWindow):
         except Exception:  # noqa: BLE001
             name = ""
         state = "监听中" if self.ctl.running else "已停止"
+        if getattr(self.ctl, "takeover_active", False):
+            state += " · 接管中"
         tray.setToolTip("AgentRMC · " + " · ".join(x for x in (state, name) if x))
         self.tray_listen.setText("停止监听" if self.ctl.running else "开始监听")
         self.tray_hide.setEnabled(self.isVisible())
@@ -2509,6 +2573,22 @@ class MainWindow(QMainWindow):
         self._map_hint_timer.setSingleShot(True)
         self._map_hint_timer.timeout.connect(self._reset_map_hint)
         foot.addWidget(self.map_foot_hint, 1)
+
+        takeover_tip = ("开关打开后，当前前台场景生效：\n"
+                        "吞掉这些键的原生事件，再按映射注入。\n"
+                        "· 实体键盘的同名键也会按当前映射执行（不走原生）\n"
+                        "· 双击键的单击会延迟约 0.3 秒")
+        self.takeover_label = QLabel("接管原生键")
+        self.takeover_label.setObjectName("mapTakeover")
+        self.takeover_label.setFixedWidth(54)
+        self.takeover_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.takeover_label.setToolTip(takeover_tip)
+        self.takeover_switch = ToggleSwitch(self.ctl.native_takeover)
+        self.takeover_switch.setToolTip(takeover_tip)
+        self.takeover_switch.toggled.connect(self._on_takeover_toggle)
+        foot.addWidget(self.takeover_label)
+        foot.addWidget(self.takeover_switch)
+        self._sync_takeover_ui()
         lay.addLayout(foot)
 
         self._refresh_keymap()
@@ -2727,6 +2807,21 @@ class MainWindow(QMainWindow):
         self.map_foot_hint.setStyleSheet(
             "QLabel#mapFoot { color: #5b6472; font-size: 10px; }")
 
+    def _on_takeover_toggle(self, on: bool) -> None:
+        self.ctl.set_native_takeover(on)
+        self._sync_takeover_ui()
+
+    def _sync_takeover_ui(self) -> None:
+        if not hasattr(self, "takeover_switch"):
+            return
+        on = bool(self.ctl.native_takeover)
+        active = bool(getattr(self.ctl, "takeover_active", False))
+        self.takeover_switch.setChecked(on)
+        self.takeover_label.setText("接管中" if active else "接管原生键")
+        color = "#7ee2a8" if active else ("#9ec1ff" if on else "#6b7684")
+        self.takeover_label.setStyleSheet(
+            "QLabel#mapTakeover { color: %s; font-size: 10px; }" % color)
+
     def _flash_map_hint(self, text: str, color: str) -> None:
         if not hasattr(self, "map_foot_hint"):
             return
@@ -2866,6 +2961,7 @@ class MainWindow(QMainWindow):
         self.ctl.profiles = core.ProfileManager(core.load_profiles())
         self.ctl.router.profiles = self.ctl.profiles
         self.ctl.router.reset()
+        self.ctl.sync_native_guard()
         self._refresh_info()
         self._refresh_keymap()
         label = display or self._gesture_label(gesture, kind)
@@ -2926,6 +3022,8 @@ class MainWindow(QMainWindow):
             ("操作", "音量/亮度：↑↓ 音量、←→ 屏幕亮度；鼠标：方向键移动、OK 点击"),
             ("退出", "再单击「返回」或「菜单」；12 秒不操作自动退出"),
             ("注意", "鼠标模式期间方向键与 Enter 被接管，物理键盘也会一起受影响"),
+            ("接管原生键", "映射页右下角打开后，当前场景中映射键的原生事件被吞；"
+                           "实体键盘同名键也会按遥控器映射处理，双击键的单击延迟约 0.3 秒"),
         ]))
         box.addWidget(guide_section("已知限制", [
             ("电源 / 音量", "这两个键走红外，电脑收不到，无法映射"),
@@ -2973,6 +3071,7 @@ class MainWindow(QMainWindow):
                     self.map_combo.setCurrentIndex(idx)
             self.map_combo.blockSignals(False)
             self._refresh_keymap()
+            self.ctl.sync_native_guard()
             self._append({"kind": "status", "text": "按键映射已重新加载",
                           "ts": time.strftime("%H:%M:%S")})
         except Exception as e:  # noqa: BLE001
@@ -3121,6 +3220,8 @@ class MainWindow(QMainWindow):
         self.pill_profile.setText(pname)
         if pname != self._last_profile:
             self._last_profile = pname
+            self.ctl.sync_native_guard(pname)
+            self._update_tray()
             self._refresh_info()
             if self.map_combo.currentData() is None:   # 跟随前台时才自动刷
                 self._refresh_keymap()
@@ -3137,6 +3238,11 @@ class MainWindow(QMainWindow):
             self.pill_battery.setText(f"{c.battery}%")
         if c.running != (self.btn_toggle.text() == "停止监听"):
             self._set_running(c.running)
+        sig_take = (bool(c.native_takeover), bool(c.takeover_active))
+        if sig_take != getattr(self, "_takeover_sig", None):
+            self._takeover_sig = sig_take
+            self._sync_takeover_ui()
+            self._update_tray()
 
     # ---------- 跨屏 / 缩放 ----------
     @staticmethod

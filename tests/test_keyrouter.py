@@ -59,11 +59,24 @@ def setup() -> core.KeyRouter:
     reset()
     core.scroll = lambda d: DELTAS.append(d)              # type: ignore[assignment]
     core.press_combo = lambda mods, vk, rep=1: KEYS.append((tuple(mods), vk, rep))  # type: ignore[assignment]
+    core.tap_key = lambda vk: KEYS.append(((), vk, 1))    # type: ignore[assignment]
     core.beep = lambda *a, **k: None                       # type: ignore[assignment]
     core.cursor_hook_start = lambda: True                 # type: ignore[assignment]
     core.cursor_hook_stop = lambda: None                  # type: ignore[assignment]
     core.time.sleep = lambda _s: None                     # type: ignore[assignment]
     return core.KeyRouter(FakeProfiles(profile()), emit=emit)
+
+
+def takeover_router() -> core.KeyRouter:
+    """qoder 左键：直通单键 + 双击退格 + 长按 PageUp，原生已由钩子吞掉。"""
+    r = setup()
+    p = r.profiles.profile
+    p["keys"]["37"] = "left"
+    p["actions"]["left"] = {"type": "none", "note": "原生 ←"}
+    p["actions"]["backspace"] = {"type": "key", "vk": 8, "label": "退格"}
+    p["double"] = {"37": "backspace"}
+    r.takeover_vks = {37}
+    return r
 
 
 def test_hold_scroll() -> None:
@@ -247,7 +260,7 @@ def test_mode_media_and_cursor() -> None:
     kb = core._KBDLLHOOKSTRUCT(vkCode=39, scanCode=0, flags=0, time=0,
                                dwExtraInfo=0)
     ret = core._cursor_hook_cb(0, core.WM_KEYDOWN, ctypes.addressof(kb))
-    assert ret == 1 and moves[-1] == (8, 0), (ret, moves)
+    assert ret == 1 and moves[-1] == (core.CURSOR_STEP, 0), (ret, moves)
     kb = core._KBDLLHOOKSTRUCT(vkCode=13, scanCode=0, flags=0, time=0,
                                dwExtraInfo=0)
     ret = core._cursor_hook_cb(0, core.WM_KEYDOWN, ctypes.addressof(kb))
@@ -255,7 +268,7 @@ def test_mode_media_and_cursor() -> None:
     kb = core._KBDLLHOOKSTRUCT(vkCode=39, scanCode=0, flags=0x10, time=0,
                                dwExtraInfo=0)
     core._cursor_hook_cb(0, core.WM_KEYDOWN, ctypes.addressof(kb))
-    assert moves[-1] == (8, 0), "注入事件不该被钩子处理"
+    assert moves[-1] == (core.CURSOR_STEP, 0), "注入事件不该被钩子处理"
     # 空闲超时自动退出（钩子活动时间清掉，走 tick 时钟）
     core._cursor_last = 0.0
     r.tick(6.0)
@@ -511,6 +524,128 @@ def test_voice_hold() -> None:
     print("PASS WorkBuddy 按住式：按下按住、松手放开")
 
 
+def test_takeover_pass_single() -> None:
+    r = takeover_router()
+    r.key_down(37, 0.0)
+    assert KEYS == [], "双击窗口还没判定，不能先补 ←"
+    r.key_up(37, 0.05)
+    r.tick(0.31)
+    assert KEYS == [((), 37, 1)], f"单击落地后应补一次 ←: {KEYS}"
+    print("PASS 原生接管：直通单击在双击窗口后补发源键")
+
+
+def test_takeover_pass_double() -> None:
+    r = takeover_router()
+    r.key_down(37, 0.0)
+    r.key_up(37, 0.05)
+    r.key_down(37, 0.20)
+    assert KEYS == [((), 8, 1)], f"双击只该发退格: {KEYS}"
+    assert not any(vk == 37 for _, vk, _ in KEYS), "双击不该再补 ←"
+    print("PASS 原生接管：双击只发退格，不再补源键")
+
+
+def test_takeover_repeat() -> None:
+    r = takeover_router()
+    r.key_down(37, 0.0)
+    r.tick(0.31)             # 单击落地，键仍按着
+    r.key_down(37, 0.35)     # 遥控器设备连发
+    assert KEYS == [((), 37, 1), ((), 37, 1)], f"连发应逐次补源键: {KEYS}"
+    r.key_up(37, 0.4)
+    print("PASS 原生接管：按住连发用源键 tap 还原")
+
+
+def test_native_guard_predicate() -> None:
+    core.native_guard_set(True, {37})
+    assert core.native_guard_should_swallow(37, False)
+    assert not core.native_guard_should_swallow(37, True), "自己注入的键不能被吞"
+    assert not core.native_guard_should_swallow(38, False)
+    core.native_guard_set(False, {37})
+    assert not core.native_guard_should_swallow(37, False)
+    core.native_guard_set(True, ())
+    assert not core.native_guard_should_swallow(37, False)
+    # 鼠标模式：cursor hook 在时，方向键/Enter 必须放行
+    core._cursor_hook = 1
+    core.native_guard_set(True, {37, 0x0D})
+    assert not core.native_guard_should_swallow(37, False)
+    assert not core.native_guard_should_swallow(0x0D, False)
+    core._cursor_hook = None
+    core.native_guard_set(False, ())
+    print("PASS 接管判定：只吞启用/非注入/映射集合内的键，鼠标模式放行方向键")
+
+
+def test_native_guard_feed() -> None:
+    import ctypes
+    core.key_events.clear()
+    core.native_guard_set(True, {37})
+    kb = core._KBDLLHOOKSTRUCT()
+    kb.vkCode = 37
+    kb.scanCode = 75
+    kb.flags = 0
+    lp = ctypes.addressof(kb)
+    rc = core._native_guard_cb(0, core.WM_KEYDOWN, lp)
+    assert rc == 1, rc
+    ev = core.key_events[-1]
+    assert ev["vkey"] == 37 and ev["down"] and ev.get("native"), ev
+    rc = core._native_guard_cb(0, core.WM_KEYUP, lp)
+    assert rc == 1 and not core.key_events[-1]["down"]
+    before = len(core.key_events)
+    kb.flags = core.LLKHF_INJECTED
+    rc = core._native_guard_cb(0, core.WM_KEYDOWN, lp)
+    assert rc != 1, "注入键不能吞"
+    assert len(core.key_events) == before
+    assert (37, True) in core._native_fed_at
+    core.native_guard_set(False, ())
+    core.key_events.clear()
+    print("PASS 原生接管：钩子吞键后主动喂给 Router，注入键不喂")
+
+
+def test_guard_cursor_handles() -> None:
+    import ctypes
+    moves: list[tuple] = []
+    clicks: list[int] = []
+    orig = (core.mouse_move, core.mouse_click)
+    core.mouse_move = lambda dx, dy: moves.append((dx, dy))  # type: ignore[assignment]
+    core.mouse_click = lambda: clicks.append(1)              # type: ignore[assignment]
+    try:
+        core._cursor_hook = 1
+        core.native_guard_set(True, {37, 0x0D})
+        kb = core._KBDLLHOOKSTRUCT()
+        kb.vkCode = 37
+        kb.flags = 0
+        rc = core._native_guard_cb(0, core.WM_KEYDOWN, ctypes.addressof(kb))
+        assert rc == 1 and moves[-1] == (-core.CURSOR_STEP, 0), (rc, moves)
+        kb.vkCode = 0x0D
+        rc = core._native_guard_cb(0, core.WM_KEYDOWN, ctypes.addressof(kb))
+        assert rc == 1 and clicks, (rc, clicks)
+    finally:
+        core._cursor_hook = None
+        core.native_guard_set(False, ())
+        core.mouse_move, core.mouse_click = orig
+    print("PASS 接管钩子也能在鼠标模式驱动鼠标（不依赖钩子链序）")
+
+
+def test_cursor_accel() -> None:
+    moves: list[tuple] = []
+    orig = core.mouse_move
+    core.mouse_move = lambda dx, dy: moves.append((dx, dy))  # type: ignore[assignment]
+    try:
+        core._cursor_hold_vk = 0
+        core._cursor_hold_count = 0
+        core._cursor_hold_t = 0.0
+        for _ in range(5):
+            core._cursor_handle(37, True)
+        assert moves == [(-8, 0), (-8, 0), (-10, 0), (-10, 0), (-12, 0)], moves
+        core._cursor_handle(37, False)
+        core._cursor_handle(37, True)
+        assert moves[-1] == (-core.CURSOR_STEP, 0), "松手再按要回到 8px"
+    finally:
+        core.mouse_move = orig
+        core._cursor_hold_vk = 0
+        core._cursor_hold_count = 0
+        core._cursor_hold_t = 0.0
+    print("PASS 鼠标模式：短按 8px，长按逐级加速")
+
+
 if __name__ == "__main__":
     test_hold_scroll()
     test_tap_home()
@@ -533,4 +668,11 @@ if __name__ == "__main__":
     test_tap_combo()
     test_voice_toggle()
     test_voice_hold()
+    test_takeover_pass_single()
+    test_takeover_pass_double()
+    test_takeover_repeat()
+    test_native_guard_predicate()
+    test_native_guard_feed()
+    test_guard_cursor_handles()
+    test_cursor_accel()
     print("\n全部通过")

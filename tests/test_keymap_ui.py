@@ -213,9 +213,67 @@ def test_custom_combo_capture() -> None:
         tmp.unlink(missing_ok=True)
 
 
+def test_takeover_switch() -> None:
+    tmp = Path(tempfile.gettempdir()) / "agentrmc_ui_takeover.json"
+    shutil.copy2(ROOT / "profiles.json", tmp)
+    win = _make_window(tmp)
+    orig_save = core.save_ui_config
+    core.save_ui_config = lambda **kw: True  # 测试不写真实 config.json
+    try:
+        win.tabs.setCurrentIndex(1)
+        _spin()
+        sw = win.takeover_switch
+        assert not sw.isChecked(), "接管开关默认应关闭"
+        QTest.mouseClick(sw, Qt.LeftButton)
+        _spin()
+        assert win.ctl.native_takeover and sw.isChecked()
+        QTest.mouseClick(sw, Qt.LeftButton)
+        _spin()
+        assert not win.ctl.native_takeover and not sw.isChecked()
+        print("PASS 接管原生键开关：可切换、状态同步")
+    finally:
+        core.save_ui_config = orig_save
+        win.deleteLater()
+        _spin()
+        tmp.unlink(missing_ok=True)
+
+
+def test_takeover_guard_state() -> None:
+    tmp = Path(tempfile.gettempdir()) / "agentrmc_ui_guard.json"
+    shutil.copy2(ROOT / "profiles.json", tmp)
+    win = _make_window(tmp)
+    try:
+        win.ctl.running = True
+        win.ctl.native_takeover = True
+        # 任意场景（包括 default）：有映射就接管
+        win.ctl.sync_native_guard("default")
+        assert win.ctl.router.takeover_vks
+        assert win.ctl.takeover_active
+        assert core.native_guard_should_swallow(38, False)
+        assert not core.native_guard_should_swallow(116, False)
+        # 切到 Qoder：集合随场景换
+        win.ctl.sync_native_guard("qoder")
+        assert win.ctl.router.takeover_vks
+        assert core.native_guard_should_swallow(37, False)
+        assert not core.native_guard_should_swallow(116, False)
+        assert not core.native_guard_should_swallow(37, True), "注入键不能被吞"
+        win.ctl.running = False
+        win.ctl.sync_native_guard("qoder")
+        assert not core.native_guard_should_swallow(37, False)
+        print("PASS 接管状态：任意场景启用，语音键不接管")
+    finally:
+        win.ctl.running = False
+        core.native_guard_stop()
+        win.deleteLater()
+        _spin()
+        tmp.unlink(missing_ok=True)
+
+
 if __name__ == "__main__":
     test_rows_visible_after_tab_switch()
     test_preset_edit_roundtrip()
     test_cell_click_opens_menu()
     test_custom_combo_capture()
+    test_takeover_switch()
+    test_takeover_guard_state()
     print("\n全部通过")

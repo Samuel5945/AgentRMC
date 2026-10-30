@@ -73,8 +73,9 @@ call "C:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\v
    钩子链序无关；接管自测覆盖 pass/double/repeat/模式标记/钩子判定。
    耳机播放键属于语音，和 M5 一起接。
 5. **语音（已完成）**：三条路线共用一套语音键状态机——
-   - 默认 **Qoder 热键**：0 模型，转发 `Ctrl+Shift+V`（Qoder hold / WorkBuddy
-     toggle）；不编译 sherpa 时 app 约 30MB，带运行库约 46MB；
+   - 默认 **转发热键**：0 模型，按当前前台场景转发——Qoder `Ctrl+Shift+V`、
+     WorkBuddy `Ctrl+D`、通用场景用全局 `Ctrl+Shift+V`；不编译 sherpa 时 app
+     约 30MB，带运行库约 46MB；
    - **本地 SenseVoice**：sherpa-onnx + SenseVoiceSmall int8，下载 158MB、
      解压约 230MB，中文/粤语/英日韩，自带标点 ITN；16kHz 单声道 PCM 直接送识别，
      3 秒测试音频热态约 150ms（首帧含模型加载约 1.8s）；
@@ -84,6 +85,7 @@ call "C:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\v
    部分设备打开后约 0.85s 才送第一块数据，所以监听开始时预热麦克风并保留 400ms
    预录，按住即说不会丢开头。支持按住说话、静音兜底、3 秒自测、转写后粘贴/复制。
    耳机播放键在 Qoder / WorkBuddy 前台时接管为开关，按一下开始、再按一下结束。
+   语音卡片在状态下面显示最近一次转写（超长截断，悬停看全文），完整内容仍在事件流。
    AgentRMC 本身不接 LLM；真正的 LLM 在 Qoder / WorkBuddy 服务端。
 6. **收尾**：BLE 电量、跨屏 DPI、托盘菜单、windeployqt 打包、体积回归。
 
@@ -106,6 +108,9 @@ call "C:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\v
 - 语音设置写在 `config.json` 的 `voice` 下：
   `backend`（`hotkey` / `sensevoice` / `qwen3`）、`sensevoice_dir`、`qwen3_dir`、
   `paste`、`auto_enter`。没有 `backend` 时兼容 Python 版的 `mode: local`。
+- 热键模式按每个 profile 的 `voice.hotkey` / `voice.trigger` 转发；要给其他
+  Agent 用热键，在 `profiles.json` 加一个带 `match` 的 profile 并配它的语音
+  快捷键。没有对应 profile 的应用，直接切本地 SenseVoice / Qwen3 转写即可。
 - 模型目录优先用配置里的路径；留空时依次找 exe 同目录 `models/<名称>`，开发时再退到
   `native/models/`。设置页把默认路径显示为占位符，不会写死机器路径。
 - 本地后端在「开始监听」时预热麦克风，停止监听或切回 hotkey 时关闭；Windows 的

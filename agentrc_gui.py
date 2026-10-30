@@ -227,17 +227,25 @@ QLabel#mapChip {{
 }}
 QLabel#mapKeyName {{ color: #dbe4ee; font-size: 12px; font-weight: 600; }}
 QFrame#mapCell {{
-    background: transparent; border: 1px solid transparent; border-radius: 7px;
+    background: rgba(255,255,255,4);
+    border: 1px solid rgba(255,255,255,10);
+    border-radius: 7px;
+}}
+QFrame#mapCell[ro="true"] {{
+    background: transparent; border: 1px solid transparent;
+}}
+QFrame#mapCell[ro="true"]:hover {{
+    background: transparent; border: 1px solid transparent;
 }}
 QFrame#mapCell:hover {{
-    background: rgba(255,255,255,9);
-    border: 1px solid rgba(255,255,255,16);
+    background: rgba(79,140,255,16);
+    border: 1px solid rgba(79,140,255,110);
 }}
 QLabel#mapCellTitle {{ color: #dbe4ee; font-size: 11px; font-weight: 600; }}
-QLabel#mapCellEffect {{ color: #5b6472; font-size: 9.5px; }}
-QLabel#mapCellDash {{ color: #3d4653; font-size: 11px; }}
-QLabel#mapCellChev {{ color: transparent; font-size: 10px; }}
-QFrame#mapCell:hover QLabel#mapCellChev {{ color: #8b949e; }}
+QLabel#mapCellEffect {{ color: #6b7684; font-size: 9.5px; }}
+QLabel#mapCellDash {{ color: #46505e; font-size: 11px; }}
+QLabel#mapCellChev {{ color: #4a5568; font-size: 10px; }}
+QFrame#mapCell:hover QLabel#mapCellChev {{ color: #9ec1ff; }}
 QFrame#mapKeyRow[sel="true"] QLabel#mapCellEffect {{ color: #8b949e; }}
 QFrame#mapKeyRow[sel="true"] QLabel#mapCellChev {{ color: #8b949e; }}
 QLabel#mapNavNote {{ font-size: 9.5px; }}
@@ -1793,6 +1801,7 @@ class MapCell(QFrame):
         self.effect_text = effect
         self.editable = bool(editable)
         self.setObjectName("mapCell")
+        self.setProperty("ro", "false" if self.editable else "true")
         self.setFixedHeight(33)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.setCursor(Qt.PointingHandCursor if editable else Qt.ArrowCursor)
@@ -1867,7 +1876,7 @@ class MapKeyRow(QFrame):
         self.setProperty("sel", "true" if selected else "false")
 
         lay = QHBoxLayout(self)
-        lay.setContentsMargins(6, 2, 10, 2)
+        lay.setContentsMargins(6, 1, 10, 1)
         lay.setSpacing(8)
 
         key_box = QWidget()
@@ -2464,6 +2473,9 @@ class MainWindow(QMainWindow):
             lab.setObjectName("mapHead")
             if width:
                 lab.setFixedWidth(width)
+            else:
+                # 手势格的内容从「1px 描边 + 7px 内边距」处起笔，表头跟正文对齐
+                lab.setContentsMargins(8, 0, 0, 0)
             hlay.addWidget(lab, stretch)
         hv.addLayout(hlay)
         hair = QFrame()

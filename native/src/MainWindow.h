@@ -36,7 +36,7 @@ private:
     QWidget *buildLogPage();
     QWidget *buildGuidePage();
     void buildTray();
-    void showMilestones();
+    void showGuide();
     void toggleListening();
     void updateListenUi();
     void onEngineEvent(const QString &kind, const QString &name,

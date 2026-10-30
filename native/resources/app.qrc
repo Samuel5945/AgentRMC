@@ -2,5 +2,6 @@
     <qresource prefix="/">
         <file>style.qss</file>
         <file alias="icons/icon.ico">../../assets/icon.ico</file>
+        <file alias="remote/pairing-earbuds.png">../../assets/remote/pairing-earbuds.png</file>
     </qresource>
 </RCC>

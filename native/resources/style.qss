@@ -448,6 +448,41 @@ QLabel#dialogNote {
     font-size: 10px;
 }
 
+QDialog#guideDialog {
+    background: #0f141d;
+    border: 1px solid rgba(255, 255, 255, 24);
+    border-radius: 12px;
+}
+
+QLabel#guideImage {
+    background: #05070c;
+    border: 1px solid rgba(255, 255, 255, 26);
+    border-radius: 12px;
+}
+
+QLabel#kbd {
+    color: #dbe4ee;
+    font-size: 11px;
+    font-weight: 600;
+    background: rgba(255, 255, 255, 14);
+    border: 1px solid rgba(255, 255, 255, 20);
+    border-radius: 6px;
+    padding: 3px 7px;
+}
+
+QPushButton#guideLink {
+    background: transparent;
+    border: none;
+    color: #4f8cff;
+    font-size: 12px;
+    font-weight: 600;
+    padding: 4px 2px;
+}
+
+QPushButton#guideLink:hover {
+    color: #7dabff;
+}
+
 QLabel#toast {
     background: transparent;
     border: none;

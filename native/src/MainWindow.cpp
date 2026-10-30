@@ -1,5 +1,6 @@
 #include "MainWindow.h"
 
+#include "ui/GuideDialog.h"
 #include "ui/KeymapPage.h"
 #include "ui/RemotePanel.h"
 #include "ui/Toast.h"
@@ -18,7 +19,9 @@
 #include <QCloseEvent>
 #include <QComboBox>
 #include <QCoreApplication>
+#include <QCursor>
 #include <QDesktopServices>
+#include <QGuiApplication>
 #include <QJsonObject>
 #include <QListWidget>
 #include <QSignalBlocker>
@@ -30,12 +33,10 @@
 #include <QHeaderView>
 #include <QLabel>
 #include <QMenu>
-#include <QMessageBox>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPushButton>
 #include <QScrollArea>
-#include <QStringList>
 #include <QSystemTrayIcon>
 #include <QTabWidget>
 #include <QTableWidget>
@@ -232,11 +233,11 @@ QWidget *MainWindow::buildHeader() {
     lay->addWidget(statusText_);
     lay->addSpacing(6);
 
-    auto *guide = new QPushButton(QString::fromUtf8("使用引导"));
-    guide->setObjectName("ghost");
-    guide->setCursor(Qt::PointingHandCursor);
-    connect(guide, &QPushButton::clicked, this, &MainWindow::showMilestones);
-    lay->addWidget(guide);
+    auto *guideButton = new QPushButton(QString::fromUtf8("使用引导"));
+    guideButton->setObjectName("ghost");
+    guideButton->setCursor(Qt::PointingHandCursor);
+    connect(guideButton, &QPushButton::clicked, this, &MainWindow::showGuide);
+    lay->addWidget(guideButton);
 
     auto *min = new QToolButton;
     min->setObjectName("winBtn");
@@ -449,28 +450,54 @@ QWidget *MainWindow::buildGuidePage() {
     card->setObjectName("card");
     auto *cl = new QVBoxLayout(card);
     cl->setContentsMargins(18, 16, 18, 16);
-    cl->setSpacing(10);
+    cl->setSpacing(16);
 
-    auto *title = new QLabel(QString::fromUtf8("原生壳迁移"));
-    title->setObjectName("secTitle");
-    cl->addWidget(title);
-
-    const QStringList lines = {
-        QString::fromUtf8("里程碑 1 已完成 · 窗口 / 主题 / 托盘 / 构建"),
-        QString::fromUtf8("里程碑 2 已完成 · config + profiles + 可编辑映射表"),
-        QString::fromUtf8("里程碑 3 已完成 · Raw Input + KeyRouter + 动作注入"),
-        QString::fromUtf8("里程碑 4 已完成 · 原生键接管 / 鼠标模式"),
-        QString::fromUtf8("里程碑 5 已完成 · 语音三后端 / 遥控器实时映射"),
-        QString::fromUtf8("里程碑 6（下一步）· BLE 电量 / 跨屏 DPI / windeployqt 打包"),
-        QString::fromUtf8("Qt 6.8 没有 Multimedia 模块，录音走 WinMM；转写走 sherpa-onnx C API。"),
-        QString::fromUtf8("Python 版继续保留，作为行为参照；两版共用 config/profiles 格式。"),
+    struct Line {
+        const char *key;
+        const char *text;
     };
-    for (const QString &line : lines) {
-        auto *label = new QLabel(line);
-        label->setObjectName("secBody");
-        label->setWordWrap(true);
-        cl->addWidget(label);
-    }
+    const auto addSection = [cl](const QString &name,
+                                 const QVector<Line> &lines) {
+        auto *box = new QWidget;
+        auto *boxLay = new QVBoxLayout(box);
+        boxLay->setContentsMargins(0, 0, 0, 0);
+        boxLay->setSpacing(9);
+        boxLay->addWidget(guide::heading(name));
+        for (const Line &line : lines) {
+            boxLay->addWidget(guide::row(QString::fromUtf8(line.key),
+                                         QString::fromUtf8(line.text), 92));
+        }
+        cl->addWidget(box);
+    };
+
+    addSection(QString::fromUtf8("第一次使用：配对遥控器"),
+               {{"长按 3 秒", "同时按住「返回」+「主页」，直到遥控器指示灯快速闪烁"},
+                {"蓝牙设置", "点遥控器卡片右侧的「蓝牙设置」，在列表里连接遥控器"},
+                {"看状态", "按一下任意键，卡片上对应键位亮起就说明连上了"},
+                {"以后", "配对过一次后无需再配对：按一下任意键就会自动回连"}});
+    addSection(QString::fromUtf8("手势速查"),
+               {{"语音键", "按住说话、松手结束（Qoder / WorkBuddy 自动切换接法）"},
+                {"方向键", "浏览内容；导航模式内改为翻页"},
+                {"OK", "发送消息；鼠标模式内 = 鼠标左键"},
+                {"返回", "停止 / 返回；双击进入音量·亮度模式"},
+                {"菜单", "换行；双击进入鼠标模式"},
+                {"主页", "回到顶部；双击进入导航模式"},
+                {"对焦", "全屏（走系统原生 F11）"}});
+    addSection(QString::fromUtf8("模式怎么用"),
+               {{"进入", "双击对应键，屏幕底部提示「xx模式 开」，并有一声提示音"},
+                {"操作", "音量/亮度：↑↓ 音量、←→ 屏幕亮度；鼠标：方向键移动、OK 点击；"
+                         "导航：←→ 切换控件、↑↓ 翻页"},
+                {"退出", "音量/亮度与鼠标模式单击「返回」或「菜单」退出；"
+                         "导航模式单击「主页」退出"},
+                {"自动退出", "音量/亮度、鼠标模式 12 秒不操作自动退出"},
+                {"接管原生键", "映射页右下角打开后，当前场景中映射键的原生事件被吞；"
+                               "实体键盘同名键也会按遥控器映射处理，"
+                               "双击键的单击会有一段判定延迟"}});
+    addSection(QString::fromUtf8("已知限制"),
+               {{"电源 / 音量", "这两个键走红外，电脑收不到，无法映射"},
+                {"未开接管", "遥控器按键仍会原生送达前台，映射动作和原生动作可能同时生效"},
+                {"双击判定", "两次按下间隔 0.45 秒以内才算双击，慢速连点会当成两次单击"},
+                {"任务栏闪", "开始/结束录音时任务栏闪一下，是 Windows 麦克风指示器"}});
     cl->addStretch(1);
 
     hl->addWidget(card);
@@ -517,17 +544,17 @@ void MainWindow::buildTray() {
             });
 }
 
-void MainWindow::showMilestones() {
-    QMessageBox::information(
-        this, "AgentRMC Native",
-        QString::fromUtf8(
-            "C++/Qt 原生迁移\n\n"
-            "里程碑 1：窗口 / 主题 / 托盘 / 构建（已完成）\n"
-            "2：config + profiles + 可编辑映射表（已完成）\n"
-            "3：Raw Input + Router + 注入（已完成）\n"
-            "4：原生键接管 / 鼠标模式（已完成）\n"
-            "5：语音（已完成）· Qoder 热键 / SenseVoice / Qwen3-ASR\n"
-            "6：BLE / DPI / 打包（下一步）"));
+void MainWindow::showGuide() {
+    auto *dialog = new GuideDialog(this);
+    dialog->setAttribute(Qt::WA_DeleteOnClose);
+    const QSize size = dialog->sizeHint();
+    if (auto *screen = QGuiApplication::screenAt(QCursor::pos())) {
+        const QRect area = screen->availableGeometry();
+        dialog->move(area.x() + (area.width() - size.width()) / 2,
+                     area.y() + (area.height() - size.height()) / 2);
+    }
+    dialog->show();
+    dialog->raise();
 }
 
 void MainWindow::toggleListening() {

@@ -46,6 +46,8 @@ qt_add_executable(AgentRMCNative
     src/ui/KeyIcon.h
     src/ui/Toast.cpp
     src/ui/Toast.h
+    src/ui/GuideDialog.cpp
+    src/ui/GuideDialog.h
     src/ui/VoiceSettingsDialog.cpp
     src/ui/VoiceSettingsDialog.h
     resources/app.qrc

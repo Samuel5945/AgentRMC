@@ -50,6 +50,19 @@ HERE = _app_dir()
 CONFIG_PATH = HERE / "config.json"
 COMMANDS_PATH = HERE / "commands.json"
 
+
+def _popen_shell(cmd: str) -> subprocess.Popen:
+    """跑 shell 命令，但**不弹控制台窗**。
+
+    AgentRMC 是 GUI 子系统进程：`Popen(..., shell=True)` 会让 Windows 为
+    `cmd.exe` 新建一个控制台，用户每按一次「启动程序」都会看到一个黑框闪一下
+    （2026-10-30 现场：窗口事件记录到 `cmd.exe` 的 ConsoleWindowClass）。
+    CREATE_NO_WINDOW 只抑制这个控制台，被启动的 GUI 程序不受影响。
+    """
+    flags = (getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+             if sys.platform == "win32" else 0)
+    return subprocess.Popen(cmd, shell=True, creationflags=flags)
+
 user32 = ctypes.WinDLL("user32", use_last_error=True)
 kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
 
@@ -906,7 +919,7 @@ class RuleEngine:
         print(f"⚡ 命中指令 [{desc}] -> {kind}")
         try:
             if kind == "run":
-                subprocess.Popen(action["cmd"], shell=True)
+                _popen_shell(action["cmd"])
             elif kind == "key":
                 press_combo(action.get("mods", []), int(action["vk"]),
                             int(action.get("repeat", 1)))
@@ -1380,7 +1393,7 @@ class KeyRouter:
                     if i + 1 < reps:
                         time.sleep(0.02)
             elif kind == "run":
-                subprocess.Popen(action["cmd"], shell=True)
+                _popen_shell(action["cmd"])
             elif kind == "nav_toggle":
                 self.nav_mode = not self.nav_mode
                 beep(900 if self.nav_mode else 560, 70)

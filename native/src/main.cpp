@@ -18,14 +18,17 @@ int main(int argc, char *argv[]) {
     }
 
     QString shot;
+    QString pin;
     const QStringList args = app.arguments();
     for (int i = 1; i + 1 < args.size(); ++i) {
         if (args.at(i) == "--shot") {
             shot = args.at(i + 1);
+        } else if (args.at(i) == "--pin") {
+            pin = args.at(i + 1);
         }
     }
 
-    MainWindow win(shot.isEmpty());
+    MainWindow win(shot.isEmpty(), pin);
     win.resize(1000, 640);
 
     if (!shot.isEmpty()) {

@@ -14,9 +14,18 @@ qt_add_executable(AgentRMCNative
     src/main.cpp
     src/MainWindow.cpp
     src/MainWindow.h
+    src/core/Profiles.cpp
+    src/core/Profiles.h
+    src/core/Presets.cpp
+    src/core/Presets.h
+    src/ui/MapWidgets.cpp
+    src/ui/MapWidgets.h
+    src/ui/KeymapPage.cpp
+    src/ui/KeymapPage.h
     resources/app.qrc
 )
 
+target_include_directories(AgentRMCNative PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(AgentRMCNative PRIVATE Qt6::Widgets)
 target_compile_options(AgentRMCNative PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
 target_compile_definitions(AgentRMCNative PRIVATE AGENTRMC_VERSION="${PROJECT_VERSION}")
@@ -37,3 +46,14 @@ if(AGENTRMC_WITH_WHISPER)
     target_link_libraries(AgentRMCNative PRIVATE whisper)
     target_compile_definitions(AgentRMCNative PRIVATE AGENTRMC_WITH_WHISPER=1)
 endif()
+
+add_executable(AgentRMCStoreTest
+    tests/m2_store_test.cpp
+    src/core/Profiles.cpp
+    src/core/Profiles.h
+    src/core/Presets.cpp
+    src/core/Presets.h
+)
+target_include_directories(AgentRMCStoreTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(AgentRMCStoreTest PRIVATE Qt6::Core)
+target_compile_options(AgentRMCStoreTest PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)

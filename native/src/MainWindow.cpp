@@ -1,10 +1,13 @@
 #include "MainWindow.h"
 
+#include "ui/KeymapPage.h"
+
 #include <QAbstractItemView>
 #include <QAction>
 #include <QApplication>
 #include <QIcon>
 #include <QCloseEvent>
+#include <QCoreApplication>
 #include <QFont>
 #include <QFrame>
 #include <QHBoxLayout>
@@ -124,7 +127,15 @@ protected:
 
 }  // namespace
 
-MainWindow::MainWindow(bool withTray, QWidget *parent) : QMainWindow(parent) {
+MainWindow::MainWindow(bool withTray, const QString &pin, QWidget *parent)
+    : QMainWindow(parent) {
+    store_ = std::make_unique<ProfileStore>(
+        QCoreApplication::applicationDirPath() + "/profiles.json");
+    store_->load();
+    store_->loadConfig(QCoreApplication::applicationDirPath() + "/config.json");
+    if (!pin.isEmpty()) {
+        store_->setPinned(pin);
+    }
     setWindowTitle("AgentRMC Native");
     setWindowIcon(QIcon(":/icons/icon.ico"));
     setWindowFlags(Qt::Window | Qt::FramelessWindowHint);
@@ -156,7 +167,8 @@ MainWindow::MainWindow(bool withTray, QWidget *parent) : QMainWindow(parent) {
     auto *tabs = new QTabWidget;
     tabs->setDocumentMode(false);
     tabs->addTab(buildLogPage(), QString::fromUtf8("事件流"));
-    tabs->addTab(buildKeymapPage(), QString::fromUtf8("按键映射"));
+    keymapPage_ = new KeymapPage(store_.get(), this);
+    tabs->addTab(keymapPage_, QString::fromUtf8("按键映射"));
     tabs->addTab(buildGuidePage(), QString::fromUtf8("使用引导"));
     tabs->setCurrentIndex(1);
     grid->addWidget(tabs, 1);
@@ -185,7 +197,7 @@ QWidget *MainWindow::buildHeader() {
     auto *brand = new QLabel("AgentRMC");
     brand->setObjectName("brand");
 
-    auto *tag = new QLabel("NATIVE · M1");
+    auto *tag = new QLabel("NATIVE · M2");
     tag->setObjectName("tag");
 
     lay->addWidget(logo);
@@ -239,7 +251,7 @@ QWidget *MainWindow::buildRemoteCard() {
     auto *head = new QHBoxLayout;
     auto *title = new QLabel(QString::fromUtf8("遥控器"));
     title->setObjectName("cardTitle");
-    auto *badge = new QLabel("M1");
+    auto *badge = new QLabel("M2");
     badge->setObjectName("badge");
     head->addWidget(title);
     head->addStretch(1);
@@ -303,7 +315,7 @@ QWidget *MainWindow::buildVoiceCard() {
     auto *head = new QHBoxLayout;
     auto *title = new QLabel(QString::fromUtf8("语音"));
     title->setObjectName("cardTitle");
-    auto *badge = new QLabel("M1");
+    auto *badge = new QLabel("M2");
     badge->setObjectName("badge");
     head->addWidget(title);
     head->addStretch(1);
@@ -323,80 +335,6 @@ QWidget *MainWindow::buildVoiceCard() {
     foot->addStretch(1);
     lay->addLayout(foot);
     return card;
-}
-
-QWidget *MainWindow::buildKeymapPage() {
-    auto *page = new QWidget;
-    auto *lay = new QVBoxLayout(page);
-    lay->setContentsMargins(0, 0, 0, 0);
-    lay->setSpacing(0);
-
-    auto *card = new QFrame;
-    card->setObjectName("card");
-    auto *cl = new QVBoxLayout(card);
-    cl->setContentsMargins(14, 11, 12, 11);
-    cl->setSpacing(8);
-
-    auto *hint = new QLabel(QString::fromUtf8("只读预览 · 里程碑 2 接入 profiles.json"));
-    hint->setObjectName("muted");
-    cl->addWidget(hint);
-
-    auto *table = new QTableWidget(8, 4);
-    table->setHorizontalHeaderLabels({QString::fromUtf8("键位"),
-                                      QString::fromUtf8("单击"),
-                                      QString::fromUtf8("双击"),
-                                      QString::fromUtf8("长按")});
-    table->verticalHeader()->setVisible(false);
-    table->setShowGrid(false);
-    table->setSelectionMode(QAbstractItemView::NoSelection);
-    table->setEditTriggers(QAbstractItemView::NoEditTriggers);
-    table->setFocusPolicy(Qt::NoFocus);
-    table->setWordWrap(false);
-    table->viewport()->setAutoFillBackground(false);
-    table->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Fixed);
-    table->setColumnWidth(0, 108);
-    for (int c = 1; c < 4; ++c) {
-        table->horizontalHeader()->setSectionResizeMode(c, QHeaderView::Stretch);
-    }
-    table->horizontalHeader()->setDefaultAlignment(Qt::AlignLeft | Qt::AlignVCenter);
-    table->horizontalHeader()->setFixedHeight(28);
-
-    const QVector<QStringList> rows = {
-        {QString::fromUtf8("↑ 上键"), QString::fromUtf8("上移"), QString::fromUtf8("↑ 直通"), QString::fromUtf8("—")},
-        {QString::fromUtf8("↓ 下键"), QString::fromUtf8("下移"), QString::fromUtf8("↓ 直通"), QString::fromUtf8("—")},
-        {QString::fromUtf8("← 左键"), QString::fromUtf8("左移"), QString::fromUtf8("← 直通"), QString::fromUtf8("—")},
-        {QString::fromUtf8("→ 右键"), QString::fromUtf8("右移"), QString::fromUtf8("→ 直通"), QString::fromUtf8("—")},
-        {QString::fromUtf8("OK 确定键"), QString::fromUtf8("确定"), QString::fromUtf8("Enter 直通"), QString::fromUtf8("—")},
-        {QString::fromUtf8("← 返回键"), QString::fromUtf8("返回"), QString::fromUtf8("音量/亮度模式"), QString::fromUtf8("—")},
-        {QString::fromUtf8("≡ 菜单键"), QString::fromUtf8("菜单"), QString::fromUtf8("鼠标模式"), QString::fromUtf8("—")},
-        {QString::fromUtf8("⌂ 主页键"), QString::fromUtf8("主页"), QString::fromUtf8("导航模式"), QString::fromUtf8("—")},
-    };
-
-    const QString dash = QString::fromUtf8("—");
-    for (int r = 0; r < rows.size(); ++r) {
-        table->setRowHeight(r, 38);
-        for (int c = 0; c < 4; ++c) {
-            auto *item = new QTableWidgetItem(rows.at(r).at(c));
-            item->setFlags(Qt::ItemIsEnabled);
-            item->setTextAlignment(Qt::AlignLeft | Qt::AlignVCenter);
-            if (c == 0) {
-                auto f = item->font();
-                f.setBold(true);
-                item->setFont(f);
-            }
-            if (rows.at(r).at(c) == dash) {
-                item->setForeground(QColor("#46505e"));
-            } else if (c == 1) {
-                item->setForeground(QColor("#8b949e"));
-            } else if (c == 2) {
-                item->setForeground(QColor("#c9d1d9"));
-            }
-            table->setItem(r, c, item);
-        }
-    }
-    cl->addWidget(table, 1);
-    lay->addWidget(card);
-    return page;
 }
 
 QWidget *MainWindow::buildLogPage() {
@@ -456,9 +394,9 @@ QWidget *MainWindow::buildGuidePage() {
     cl->addWidget(title);
 
     const QStringList lines = {
-        QString::fromUtf8("里程碑 1（当前）· 窗口 / 主题 / 托盘 / 构建"),
-        QString::fromUtf8("里程碑 2 · config + profiles + 映射表"),
-        QString::fromUtf8("里程碑 3 · Raw Input + KeyRouter + 动作注入"),
+        QString::fromUtf8("里程碑 1 已完成 · 窗口 / 主题 / 托盘 / 构建"),
+        QString::fromUtf8("里程碑 2 已完成 · config + profiles + 可编辑映射表"),
+        QString::fromUtf8("里程碑 3（下一步）· Raw Input + KeyRouter + 动作注入"),
         QString::fromUtf8("里程碑 4 · 原生键接管 / 鼠标模式 / 耳机播放键"),
         QString::fromUtf8("里程碑 5 · hotkey 语音 + whisper.cpp（GGML 模型）"),
         QString::fromUtf8("里程碑 6 · BLE 电量 / 跨屏 DPI / windeployqt 打包"),

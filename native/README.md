@@ -42,23 +42,31 @@ call "C:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\v
 
 ## 里程碑
 
-1. **壳（当前）**：无边框窗口、主题/QSS、左侧遥控器卡片、三个 Tab、托盘、
+1. **壳（已完成）**：无边框窗口、主题/QSS、左侧遥控器卡片、三个 Tab、托盘、
    `--shot` 无头截图。
-2. **配置与映射表**：复用 `config.json` / `profiles.json` 同一套 schema；
-   Profile 匹配、extends 合并、MapCell/MapRow 可编辑手势格。
-3. **输入链**：Raw Input + 设备过滤、单实例、KeyRouter（单击/双击/长按）、
+2. **配置与映射表（已完成）**：复用 `config.json` / `profiles.json` 同一套 schema；
+   前台进程/标题匹配 + 跟随前台/固定场景；extends 合并；MapCell/MapRow 常驻边界、
+   悬停、选中；单击/双击/长按预设菜单 + 自定义组合键；写回 `profiles.json` 并保留
+   `.bak`；C++ 数据层自测覆盖写回/extends/去重。
+3. **输入链（下一步）**：Raw Input + 设备过滤、单实例、KeyRouter（单击/双击/长按）、
    动作注入（key/scroll/run/mouse/brightness）、媒体模式、导航模式。
 4. **钩子**：原生键接管开关、鼠标模式、耳机播放键；保持 Python 版踩过的
    链序/自喂 Router/物理键副作用。
 5. **语音**：hotkey 注入（剪贴板/组合键）；whisper.cpp 本地转写（模型不进仓）。
 6. **收尾**：BLE 电量、跨屏 DPI、托盘菜单、windeployqt 打包、体积回归。
 
-## 兼容性
+## 数据与兼容性
 
-- `config.json` / `profiles.json` 保持同一格式，用户现有映射（左键双击=退格、
-  长按=PageUp 等）直接可读。
+- 原生版读写 exe 同目录的 `config.json` / `profiles.json`；`build.bat` 首次构建时
+  从仓库根目录播种，之后保留原生版自己的编辑（不会覆盖）。
+- 和 Python 版保持同一格式，用户现有映射（左键双击=退格、长按=PageUp 等）直接可读。
+- 映射页点格弹出预设菜单；单击支持「原生直通」，双击支持「关闭双击/双击模式」，
+  长按支持「关闭/连续触发/连发加速/按住某动作」，三格都支持自定义组合键。
+- 写回前自动把上一版保存为 `profiles.json.bak`。
 - Python 版继续保留，作为行为参照和验收 oracle；两版可以并排跑，事件日志对比。
 - 原生版在里程碑 3 之前不接输入、不装钩子，不会干扰正在运行的 Python 版。
+- 预览/截图：`AgentRMCNative.exe --pin qoder`，或
+  `AgentRMCNative.exe --shot shot.png --pin qoder`。
 
 ## 体积预算
 
@@ -68,3 +76,13 @@ call "C:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\v
 | 程序 + 资源 | 3–8MB |
 | whisper.cpp | ~5MB（不含模型） |
 | 模型（GGML small） | ~466MB，可选 |
+
+里程碑 2 后，`native/build/Release` 实测约 **30MB**（不含模型）。
+
+## 自测
+
+```bat
+native\build\Release\AgentRMCStoreTest.exe
+```
+
+覆盖：预设写回、`.bak`、同键原生去重、extends 继承、custom 动作。

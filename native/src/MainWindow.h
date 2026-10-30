@@ -14,6 +14,7 @@ class QPushButton;
 class QSystemTrayIcon;
 class InputEngine;
 class KeymapPage;
+class RemotePanel;
 class VoiceController;
 
 class MainWindow final : public QMainWindow {
@@ -43,6 +44,7 @@ private:
                      const QString &profile, const QString &detail, int vk);
     void clearLog();
     void refreshVoiceUi();
+    void refreshRemoteCard();
     void openVoiceSettings();
     void onVoiceState(const QString &state, const QString &detail);
     void onVoiceTranscribed(const QString &text, int costMs);
@@ -64,6 +66,9 @@ private:
     QLabel *voiceFoot_ = nullptr;
     QPushButton *voiceTest_ = nullptr;
     QString lastTranscript_;
+    RemotePanel *remotePanel_ = nullptr;
+    QLabel *remoteDot_ = nullptr;
+    QLabel *remoteState_ = nullptr;
     QSystemTrayIcon *tray_ = nullptr;
     bool quitting_ = false;
 };

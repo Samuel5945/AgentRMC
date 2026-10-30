@@ -1,9 +1,11 @@
 #include "MainWindow.h"
 
 #include "ui/KeymapPage.h"
+#include "ui/RemotePanel.h"
 #include "ui/VoiceSettingsDialog.h"
 
 #include "core/InputEngine.h"
+#include "core/Presets.h"
 #include "core/VoiceController.h"
 
 #include <QAbstractItemView>
@@ -57,84 +59,6 @@ protected:
     }
 };
 
-class RemoteCanvas final : public QWidget {
-public:
-    explicit RemoteCanvas(QWidget *parent = nullptr) : QWidget(parent) {
-        setMinimumHeight(300);
-        setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
-    }
-
-protected:
-    void paintEvent(QPaintEvent *) override {
-        QPainter p(this);
-        p.setRenderHint(QPainter::Antialiasing, true);
-
-        const qreal bodyW = 110.0;
-        const qreal bodyH = qMin<qreal>(height() - 12.0, 330.0);
-        const QRectF body((width() - bodyW) / 2.0, (height() - bodyH) / 2.0,
-                          bodyW, bodyH);
-        p.setPen(QPen(QColor(255, 255, 255, 22), 1.0));
-        p.setBrush(QColor(8, 12, 18));
-        p.drawRoundedRect(body, 22, 22);
-
-        const qreal cx = body.center().x();
-        auto ring = [&](qreal y, qreal r, const QColor &color) {
-            p.setPen(QPen(color, 1.2));
-            p.setBrush(Qt::NoBrush);
-            p.drawEllipse(QPointF(cx, y), r, r);
-        };
-        ring(body.top() + 22, 5.0, QColor(255, 255, 255, 55));
-        ring(body.top() + 44, 4.0, QColor(255, 255, 255, 32));
-
-        const QPointF ok(cx, body.top() + 108);
-        p.setPen(QPen(QColor(255, 255, 255, 40), 1.0));
-        p.setBrush(QColor(15, 22, 32));
-        p.drawEllipse(ok, 31, 31);
-        p.setPen(QPen(QColor(255, 255, 255, 90), 1.2));
-        p.drawEllipse(ok, 16, 16);
-
-        QFont f = font();
-        f.setPixelSize(9);
-        f.setBold(true);
-        p.setFont(f);
-        p.setPen(QColor(230, 237, 243));
-        p.drawText(QRectF(ok.x() - 16, ok.y() - 8, 32, 16), Qt::AlignCenter, "OK");
-
-        QFont g = font();
-        g.setPixelSize(11);
-        p.setFont(g);
-        p.setPen(QColor(200, 210, 222));
-        auto arrow = [&](qreal dx, qreal dy, const QString &glyph) {
-            p.drawText(QRectF(ok.x() + dx - 10, ok.y() + dy - 8, 20, 16),
-                       Qt::AlignCenter, glyph);
-        };
-        arrow(0, -47, QString::fromUtf8("↑"));
-        arrow(0, 47, QString::fromUtf8("↓"));
-        arrow(-47, 0, QString::fromUtf8("←"));
-        arrow(47, 0, QString::fromUtf8("→"));
-
-        const qreal chipsY = body.top() + 166;
-        for (int i = 0; i < 3; ++i) {
-            const QRectF chip(body.left() + 18 + i * 26, chipsY, 20, 18);
-            p.setPen(QPen(QColor(255, 255, 255, 26), 1.0));
-            p.setBrush(QColor(14, 20, 29));
-            p.drawRoundedRect(chip, 6, 6);
-        }
-        p.setPen(QColor(160, 172, 186));
-        p.drawText(QRectF(body.left() + 18, chipsY, 20, 18), Qt::AlignCenter,
-                   QString::fromUtf8("←"));
-        p.drawText(QRectF(body.left() + 44, chipsY, 20, 18), Qt::AlignCenter,
-                   QString::fromUtf8("≡"));
-        p.drawText(QRectF(body.left() + 70, chipsY, 20, 18), Qt::AlignCenter,
-                   QString::fromUtf8("⌂"));
-
-        const QRectF volume(cx - 8, body.top() + 202, 16, bodyH - 226);
-        p.setPen(QPen(QColor(255, 255, 255, 22), 1.0));
-        p.setBrush(QColor(12, 17, 25));
-        p.drawRoundedRect(volume, 8, 8);
-    }
-};
-
 }  // namespace
 
 MainWindow::MainWindow(bool withTray, const QString &pin, QWidget *parent)
@@ -157,14 +81,34 @@ MainWindow::MainWindow(bool withTray, const QString &pin, QWidget *parent)
             });
     connect(engine_, &InputEngine::profileChanged, this,
             [this](const QString &) {
+                refreshRemoteCard();
                 if (!voice_->busy()) {
                     refreshVoiceUi();
                 }
+                if (remoteState_ != nullptr && engine_->isRunning()) {
+                    remoteState_->setText(
+                        QString::fromUtf8("监听中 · ") +
+                        voiceProfileLabel(store_->current(true).name));
+                }
             });
     connect(engine_, &InputEngine::voiceDown, voice_, &VoiceController::voiceDown);
+    connect(engine_, &InputEngine::voiceDown, this, [this] {
+        if (remotePanel_ != nullptr) {
+            remotePanel_->flash(116);
+        }
+        if (remoteState_ != nullptr && remotePanel_ != nullptr) {
+            remoteState_->setText(QString::fromUtf8("语音 · ") +
+                                  remotePanel_->actionFor(116));
+        }
+    });
     connect(engine_, &InputEngine::voiceUp, voice_, &VoiceController::voiceUp);
     connect(engine_, &InputEngine::mediaVoice, voice_,
             &VoiceController::mediaToggle);
+    connect(engine_, &InputEngine::mediaVoice, this, [this] {
+        if (remoteState_ != nullptr) {
+            remoteState_->setText(QString::fromUtf8("耳机 · 语音开关"));
+        }
+    });
     connect(voice_, &VoiceController::stateChanged, this,
             &MainWindow::onVoiceState);
     connect(voice_, &VoiceController::transcribed, this,
@@ -205,6 +149,10 @@ MainWindow::MainWindow(bool withTray, const QString &pin, QWidget *parent)
     tabs->setDocumentMode(false);
     tabs->addTab(buildLogPage(), QString::fromUtf8("事件流"));
     keymapPage_ = new KeymapPage(store_.get(), this);
+    connect(keymapPage_, &KeymapPage::mappingsChanged, this,
+            &MainWindow::refreshRemoteCard);
+    connect(keymapPage_, &KeymapPage::viewChanged, this,
+            &MainWindow::refreshRemoteCard);
     tabs->addTab(keymapPage_, QString::fromUtf8("按键映射"));
     tabs->addTab(buildGuidePage(), QString::fromUtf8("使用引导"));
     tabs->setCurrentIndex(1);
@@ -212,6 +160,7 @@ MainWindow::MainWindow(bool withTray, const QString &pin, QWidget *parent)
 
     outer->addWidget(body, 1);
 
+    refreshRemoteCard();
     if (withTray) {
         buildTray();
     }
@@ -289,55 +238,34 @@ QWidget *MainWindow::buildRemoteCard() {
     auto *head = new QHBoxLayout;
     auto *title = new QLabel(QString::fromUtf8("遥控器"));
     title->setObjectName("cardTitle");
-    auto *badge = new QLabel("M4");
+    auto *badge = new QLabel("M5");
     badge->setObjectName("badge");
     head->addWidget(title);
     head->addStretch(1);
     head->addWidget(badge);
     lay->addLayout(head);
 
-    auto *row = new QHBoxLayout;
-    row->setSpacing(6);
-    auto *canvas = new RemoteCanvas;
-    canvas->setFixedWidth(126);
-    row->addWidget(canvas, 0, Qt::AlignTop);
-
-    auto *info = new QVBoxLayout;
-    info->setSpacing(10);
-    info->setContentsMargins(0, 6, 0, 0);
-    const QStringList labels = {
-        QString::fromUtf8("电源（红外）"),
-        QString::fromUtf8("对焦 · 全屏"),
-        QString::fromUtf8("语音 · 按住说话"),
-        QString::fromUtf8("方向 · 滚动 / OK 发送"),
-        QString::fromUtf8("返回 · 菜单 · 主页"),
-        QString::fromUtf8("音量（红外）"),
-    };
-    for (const QString &text : labels) {
-        auto *label = new QLabel(text);
-        label->setObjectName("muted");
-        label->setWordWrap(true);
-        info->addWidget(label);
-    }
-    info->addStretch(1);
-    row->addLayout(info, 1);
-    lay->addLayout(row, 1);
+    remotePanel_ = new RemotePanel;
+    lay->addWidget(remotePanel_, 1);
 
     auto *foot = new QHBoxLayout;
     foot->setSpacing(7);
-    auto *dot = new QLabel;
-    dot->setObjectName("dot");
-    dot->setFixedSize(6, 6);
-    auto *state = new QLabel(QString::fromUtf8("等待迁移"));
-    state->setObjectName("muted");
+    remoteDot_ = new QLabel;
+    remoteDot_->setObjectName("dot");
+    remoteDot_->setFixedSize(6, 6);
+    remoteState_ = new QLabel(QString::fromUtf8("未监听"));
+    remoteState_->setObjectName("muted");
     auto *bt = new QPushButton(QString::fromUtf8("蓝牙设置"));
     bt->setObjectName("ghost");
     bt->setEnabled(false);
-    foot->addWidget(dot, 0, Qt::AlignVCenter);
-    foot->addWidget(state);
+    bt->setToolTip(QString::fromUtf8("BLE 电量/配对在里程碑 6 接入"));
+    foot->addWidget(remoteDot_, 0, Qt::AlignVCenter);
+    foot->addWidget(remoteState_);
     foot->addStretch(1);
     foot->addWidget(bt);
     lay->addLayout(foot);
+
+    refreshRemoteCard();
     return card;
 }
 
@@ -375,6 +303,7 @@ QWidget *MainWindow::buildVoiceCard() {
                 voice_->reload();
                 lastTranscript_.clear();
                 refreshVoiceUi();
+                refreshRemoteCard();
                 appendEvent(QStringLiteral("status"), QString(),
                             QString(),
                             QString::fromUtf8("语音后端切换为 ") +
@@ -497,7 +426,7 @@ QWidget *MainWindow::buildGuidePage() {
         QString::fromUtf8("里程碑 2 已完成 · config + profiles + 可编辑映射表"),
         QString::fromUtf8("里程碑 3 已完成 · Raw Input + KeyRouter + 动作注入"),
         QString::fromUtf8("里程碑 4 已完成 · 原生键接管 / 鼠标模式"),
-        QString::fromUtf8("里程碑 5（当前）· 语音：Qoder 热键 / SenseVoice / Qwen3-ASR"),
+        QString::fromUtf8("里程碑 5（当前）· 语音三后端 / 遥控器实时高亮与映射"),
         QString::fromUtf8("里程碑 6 · BLE 电量 / 跨屏 DPI / windeployqt 打包"),
         QString::fromUtf8("Qt 6.8 没有 Multimedia 模块，录音走 WinMM；转写走 sherpa-onnx C API。"),
         QString::fromUtf8("Python 版继续保留，作为行为参照；两版共用 config/profiles 格式。"),
@@ -635,11 +564,62 @@ void MainWindow::refreshVoiceUi() {
     }
 }
 
+void MainWindow::refreshRemoteCard() {
+    if (remotePanel_ == nullptr) {
+        return;
+    }
+    const Profile &profile = store_->current(true);
+    auto actionFor = [&](int vk) {
+        const QString semantic =
+            profile.keys.value(QString::number(vk)).toString();
+        if (semantic.isEmpty()) {
+            return QString::fromUtf8("未映射");
+        }
+        const QJsonObject action =
+            profile.actions.value(semantic).toObject();
+        if (action.isEmpty()) {
+            return QString::fromUtf8("无动作");
+        }
+        return Presets::shortDesc(action, vk);
+    };
+
+    const VoiceOptions voice = voice_->options();
+    QString voiceText;
+    if (voice.backend == VoiceBackend::Hotkey) {
+        voiceText = voiceComboText(voice.hotkeyMods, voice.hotkeyVk);
+        voiceText += voice.hotkeyTrigger == QStringLiteral("toggle")
+                         ? QString::fromUtf8(" · 开关")
+                         : QString::fromUtf8(" · 按住");
+    } else {
+        voiceText = voiceBackendLabel(voice.backend);
+    }
+
+    const QVector<RemotePanel::Entry> entries = {
+        {0, QStringLiteral("○"), QString::fromUtf8("电源"),
+         QString::fromUtf8("红外"), true},
+        {122, QStringLiteral("◎"), QString::fromUtf8("对焦"), actionFor(122),
+         false},
+        {116, QStringLiteral("F5"), QString::fromUtf8("语音"), voiceText, false},
+        {38, QStringLiteral("↑"), QString::fromUtf8("上键"), actionFor(38), false},
+        {40, QStringLiteral("↓"), QString::fromUtf8("下键"), actionFor(40), false},
+        {37, QStringLiteral("←"), QString::fromUtf8("左键"), actionFor(37), false},
+        {39, QStringLiteral("→"), QString::fromUtf8("右键"), actionFor(39), false},
+        {13, QStringLiteral("OK"), QString::fromUtf8("OK"), actionFor(13), false},
+        {27, QStringLiteral("↩"), QString::fromUtf8("返回"), actionFor(27), false},
+        {93, QStringLiteral("☰"), QString::fromUtf8("菜单"), actionFor(93), false},
+        {36, QStringLiteral("⌂"), QString::fromUtf8("主页"), actionFor(36), false},
+        {0, QStringLiteral("VOL"), QString::fromUtf8("音量"),
+         QString::fromUtf8("红外"), true},
+    };
+    remotePanel_->setEntries(entries);
+}
+
 void MainWindow::openVoiceSettings() {
     auto *dialog = new VoiceSettingsDialog(store_.get(), this);
     connect(dialog, &VoiceSettingsDialog::saved, this, [this] {
         voice_->reload();
         refreshVoiceUi();
+        refreshRemoteCard();
         appendEvent(QStringLiteral("status"), QString(),
                     QString(), QString::fromUtf8("语音设置已保存"), 0);
     });
@@ -705,11 +685,37 @@ void MainWindow::onVoiceTranscribed(const QString &text, int costMs) {
 void MainWindow::onEngineEvent(const QString &kind, const QString &name,
                                const QString &profile, const QString &detail,
                                int vk) {
+    if (kind == QStringLiteral("key") && vk != 0) {
+        if (remotePanel_ != nullptr) {
+            remotePanel_->flash(vk);
+        }
+        if (remoteState_ != nullptr && remotePanel_ != nullptr) {
+            const QString text = name.isEmpty() ? detail : name;
+            const QString label = remotePanel_->labelFor(vk);
+            if (!text.isEmpty()) {
+                remoteState_->setText(label.isEmpty()
+                                          ? text
+                                          : label + QStringLiteral(" · ") + text);
+            }
+        }
+    }
     appendEvent(kind, name, profile, detail, vk);
 }
 
 void MainWindow::onEngineRunning(bool running, const QString &message) {
     updateListenUi();
+    refreshRemoteCard();
+    if (remoteDot_ != nullptr) {
+        remoteDot_->setStyleSheet(
+            running ? QStringLiteral("background:#3fb950; border-radius:3px;")
+                    : QStringLiteral("background:#4a5568; border-radius:3px;"));
+    }
+    if (remoteState_ != nullptr) {
+        remoteState_->setText(
+            running ? QString::fromUtf8("监听中 · ") +
+                          voiceProfileLabel(store_->current(true).name)
+                    : QString::fromUtf8("未监听"));
+    }
     appendEvent(QStringLiteral("status"),
                 running ? QStringLiteral("监听") : QStringLiteral("停止"),
                 QString(), message, 0);

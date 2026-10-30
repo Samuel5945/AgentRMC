@@ -21,6 +21,10 @@ public:
     explicit KeymapPage(ProfileStore *store, QWidget *parent = nullptr);
     void refreshAll();
 
+signals:
+    void mappingsChanged();
+    void viewChanged();
+
 private:
     void buildUi();
     void rebuildCombo();

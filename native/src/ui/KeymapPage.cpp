@@ -284,7 +284,11 @@ void KeymapPage::rebuildCombo() {
 
 void KeymapPage::refreshAll() {
     const Profile &profile = store_->current(true);
+    const bool changed = shownName_ != profile.name;
     shownName_ = profile.name;
+    if (changed) {
+        emit viewChanged();
+    }
     refreshScene();
     rebuildTable();
     const int index = combo_->findData(store_->pinned());
@@ -652,6 +656,7 @@ void KeymapPage::applyPreset(int vk, const QString &gesture,
         return;
     }
     refreshAll();
+    emit mappingsChanged();
     QString label;
     if (kind == "none") {
         label = gesture == "double" ? QStringLiteral("已关闭")
@@ -685,6 +690,7 @@ void KeymapPage::captureCombo(int vk, const QString &gesture) {
         return;
     }
     refreshAll();
+    emit mappingsChanged();
     flashHint(QStringLiteral("已保存 · %1 · %2 %3 → %4")
                   .arg(profileName, keyName(vk), gestureLabel(gesture),
                        dialog.combo()),

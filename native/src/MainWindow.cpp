@@ -18,6 +18,7 @@
 #include <QCloseEvent>
 #include <QComboBox>
 #include <QCoreApplication>
+#include <QDesktopServices>
 #include <QJsonObject>
 #include <QListWidget>
 #include <QSignalBlocker>
@@ -39,6 +40,7 @@
 #include <QTabWidget>
 #include <QTableWidget>
 #include <QToolButton>
+#include <QUrl>
 #include <QVBoxLayout>
 #include <QVector>
 #include <QWindow>
@@ -212,7 +214,7 @@ QWidget *MainWindow::buildHeader() {
     auto *brand = new QLabel("AgentRMC");
     brand->setObjectName("brand");
 
-    auto *tag = new QLabel("NATIVE · M5");
+    auto *tag = new QLabel("NATIVE");
     tag->setObjectName("tag");
 
     lay->addWidget(logo);
@@ -267,7 +269,7 @@ QWidget *MainWindow::buildRemoteCard() {
     auto *head = new QHBoxLayout;
     auto *title = new QLabel(QString::fromUtf8("遥控器"));
     title->setObjectName("cardTitle");
-    remoteBadge_ = new QLabel("M5");
+    remoteBadge_ = new QLabel(QString::fromUtf8("待机"));
     remoteBadge_->setObjectName("badge");
     head->addWidget(title);
     head->addStretch(1);
@@ -285,9 +287,15 @@ QWidget *MainWindow::buildRemoteCard() {
     remoteState_ = new QLabel(QString::fromUtf8("未监听"));
     remoteState_->setObjectName("muted");
     auto *bt = new QPushButton(QString::fromUtf8("蓝牙设置"));
-    bt->setObjectName("ghost");
-    bt->setEnabled(false);
-    bt->setToolTip(QString::fromUtf8("BLE 电量/配对在里程碑 6 接入"));
+    bt->setObjectName("ghostSmall");
+    bt->setCursor(Qt::PointingHandCursor);
+    bt->setToolTip(QString::fromUtf8("打开 Windows 蓝牙设置"));
+    connect(bt, &QPushButton::clicked, this, [this] {
+        if (!QDesktopServices::openUrl(QUrl(QStringLiteral("ms-settings:bluetooth")))) {
+            appendEvent(QStringLiteral("error"), QString(), QString(),
+                        QString::fromUtf8("打不开系统蓝牙设置"), 0);
+        }
+    });
     foot->addWidget(remoteDot_, 0, Qt::AlignVCenter);
     foot->addWidget(remoteState_);
     foot->addStretch(1);
@@ -310,11 +318,8 @@ QWidget *MainWindow::buildVoiceCard() {
     auto *head = new QHBoxLayout;
     auto *title = new QLabel(QString::fromUtf8("语音"));
     title->setObjectName("cardTitle");
-    auto *badge = new QLabel("M5");
-    badge->setObjectName("badge");
     head->addWidget(title);
     head->addStretch(1);
-    head->addWidget(badge);
     lay->addLayout(head);
 
     voiceBackend_ = new QComboBox;
@@ -455,8 +460,8 @@ QWidget *MainWindow::buildGuidePage() {
         QString::fromUtf8("里程碑 2 已完成 · config + profiles + 可编辑映射表"),
         QString::fromUtf8("里程碑 3 已完成 · Raw Input + KeyRouter + 动作注入"),
         QString::fromUtf8("里程碑 4 已完成 · 原生键接管 / 鼠标模式"),
-        QString::fromUtf8("里程碑 5（当前）· 语音三后端 / 遥控器实时高亮与映射"),
-        QString::fromUtf8("里程碑 6 · BLE 电量 / 跨屏 DPI / windeployqt 打包"),
+        QString::fromUtf8("里程碑 5 已完成 · 语音三后端 / 遥控器实时映射"),
+        QString::fromUtf8("里程碑 6（下一步）· BLE 电量 / 跨屏 DPI / windeployqt 打包"),
         QString::fromUtf8("Qt 6.8 没有 Multimedia 模块，录音走 WinMM；转写走 sherpa-onnx C API。"),
         QString::fromUtf8("Python 版继续保留，作为行为参照；两版共用 config/profiles 格式。"),
     };
@@ -498,7 +503,7 @@ void MainWindow::buildTray() {
         QApplication::quit();
     });
     tray_->setContextMenu(menu);
-    tray_->setToolTip("AgentRMC Native · 里程碑 5");
+    tray_->setToolTip("AgentRMC Native");
     tray_->show();
 
     connect(tray_, &QSystemTrayIcon::activated, this,
@@ -521,8 +526,8 @@ void MainWindow::showMilestones() {
             "2：config + profiles + 可编辑映射表（已完成）\n"
             "3：Raw Input + Router + 注入（已完成）\n"
             "4：原生键接管 / 鼠标模式（已完成）\n"
-            "5：语音（当前）· Qoder 热键 / SenseVoice / Qwen3-ASR\n"
-            "6：BLE / DPI / 打包"));
+            "5：语音（已完成）· Qoder 热键 / SenseVoice / Qwen3-ASR\n"
+            "6：BLE / DPI / 打包（下一步）"));
 }
 
 void MainWindow::toggleListening() {
@@ -628,7 +633,7 @@ void MainWindow::refreshRemoteCard() {
          QString::fromUtf8("红外"), true},
         {122, QStringLiteral("◎"), QString::fromUtf8("对焦"), actionFor(122),
          false},
-        {116, QStringLiteral("F5"), QString::fromUtf8("语音"), voiceText, false},
+        {116, QString(), QString::fromUtf8("语音"), voiceText, false},
         {38, QStringLiteral("↑"), QString::fromUtf8("上键"), actionFor(38), false},
         {40, QStringLiteral("↓"), QString::fromUtf8("下键"), actionFor(40), false},
         {37, QStringLiteral("←"), QString::fromUtf8("左键"), actionFor(37), false},
@@ -646,7 +651,7 @@ void MainWindow::refreshRemoteCard() {
 void MainWindow::applyRemoteMode(const QString &badge, const QSet<int> &keys,
                                  bool on) {
     if (remoteBadge_ != nullptr) {
-        remoteBadge_->setText(on ? badge : QStringLiteral("M5"));
+        remoteBadge_->setText(on ? badge : QString::fromUtf8("待机"));
     }
     if (remotePanel_ != nullptr) {
         remotePanel_->setModeKeys(on ? keys : QSet<int>());

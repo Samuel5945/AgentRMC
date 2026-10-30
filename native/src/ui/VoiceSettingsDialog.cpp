@@ -3,6 +3,7 @@
 #include "core/Profiles.h"
 #include "core/VoiceSettings.h"
 
+#include <QAbstractButton>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QCoreApplication>
@@ -146,6 +147,9 @@ VoiceSettingsDialog::VoiceSettingsDialog(ProfileStore *store, QWidget *parent)
             [this] { refreshStatus(); });
     connect(qwenDir_, &QLineEdit::textChanged, this,
             [this] { refreshStatus(); });
+    for (QAbstractButton *button : findChildren<QAbstractButton *>()) {
+        button->setFocusPolicy(Qt::NoFocus);
+    }
     refreshStatus();
 }
 

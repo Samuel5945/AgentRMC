@@ -8,6 +8,7 @@
 #include "core/Presets.h"
 #include "core/VoiceController.h"
 
+#include <QAbstractButton>
 #include <QAbstractItemView>
 #include <QAction>
 #include <QApplication>
@@ -179,6 +180,9 @@ MainWindow::MainWindow(bool withTray, const QString &pin, QWidget *parent)
     outer->addWidget(body, 1);
 
     refreshRemoteCard();
+    for (QAbstractButton *button : findChildren<QAbstractButton *>()) {
+        button->setFocusPolicy(Qt::NoFocus);
+    }
     if (withTray) {
         buildTray();
     }

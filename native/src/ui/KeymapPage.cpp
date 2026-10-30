@@ -410,17 +410,18 @@ MapCellData KeymapPage::singleCell(int vk, const Profile &profile) const {
             const QString combo = ProfileStore::voiceCombo(store_->config(),
                                                            profile);
             const QString trigger = triggerText(store_->config(), profile);
+            const QString target = voiceProfileLabel(profile.name);
             const QString tip =
                 trigger == "toggle"
-                    ? QStringLiteral("开关式：按下开始、松手结束，交给 Qoder / WorkBuddy")
-                    : QStringLiteral("按住式：按住说话、松手结束，交给 Qoder / WorkBuddy");
+                    ? QStringLiteral("开关式：按下开始、松手结束，转给 %1").arg(target)
+                    : QStringLiteral("按住式：按住说话、松手结束，转给 %1").arg(target);
             return {QStringLiteral("语音输入"), combo, tip, false};
         }
         const bool qwen = voice.backend == VoiceBackend::Qwen3Asr;
         return {QStringLiteral("语音输入"),
                 qwen ? QStringLiteral("本地 Qwen3-ASR")
                      : QStringLiteral("本地 SenseVoice"),
-                QStringLiteral("按住遥控器语音键说话，松手后本地转写并粘贴"),
+                QStringLiteral("按住遥控器语音键说话，松手后本地转写并粘贴到当前应用"),
                 false};
     }
 

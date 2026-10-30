@@ -46,6 +46,8 @@ private:
     void openVoiceSettings();
     void onVoiceState(const QString &state, const QString &detail);
     void onVoiceTranscribed(const QString &text, int costMs);
+    void setVoiceStatus(const QString &detail, const QString &color,
+                        bool showTranscript);
 
     std::unique_ptr<ProfileStore> store_;
     InputEngine *engine_ = nullptr;
@@ -61,6 +63,7 @@ private:
     QLabel *voiceState_ = nullptr;
     QLabel *voiceFoot_ = nullptr;
     QPushButton *voiceTest_ = nullptr;
+    QString lastTranscript_;
     QSystemTrayIcon *tray_ = nullptr;
     bool quitting_ = false;
 };

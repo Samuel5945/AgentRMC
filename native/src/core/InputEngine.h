@@ -47,6 +47,7 @@ signals:
     void voiceDown();
     void voiceUp();
     void mediaVoice();
+    void profileChanged(const QString &name);
 
 private:
     friend class InputEngineFilter;
@@ -89,4 +90,5 @@ private:
     std::atomic<int> mediaVk_{0xB3};
     std::atomic<bool> mediaGate_{false};
     std::atomic<qint64> mediaLastMs_{0};
+    QString lastProfileName_;
 };

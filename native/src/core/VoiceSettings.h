@@ -37,6 +37,7 @@ struct VoiceOptions {
 VoiceBackend voiceBackendFromString(const QString &value);
 QString voiceBackendKey(VoiceBackend backend);
 QString voiceBackendLabel(VoiceBackend backend);
+QString voiceProfileLabel(const QString &profileName);
 QString voiceComboText(const QStringList &mods, int vk);
 
 VoiceOptions resolveVoiceOptions(const QJsonObject &config,

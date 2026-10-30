@@ -110,8 +110,22 @@ QString voiceBackendLabel(VoiceBackend backend) {
         return QStringLiteral("本地 Qwen3-ASR");
     case VoiceBackend::Hotkey:
     default:
-        return QStringLiteral("Qoder 热键（0 模型）");
+        return QStringLiteral("转发热键（0 模型）");
     }
+}
+
+QString voiceProfileLabel(const QString &profileName) {
+    const QString name = profileName.toLower();
+    if (name == QStringLiteral("qoder")) {
+        return QStringLiteral("Qoder");
+    }
+    if (name == QStringLiteral("agent")) {
+        return QStringLiteral("WorkBuddy");
+    }
+    if (name.isEmpty() || name == QStringLiteral("default")) {
+        return QStringLiteral("通用");
+    }
+    return profileName;
 }
 
 QString voiceComboText(const QStringList &mods, int vk) {

@@ -155,6 +155,12 @@ MainWindow::MainWindow(bool withTray, const QString &pin, QWidget *parent)
             [this](bool running, const QString &) {
                 voice_->setListening(running);
             });
+    connect(engine_, &InputEngine::profileChanged, this,
+            [this](const QString &) {
+                if (!voice_->busy()) {
+                    refreshVoiceUi();
+                }
+            });
     connect(engine_, &InputEngine::voiceDown, voice_, &VoiceController::voiceDown);
     connect(engine_, &InputEngine::voiceUp, voice_, &VoiceController::voiceUp);
     connect(engine_, &InputEngine::mediaVoice, voice_,
@@ -355,7 +361,7 @@ QWidget *MainWindow::buildVoiceCard() {
     lay->addLayout(head);
 
     voiceBackend_ = new QComboBox;
-    voiceBackend_->addItem(QString::fromUtf8("Qoder 热键 · 0 模型"), "hotkey");
+    voiceBackend_->addItem(QString::fromUtf8("转发热键 · 0 模型"), "hotkey");
     voiceBackend_->addItem(QString::fromUtf8("本地 SenseVoice"), "sensevoice");
     voiceBackend_->addItem(QString::fromUtf8("本地 Qwen3-ASR"), "qwen3");
     voiceBackend_->setCursor(Qt::PointingHandCursor);
@@ -367,6 +373,7 @@ QWidget *MainWindow::buildVoiceCard() {
                 const QString key = voiceBackend_->itemData(index).toString();
                 store_->updateVoice(QJsonObject{{"backend", key}});
                 voice_->reload();
+                lastTranscript_.clear();
                 refreshVoiceUi();
                 appendEvent(QStringLiteral("status"), QString(),
                             QString(),
@@ -605,16 +612,17 @@ void MainWindow::refreshVoiceUi() {
             voiceBackend_->setCurrentIndex(index);
         }
     }
-    voiceState_->setText(voice_->statusText());
     if (options.backend == VoiceBackend::Hotkey) {
-        voiceState_->setStyleSheet(QStringLiteral("color:#9ec1ff;"));
+        setVoiceStatus(voice_->statusText(), QStringLiteral("#9ec1ff"), true);
         if (voiceFoot_ != nullptr) {
-            voiceFoot_->setText(QString::fromUtf8("0 模型 · 转发到前台窗口"));
+            voiceFoot_->setText(QString::fromUtf8("0 模型 · 跟随前台场景转发"));
         }
     } else {
         const bool ready = voice_->modelReady();
-        voiceState_->setStyleSheet(ready ? QStringLiteral("color:#c9d1d9;")
-                                         : QStringLiteral("color:#d29922;"));
+        setVoiceStatus(voice_->statusText(),
+                       ready ? QStringLiteral("#c9d1d9")
+                             : QStringLiteral("#d29922"),
+                       true);
         if (voiceFoot_ != nullptr) {
             voiceFoot_->setText(ready
                                     ? QString::fromUtf8("本地转写 · 音频不出本机")
@@ -639,22 +647,44 @@ void MainWindow::openVoiceSettings() {
     dialog->deleteLater();
 }
 
-void MainWindow::onVoiceState(const QString &state, const QString &detail) {
-    if (voiceState_ != nullptr) {
-        if (state == QStringLiteral("idle")) {
-            voiceState_->setText(detail == QStringLiteral("就绪") ||
-                                         detail == QStringLiteral("语音快捷键已结束")
-                                     ? voice_->statusText()
-                                     : detail);
-            voiceState_->setStyleSheet(
-                detail.contains(QString::fromUtf8("太短")) ||
-                        detail.contains(QString::fromUtf8("未"))
-                    ? QStringLiteral("color:#d29922;")
-                    : QStringLiteral("color:#c9d1d9;"));
-        } else {
-            voiceState_->setText(detail);
-            voiceState_->setStyleSheet(QStringLiteral("color:#7c9cff;"));
+void MainWindow::setVoiceStatus(const QString &detail, const QString &color,
+                                 bool showTranscript) {
+    if (voiceState_ == nullptr) {
+        return;
+    }
+    QString html = QStringLiteral("<span style=\"color:%1;\">%2</span>")
+                       .arg(color, detail.toHtmlEscaped());
+    if (showTranscript && !lastTranscript_.isEmpty()) {
+        QString text = lastTranscript_;
+        if (text.size() > 40) {
+            text = text.left(40) + QString::fromUtf8("…");
         }
+        html += QStringLiteral("<br><span style=\"color:#e6edf3;\">%1</span>")
+                    .arg(text.toHtmlEscaped());
+        voiceState_->setToolTip(lastTranscript_);
+    } else {
+        voiceState_->setToolTip(QString());
+    }
+    voiceState_->setTextFormat(Qt::RichText);
+    voiceState_->setText(html);
+}
+
+void MainWindow::onVoiceState(const QString &state, const QString &detail) {
+    if (state == QStringLiteral("idle")) {
+        const bool warn = detail.contains(QString::fromUtf8("太短")) ||
+                          detail.contains(QString::fromUtf8("未"));
+        const QString shown =
+            detail == QStringLiteral("就绪") ||
+                    detail == QStringLiteral("语音快捷键已结束")
+                ? voice_->statusText()
+                : detail;
+        setVoiceStatus(shown,
+                       warn ? QStringLiteral("#d29922")
+                            : QStringLiteral("#c9d1d9"),
+                       true);
+    } else {
+        lastTranscript_.clear();
+        setVoiceStatus(detail, QStringLiteral("#7c9cff"), false);
     }
     if (voiceTest_ != nullptr) {
         voiceTest_->setEnabled(voice_->options().backend != VoiceBackend::Hotkey &&
@@ -663,6 +693,7 @@ void MainWindow::onVoiceState(const QString &state, const QString &detail) {
 }
 
 void MainWindow::onVoiceTranscribed(const QString &text, int costMs) {
+    lastTranscript_ = text;
     appendEvent(QStringLiteral("voice"), QString(), QString(),
                 QStringLiteral("✓ %1s · %2")
                     .arg(costMs / 1000.0, 0, 'f', 1)

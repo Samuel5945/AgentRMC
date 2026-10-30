@@ -189,6 +189,10 @@ void InputEngine::refreshProfile() {
         return;
     }
     const Profile current = store_->current(true);
+    if (lastProfileName_ != current.name) {
+        lastProfileName_ = current.name;
+        emit profileChanged(current.name);
+    }
     auto snapshot = std::make_shared<Profile>(current);
     {
         std::lock_guard<std::mutex> lock(profileMutex_);

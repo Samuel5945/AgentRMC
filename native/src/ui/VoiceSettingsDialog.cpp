@@ -53,7 +53,7 @@ VoiceSettingsDialog::VoiceSettingsDialog(ProfileStore *store, QWidget *parent)
     backendLabel->setObjectName("muted");
     backendLabel->setFixedWidth(98);
     backend_ = new QComboBox;
-    backend_->addItem(QString::fromUtf8("Qoder 热键（0 模型）"), "hotkey");
+    backend_->addItem(QString::fromUtf8("转发当前应用热键（0 模型）"), "hotkey");
     backend_->addItem(QString::fromUtf8("本地 SenseVoice（约 230MB）"), "sensevoice");
     backend_->addItem(QString::fromUtf8("本地 Qwen3-ASR（约 1GB）"), "qwen3");
     QString backendKey = voice.value("backend").toString();
@@ -178,7 +178,9 @@ void VoiceSettingsDialog::refreshStatus() {
             "CPU 转写会比 SenseVoice 慢。"));
     } else {
         note_->setText(QString::fromUtf8(
-            "默认路线：不打包模型，语音键只转发 Ctrl+Shift+V 给 Qoder/WorkBuddy。"));
+            "默认路线：不打包模型，把语音键转成当前前台场景的热键"
+            "（Qoder Ctrl+Shift+V / WorkBuddy Ctrl+D）。其他应用在 profiles.json "
+            "配 voice.hotkey，或改用本地转写。"));
     }
 }
 

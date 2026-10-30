@@ -52,10 +52,12 @@ QString VoiceController::backendLabel() {
 
 QString VoiceController::hotkeyHint() {
     updateOptions();
+    const Profile &profile = store_->current(true);
     const QString combo = voiceComboText(options_.hotkeyMods, options_.hotkeyVk);
-    return combo + (options_.hotkeyTrigger == QStringLiteral("toggle")
-                        ? QStringLiteral(" · 按一下开始/再按一次结束")
-                        : QStringLiteral(" · 按住说话"));
+    return voiceProfileLabel(profile.name) + QStringLiteral(" · ") + combo +
+           (options_.hotkeyTrigger == QStringLiteral("toggle")
+                ? QStringLiteral(" · 按一下开始/再按一次结束")
+                : QStringLiteral(" · 按住说话"));
 }
 
 bool VoiceController::modelReady(QString *detail) {

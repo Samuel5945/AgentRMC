@@ -134,6 +134,10 @@ int main() {
               "unknown backend");
         check(voiceBackendKey(VoiceBackend::Qwen3Asr) == "qwen3",
               "qwen3 key");
+        check(voiceProfileLabel("agent") == QStringLiteral("WorkBuddy"),
+              "agent label");
+        check(voiceProfileLabel("default") == QStringLiteral("通用"),
+              "default label");
     }
 
     {

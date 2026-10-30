@@ -51,11 +51,14 @@ call "C:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\v
 3. **输入链（已完成）**：Raw Input + 设备过滤、KeyRouter（单击/双击/长按/连发加速）、
    动作注入（key/scroll/run/mouse/brightness）、媒体/导航/鼠标模式、单实例互斥、
    开始/停止监听、事件流；C++ 路由自测覆盖 tap/double/hold/modes。
-4. **钩子（下一步）**：原生键接管开关、鼠标模式的低层钩子、耳机播放键；保持 Python 版
-   踩过的链序/自喂 Router/物理键副作用。
-5. **语音 / 模型（停点）**：这里会停一下再决定——继续用 QoderCN 自己的云端语音
+4. **钩子（已完成）**：映射页「接管原生键」开关（全场景）、WH_KEYBOARD_LL 吞键并
+   直接喂 Router、直通动作补发源键/连发补发、鼠标模式低层钩子（短按 8px、按住加速）、
+   钩子链序无关；接管自测覆盖 pass/double/repeat/模式标记/钩子判定。
+   耳机播放键属于语音，和 M5 一起接。
+5. **语音 / 模型（停点，下一步先停）**：继续用 QoderCN 自己的云端语音
    （hotkey 转发 `Ctrl+Shift+V`，不打包模型，app 维持 ~30MB），还是接 whisper.cpp
-   本地转写。AgentRMC 本身不接 LLM；真正的 LLM 在 Qoder / WorkBuddy 服务端。
+   本地转写；耳机播放键也在这里接。AgentRMC 本身不接 LLM；真正的 LLM 在
+   Qoder / WorkBuddy 服务端。
 6. **收尾**：BLE 电量、跨屏 DPI、托盘菜单、windeployqt 打包、体积回归。
 
 ## 数据与兼容性
@@ -69,7 +72,11 @@ call "C:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\v
 - Python 版继续保留，作为行为参照和验收 oracle；两版可以并排跑，事件日志对比。
 - 原生版和 Python 版共用单实例互斥量：Python 版在跑时，原生版的「开始监听」会提示
   `AgentRMC 已在运行`；先停 Python 版再测原生监听，避免每个键注入两次。
-- M3 还没有原生键接管（M4）：此时映射仍是叠加，双击/直通的原生键还会到前台。
+- 映射页右下角「接管原生键」默认关；打开后当前前台场景的映射键原生事件由低层钩子
+  吞掉再喂 Router。用户态只能按 VK 吞，实体键盘同名键也会按映射处理；双击键的单击
+  延迟约 0.3 秒。关掉开关立即恢复原生。
+- M4 的鼠标模式：方向键/Enter 由低层钩子接管，短按 8px、按住逐级加速；退出仍用
+  返回/菜单。
 - 预览/截图：`AgentRMCNative.exe --pin qoder`，或
   `AgentRMCNative.exe --shot shot.png --pin qoder`。
 
@@ -82,14 +89,16 @@ call "C:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\v
 | whisper.cpp | ~5MB（不含模型） |
 | 模型（GGML small） | ~466MB，可选 |
 
-里程碑 3 后，`native/build/Release` 实测约 **30MB**（不含模型）。
+里程碑 4 后，`native/build/Release` 实测约 **30MB**（不含模型）。
 
 ## 自测
 
 ```bat
 native\build\Release\AgentRMCStoreTest.exe
 native\build\Release\AgentRMCRouterTest.exe
+native\build\Release\AgentRMCTakeoverTest.exe
 ```
 
 覆盖：预设写回、`.bak`、同键原生去重、extends 继承、custom 动作；
-以及 KeyRouter 的滚动/tap/双击/长按/媒体/导航/鼠标模式。
+KeyRouter 的滚动/tap/双击/长按/媒体/导航/鼠标模式；以及接管下的直通补发、
+连发补发、模式标记和钩子吞键判定。

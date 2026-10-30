@@ -2,12 +2,17 @@
 
 #include "ui/KeymapPage.h"
 
+#include "core/InputEngine.h"
+
 #include <QAbstractItemView>
 #include <QAction>
 #include <QApplication>
+#include <QColor>
 #include <QIcon>
 #include <QCloseEvent>
 #include <QCoreApplication>
+#include <QListWidget>
+#include <QTime>
 #include <QFont>
 #include <QFrame>
 #include <QHBoxLayout>
@@ -136,6 +141,10 @@ MainWindow::MainWindow(bool withTray, const QString &pin, QWidget *parent)
     if (!pin.isEmpty()) {
         store_->setPinned(pin);
     }
+    engine_ = new InputEngine(store_.get(), this);
+    connect(engine_, &InputEngine::eventReady, this, &MainWindow::onEngineEvent);
+    connect(engine_, &InputEngine::runningChanged, this,
+            &MainWindow::onEngineRunning);
     setWindowTitle("AgentRMC Native");
     setWindowIcon(QIcon(":/icons/icon.ico"));
     setWindowFlags(Qt::Window | Qt::FramelessWindowHint);
@@ -197,7 +206,7 @@ QWidget *MainWindow::buildHeader() {
     auto *brand = new QLabel("AgentRMC");
     brand->setObjectName("brand");
 
-    auto *tag = new QLabel("NATIVE · M2");
+    auto *tag = new QLabel("NATIVE · M3");
     tag->setObjectName("tag");
 
     lay->addWidget(logo);
@@ -205,13 +214,14 @@ QWidget *MainWindow::buildHeader() {
     lay->addWidget(tag);
     lay->addStretch(1);
 
-    auto *dot = new QLabel;
-    dot->setObjectName("dot");
-    dot->setFixedSize(6, 6);
-    auto *status = new QLabel(QString::fromUtf8("未监听"));
-    status->setObjectName("muted");
-    lay->addWidget(dot, 0, Qt::AlignVCenter);
-    lay->addWidget(status);
+    statusDot_ = new QLabel;
+    statusDot_->setStyleSheet(
+        QStringLiteral("background: #4a5568; border-radius: 3px;"));
+    statusDot_->setFixedSize(6, 6);
+    statusText_ = new QLabel(QString::fromUtf8("未监听"));
+    statusText_->setObjectName("muted");
+    lay->addWidget(statusDot_, 0, Qt::AlignVCenter);
+    lay->addWidget(statusText_);
     lay->addSpacing(6);
 
     auto *guide = new QPushButton(QString::fromUtf8("使用引导"));
@@ -251,7 +261,7 @@ QWidget *MainWindow::buildRemoteCard() {
     auto *head = new QHBoxLayout;
     auto *title = new QLabel(QString::fromUtf8("遥控器"));
     title->setObjectName("cardTitle");
-    auto *badge = new QLabel("M2");
+    auto *badge = new QLabel("M3");
     badge->setObjectName("badge");
     head->addWidget(title);
     head->addStretch(1);
@@ -306,7 +316,7 @@ QWidget *MainWindow::buildRemoteCard() {
 QWidget *MainWindow::buildVoiceCard() {
     auto *card = new QFrame;
     card->setObjectName("card");
-    card->setFixedHeight(210);
+    card->setFixedHeight(250);
 
     auto *lay = new QVBoxLayout(card);
     lay->setContentsMargins(16, 13, 16, 13);
@@ -315,7 +325,7 @@ QWidget *MainWindow::buildVoiceCard() {
     auto *head = new QHBoxLayout;
     auto *title = new QLabel(QString::fromUtf8("语音"));
     title->setObjectName("cardTitle");
-    auto *badge = new QLabel("M2");
+    auto *badge = new QLabel("M3");
     badge->setObjectName("badge");
     head->addWidget(title);
     head->addStretch(1);
@@ -327,6 +337,13 @@ QWidget *MainWindow::buildVoiceCard() {
     box->setWordWrap(true);
     box->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
     lay->addWidget(box, 1);
+
+    listenButton_ = new QPushButton(QString::fromUtf8("开始监听"));
+    listenButton_->setObjectName("primary");
+    listenButton_->setCursor(Qt::PointingHandCursor);
+    connect(listenButton_, &QPushButton::clicked, this,
+            &MainWindow::toggleListening);
+    lay->addWidget(listenButton_);
 
     auto *foot = new QHBoxLayout;
     auto *state = new QLabel(QString::fromUtf8("本地模型：未接入"));
@@ -350,20 +367,31 @@ QWidget *MainWindow::buildLogPage() {
     cl->setSpacing(10);
 
     auto *head = new QHBoxLayout;
-    auto *count = new QLabel(QString::fromUtf8("0 条"));
-    count->setObjectName("muted");
+    logCount_ = new QLabel(QString::fromUtf8("0 条"));
+    logCount_->setObjectName("muted");
     auto *clear = new QPushButton(QString::fromUtf8("清空"));
     clear->setObjectName("ghostText");
-    clear->setEnabled(false);
-    head->addWidget(count);
+    clear->setCursor(Qt::PointingHandCursor);
+    connect(clear, &QPushButton::clicked, this, &MainWindow::clearLog);
+    head->addWidget(logCount_);
     head->addStretch(1);
     head->addWidget(clear);
     cl->addLayout(head);
 
-    auto *waiting = new QLabel(QString::fromUtf8("等待迁移 · 原生壳尚未接入输入"));
-    waiting->setObjectName("muted");
-    waiting->setAlignment(Qt::AlignCenter);
-    cl->addWidget(waiting, 1);
+    logEmpty_ = new QLabel(QString::fromUtf8("等待按键…"));
+    logEmpty_->setObjectName("muted");
+    logEmpty_->setAlignment(Qt::AlignCenter);
+    cl->addWidget(logEmpty_, 1);
+
+    logList_ = new QListWidget;
+    logList_->setObjectName("logList");
+    logList_->setFrameShape(QFrame::NoFrame);
+    logList_->setSelectionMode(QAbstractItemView::NoSelection);
+    logList_->setFocusPolicy(Qt::NoFocus);
+    logList_->setWordWrap(true);
+    logList_->setSpacing(2);
+    logList_->hide();
+    cl->addWidget(logList_, 1);
     lay->addWidget(card);
     return page;
 }
@@ -396,9 +424,9 @@ QWidget *MainWindow::buildGuidePage() {
     const QStringList lines = {
         QString::fromUtf8("里程碑 1 已完成 · 窗口 / 主题 / 托盘 / 构建"),
         QString::fromUtf8("里程碑 2 已完成 · config + profiles + 可编辑映射表"),
-        QString::fromUtf8("里程碑 3（下一步）· Raw Input + KeyRouter + 动作注入"),
+        QString::fromUtf8("里程碑 3（当前）· Raw Input + KeyRouter + 动作注入"),
         QString::fromUtf8("里程碑 4 · 原生键接管 / 鼠标模式 / 耳机播放键"),
-        QString::fromUtf8("里程碑 5 · hotkey 语音 + whisper.cpp（GGML 模型）"),
+        QString::fromUtf8("里程碑 5 · hotkey 语音 / 本地 whisper（停点，先选方案）"),
         QString::fromUtf8("里程碑 6 · BLE 电量 / 跨屏 DPI / windeployqt 打包"),
         QString::fromUtf8("Python 版继续保留，作为行为参照；两版共用 config/profiles 格式。"),
     };
@@ -459,12 +487,100 @@ void MainWindow::showMilestones() {
         this, "AgentRMC Native",
         QString::fromUtf8(
             "C++/Qt + whisper.cpp 原生迁移\n\n"
-            "里程碑 1（当前）：窗口 / 主题 / 托盘 / 构建\n"
-            "2：config + profiles + 映射表\n"
-            "3：Raw Input + Router + 注入\n"
+            "里程碑 1：窗口 / 主题 / 托盘 / 构建（已完成）\n"
+            "2：config + profiles + 可编辑映射表（已完成）\n"
+            "3：Raw Input + Router + 注入（当前）\n"
             "4：原生键接管 / 鼠标模式\n"
-            "5：hotkey 语音 + whisper.cpp\n"
+            "5：hotkey 语音 / 本地 whisper（停点：先选 Qoder 语音还是本地模型）\n"
             "6：BLE / DPI / 打包"));
+}
+
+void MainWindow::toggleListening() {
+    if (engine_ == nullptr) {
+        return;
+    }
+    if (engine_->isRunning()) {
+        engine_->stop();
+        return;
+    }
+    QString error;
+    if (!engine_->start(&error)) {
+        appendEvent(QStringLiteral("error"), QStringLiteral("启动失败"),
+                    QString(), error, 0);
+    }
+    updateListenUi();
+}
+
+void MainWindow::updateListenUi() {
+    const bool running = engine_ != nullptr && engine_->isRunning();
+    if (statusDot_ != nullptr) {
+        statusDot_->setStyleSheet(
+            QStringLiteral("background: %1; border-radius: 3px;")
+                .arg(running ? "#3fb950" : "#4a5568"));
+    }
+    if (statusText_ != nullptr) {
+        statusText_->setText(running ? QStringLiteral("监听中")
+                                     : QStringLiteral("未监听"));
+    }
+    if (listenButton_ != nullptr) {
+        listenButton_->setText(running ? QStringLiteral("停止监听")
+                                       : QStringLiteral("开始监听"));
+    }
+}
+
+void MainWindow::onEngineEvent(const QString &kind, const QString &name,
+                               const QString &profile, const QString &detail,
+                               int vk) {
+    appendEvent(kind, name, profile, detail, vk);
+}
+
+void MainWindow::onEngineRunning(bool running, const QString &message) {
+    updateListenUi();
+    appendEvent(QStringLiteral("status"),
+                running ? QStringLiteral("监听") : QStringLiteral("停止"),
+                QString(), message, 0);
+}
+
+void MainWindow::appendEvent(const QString &kind, const QString &name,
+                             const QString &profile, const QString &detail,
+                             int vk) {
+    Q_UNUSED(vk);
+    if (logList_ == nullptr) {
+        return;
+    }
+    const QString stamp = QTime::currentTime().toString("HH:mm:ss");
+    QString text = stamp + "  ";
+    if (kind == "key") {
+        text += profile + QStringLiteral(" · ") + name;
+        if (!detail.isEmpty()) {
+            text += QStringLiteral(" · ") + detail;
+        }
+    } else {
+        text += detail.isEmpty() ? name : detail;
+    }
+    auto *item = new QListWidgetItem(text, logList_);
+    QColor color("#c9d1d9");
+    if (kind == "error") {
+        color = QColor("#f85149");
+    } else if (kind == "status") {
+        color = QColor("#8b949e");
+    }
+    item->setForeground(color);
+    logList_->addItem(item);
+    logList_->scrollToBottom();
+    logEmpty_->hide();
+    logList_->show();
+    logCount_->setText(QStringLiteral("%1 条").arg(logList_->count()));
+}
+
+void MainWindow::clearLog() {
+    if (logList_ == nullptr) {
+        return;
+    }
+    logList_->clear();
+    logList_->hide();
+    logEmpty_->show();
+    logCount_->setText(QStringLiteral("0 条"));
 }
 
 void MainWindow::closeEvent(QCloseEvent *event) {

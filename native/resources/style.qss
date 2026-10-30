@@ -418,6 +418,39 @@ QLabel#captureHint {
     font-size: 10px;
 }
 
+
+QPushButton#primary {
+    color: white;
+    font-size: 12px;
+    font-weight: 600;
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                                stop:0 #4f8cff, stop:1 #7c5cff);
+    border: none;
+    border-radius: 10px;
+    padding: 9px 0;
+}
+
+QPushButton#primary:hover {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                                stop:0 #6299ff, stop:1 #8d70ff);
+}
+
+QListWidget#logList {
+    background: transparent;
+    border: none;
+    color: #c9d1d9;
+    font-size: 11px;
+}
+
+QListWidget#logList::item {
+    padding: 5px 6px;
+    border-radius: 6px;
+}
+
+QListWidget#logList::item:hover {
+    background: rgba(255, 255, 255, 6);
+}
+
 QToolTip {
     color: #e6edf3;
     background: #161d2a;

@@ -18,6 +18,12 @@ qt_add_executable(AgentRMCNative
     src/core/Profiles.h
     src/core/Presets.cpp
     src/core/Presets.h
+    src/core/Injector.cpp
+    src/core/Injector.h
+    src/core/KeyRouter.cpp
+    src/core/KeyRouter.h
+    src/core/InputEngine.cpp
+    src/core/InputEngine.h
     src/ui/MapWidgets.cpp
     src/ui/MapWidgets.h
     src/ui/KeymapPage.cpp
@@ -57,3 +63,16 @@ add_executable(AgentRMCStoreTest
 target_include_directories(AgentRMCStoreTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(AgentRMCStoreTest PRIVATE Qt6::Core)
 target_compile_options(AgentRMCStoreTest PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
+
+add_executable(AgentRMCRouterTest
+    tests/m3_router_test.cpp
+    src/core/KeyRouter.cpp
+    src/core/KeyRouter.h
+    src/core/Presets.cpp
+    src/core/Presets.h
+    src/core/Injector.cpp
+    src/core/Injector.h
+)
+target_include_directories(AgentRMCRouterTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(AgentRMCRouterTest PRIVATE Qt6::Core)
+target_compile_options(AgentRMCRouterTest PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)

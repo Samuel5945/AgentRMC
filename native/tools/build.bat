@@ -5,6 +5,8 @@ set ROOT=%HERE%..\..
 set VS=C:\Program Files\Microsoft Visual Studio\18\Community
 set CMAKE=%VS%\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe
 set QT=%ROOT%\native\.qt\6.8.3\msvc2022_64
+set SHERPA=ON
+if /I "%~1"=="lean" set SHERPA=OFF
 
 if not exist "%QT%\bin\windeployqt.exe" (
     echo [!] Qt 6.8.3 not found at %QT%
@@ -17,7 +19,8 @@ if errorlevel 1 exit /b 1
 
 "%CMAKE%" -S "%ROOT%\native" -B "%ROOT%\native\build" ^
     -G "Visual Studio 18 2026" -A x64 ^
-    -DCMAKE_PREFIX_PATH="%QT%"
+    -DCMAKE_PREFIX_PATH="%QT%" ^
+    -DAGENTRMC_ENABLE_SHERPA=%SHERPA%
 if errorlevel 1 exit /b 1
 
 "%CMAKE%" --build "%ROOT%\native\build" --config Release

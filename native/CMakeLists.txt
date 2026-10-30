@@ -45,6 +45,7 @@ qt_add_executable(AgentRMCNative
     resources/app.qrc
 )
 
+set_target_properties(AgentRMCNative PROPERTIES WIN32_EXECUTABLE TRUE)
 target_include_directories(AgentRMCNative PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(AgentRMCNative PRIVATE Qt6::Widgets winmm)
 target_compile_options(AgentRMCNative PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)

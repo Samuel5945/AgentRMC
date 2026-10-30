@@ -84,7 +84,8 @@ call "C:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\v
    录音用 WinMM（Qt 6.8 没装 Multimedia），自动降级 44.1/48kHz 再重采样到 16k。
    部分设备打开后约 0.85s 才送第一块数据，所以监听开始时预热麦克风并保留 400ms
    预录，按住即说不会丢开头。支持按住说话、静音兜底、3 秒自测、转写后粘贴/复制。
-   耳机播放键在 Qoder / WorkBuddy 前台时接管为开关，按一下开始、再按一下结束。
+   耳机播放键在配了语音的前台场景接管为开关，按一下开始、再按一下结束；语音设置里有
+   总开关，停嘴 / 超时两条兜底见「数据与兼容性」。
    语音卡片在状态下面显示最近一次转写（超长截断，悬停看全文），完整内容仍在事件流。
    遥控器卡片按当前 profile 实时列出生效映射；按下实体键时对应键位和行高亮，底部显示
    刚触发的「键位 · 动作」，改映射后立即刷新。映射页选中/悬停时对应键画蓝环；进入
@@ -121,8 +122,18 @@ call "C:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\v
   `native/models/`。设置页把默认路径显示为占位符，不会写死机器路径。
 - 本地后端在「开始监听」时预热麦克风，停止监听或切回 hotkey 时关闭；Windows 的
   麦克风指示器会在这段时间常亮，这是预期行为。
-- 耳机播放键（0xB3）只在当前场景命中 `media_voice.swallow_in`（默认 qoder / agent）
-  时被低层钩子吞掉并转成语音开关，其他场景保持系统媒体键。
+- 耳机播放键（0xB3）在当前场景配了语音时被低层钩子吞掉并转成语音开关：按一下起、
+  再按一下收。范围默认按「场景有没有配语音」判定，要收紧用 `media_voice.swallow_in`
+  写名单；语音设置里有「耳机播放键 = 语音开关」总开关（写回 `media_voice.enabled`）。
+- 耳机的 transport 手势只在**电脑上没有活动播放会话**时才会被 Windows 注入成按键
+  （实测双击=`0xB3`、三击=`0xB0`，都带 `INJ`、无 keyup、无设备名）；正在播放时
+  播放/暂停直接投给 SMTC 媒体会话，键盘层看不到这一帧，也就抢不到——这种场合开语音
+  用遥控器 F5。三击是「下一曲」，留着切歌，不抢。
+- 耳机起的会话没有 keyup，结束时机自己兜：本地后端读麦克风能量，停嘴
+  `media_voice.silence_ms`（默认 6000）自动收尾；转发热键模式不录音、没有能量信号，
+  `media_voice.auto_stop_ms`（默认 30000）到点释放组合键。热键模式**不会**为了判停
+  去临时打开录音设备——那会把蓝牙耳机从 A2DP 拽进 Handsfree，实测会改掉手势的投递方式。
+- 想不戴耳机复现这一帧：`python rc_probe/sim_avrcp.py 2`（注入带 INJ、只发 keydown 的 0xB3）。
 - 预览/截图：`AgentRMCNative.exe --pin qoder`，
   `AgentRMCNative.exe --shot shot.png --pin qoder`，或
   `AgentRMCNative.exe --shot-settings dialog.png`。

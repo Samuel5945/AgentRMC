@@ -533,7 +533,9 @@ agent/qoder 的实际用法：
   "media_voice": {                     // 耳机播放/暂停键 = 语音开关
     "enabled": true,
     "vkey": 179,                       // VK_MEDIA_PLAY_PAUSE
-    "swallow_in": ["qoder", "agent"]   // 这些 profile 在前台时接管
+    "swallow_in": ["qoder", "agent"],  // 可省：写了就按名单，不写则凡是配了语音的场景都接管
+    "silence_ms": 6000,                // 本地后端：耳机起的会话停嘴多久自动收尾
+    "auto_stop_ms": 30000              // 转发热键：耳机起的会话多久释放组合键
   },
   "keys": { "38": "up", "40": "down" },        // vkey -> 语义名
   "actions": { "up": { "type": "key", "vk": 38 } },  // 语义名 -> 动作
@@ -597,15 +599,22 @@ Qoder 的 `voiceInputComboShortcut` 只在 **keydown** 上做切换（webview �
 
 #### 耳机播放键也能开关语音
 
-仅在 `voice.mode = hotkey` 时生效：Qoder / WorkBuddy 在前台时，蓝牙耳机的
-**播放/暂停键**会被接管为语音开关：按一下开、再按一下关。
-实测耳机走 AVRCP，系统只注入 **keydown**（带 `INJ` 标记、没有设备名、没有 keyup），
-所以不能走按住逻辑，只能做 toggle；上一曲/下一曲仍然控制媒体。
+Qoder / WorkBuddy 场景在前台时，蓝牙耳机的**播放/暂停**手势会被接管为语音开关：
+按一下开、再按一下关。耳机走 AVRCP，而 Windows 只在**电脑上没有活动播放会话**时
+才把它注入成按键（带 `INJ` 标记、没有设备名、也没有 keyup），所以只能做 toggle，
+走不了按住逻辑。
 
-- 只在 `qoder` / `agent` 是前台窗口时吞键，其他应用里播放键照常控制音乐。
-- 低层键盘钩子单独跑一个线程（`media_hook_start`），不占 Qt 主线程，收不到就退回普通媒体行为。
-- 想关掉或换键，改 `config.json` 的 `media_voice`：`enabled`、`vkey`（179 = 播放/暂停）、
-  `swallow_in`（哪些 profile 前台时接管）。
+- 正在放歌时，播放/暂停被 Windows 直接投给 SMTC 媒体会话，键盘层收不到这一帧，
+  接管不了——那种场合用遥控器 F5 开语音。
+- 实测双击 = `0xB3`（播放/暂停）、三击 = `0xB0`（下一曲）。三击留给切歌，不抢。
+- 生效范围：默认凡是配了语音的场景都接管；要收紧就在 `media_voice.swallow_in`
+  写场景名名单。原生版语音设置里有「耳机播放键 = 语音开关」总开关，直接写回配置。
+- 结束时机由程序兜底：本地后端读麦克风能量，停嘴 `silence_ms`（默认 6000ms）自动
+  收尾；转发热键模式不录音、没有能量信号，`auto_stop_ms`（默认 30000ms）到点释放
+  组合键，免得 Ctrl+Shift 一直按住。
+- 换键改 `media_voice.vkey`（179 = 播放/暂停），整体关掉用 `media_voice.enabled`。
+- 想复现这一帧不用戴耳机：`python rc_probe/sim_avrcp.py 2` 会注入同样的
+  「带 INJ、只发 keydown」的 0xB3。
 
 > 音量键不产生任何键码（AVRCP 绝对音量），接不了；耳机麦克风在系统里也没有录音端点。
 
@@ -919,7 +928,7 @@ Router 按映射处理。
 - [x] 跨屏移动/缩放：PassThrough DPI + 原生拖动 + 切屏回夹 + 几何记忆
 - [x] 启动即监听 + 单实例保护 + 托盘常驻（关窗只隐藏、启动不闪窗）
 - [x] 实测 NOLEGACY 的真正语义（按应用生效，用户态无法拦截原生键）
-- [x] 耳机播放键接管语音（Qoder/WorkBuddy 前台时吞键；AVRCP 无 keyup，只能 toggle）
+- [x] 耳机播放键接管语音（前台场景吞键；AVRCP 无 keyup 只能 toggle；有活动播放会话时系统不注入按键，抢不到）
 - [x] 图形界面切换本地模型开关与 small/medium/large 尺寸（写回 config.json，热加载/释放）
 - [ ] TTS 播报 Agent 回复，形成语音闭环
 - [ ] 若换 ATVV 遥控器（RC003-MS / 遥控器 2 Pro），把 `rc_probe/atvv_probe.py` 的解码链并进主程序

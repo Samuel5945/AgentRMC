@@ -74,11 +74,11 @@ void paintNormalized(QPainter &painter, const QRectF &box, Glyph glyph,
         break;
     case Glyph::Back: {
         QPainterPath path;
-        path.moveTo(5.0, 4.5);
-        path.cubicTo(5.0, -2.0, 0.0, -5.0, -4.2, -4.0);
+        path.moveTo(5.0, 5.0);
+        path.cubicTo(5.0, -2.5, 0.0, -5.2, -4.5, -4.2);
         painter.drawPath(path);
-        painter.drawLine(QPointF(-4.2, -4.0), QPointF(-1.4, -6.0));
-        painter.drawLine(QPointF(-4.2, -4.0), QPointF(-6.0, -1.2));
+        painter.drawLine(QPointF(-4.5, -4.2), QPointF(-1.6, -6.2));
+        painter.drawLine(QPointF(-4.5, -4.2), QPointF(-6.2, -1.4));
         break;
     }
     case Glyph::Menu:
@@ -160,10 +160,20 @@ void paintGlyph(QPainter &painter, const QRectF &box, Glyph glyph,
         QFont font = painter.font();
         font.setPixelSize(qMax(8, int(box.height() * 0.80)));
         font.setBold(true);
+        font.setStyleStrategy(QFont::NoSubpixelAntialias);
+
+        QPainterPath text;
+        text.addText(QPointF(0, 0), font, QStringLiteral("OK"));
+        const QRectF bounds = text.boundingRect();
+        QRectF target = box;
+        const qreal neededWidth = bounds.width() + box.height() * 0.20;
+        if (target.width() < neededWidth) {
+            const qreal extra = (neededWidth - target.width()) / 2.0;
+            target.adjust(-extra, 0, extra, 0);
+        }
         painter.save();
-        painter.setFont(font);
-        painter.setPen(color);
-        painter.drawText(box, Qt::AlignCenter, QStringLiteral("OK"));
+        painter.translate(target.center() - bounds.center());
+        painter.fillPath(text, color);
         painter.restore();
         return;
     }

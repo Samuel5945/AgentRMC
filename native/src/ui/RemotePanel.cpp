@@ -150,7 +150,8 @@ void RemotePanel::paintEvent(QPaintEvent *event) {
             lit ? QColor(255, 255, 255)
                 : (key.infrared ? QColor(90, 100, 114) : QColor(230, 237, 243));
         KeyIcon::paintGlyph(
-            painter, QRectF(cx - 5.25, key.y - 5.25, 10.5, 10.5),
+            painter,
+            QRectF(cx + key.dx - 5.25, key.y - 5.25, 10.5, 10.5),
             KeyIcon::glyphForVk(key.vk), iconColor);
     }
 

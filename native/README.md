@@ -41,7 +41,7 @@ native\tools\build.bat
 只打 hotkey 包（不带本地转写运行库，约 26–30MB）：
 
 ```bat
-cmake -S native -B native\build -DAGENTRMC_ENABLE_SHERPA=OFF ...
+native\tools\build.bat lean
 ```
 
 `build.bat` 会删掉 Widgets 用不到的 `dxcompiler/dxil/d3dcompiler/vc_redist`，

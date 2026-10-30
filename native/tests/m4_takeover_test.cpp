@@ -122,14 +122,14 @@ int main() {
                     nativeCursorStep(17) == 24,
                 "cursor step accel");
 
-    // 耳机播放键：只吞物理键，注入键放行；开关关闭时不动。
-    ok &= check(nativeShouldSwallowMedia(0xB3, false, true, 0xB3),
-                "media swallow on");
-    ok &= check(!nativeShouldSwallowMedia(0xB3, true, true, 0xB3),
-                "media injected pass");
-    ok &= check(!nativeShouldSwallowMedia(0xB3, false, false, 0xB3),
+    // 耳机播放键：AVRCP 只送注入的 keydown，所以只吞注入键；物理键放行给 Raw Input 路。
+    ok &= check(nativeShouldSwallowMedia(0xB3, true, true, 0xB3),
+                "media injected swallow");
+    ok &= check(!nativeShouldSwallowMedia(0xB3, false, true, 0xB3),
+                "media physical pass");
+    ok &= check(!nativeShouldSwallowMedia(0xB3, true, false, 0xB3),
                 "media disabled pass");
-    ok &= check(!nativeShouldSwallowMedia(0xB3, false, true, 0),
+    ok &= check(!nativeShouldSwallowMedia(0xB3, true, true, 0),
                 "media unset pass");
 
     if (!ok) {

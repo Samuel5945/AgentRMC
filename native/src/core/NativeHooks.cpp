@@ -76,7 +76,9 @@ bool nativeShouldSwallow(int vk, bool injected, bool enabled,
 
 bool nativeShouldSwallowMedia(int vk, bool injected, bool enabled,
                               int mediaVk) {
-    return enabled && !injected && mediaVk != 0 && vk == mediaVk;
+    // 与 nativeShouldSwallow 相反：耳机走 AVRCP，系统只注入带 INJ 标记的 keydown，
+    // 没有 keyup 也没有设备名，所以这里必须认 injected。
+    return enabled && injected && mediaVk != 0 && vk == mediaVk;
 }
 
 int nativeCursorStep(int count) {

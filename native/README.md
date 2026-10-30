@@ -103,6 +103,8 @@ call "C:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\v
 - Python 版继续保留，作为行为参照和验收 oracle；两版可以并排跑，事件日志对比。
 - 原生版和 Python 版共用单实例互斥量：Python 版在跑时，原生版的「开始监听」会提示
   `AgentRMC 已在运行`；先停 Python 版再测原生监听，避免每个键注入两次。
+- 启动时读 `ui.auto_listen`（默认 true）自动开始监听，和 Python 版一致；`--shot`
+  截图模式不会自动监听。本地语音后端在自动监听时会预热麦克风。
 - 映射页右下角「接管原生键」默认关；打开后当前前台场景的映射键原生事件由低层钩子
   吞掉再喂 Router。用户态只能按 VK 吞，实体键盘同名键也会按映射处理；双击键的单击
   延迟约 0.3 秒。关掉开关立即恢复原生。

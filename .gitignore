@@ -35,3 +35,7 @@ profiles.json.tmp
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# ---------- native Qt SDK / build ----------
+native/.qt/
+native/build/

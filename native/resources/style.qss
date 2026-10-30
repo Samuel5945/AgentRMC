@@ -1,0 +1,245 @@
+* {
+    font-family: "Microsoft YaHei UI", "Segoe UI", sans-serif;
+}
+
+QWidget#root {
+    background: #0b0e14;
+}
+
+QWidget#header {
+    background: transparent;
+}
+
+QLabel#brandLogo {
+    color: #ffffff;
+    font-size: 11px;
+    font-weight: 800;
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                                stop:0 #4f8cff, stop:1 #7c5cff);
+    border-radius: 6px;
+}
+
+QLabel#brand {
+    color: #e6edf3;
+    font-size: 14px;
+    font-weight: 700;
+}
+
+QLabel#tag {
+    color: #9ec1ff;
+    font-size: 9px;
+    font-weight: 600;
+    background: rgba(79, 140, 255, 28);
+    border: 1px solid rgba(79, 140, 255, 80);
+    border-radius: 8px;
+    padding: 2px 7px;
+}
+
+QLabel#muted {
+    color: #8b949e;
+    font-size: 11px;
+}
+
+QLabel#voiceBox {
+    color: #5b6472;
+    font-size: 11px;
+    background: rgba(255, 255, 255, 7);
+    border: 1px solid rgba(255, 255, 255, 12);
+    border-radius: 10px;
+    padding: 8px 10px;
+}
+
+QLabel#dot {
+    background: #4a5568;
+    border-radius: 3px;
+}
+
+QFrame#card {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                                stop:0 #121722, stop:1 #161d2a);
+    border: 1px solid rgba(255, 255, 255, 18);
+    border-radius: 16px;
+}
+
+QLabel#cardTitle {
+    color: #8b949e;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 1px;
+}
+
+QLabel#badge {
+    color: #8b949e;
+    font-size: 10px;
+    background: rgba(255, 255, 255, 10);
+    border: 1px solid rgba(255, 255, 255, 16);
+    border-radius: 8px;
+    padding: 2px 8px;
+}
+
+QPushButton#ghost {
+    color: #c9d1d9;
+    font-size: 11px;
+    background: rgba(255, 255, 255, 6);
+    border: 1px solid rgba(255, 255, 255, 18);
+    border-radius: 8px;
+    padding: 5px 10px;
+}
+
+QPushButton#ghost:hover {
+    background: rgba(255, 255, 255, 12);
+}
+
+QPushButton#ghost:disabled {
+    color: #46505e;
+    background: transparent;
+    border: 1px solid rgba(255, 255, 255, 10);
+}
+
+QPushButton#ghostText {
+    color: #8b949e;
+    font-size: 11px;
+    background: transparent;
+    border: none;
+}
+
+QPushButton#ghostText:disabled {
+    color: #3d4653;
+}
+
+QToolButton#winBtn {
+    color: #8b949e;
+    font-size: 13px;
+    border: none;
+    background: transparent;
+    border-radius: 6px;
+}
+
+QToolButton#winBtn:hover {
+    color: #e6edf3;
+    background: rgba(255, 255, 255, 14);
+}
+
+QToolButton#closeBtn {
+    color: #8b949e;
+    font-size: 12px;
+    border: none;
+    background: transparent;
+    border-radius: 6px;
+}
+
+QToolButton#closeBtn:hover {
+    color: #ffffff;
+    background: #e5484d;
+}
+
+QTabWidget::pane {
+    border: none;
+    background: transparent;
+}
+
+QTabBar {
+    background: transparent;
+}
+
+QTabBar::tab {
+    color: #8b949e;
+    background: transparent;
+    padding: 7px 14px;
+    margin-right: 4px;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    font-size: 12px;
+}
+
+QTabBar::tab:selected {
+    color: #e6edf3;
+    background: rgba(79, 140, 255, 26);
+    border: 1px solid rgba(79, 140, 255, 64);
+}
+
+QTabBar::tab:hover {
+    color: #c9d1d9;
+    background: rgba(255, 255, 255, 8);
+}
+
+QTabWidget QWidget {
+    background: transparent;
+}
+
+QTableWidget {
+    background: transparent;
+    border: none;
+    color: #dbe4ee;
+    font-size: 11px;
+}
+
+QTableWidget::item {
+    padding: 4px 8px;
+    border-bottom: 1px solid rgba(255, 255, 255, 8);
+}
+
+QHeaderView::section {
+    color: #5b6472;
+    background: transparent;
+    border: none;
+    border-bottom: 1px solid rgba(255, 255, 255, 16);
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 1px;
+    padding: 4px 8px;
+}
+
+QScrollArea {
+    background: transparent;
+    border: none;
+}
+
+QScrollArea > QWidget > QWidget {
+    background: transparent;
+}
+
+QLabel#secTitle {
+    color: #e6edf3;
+    font-size: 13px;
+    font-weight: 700;
+}
+
+QLabel#secBody {
+    color: #b6c2cf;
+    font-size: 12px;
+}
+
+QMenu {
+    background: #161d2a;
+    color: #e6edf3;
+    border: 1px solid rgba(255, 255, 255, 26);
+    border-radius: 8px;
+    padding: 5px;
+}
+
+QMenu::item {
+    padding: 6px 24px 6px 12px;
+    border-radius: 6px;
+    font-size: 11.5px;
+}
+
+QMenu::item:selected {
+    background: rgba(79, 140, 255, 70);
+}
+
+QMessageBox {
+    background: #121722;
+    color: #e6edf3;
+}
+
+QMessageBox QLabel {
+    color: #e6edf3;
+    font-size: 12px;
+}
+
+QToolTip {
+    color: #e6edf3;
+    background: #161d2a;
+    border: 1px solid rgba(255, 255, 255, 26);
+}

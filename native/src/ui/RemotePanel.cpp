@@ -189,7 +189,7 @@ void RemotePanel::paintEvent(QPaintEvent *event) {
                              glyph);
         }
         if (key.vk == 116) {
-            drawMic(painter, cx, key.y, 1.0,
+            drawMic(painter, cx, key.y, 0.72,
                     lit ? QColor(255, 255, 255) : QColor(230, 237, 243));
         }
     }
@@ -218,7 +218,7 @@ void RemotePanel::paintEvent(QPaintEvent *event) {
                                            : QColor(160, 172, 186));
         painter.setPen(rowColor);
         if (entry.vk == 116) {
-            drawMic(painter, 126, rowY + 9, 0.65, rowColor);
+            drawMic(painter, 126, rowY + 9, 0.5, rowColor);
         } else {
             painter.drawText(QRectF(116, rowY, 20, 18), Qt::AlignCenter,
                              entry.glyph);

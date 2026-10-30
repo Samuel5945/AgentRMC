@@ -2,7 +2,7 @@
 
 #include <QLabel>
 
-class QGraphicsOpacityEffect;
+class QPaintEvent;
 class QPropertyAnimation;
 class QTimer;
 
@@ -16,10 +16,9 @@ public:
     void reposition();
 
 protected:
-    bool eventFilter(QObject *watched, QEvent *event) override;
+    void paintEvent(QPaintEvent *event) override;
 
 private:
     QTimer *hideTimer_ = nullptr;
-    QGraphicsOpacityEffect *effect_ = nullptr;
     QPropertyAnimation *fade_ = nullptr;
 };

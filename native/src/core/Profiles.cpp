@@ -193,6 +193,20 @@ bool ProfileStore::updateVoice(const QJsonObject &patch) {
     return true;
 }
 
+bool ProfileStore::updateMediaVoice(const QJsonObject &patch) {
+    QJsonObject root = config_;
+    QJsonObject media = root.value("media_voice").toObject();
+    for (auto it = patch.begin(); it != patch.end(); ++it) {
+        media[it.key()] = it.value();
+    }
+    root["media_voice"] = media;
+    if (!saveConfig(root)) {
+        return false;
+    }
+    config_ = root;
+    return true;
+}
+
 bool ProfileStore::saveConfig(const QJsonObject &root) {
     if (configPath_.isEmpty()) {
         configPath_ = QFileInfo(path_).absolutePath() + "/config.json";

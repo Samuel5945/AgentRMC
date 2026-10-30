@@ -228,8 +228,12 @@ void InputEngine::refreshProfile() {
                             QCoreApplication::applicationDirPath());
     voiceVk_.store(voice.voiceVk);
     mediaVk_.store(voice.mediaVk);
+    // 生效范围：配置里写了 swallow_in 就按名单，否则凡是配了语音的场景都接管。
     const bool mediaGate =
-        voice.mediaEnabled && voice.mediaProfiles.contains(current.name.toLower());
+        voice.mediaEnabled && (voice.mediaScopeExplicit
+                                   ? voice.mediaProfiles.contains(
+                                         current.name.toLower())
+                                   : !current.voice.isEmpty());
     mediaGate_.store(mediaGate);
     if (hooks_ != nullptr) {
         hooks_->setMediaVoice(voice.mediaVk, mediaGate);

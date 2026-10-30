@@ -33,6 +33,7 @@ public:
     bool setUiBool(const QString &key, bool value);
     QJsonObject voiceConfig() const;
     bool updateVoice(const QJsonObject &patch);
+    bool updateMediaVoice(const QJsonObject &patch);
     const QVector<Profile> &profiles() const { return profiles_; }
     const Profile &fallback() const { return fallback_; }
     const Profile *find(const QString &name) const;

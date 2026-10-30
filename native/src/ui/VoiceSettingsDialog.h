@@ -35,4 +35,6 @@ private:
     QLabel *note_ = nullptr;
     QCheckBox *paste_ = nullptr;
     QCheckBox *autoEnter_ = nullptr;
+    QCheckBox *headset_ = nullptr;
+    QLabel *mediaHint_ = nullptr;
 };

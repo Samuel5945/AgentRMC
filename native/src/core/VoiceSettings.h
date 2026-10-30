@@ -29,7 +29,10 @@ struct VoiceOptions {
     int voiceVk = 0x74;  // F5
     int mediaVk = 0xB3;  // VK_MEDIA_PLAY_PAUSE
     bool mediaEnabled = true;
-    QStringList mediaProfiles;
+    QStringList mediaProfiles;  // 显式覆盖；留空时按场景是否配了语音判定
+    bool mediaScopeExplicit = false;
+    int mediaSilenceMs = 6000;   // 耳机起的本地会话：静音这么久就收尾
+    int mediaAutoStopMs = 30000;  // 耳机起的热键会话：没有录音信号，到时释放组合键
     int threads = 4;
     QString language = QStringLiteral("zh");
 };

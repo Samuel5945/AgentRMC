@@ -78,12 +78,29 @@ int main() {
         check(options.hotkeyTrigger == "hold", "default trigger hold");
         check(options.voiceVk == 0x74, "default voice key");
         check(options.mediaVk == 0xB3, "default media key");
+        check(options.mediaScopeExplicit, "explicit swallow_in list");
+        check(options.mediaProfiles == QStringList({"qoder", "agent"}),
+              "media scope from config");
+        check(options.mediaSilenceMs == 6000, "media silence default");
+        check(options.mediaAutoStopMs == 30000, "media auto stop default");
         check(options.minRepeats == 2, "default min repeats");
         check(options.senseVoiceDir.endsWith("models/sensevoice"),
               "default sensevoice dir");
         check(voiceComboText(options.hotkeyMods, options.hotkeyVk) ==
                   "CTRL+SHIFT+V",
               "combo text");
+    }
+
+    {
+        // 不写 swallow_in 时不再退回固定名单，改由场景是否配了语音决定。
+        QJsonObject config = baseConfig();
+        QJsonObject media = config.value("media_voice").toObject();
+        media.remove("swallow_in");
+        config["media_voice"] = media;
+        const VoiceOptions options =
+            resolveVoiceOptions(config, QJsonObject{}, appDir);
+        check(!options.mediaScopeExplicit, "scope derived when unset");
+        check(options.mediaProfiles.isEmpty(), "no hardcoded scene list");
     }
 
     {

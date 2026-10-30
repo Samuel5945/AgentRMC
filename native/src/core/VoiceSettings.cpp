@@ -204,9 +204,9 @@ VoiceOptions resolveVoiceOptions(const QJsonObject &config,
     options.mediaEnabled = boolValue(media, "enabled", true);
     options.mediaVk = intValue(media, "vkey", 0xB3);
     options.mediaProfiles = stringList(media.value("swallow_in"));
-    if (options.mediaProfiles.isEmpty()) {
-        options.mediaProfiles = {QStringLiteral("qoder"), QStringLiteral("agent")};
-    }
+    options.mediaScopeExplicit = !options.mediaProfiles.isEmpty();
+    options.mediaSilenceMs = intValue(media, "silence_ms", 6000);
+    options.mediaAutoStopMs = intValue(media, "auto_stop_ms", 30000);
     return options;
 }
 

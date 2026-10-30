@@ -120,6 +120,38 @@ VoiceSettingsDialog::VoiceSettingsDialog(ProfileStore *store, QWidget *parent)
     root->addWidget(paste_);
     root->addWidget(autoEnter_);
 
+    const QJsonObject media = store_->config().value("media_voice").toObject();
+    headset_ = new QCheckBox(QString::fromUtf8("耳机播放键 = 语音开关"));
+    headset_->setChecked(media.value("enabled").toBool(true));
+    headset_->setToolTip(QString::fromUtf8(
+        "按一次开始、再按一次结束。本地转写时静音 %1 秒自动收尾；"
+        "转发热键模式 %2 秒自动释放组合键，免得 Ctrl+Shift 一直按住。")
+        .arg(defaults.mediaSilenceMs / 1000)
+        .arg(defaults.mediaAutoStopMs / 1000));
+    root->addWidget(headset_);
+
+    QStringList explicitScope;
+    for (const QJsonValue &value : media.value("swallow_in").toArray()) {
+        explicitScope << value.toString().toLower();
+    }
+    QStringList scope;
+    for (const Profile &profile : store_->profiles()) {
+        const bool hit = explicitScope.isEmpty()
+                             ? !profile.voice.isEmpty()
+                             : explicitScope.contains(profile.name.toLower());
+        if (hit) {
+            scope << profile.name;
+        }
+    }
+    mediaHint_ = new QLabel(scope.isEmpty()
+        ? QString::fromUtf8("当前没有场景配语音，耳机播放键保持系统媒体键；"
+                            "在映射页给场景配上语音热键后会自动接管。")
+        : QString::fromUtf8("只在 %1 场景接管，其余场景仍是系统媒体键。")
+              .arg(scope.join(QStringLiteral(" / "))));
+    mediaHint_->setObjectName("muted");
+    mediaHint_->setWordWrap(true);
+    root->addWidget(mediaHint_);
+
     auto *foot = new QHBoxLayout;
     auto *download = new QPushButton(QString::fromUtf8("下载脚本"));
     download->setObjectName("ghostSmall");
@@ -208,6 +240,13 @@ void VoiceSettingsDialog::save() {
     patch["paste"] = paste_->isChecked();
     patch["auto_enter"] = autoEnter_->isChecked();
     if (!store_->updateVoice(patch)) {
+        note_->setText(QString::fromUtf8("保存失败：无法写入 config.json"));
+        note_->setStyleSheet(QStringLiteral("color:#f85149;"));
+        return;
+    }
+    QJsonObject mediaPatch;
+    mediaPatch["enabled"] = headset_->isChecked();
+    if (!store_->updateMediaVoice(mediaPatch)) {
         note_->setText(QString::fromUtf8("保存失败：无法写入 config.json"));
         note_->setStyleSheet(QStringLiteral("color:#f85149;"));
         return;

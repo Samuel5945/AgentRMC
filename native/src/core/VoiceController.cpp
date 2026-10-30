@@ -15,6 +15,13 @@
 #endif
 #include <windows.h>
 
+namespace {
+
+// 耳机麦克风的可说话峰值（RMS，约 -34 dBFS），高于它算还在说话。
+constexpr double kMediaVoiceFloor = 0.02;
+
+}  // namespace
+
 VoiceController::VoiceController(ProfileStore *store, QObject *parent)
     : QObject(parent), store_(store) {
     tick_ = new QTimer(this);
@@ -162,7 +169,29 @@ void VoiceController::tick() {
         finishSession();
         return;
     }
-    if (!test_ && !mediaStart_ && now - lastVoiceAt_ > options_.silenceStopMs) {
+    if (test_) {
+        return;
+    }
+    if (mediaStart_) {
+        // 耳机只送 keydown、没有 keyup，结束时机得自己找：能拿到麦克风能量就按停嘴判定，
+        // 否则（热键模式且麦克风没开成）只能按时释放组合键，免得 Ctrl+Shift 一直按住。
+        const bool hasLevel = recorder_.isOpen();
+        if (hasLevel) {
+            if (recorder_.level() >= kMediaVoiceFloor) {
+                lastVoiceAt_ = now;
+            }
+            if (now - lastVoiceAt_ > options_.mediaSilenceMs) {
+                finishSession();
+                return;
+            }
+        }
+        if (options_.backend == VoiceBackend::Hotkey &&
+            now - recordAt_ > options_.mediaAutoStopMs) {
+            finishSession();
+        }
+        return;
+    }
+    if (now - lastVoiceAt_ > options_.silenceStopMs) {
         finishSession();
     }
 }
@@ -180,7 +209,7 @@ void VoiceController::startSession(bool media) {
     activeTrigger_ = options_.hotkeyTrigger;
 
     if (options_.backend == VoiceBackend::Hotkey) {
-        if (!media && activeTrigger_ == QStringLiteral("toggle")) {
+        if (activeTrigger_ == QStringLiteral("toggle")) {
             injector_.key(activeMods_, activeVk_);
             toggleCombo_ = true;
         } else {
@@ -196,8 +225,10 @@ void VoiceController::startSession(bool media) {
                                             : QStringLiteral("开关")));
         beep(1180, 60, !test_);
         setState(State::Recording,
-                 holdCombo_ ? QStringLiteral("语音中 · 松手结束")
-                            : QStringLiteral("语音中 · 再按一次结束"));
+                 mediaStart_ && options_.backend != VoiceBackend::Hotkey
+                     ? QStringLiteral("语音中 · 再按一次或停嘴结束")
+                     : (holdCombo_ ? QStringLiteral("语音中 · 松手结束")
+                                   : QStringLiteral("语音中 · 再按一次结束")));
         return;
     }
 

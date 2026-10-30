@@ -1,5 +1,7 @@
 #include "MapWidgets.h"
 
+#include "ui/KeyIcon.h"
+
 #include <QEnterEvent>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -110,11 +112,17 @@ MapKeyRow::MapKeyRow(int vk, QString glyph, QString name, MapCellData single,
     keyLayout->setContentsMargins(0, 0, 0, 0);
     keyLayout->setSpacing(8);
 
-    auto *chip = new QLabel(glyph, keyBox);
+    auto *chip = new QLabel(keyBox);
     chip->setObjectName("mapChip");
     chip->setFixedSize(24, 24);
     chip->setAlignment(Qt::AlignCenter);
     chip->setAttribute(Qt::WA_TransparentForMouseEvents);
+    if (vk == 116) {
+        chip->setPixmap(KeyIcon::micPixmap(
+            13, devicePixelRatioF(), QColor(230, 237, 243)));
+    } else {
+        chip->setText(glyph);
+    }
 
     auto *label = new QLabel(name, keyBox);
     label->setObjectName("mapKeyName");

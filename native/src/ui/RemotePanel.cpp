@@ -1,5 +1,7 @@
 #include "RemotePanel.h"
 
+#include "KeyIcon.h"
+
 #include <QDateTime>
 #include <QFontMetrics>
 #include <QPainter>
@@ -49,22 +51,6 @@ QString glyphFor(int vk) {
     case 36: return QStringLiteral("⌂");
     default: return {};
     }
-}
-
-void drawMic(QPainter &painter, double cx, double cy, double scale,
-             const QColor &color) {
-    QPen pen(color, 1.2 * scale);
-    pen.setCapStyle(Qt::RoundCap);
-    painter.setPen(pen);
-    painter.setBrush(Qt::NoBrush);
-    painter.drawRoundedRect(
-        QRectF(cx - 2.3 * scale, cy - 5.4 * scale, 4.6 * scale, 7.0 * scale),
-        2.3 * scale, 2.3 * scale);
-    painter.drawArc(
-        QRectF(cx - 4.6 * scale, cy - 1.8 * scale, 9.2 * scale, 8.4 * scale),
-        180 * 16, 180 * 16);
-    painter.drawLine(QPointF(cx, cy + 6.6 * scale),
-                     QPointF(cx, cy + 8.2 * scale));
 }
 
 bool isLit(int vk, int litVk, qint64 litUntil) {
@@ -189,8 +175,9 @@ void RemotePanel::paintEvent(QPaintEvent *event) {
                              glyph);
         }
         if (key.vk == 116) {
-            drawMic(painter, cx, key.y, 0.72,
-                    lit ? QColor(255, 255, 255) : QColor(230, 237, 243));
+            KeyIcon::paintMic(
+                painter, QRectF(cx - 4.0, key.y - 5.9, 8.0, 11.8),
+                lit ? QColor(255, 255, 255) : QColor(230, 237, 243));
         }
     }
 
@@ -218,8 +205,9 @@ void RemotePanel::paintEvent(QPaintEvent *event) {
                                            : QColor(160, 172, 186));
         painter.setPen(rowColor);
         if (entry.vk == 116) {
-            drawMic(painter, 126, rowY + 9, 0.72,
-                    lit ? QColor(255, 255, 255) : QColor(230, 237, 243));
+            KeyIcon::paintMic(
+                painter, QRectF(122, rowY + 3.1, 8.0, 11.8),
+                lit ? QColor(255, 255, 255) : QColor(230, 237, 243));
         } else {
             painter.drawText(QRectF(116, rowY, 20, 18), Qt::AlignCenter,
                              entry.glyph);

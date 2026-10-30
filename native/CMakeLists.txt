@@ -42,6 +42,8 @@ qt_add_executable(AgentRMCNative
     src/ui/ToggleSwitch.h
     src/ui/RemotePanel.cpp
     src/ui/RemotePanel.h
+    src/ui/KeyIcon.cpp
+    src/ui/KeyIcon.h
     src/ui/Toast.cpp
     src/ui/Toast.h
     src/ui/VoiceSettingsDialog.cpp

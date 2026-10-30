@@ -25,6 +25,7 @@ rc_probe/*
 # ---------- 本地数据 ----------
 .workbuddy-ai/
 *.log
+vibe_images/
 
 # 映射页自动保存的备份/临时文件
 profiles.json.bak

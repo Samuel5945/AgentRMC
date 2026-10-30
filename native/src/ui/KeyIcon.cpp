@@ -5,6 +5,7 @@
 #include <QPainterPath>
 
 #include <cmath>
+#include <initializer_list>
 
 namespace KeyIcon {
 namespace {
@@ -73,12 +74,41 @@ void paintNormalized(QPainter &painter, const QRectF &box, Glyph glyph,
         drawArrow(painter, glyph);
         break;
     case Glyph::Back: {
-        QPainterPath path;
-        path.moveTo(5.0, 5.0);
-        path.cubicTo(5.0, -2.5, 0.0, -5.2, -4.5, -4.2);
-        painter.drawPath(path);
-        painter.drawLine(QPointF(-4.5, -4.2), QPointF(-1.6, -6.2));
-        painter.drawLine(QPointF(-4.5, -4.2), QPointF(-6.2, -1.4));
+        // 圆弧从右下起笔，逆时针绕过顶部，箭头沿端点切线指向左下。
+        constexpr qreal kRadius = 6.2;
+        constexpr qreal kStart = -45.0;
+        constexpr qreal kEnd = 130.0;
+        auto pointAt = [](qreal radius, qreal deg) {
+            const qreal rad = deg * kPi / 180.0;
+            return QPointF(radius * std::cos(rad), -radius * std::sin(rad));
+        };
+        const QPointF tip = pointAt(kRadius, kEnd);
+        const qreal rad = kEnd * kPi / 180.0;
+        const QPointF dir(-std::sin(rad), -std::cos(rad));
+        const QPointF perp(-dir.y(), dir.x());
+        const QPointF barbs[2] = {tip - dir * 3.4 + perp * 2.3,
+                                  tip - dir * 3.4 - perp * 2.3};
+        // 包围盒只覆盖真正画到的角度区间，据此整体居中。
+        const std::initializer_list<QPointF> extent = {
+            tip, pointAt(kRadius, kStart), pointAt(kRadius, 0.0),
+            pointAt(kRadius, 90.0), barbs[0], barbs[1]};
+        qreal minX = tip.x();
+        qreal maxX = tip.x();
+        qreal minY = tip.y();
+        qreal maxY = tip.y();
+        for (const QPointF &p : extent) {
+            minX = (p.x() < minX) ? p.x() : minX;
+            maxX = (p.x() > maxX) ? p.x() : maxX;
+            minY = (p.y() < minY) ? p.y() : minY;
+            maxY = (p.y() > maxY) ? p.y() : maxY;
+        }
+        painter.save();
+        painter.translate(-(minX + maxX) / 2.0, -(minY + maxY) / 2.0);
+        painter.drawArc(QRectF(-kRadius, -kRadius, kRadius * 2, kRadius * 2),
+                        int(kStart * 16), int((kEnd - kStart) * 16));
+        painter.drawLine(tip, barbs[0]);
+        painter.drawLine(tip, barbs[1]);
+        painter.restore();
         break;
     }
     case Glyph::Menu:
@@ -158,21 +188,15 @@ void paintGlyph(QPainter &painter, const QRectF &box, Glyph glyph,
     }
     if (glyph == Glyph::Ok) {
         QFont font = painter.font();
-        font.setPixelSize(qMax(8, int(box.height() * 0.80)));
-        font.setBold(true);
+        font.setPixelSize(qMax(7, int(box.height() * 0.66)));
+        font.setWeight(QFont::DemiBold);
         font.setStyleStrategy(QFont::NoSubpixelAntialias);
 
         QPainterPath text;
         text.addText(QPointF(0, 0), font, QStringLiteral("OK"));
         const QRectF bounds = text.boundingRect();
-        QRectF target = box;
-        const qreal neededWidth = bounds.width() + box.height() * 0.20;
-        if (target.width() < neededWidth) {
-            const qreal extra = (neededWidth - target.width()) / 2.0;
-            target.adjust(-extra, 0, extra, 0);
-        }
         painter.save();
-        painter.translate(target.center() - bounds.center());
+        painter.translate(box.center() - bounds.center());
         painter.fillPath(text, color);
         painter.restore();
         return;

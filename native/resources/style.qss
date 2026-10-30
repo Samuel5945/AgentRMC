@@ -448,6 +448,15 @@ QLabel#dialogNote {
     font-size: 10px;
 }
 
+QLabel#toast {
+    background: rgba(15, 20, 29, 238);
+    border: 1px solid rgba(255, 255, 255, 30);
+    border-radius: 12px;
+    color: #e6edf3;
+    font-size: 12px;
+    padding: 9px 16px;
+}
+
 QLabel#captureTitle {
     color: #e6edf3;
     font-size: 13px;

@@ -2,6 +2,7 @@
 
 #include "ui/KeymapPage.h"
 #include "ui/RemotePanel.h"
+#include "ui/Toast.h"
 #include "ui/VoiceSettingsDialog.h"
 
 #include "core/InputEngine.h"
@@ -181,6 +182,7 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
 
     outer->addWidget(body, 1);
 
+    toast_ = new Toast(this);
     refreshRemoteCard();
     for (QAbstractButton *button : findChildren<QAbstractButton *>()) {
         button->setFocusPolicy(Qt::NoFocus);
@@ -727,12 +729,30 @@ void MainWindow::onEngineEvent(const QString &kind, const QString &name,
         if (name == QString::fromUtf8("音量/亮度模式")) {
             applyRemoteMode(QString::fromUtf8("音量 · 亮度"),
                             QSet<int>{37, 38, 39, 40}, on);
+            if (toast_ != nullptr) {
+                toast_->showText(
+                    on ? QString::fromUtf8(
+                             "音量 / 亮度模式 · ↑↓ 音量，←→ 屏幕亮度；单击返回/菜单退出")
+                       : QString::fromUtf8("已退出音量 / 亮度模式"));
+            }
         } else if (name == QString::fromUtf8("鼠标模式")) {
             applyRemoteMode(QString::fromUtf8("鼠标模式"),
                             QSet<int>{37, 38, 39, 40, 13}, on);
+            if (toast_ != nullptr) {
+                toast_->showText(
+                    on ? QString::fromUtf8(
+                             "鼠标模式 · 方向键移动，OK 左键；单击菜单退出")
+                       : QString::fromUtf8("已退出鼠标模式"));
+            }
         } else if (name == QString::fromUtf8("导航模式")) {
             applyRemoteMode(QString::fromUtf8("导航模式"),
                             QSet<int>{37, 38, 39, 40}, on);
+            if (toast_ != nullptr) {
+                toast_->showText(
+                    on ? QString::fromUtf8(
+                             "导航模式 · ←→ 切换控件，↑↓ 翻页；单击主页退出")
+                       : QString::fromUtf8("已退出导航模式"));
+            }
         }
     }
     if (kind == QStringLiteral("key") && vk != 0) {

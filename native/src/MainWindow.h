@@ -16,6 +16,7 @@ class QSystemTrayIcon;
 class InputEngine;
 class KeymapPage;
 class RemotePanel;
+class Toast;
 class VoiceController;
 
 class MainWindow final : public QMainWindow {
@@ -69,6 +70,7 @@ private:
     QPushButton *voiceTest_ = nullptr;
     QString lastTranscript_;
     RemotePanel *remotePanel_ = nullptr;
+    Toast *toast_ = nullptr;
     QLabel *remoteBadge_ = nullptr;
     QLabel *remoteDot_ = nullptr;
     QLabel *remoteState_ = nullptr;

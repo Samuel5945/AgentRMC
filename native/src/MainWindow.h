@@ -23,7 +23,7 @@ class MainWindow final : public QMainWindow {
 
 public:
     explicit MainWindow(bool withTray, const QString &pin = QString(),
-                        QWidget *parent = nullptr);
+                        bool autoListen = true, QWidget *parent = nullptr);
 
 protected:
     void closeEvent(QCloseEvent *event) override;

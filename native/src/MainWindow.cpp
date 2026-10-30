@@ -21,6 +21,7 @@
 #include <QListWidget>
 #include <QSignalBlocker>
 #include <QTime>
+#include <QTimer>
 #include <QFont>
 #include <QFrame>
 #include <QHBoxLayout>
@@ -62,7 +63,8 @@ protected:
 
 }  // namespace
 
-MainWindow::MainWindow(bool withTray, const QString &pin, QWidget *parent)
+MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
+                       QWidget *parent)
     : QMainWindow(parent) {
     store_ = std::make_unique<ProfileStore>(
         QCoreApplication::applicationDirPath() + "/profiles.json");
@@ -182,6 +184,9 @@ MainWindow::MainWindow(bool withTray, const QString &pin, QWidget *parent)
     refreshRemoteCard();
     for (QAbstractButton *button : findChildren<QAbstractButton *>()) {
         button->setFocusPolicy(Qt::NoFocus);
+    }
+    if (autoListen && store_->uiBool("auto_listen", true)) {
+        QTimer::singleShot(0, this, &MainWindow::toggleListening);
     }
     if (withTray) {
         buildTray();

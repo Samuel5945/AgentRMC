@@ -50,7 +50,7 @@ int main(int argc, char *argv[]) {
         return app.exec();
     }
 
-    MainWindow win(shot.isEmpty(), pin);
+    MainWindow win(shot.isEmpty(), pin, shot.isEmpty());
     win.resize(1000, 640);
 
     if (!shot.isEmpty()) {

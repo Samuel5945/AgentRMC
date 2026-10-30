@@ -1,6 +1,9 @@
 # AgentRMC
 
-把极米/小米系 BLE 遥控器改造成电脑 Agent 的输入终端。
+把极米 / 快乐星球投影仪遥控器改造成电脑 Agent 的输入终端。
+
+实测机型为极米「快乐星球 O3」13 键 BLE 遥控器（VID `0x000D` / PID `0x3838`）；
+同款 HID 遥控器改 `config.json` 的 `device_mark` 即可复用。
 
 按键走标准 HID（零驱动），语音可以本地 whisper 转写、也可以转给 Agent 自己的语音键，
 按前台窗口自动切换键映射。
@@ -14,7 +17,7 @@
 ## 快速开始
 
 ```bash
-git clone <repo> && cd AgentRMC
+git clone https://github.com/Samuel5945/AgentRMC.git && cd AgentRMC
 
 tools\setup.bat            # 建 venv + 装依赖
 tools\download_model.bat   # 下载 whisper small（约 480MB，默认走 127.0.0.1:7897 代理）
@@ -79,7 +82,7 @@ AgentRMC/
 | 固件 | `B951C_HBG2_JH_V1.1.2` |
 | HID Usage | `0x0001` / `0x0006`（Generic Desktop / Keyboard） |
 | Appearance | `0x0180`（Generic Remote Control） |
-| 来源 | 极米「快乐星球 O3」投影仪配套遥控器，13 键 |
+| 来源 | 极米 / 快乐星球投影仪配套遥控器（实测极米「快乐星球 O3」，13 键） |
 
 ## 探测结论
 

@@ -69,6 +69,22 @@ void RemotePanel::setEntries(const QVector<Entry> &entries) {
     update();
 }
 
+void RemotePanel::setModeKeys(const QSet<int> &keys) {
+    if (modeKeys_ == keys) {
+        return;
+    }
+    modeKeys_ = keys;
+    update();
+}
+
+void RemotePanel::setLinkedVk(int vk) {
+    if (linkedVk_ == vk) {
+        return;
+    }
+    linkedVk_ = vk;
+    update();
+}
+
 void RemotePanel::flash(int vk) {
     if (vk == 0) {
         return;
@@ -133,6 +149,20 @@ void RemotePanel::paintEvent(QPaintEvent *event) {
         const QRectF circle(cx + key.dx - key.radius, key.y - key.radius,
                             key.radius * 2, key.radius * 2);
         painter.drawEllipse(circle);
+
+        const bool linked = key.vk != 0 && key.vk == linkedVk_;
+        const bool ringed = key.vk != 0 && modeKeys_.contains(key.vk);
+        if (!lit && linked) {
+            painter.setBrush(Qt::NoBrush);
+            painter.setPen(QPen(QColor(79, 140, 255, 210), 1.5));
+            painter.drawEllipse(circle.adjusted(-3, -3, 3, 3));
+        }
+        if (!lit && ringed) {
+            const double extra = linked ? 6.0 : 3.0;
+            painter.setBrush(Qt::NoBrush);
+            painter.setPen(QPen(QColor(124, 92, 255, 200), 1.6));
+            painter.drawEllipse(circle.adjusted(-extra, -extra, extra, extra));
+        }
 
         const QString glyph = glyphFor(key.vk);
         if (!glyph.isEmpty()) {

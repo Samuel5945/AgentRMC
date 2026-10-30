@@ -153,8 +153,26 @@ MainWindow::MainWindow(bool withTray, const QString &pin, QWidget *parent)
             &MainWindow::refreshRemoteCard);
     connect(keymapPage_, &KeymapPage::viewChanged, this,
             &MainWindow::refreshRemoteCard);
+    connect(keymapPage_, &KeymapPage::keySelected, this, [this](int vk) {
+        if (remotePanel_ != nullptr) {
+            remotePanel_->setLinkedVk(vk);
+        }
+    });
+    connect(keymapPage_, &KeymapPage::keyHovered, this,
+            [this](int vk, bool on) {
+                if (remotePanel_ != nullptr) {
+                    remotePanel_->setLinkedVk(on ? vk : keymapPage_->selectedVk());
+                }
+            });
     tabs->addTab(keymapPage_, QString::fromUtf8("按键映射"));
     tabs->addTab(buildGuidePage(), QString::fromUtf8("使用引导"));
+    connect(tabs, &QTabWidget::currentChanged, this, [this](int index) {
+        if (remotePanel_ != nullptr) {
+            remotePanel_->setLinkedVk(
+                index == 1 && keymapPage_ != nullptr ? keymapPage_->selectedVk()
+                                                     : 0);
+        }
+    });
     tabs->setCurrentIndex(1);
     grid->addWidget(tabs, 1);
 
@@ -238,11 +256,11 @@ QWidget *MainWindow::buildRemoteCard() {
     auto *head = new QHBoxLayout;
     auto *title = new QLabel(QString::fromUtf8("遥控器"));
     title->setObjectName("cardTitle");
-    auto *badge = new QLabel("M5");
-    badge->setObjectName("badge");
+    remoteBadge_ = new QLabel("M5");
+    remoteBadge_->setObjectName("badge");
     head->addWidget(title);
     head->addStretch(1);
-    head->addWidget(badge);
+    head->addWidget(remoteBadge_);
     lay->addLayout(head);
 
     remotePanel_ = new RemotePanel;
@@ -614,6 +632,16 @@ void MainWindow::refreshRemoteCard() {
     remotePanel_->setEntries(entries);
 }
 
+void MainWindow::applyRemoteMode(const QString &badge, const QSet<int> &keys,
+                                 bool on) {
+    if (remoteBadge_ != nullptr) {
+        remoteBadge_->setText(on ? badge : QStringLiteral("M5"));
+    }
+    if (remotePanel_ != nullptr) {
+        remotePanel_->setModeKeys(on ? keys : QSet<int>());
+    }
+}
+
 void MainWindow::openVoiceSettings() {
     auto *dialog = new VoiceSettingsDialog(store_.get(), this);
     connect(dialog, &VoiceSettingsDialog::saved, this, [this] {
@@ -685,6 +713,19 @@ void MainWindow::onVoiceTranscribed(const QString &text, int costMs) {
 void MainWindow::onEngineEvent(const QString &kind, const QString &name,
                                const QString &profile, const QString &detail,
                                int vk) {
+    if (kind == QStringLiteral("status")) {
+        const bool on = detail.contains(QString::fromUtf8(" 开"));
+        if (name == QString::fromUtf8("音量/亮度模式")) {
+            applyRemoteMode(QString::fromUtf8("音量 · 亮度"),
+                            QSet<int>{37, 38, 39, 40}, on);
+        } else if (name == QString::fromUtf8("鼠标模式")) {
+            applyRemoteMode(QString::fromUtf8("鼠标模式"),
+                            QSet<int>{37, 38, 39, 40, 13}, on);
+        } else if (name == QString::fromUtf8("导航模式")) {
+            applyRemoteMode(QString::fromUtf8("导航模式"),
+                            QSet<int>{37, 38, 39, 40}, on);
+        }
+    }
     if (kind == QStringLiteral("key") && vk != 0) {
         if (remotePanel_ != nullptr) {
             remotePanel_->flash(vk);
@@ -715,6 +756,9 @@ void MainWindow::onEngineRunning(bool running, const QString &message) {
             running ? QString::fromUtf8("监听中 · ") +
                           voiceProfileLabel(store_->current(true).name)
                     : QString::fromUtf8("未监听"));
+    }
+    if (!running) {
+        applyRemoteMode(QString(), QSet<int>(), false);
     }
     appendEvent(QStringLiteral("status"),
                 running ? QStringLiteral("监听") : QStringLiteral("停止"),

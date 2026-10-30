@@ -380,6 +380,7 @@ void KeymapPage::rebuildTable() {
                                       doubleCell(vk, profile),
                                       holdCell(vk, profile), vk == selectedVk_);
             connect(row, &MapKeyRow::picked, this, &KeymapPage::selectRow);
+            connect(row, &MapKeyRow::hovered, this, &KeymapPage::keyHovered);
             connect(row, &MapKeyRow::cellClicked, this,
                     [this](int value, const QString &gesture) {
                         selectRow(value);
@@ -399,6 +400,7 @@ void KeymapPage::selectRow(int vk) {
     for (auto it = rows_.begin(); it != rows_.end(); ++it) {
         it.value()->setSelected(it.key() == vk);
     }
+    emit keySelected(vk);
 }
 
 bool KeymapPage::hasNav(const Profile &profile) const {

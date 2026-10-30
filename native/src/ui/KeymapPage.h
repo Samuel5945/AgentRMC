@@ -20,10 +20,13 @@ class KeymapPage final : public QFrame {
 public:
     explicit KeymapPage(ProfileStore *store, QWidget *parent = nullptr);
     void refreshAll();
+    int selectedVk() const { return selectedVk_; }
 
 signals:
     void mappingsChanged();
     void viewChanged();
+    void keySelected(int vk);
+    void keyHovered(int vk, bool on);
 
 private:
     void buildUi();

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QMainWindow>
+#include <QSet>
 
 #include <memory>
 
@@ -45,6 +46,7 @@ private:
     void clearLog();
     void refreshVoiceUi();
     void refreshRemoteCard();
+    void applyRemoteMode(const QString &badge, const QSet<int> &keys, bool on);
     void openVoiceSettings();
     void onVoiceState(const QString &state, const QString &detail);
     void onVoiceTranscribed(const QString &text, int costMs);
@@ -67,6 +69,7 @@ private:
     QPushButton *voiceTest_ = nullptr;
     QString lastTranscript_;
     RemotePanel *remotePanel_ = nullptr;
+    QLabel *remoteBadge_ = nullptr;
     QLabel *remoteDot_ = nullptr;
     QLabel *remoteState_ = nullptr;
     QSystemTrayIcon *tray_ = nullptr;

@@ -8,8 +8,26 @@ class QPainter;
 
 namespace KeyIcon {
 
-void paintMic(QPainter &painter, const QRectF &box, const QColor &color,
-              qreal strokeWidth = 1.2);
-QPixmap micPixmap(int size, qreal devicePixelRatio, const QColor &color);
+enum class Glyph {
+    Unknown = 0,
+    Up,
+    Down,
+    Left,
+    Right,
+    Ok,
+    Back,
+    Menu,
+    Home,
+    Mic,
+    Focus,
+    Power,
+    Volume,
+};
+
+Glyph glyphForVk(int vk);
+void paintGlyph(QPainter &painter, const QRectF &box, Glyph glyph,
+                const QColor &color);
+QPixmap glyphPixmap(Glyph glyph, int size, qreal devicePixelRatio,
+                    const QColor &color);
 
 }  // namespace KeyIcon

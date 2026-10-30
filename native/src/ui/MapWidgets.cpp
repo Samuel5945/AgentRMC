@@ -117,9 +117,10 @@ MapKeyRow::MapKeyRow(int vk, QString glyph, QString name, MapCellData single,
     chip->setFixedSize(24, 24);
     chip->setAlignment(Qt::AlignCenter);
     chip->setAttribute(Qt::WA_TransparentForMouseEvents);
-    if (vk == 116) {
-        chip->setPixmap(KeyIcon::micPixmap(
-            13, devicePixelRatioF(), QColor(230, 237, 243)));
+    const KeyIcon::Glyph icon = KeyIcon::glyphForVk(vk);
+    if (icon != KeyIcon::Glyph::Unknown) {
+        chip->setPixmap(KeyIcon::glyphPixmap(
+            icon, 14, devicePixelRatioF(), QColor(230, 237, 243)));
     } else {
         chip->setText(glyph);
     }

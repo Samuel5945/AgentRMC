@@ -38,21 +38,6 @@ const QVector<KeySpec> &keys() {
     return table;
 }
 
-QString glyphFor(int vk) {
-    switch (vk) {
-    case 122: return QStringLiteral("◎");
-    case 38: return QStringLiteral("↑");
-    case 40: return QStringLiteral("↓");
-    case 37: return QStringLiteral("←");
-    case 39: return QStringLiteral("→");
-    case 13: return QStringLiteral("OK");
-    case 27: return QStringLiteral("↩");
-    case 93: return QStringLiteral("☰");
-    case 36: return QStringLiteral("⌂");
-    default: return {};
-    }
-}
-
 bool isLit(int vk, int litVk, qint64 litUntil) {
     return vk != 0 && vk == litVk &&
            QDateTime::currentMSecsSinceEpoch() < litUntil;
@@ -131,10 +116,6 @@ void RemotePanel::paintEvent(QPaintEvent *event) {
     painter.setBrush(QColor(8, 12, 18));
     painter.drawRoundedRect(body, 22, 22);
 
-    QFont glyphFont = font();
-    glyphFont.setPixelSize(8);
-    glyphFont.setBold(true);
-
     for (const KeySpec &key : keys()) {
         const bool lit = isLit(key.vk, litVk_, litUntil_);
         if (lit) {
@@ -165,20 +146,12 @@ void RemotePanel::paintEvent(QPaintEvent *event) {
             painter.drawEllipse(circle.adjusted(-extra, -extra, extra, extra));
         }
 
-        const QString glyph = glyphFor(key.vk);
-        if (!glyph.isEmpty()) {
-            painter.setFont(glyphFont);
-            painter.setPen(lit ? QColor(255, 255, 255)
-                               : (key.infrared ? QColor(90, 100, 114)
-                                               : QColor(230, 237, 243)));
-            painter.drawText(circle.adjusted(-5, 0, 5, 0), Qt::AlignCenter,
-                             glyph);
-        }
-        if (key.vk == 116) {
-            KeyIcon::paintMic(
-                painter, QRectF(cx - 4.0, key.y - 5.9, 8.0, 11.8),
-                lit ? QColor(255, 255, 255) : QColor(230, 237, 243));
-        }
+        const QColor iconColor =
+            lit ? QColor(255, 255, 255)
+                : (key.infrared ? QColor(90, 100, 114) : QColor(230, 237, 243));
+        KeyIcon::paintGlyph(
+            painter, QRectF(cx - 5.25, key.y - 5.25, 10.5, 10.5),
+            KeyIcon::glyphForVk(key.vk), iconColor);
     }
 
     // 音量条（红外，不参与映射）
@@ -203,15 +176,14 @@ void RemotePanel::paintEvent(QPaintEvent *event) {
                                     ? QColor(90, 100, 114)
                                     : (lit ? QColor(230, 237, 243)
                                            : QColor(160, 172, 186));
-        painter.setPen(rowColor);
-        if (entry.vk == 116) {
-            KeyIcon::paintMic(
-                painter, QRectF(122, rowY + 3.1, 8.0, 11.8),
-                lit ? QColor(255, 255, 255) : QColor(230, 237, 243));
-        } else {
-            painter.drawText(QRectF(116, rowY, 20, 18), Qt::AlignCenter,
-                             entry.glyph);
+        KeyIcon::Glyph glyph = KeyIcon::glyphForVk(entry.vk);
+        if (entry.label == QString::fromUtf8("电源")) {
+            glyph = KeyIcon::Glyph::Power;
+        } else if (entry.label == QString::fromUtf8("音量")) {
+            glyph = KeyIcon::Glyph::Volume;
         }
+        KeyIcon::paintGlyph(painter, QRectF(120.75, rowY + 3.75, 10.5, 10.5),
+                            glyph, lit ? QColor(230, 237, 243) : rowColor);
         painter.setPen(rowColor);
         const QString text = metrics.elidedText(
             entry.action, Qt::ElideRight, 110);

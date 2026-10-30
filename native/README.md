@@ -1,9 +1,12 @@
 # AgentRMC Native（C++/Qt + sherpa-onnx）
 
-这是 Python 版之外的原生迁移线。目标是把 app 本体从 ~349MB 压到 **~30MB**
-（不装本地后端；带 sherpa 运行库约 46MB），本地模型另算、可选，同时保留现有界面和功能。
+这里是**原生迁移线**的记录：为什么重写、工具链、构建、里程碑、与 Python 版的兼容性。
+面向使用者的产品文档（界面、键位与场景、语音三条路线、耳机、已知限制）在
+[根 README.md](../README.md)。
 
-当前分支：`feat/native-qt-whispercpp`
+原生线现在就是 `master` 上的当前实现；Python 线整体留在 `legacy-python` 分支。
+目标是把 app 本体从 ~349MB 压到 **~30MB**（不装本地后端；带 sherpa 运行库约 46MB），
+本地模型另算、可选，同时保留现有界面和功能。
 
 ## 为什么重写
 
@@ -122,18 +125,9 @@ call "C:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\v
   `native/models/`。设置页把默认路径显示为占位符，不会写死机器路径。
 - 本地后端在「开始监听」时预热麦克风，停止监听或切回 hotkey 时关闭；Windows 的
   麦克风指示器会在这段时间常亮，这是预期行为。
-- 耳机播放键（0xB3）在当前场景配了语音时被低层钩子吞掉并转成语音开关：按一下起、
-  再按一下收。范围默认按「场景有没有配语音」判定，要收紧用 `media_voice.swallow_in`
-  写名单；语音设置里有「耳机播放键 = 语音开关」总开关（写回 `media_voice.enabled`）。
-- 耳机的 transport 手势只在**电脑上没有活动播放会话**时才会被 Windows 注入成按键
-  （实测双击=`0xB3`、三击=`0xB0`，都带 `INJ`、无 keyup、无设备名）；正在播放时
-  播放/暂停直接投给 SMTC 媒体会话，键盘层看不到这一帧，也就抢不到——这种场合开语音
-  用遥控器 F5。三击是「下一曲」，留着切歌，不抢。
-- 耳机起的会话没有 keyup，结束时机自己兜：本地后端读麦克风能量，停嘴
-  `media_voice.silence_ms`（默认 6000）自动收尾；转发热键模式不录音、没有能量信号，
-  `media_voice.auto_stop_ms`（默认 30000）到点释放组合键。热键模式**不会**为了判停
-  去临时打开录音设备——那会把蓝牙耳机从 A2DP 拽进 Handsfree，实测会改掉手势的投递方式。
-- 想不戴耳机复现这一帧：`python rc_probe/sim_avrcp.py 2`（注入带 INJ、只发 keydown 的 0xB3）。
+- 耳机播放键（AVRCP 注入键）接管成语音开关的完整规则——生效范围、UI 开关、
+  `silence_ms` / `auto_stop_ms` 两条兜底、「有活动播放会话时系统不注入按键所以抢不到」——
+  写在根 README 的「耳机播放键也能开关语音」一节，本文不再重复。
 - 预览/截图：`AgentRMCNative.exe --pin qoder`，
   `AgentRMCNative.exe --shot shot.png --pin qoder`，或
   `AgentRMCNative.exe --shot-settings dialog.png`。

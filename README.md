@@ -1,74 +1,75 @@
 # AgentRMC
 
-把极米 / 快乐星球投影仪遥控器改造成电脑 Agent 的输入终端。
+把极米 / 快乐星球投影仪遥控器改造成电脑 Agent 的输入终端：按键走标准 HID（零驱动），
+语音交给前台 Agent 自己的语音键或本地模型转写，键映射按前台窗口自动切换，
+蓝牙耳机播放键也能当语音开关。
 
 实测机型为极米「快乐星球 O3」13 键 BLE 遥控器（VID `0x000D` / PID `0x3838`）；
 同款 HID 遥控器改 `config.json` 的 `device_mark` 即可复用。
 
-按键走标准 HID（零驱动），语音可以本地 whisper 转写、也可以转给 Agent 自己的语音键，
-按前台窗口自动切换键映射。
+当前实现是 **C++/Qt 6 原生版**（`native/`，v0.1.0；本身不接 LLM，模型在 Qoder / WorkBuddy 服务端）。
+Python 版留在 `legacy-python` 分支，两版读写同一套 `config.json` / `profiles.json`。
 
 ```
-遥控器 → HID → Raw Input ─┬→ 按键 → 场景 Profile → 动作（模拟按键/滚动/长按手势/启动程序）
-                          └→ 语音键 → ┬→ 本地 whisper → 指令表 / 粘贴给 Agent
-                                      └→ 转给 Agent 自己的语音键（hold / toggle）
+遥控器 → HID → Raw Input ─┬→ 按键 → 场景 Profile → 动作（按键/滚动/鼠标/模式/启动程序）
+蓝牙耳机 → AVRCP 注入键 ──┘
+                           └→ 语音键 → 一套状态机 → ┬→ 转发 Agent 语音热键（默认，0 模型）
+                                                    ├→ 本地 SenseVoice / Qwen3-ASR 转写 → 粘贴
+                                                    └→ 耳机播放键 = 同一个开关（无 keyup，只能切换）
 ```
 
 ## 快速开始
 
-```bash
+```bat
 git clone https://github.com/Samuel5945/AgentRMC.git && cd AgentRMC
 
-tools\setup.bat            # 建 venv + 装依赖
-tools\download_model.bat   # 下载 whisper small（约 480MB，默认走 127.0.0.1:7897 代理）
-
-tools\run.bat              # 命令行版
-# 或
-.venv\Scripts\python.exe agentrc_gui.py   # 图形界面
+rem 需要 Visual Studio（MSVC + 自带 CMake），Qt 6.8.3 msvc2022_64 装在 native\.qt\
+native\tools\build.bat                       rem 构建（lean 变体：build.bat lean）
+native\build\Release\AgentRMCNative.exe      rem 运行：启动即监听，关窗收进托盘
 ```
 
-打包 exe：
+可选的本地转写——不装也能用，默认路线是转发热键、0 模型：
 
-```bash
-tools\build_exe.bat        # 产物 release\AgentRMC\AgentRMC.exe，约 348MB
+```bat
+native\tools\download_voice_models.bat runtime       rem sherpa-onnx 运行库，约 20MB
+native\tools\download_voice_models.bat sensevoice    rem SenseVoiceSmall int8，下载 158MB
+native\tools\download_voice_models.bat qwen3         rem Qwen3-ASR 0.6B，下载 838MB（可选）
 ```
+
+`config.json` / `profiles.json` 放在 **exe 同目录**（首次构建从仓库根播种，之后保留你自己的改动）。
+构建细节、工具链和体积构成见 [native/README.md](native/README.md)。
 
 ## 项目结构
 
 ```
 AgentRMC/
-├── agentrc.py              核心：Raw Input 监听、语音状态机、按键路由、ASR、场景、指令
-├── agentrc_gui.py          Qt 图形界面
-├── config.json             语音键码、麦克风、ASR 参数
-├── profiles.json           场景表（按前台窗口切换键映射，支持 extends / 长按 / 导航键表）
-├── commands.json           语音指令表（说"打开浏览器"直接执行，仅 local 模式）
-├── tests/
-│   ├── test_keyrouter.py   无头测试：长按连滚 / 双动作 / 双击模式 / extends / 语音接法
-│   └── test_gui_geometry.py 无头测试：跨屏/小屏窗口回夹
-├── requirements.txt
-├── assets/
-│   ├── icon.ico            应用图标
-│   └── remote/pairing.png  配对示意图（图文引导弹窗用，打包时一起拷进 release）
-├── tools/
-│   ├── setup.bat           建 venv + 装依赖
-│   ├── download_model.bat  下载 whisper 模型（走代理，绕开 huggingface-hub）
-│   ├── build_exe.bat       打包 exe
-│   ├── run.bat             命令行启动
-│   ├── learn_keys.bat      按键学习（换遥控器时重新校准）
-│   └── probe_admin.bat     提权读原始 HID 报告（诊断用）
-├── rc_probe/               探测脚本，保留作协议分析参考
+├── native/                 ← 当前实现（C++/Qt 6 + sherpa-onnx）
+│   ├── src/core/           InputEngine（Raw Input + 钩子）、KeyRouter、Injector、
+│   │                       VoiceController、AsrEngine、AudioRecorder、ProfileStore、Presets
+│   ├── src/ui/             遥控器卡片、按键映射页、语音设置、使用引导、Toast、
+│   │                       ToggleSwitch、矢量键位图标（KeyIcon）
+│   ├── tests/              六个无头自测（store / router / takeover / voice / audio / asr）
+│   ├── tools/              build.bat、download_voice_models.bat
+│   ├── models/             本地模型（git 忽略，需自行下载）
+│   ├── third_party/        sherpa-onnx 预编译库（git 忽略）
+│   └── README.md           迁移记录、里程碑、工具链、构建与体积
+├── config.json             语音键码、耳机键、麦克风与 ASR 参数（开发期默认值）
+├── profiles.json           场景表（按前台窗口切换键映射，支持 extends / 双击 / 长按 / 导航键表）
+├── commands.json           语音指令表（**只有 Python 版实现**，原生版不读，见「语音指令」）
+├── rc_probe/               探测与验收脚本，保留作协议分析参考
+│   ├── media_probe.py         低层钩子 + Raw Input 双路记录媒体键（只读）
+│   ├── sim_avrcp.py           模拟耳机 AVRCP 注入帧（带 INJ、只发 keydown）
 │   ├── dump_gatt_winrt.py     枚举 GATT 服务表
-│   ├── probe_notify.py        订阅私有通道
-│   ├── probe_ctrl.py          试探控制通道命令
 │   ├── hid_caps.py            读 HID 报告能力
-│   ├── learn_keys.py          交互式按键学习
-│   ├── analyze_raw.py         分析原始报告
+│   ├── learn_keys.py          交互式按键学习（换遥控器时重新校准）
+│   ├── rawreport.py           提权读 256 字节透传包
 │   ├── nolegacy_probe.py      NOLEGACY + SendInput 行为（单进程）
 │   ├── nolegacy_probe2.py     NOLEGACY 的抑制范围（跨进程）
-│   ├── uia_probe.py           读 Electron 窗口的 UIA 树（TTS 前置调研）
-│   └── rawreport.py           提权读 256 字节透传包
-├── legacy/                 早期 pywebview 方案（WebView2 不兼容，已弃用）
-└── models/                 模型目录（git 忽略，需自行下载）
+│   └── uia_probe.py           读 Electron 窗口的 UIA 树（TTS 前置调研）
+├── tests/                  Python 线无头测试
+├── tools/                  Python 线的 setup / run / build 脚本
+├── agentrc.py / agentrc_gui.py / legacy/   历史 Python 线（完整文档在 legacy-python 分支）
+└── assets/                 应用图标与配对示意图
 ```
 
 ## 设备
@@ -133,115 +134,96 @@ keydown  keydown  keydown  ...  keydown   keyup
 > 这里很容易误判成"要帮实体键盘转发 F5"。不会：Raw Input 已经按设备路径过滤，
 > 只收遥控器的报文，实体键盘的 F5 根本不进这个状态机。
 
-## 改造架构
+## 架构
 
 ```
-┌──────────────────────────────────────────────────────────┐
-│  BLE 遥控器  (HOGP)                                       │
-└───────────────┬──────────────────────────────────────────┘
-                │ 标准 HID 键盘报告
-┌───────────────▼──────────────────────────────────────────┐
-│  Windows HID 驱动                                         │
-└───────────────┬──────────────────────────────────────────┘
-                │ Raw Input（按设备路径过滤，不干扰真实键盘）
-┌───────────────▼──────────────────────────────────────────┐
-│  agentrc.py                                              │
-│                                                          │
-│  ┌─────────────┐   ┌──────────────┐   ┌───────────────┐ │
-│  │ 按键 → 语义 │   │ 语音键长按   │   │ 动作执行      │ │
-│  │ up/down/... │──▶│ 判定 + 录音  │──▶│ 模拟按键      │ │
-│  └─────────────┘   └──────┬───────┘   │ 剪贴板 + 粘贴 │ │
-│                           │            └───────────────┘ │
-│                    ┌──────▼───────┐                      │
-│                    │ faster-whisper│                     │
-│                    │  本地转写     │                     │
-│                    └──────────────┘                      │
-└──────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────┐
+│  BLE 遥控器 (HOGP)         蓝牙耳机 (AVRCP → 注入键)       │
+└───────────────┬───────────────────────────┬────────────────┘
+                │ 标准 HID 键盘报告          │
+┌───────────────▼───────────────────────────▼────────────────┐
+│  Windows HID 驱动 / 蓝牙 AVRCP 服务                        │
+└───────┬───────────────────────────────────────────┬────────┘
+        │ Raw Input（按设备路径过滤，只收遥控器）   │ WH_KEYBOARD_LL
+┌───────▼────────────────────────────────────────────────────┐
+│  AgentRMCNative.exe   C++/Qt 6 Widgets                     │
+│                                                            │
+│  InputEngine ──▶ KeyRouter ──▶ Injector                    │
+│   单击 / 双击 / 长按 · 连发加速 · 音量·鼠标·导航模式 · 接管 │
+│        │                                                   │
+│        └──▶ VoiceController（一套语音键状态机，三条路线共用）
+│             转发热键 │ SenseVoice │ Qwen3-ASR │ 耳机开关   │
+│                      └─ AsrEngine（sherpa-onnx C API）     │
+│  ProfileStore / Presets（同一套 config.json、profiles.json）
+└────────────────────────────────────────────────────────────┘
 ```
+
+| 模块 | 职责 |
+|---|---|
+| `core/InputEngine` | Raw Input 收键 + 设备过滤 + 低层钩子吞键，两路喂同一个 Router |
+| `core/KeyRouter` | 单击 / 双击 / 长按 / 连发加速 / 模式切换 / 双击判定窗 |
+| `core/Injector` | SendInput 按键、滚动、鼠标、启动程序、显示器亮度 |
+| `core/NativeHooks` | `WH_KEYBOARD_LL`：接管映射键、鼠标模式、耳机播放键判定 |
+| `core/VoiceController` | 语音键状态机：按住 / 切换、耳机开关、静音兜底、3 秒自测、粘贴 |
+| `core/AsrEngine`、`core/AudioRecorder` | sherpa-onnx 转写；WinMM 录音 + 重采样（Qt 6.8 没带 Multimedia） |
+| `core/ProfileStore`、`core/Presets` | 配置与场景读写、动作预设、写回前自动 `.bak` |
+| `src/ui/*` | 遥控器卡片、按键映射页、语音设置、使用引导、Toast、ToggleSwitch、矢量键位图标 |
 
 ## 用法
 
 ### 首次准备
 
-```bash
-tools\setup.bat          # 建 venv + 装依赖
-tools\download_model.bat # 下载 whisper small 模型（约 480MB，走 7897 代理）
-tools\download_model.bat medium   # 可选：medium / large（=large-v3）
-```
-
-模型放在 `models/faster-whisper-<尺寸>/`，程序会优先加载本地目录，不需要联网。
-图形界面的「本地模型」开关和尺寸下拉可以直接切换，详见下文。
-
 遥控器第一次配对：把它靠近要连接的设备，**同时长按「返回」+「主页」约 3 秒**，指示灯快闪后
 在系统蓝牙列表里点它。配对过一次之后不用再配，按一下任意键就会自动回连。
-软件里点顶栏 **使用引导** 会弹出图文版步骤。
+软件里点顶栏 **使用引导** 会弹出图文版步骤（配对示意图 + 四步配对 + 常用手势 + 模式说明 +
+已知限制），卡片上的 `蓝牙设置` 直接打开系统的蓝牙设置页。
 
-> HuggingFace 直连不通时，`huggingface-hub` 新版对 `HTTPS_PROXY` 支持有问题（会报 502）。
-> 所以 `download_model.bat` 直接用 `curl -x` 走代理抓文件，绕开这个库。
-> 代理地址在 bat 开头的 `set PROXY=` 改。
+> 只需要普通用户权限，不需要管理员。
 
-### 图形界面（推荐）
+### 界面
 
-双击 **`release\AgentRMC\AgentRMC.exe`**。窗口两栏，左栏上下两块：
+单窗口两栏，Qt Widgets + 一份 QSS：
 
-- **左上 · 遥控器** —— 按真实键位画的键位图：按下哪个键就实时高亮，进入模式时可用键描边，
-  电源键与音量拨杆标灰（红外，电脑收不到）。下方是**连接状态灯**
-  （绿=已连接 · HID 在位 / 橙=未连接，按一下任意键回连 / 灰=未发现）和 `蓝牙设置` 按钮
-- **左下 · 语音** —— 细电平/录音脉冲、两行识别结果、`开始监听`（监听中变红）、
-  右上角 `试麦`（录 4 秒并转写），以及一行 **`本地模型` 开关 + small/medium/large + 状态**。
-  语音接法、指令条数、设备号收进「语音」标题的悬停提示，不占版面
+- **左上 · 遥控器卡片** —— 按真实键位画的矢量键位图：按下实体键时对应键和右侧表格行同时高亮，
+  底部显示刚触发的「键位 · 动作」；右侧按当前场景列出生效映射，改完立即刷新；
+  徽标随状态切 `待机 / 监听中 / 模式名`；电源键与音量拨杆标灰（红外，电脑收不到）
+- **左下 · 语音卡片** —— 状态与当前接法（例：`Qoder · CTRL+SHIFT+V · 按一下开始/再按一次结束`）、
+  `测试 3 秒`、`模型设置`、最近一次转写（超长截断，悬停看全文）、事件条数与 `清空`
 - **右 · 三页签** —— `事件流`（可清空）、`按键映射`、`使用引导`
+- **顶栏** —— 状态点 + `监听中 / 未监听` + 当前场景，右侧 `使用引导` 和窗口按钮
+- **托盘** —— 左键唤回界面并置前；右键 显示主界面 / 隐藏到托盘、开始监听 / 停止监听、退出；
+  窗口 `✕` **只是收进托盘，监听继续**（`ui.close_to_tray` 设 false 则关窗即退出）
 
-顶栏是一行状态文字：`● 监听中 · 76% · default`，右侧 `使用引导` 随时弹图文引导窗口。
+`ui.auto_listen`（默认 true）启动即监听；`ui.start_minimized` 启动就藏进托盘、不抢 Qoder 的焦点。
+单实例互斥量与 Python 版共用：另一版在跑时点「开始监听」会提示 `AgentRMC 已在运行`，
+避免每个键注入两次。跨屏与缩放：PassThrough DPI（175%/225% 不取整）+ 原生拖动 +
+切屏回夹 + 几何记忆。
 
-两个按钮：`开始监听` / `试麦`。
-`config.json` 里的 `ui.auto_listen` 为 `true` 时，程序启动后自动开始监听；
-同时只允许一个实例（第二个会弹窗退出，避免每个键注入两次）。
-`ui.start_minimized` 为 `true` 时窗口启动就藏在托盘里，不占屏幕也不抢 Qoder 的焦点
-（有托盘就直接不显示，点托盘图标再叫出来）；
-**第一次启动例外**——会正常开窗口并自动弹出图文引导，看过一次（切页签或关窗）才记住。
+模式提示：进入音量 / 鼠标 / 导航模式时，鼠标所在屏幕底部居中弹 2 秒置顶提示
+（进入给操作说明、退出给已退出提示），不抢焦点。
 
-**托盘常驻**：右下角托盘图标（`assets/icon.ico`）就是后台监听的入口。
+### 按键映射页
 
-| 操作 | 行为 |
-|---|---|
-| 左键点托盘图标 | 唤回主界面并置前（窗口已经在前台时不会把它藏掉） |
-| 右键托盘 → 显示主界面 / 隐藏到托盘 | 手动开关界面 |
-| 右键托盘 → 开始监听 / 停止监听 | 不打开窗口也能停掉监听 |
-| 右键托盘 → 退出 AgentRMC | 真退出：先 `ctl.stop()` 再结束进程 |
-| 窗口右上角 `✕` | **只是收进托盘，监听继续**（第一次会弹一条气泡提示） |
-
-`ui.close_to_tray` 设为 `false` 可以退回老行为（关窗即退出）；系统托盘不可用时也自动退回。
-托盘提示文字实时显示状态：`AgentRMC · 监听中 · qoder`。
-
-窗口跨屏/缩放：启用了 Qt 的 `PassThrough` DPI 策略（175%/225% 不取整）、用
-`startSystemMove` 走系统原生拖动，切屏后把窗口回夹到当前屏幕的可用区域（小于最小尺寸
-的屏幕会缩到能放下），并在退出时把几何存进 `QSettings("AgentRMC","AgentRMC")`，
-下次启动恢复后同样回夹。
-
-#### 按键映射页
-
-右侧标签切到 **按键映射**，按物理键列出当前 Profile 的完整映射。顶部场景行用
+右侧切到 **按键映射**，按物理键列出当前场景的完整映射。顶部场景行用
 **绿点 = 跟随前台命中 / 橙点 = 下拉框钉住**，后面是命中该场景的进程或标题；
 下面是 `键位 / 单击 / 双击 / 长按` 四列，分成 方向键、功能键、语音与直通 三组。
 
 **单击、双击、长按三个单元格都可以直接点**，弹出常用动作预设（导航键、滚动、浏览器、
 编辑器、系统、鼠标、双击模式、按住重复/按住动作）。菜单最上面的 **`自定义组合键…`**
 弹出一个录入框，**在键盘上按下想要的按键/组合（可含 Ctrl/Shift/Alt/Win）直接录入**，
-不用碰 JSON；Esc 取消。选完立刻写回 `profiles.json` 并热重载，
-同时保留上一版 `profiles.json.bak`。语音键和对焦键是固定行为
-（语音接法 / F11 原生直通），单元格不可编辑。
+不用碰 JSON；Esc 取消。选完立刻写回 `profiles.json` 并热重载，同时保留上一版
+`profiles.json.bak`。语音键和对焦键是固定行为（语音接法 / F11 原生直通），单元格不可编辑。
 
 | 元素 | 说明 |
 |---|---|
 | 场景行 | 绿色点 = 跟随前台自动命中；橙色点 = 固定预览。后面的匹配规则说明为什么命中（进程名 / 窗口标题，悬停看完整列表） |
-| 下拉框 | 默认 `跟随前台`，切窗口时表格自动跟着变；也可以钉住某个 profile 预览 |
+| 下拉框 | 默认 `跟随前台`，切窗口时表格自动跟着变；也可以钉住某个场景预览 |
 | `键位` | 遥控器物理键：`↑ ↓ ← → OK 返回 菜单 主页 语音 对焦` |
-| `单击` | Profile 解析后的动作，下面一行是实际按键/效果，如 `滚轮 ↑ 300`、`Enter 直通`、`CTRL+T`；点格改动作 |
+| `单击` | 场景解析后的动作，下面一行是实际按键/效果，如 `滚轮 ↑ 300`、`Enter 直通`、`CTRL+T`；点格改动作 |
 | `双击` | 默认是 Router 内置手势：返回=`音量/亮度模式`、菜单=`鼠标模式`、主页=`导航模式`。点格可以改成任意预设，或 `关闭双击`；改成其它动作后单击会延迟 0.3s 等第二击 |
 | `长按` | 默认继承动作自带的 `hold_repeat` / `hold_action`；点格可以改成 `连续触发`、`连续加速`、`按住某动作` 或关闭。语音键固定 `按住说话` |
 | 行联动 | 点选或悬停一行，左侧遥控器图上的对应键会亮起蓝环，眼不用在两个面板之间找 |
-| 接管原生键 | 右下角开关：当前前台场景的映射键原生事件被吞掉，再按映射注入。实体键盘同名键也会按映射处理，双击键的单击延迟约 0.3s；默认关 |
+| 接管原生键 | 右下角开关：当前前台场景的映射键原生事件被低层钩子吞掉，再按映射注入。实体键盘同名键也会按映射处理，双击键的单击延迟约 0.3s；默认关 |
 | `高级配置` | 用默认编辑器打开 `profiles.json`（匹配规则、自定义动作等） |
 | `重新加载` | 改完 json 不用重启程序，点一下热加载 |
 
@@ -253,130 +235,67 @@ tools\download_model.bat medium   # 可选：medium / large（=large-v3）
 
 窗口变矮时表格纵向滚动；窗口极窄时保持四列不挤压，横向滚动兜底。正常 1000×680 窗口没有滚动条。
 
-源码方式启动：
+### 命令行与界面验收
 
-```bash
-.venv\Scripts\python.exe agentrc_gui.py
-.venv\Scripts\python.exe agentrc_gui.py --tab keymap   # 启动直接停在按键映射页
-.venv\Scripts\python.exe agentrc_gui.py --tab keymap --pin qoder   # 固定预览 qoder
+```bat
+native\build\Release\AgentRMCNative.exe --pin qoder                    rem 固定预览某场景
+native\build\Release\AgentRMCNative.exe --shot out.png --tab 1         rem 离屏渲染整窗截图
+native\build\Release\AgentRMCNative.exe --shot-settings dialog.png     rem 截语音设置对话框
+native\build\Release\AgentRMCNative.exe --shot-guide guide.png         rem 截使用引导
 ```
 
-截图/验收（不启动监听、不弹第二个实例）：
+`--shot` 系列不会启动监听，也不抢单实例，专门用来做界面验收。
 
-```bash
-.venv\Scripts\python.exe agentrc_gui.py --shot out.png --tab keymap --pin qoder
+### 构建
+
+```bat
+native\tools\build.bat              rem 完整构建 + windeployqt
+native\tools\build.bat lean         rem 只打 hotkey 包（不链 sherpa 运行库）
 ```
 
-### 命令行方式
+工具链（MSVC + CMake + Qt 6.8.3）、手动 cmake 命令、`windeployqt` 会删掉哪些无用 DLL、
+以及各部分体积构成，见 [native/README.md](native/README.md)。
 
-```bash
-# 列出可用麦克风
-.venv\Scripts\python.exe agentrc.py --list-mic
+### 自测
 
-# 调试：打印遥控器所有按键
-.venv\Scripts\python.exe agentrc.py --list-keys
-
-# 验证语音链路（录 5 秒并转写）
-.venv\Scripts\python.exe agentrc.py --test-mic
-
-# 正常运行
-.venv\Scripts\python.exe agentrc.py
+```bat
+native\build\Release\AgentRMCStoreTest.exe
+native\build\Release\AgentRMCRouterTest.exe
+native\build\Release\AgentRMCTakeoverTest.exe
+native\build\Release\AgentRMCVoiceTest.exe
+native\build\Release\AgentRMCAudioTest.exe 2 rc_probe\mic_test.wav
+native\build\Release\AgentRMCAsrTest.exe native\models\sensevoice\test_wavs\zh.wav native\models\sensevoice sensevoice
 ```
 
-也可以双击 `tools\run.bat`。**不需要管理员权限。**
+覆盖：预设写回、`.bak`、同键原生去重、`extends` 继承、custom 动作；Router 的滚动 / tap /
+双击 / 长按 / 媒体 · 导航 · 鼠标模式；接管下的直通补发、连发补发、模式标记和钩子吞键判定
+（含耳机键）；语音后端解析、WAV 头、SenseVoice / Qwen3 模型发现；真实麦克风采集
+（1 秒预热、400ms 预录、松手等最后一块）；以及 SenseVoice 端到端转写（第二次为热态延迟）。
+`AgentRMCAsrTest` 只在启用 sherpa 时生成。
 
-### 打包成 exe
+> 无头测试全绿不等于输入链路对：耳机键这类只在真机出现的差异，用
+> `rc_probe/media_probe.py`（只读记录低层钩子 + Raw Input）配
+> `rc_probe/sim_avrcp.py`（注入一帧带 `INJ`、只发 keydown 的 `0xB3`）做 A/B 复现。
 
-```bash
-.venv\Scripts\python.exe -m PyInstaller --noconfirm --windowed ^
-  --name AgentRMC --onedir --icon=assets/icon.ico ^
-  --collect-data faster_whisper ^
-  --distpath release --workpath build_release ^
-  --exclude-module tkinter ^
-  --exclude-module PySide6.QtWebEngineCore ^
-  --exclude-module PySide6.QtWebEngineWidgets ^
-  --exclude-module PySide6.Qt3DCore ^
-  --exclude-module PySide6.QtMultimedia ^
-  agentrc_gui.py
-```
+## 语音指令（只有 Python 版实现）
 
-产物 `release/AgentRMC/` 约 348MB（ctranslate2 58MB + Qt 运行时 + onnxruntime）。
+`commands.json` 那张「说"打开浏览器"就直接执行」的本地指令表，**只有 Python 版**读它；
+原生版不读 `commands.json`，转写结果一律走粘贴（转发热键路线则整个交给 Qoder / WorkBuddy
+自己的识别）。要这条能力就用 `legacy-python` 分支，或者按下面的格式把它补进原生版。
 
-打包后需要把 `models/` 和三个 json 配置放到 exe 同级目录（打包脚本不会自动带，因为模型 462MB）。
-开发机上可以用目录联接省空间：
-
-```powershell
-New-Item -ItemType Junction -Path release\AgentRMC\models -Target D:\githubrepos\Agentrmc\models
-```
-
-程序启动时从 **exe 所在目录**读配置和模型（`_app_dir()` 里判断了 `sys.frozen`）。
-
-按住语音键说话，松手结束：当前用 `hotkey` 模式，把语音交给 Qoder 自己的 Ctrl+Shift+V
-（toggle：按下开始、松手停止；先把焦点点进 Qoder 输入框）。`local` 模式则自己录音转写
-再粘贴，见下文。
-
-### 实测性能
-
-| 指标 | 值 |
-|---|---|
-| 模型加载 | 0.9s（本地） |
-| 4.5s 音频转写 | 1.1s（约 4 倍实时） |
-| 中文准确率 | 测试句 100% 正确 |
-| 硬件 | CPU / int8 量化 |
-
-### 无头测试
-
-不碰真实键盘、不注入任何按键，验证长按连滚、点击/长按双动作、
-`extends` 合并和 Qoder 开关式语音的时序：
-
-```bash
-.venv\Scripts\python.exe tests\test_keyrouter.py
-```
-
-## 语音指令
-
-只在 `voice.mode: local` 下生效：识别出的文本会**先过一遍本地指令表**，命中就直接执行；
-没命中才粘贴给 Agent。当前 `hotkey` 模式把语音直接交给 Qoder 自己的识别，不走这张表。
-
-| 说 | 动作 |
-|---|---|
-| 打开浏览器 / 开浏览器 / 上网 | 启动 Edge |
-| 打开计算器 / 记事本 / 资源管理器 | 启动对应程序 |
-| 截图 / 截个图 | `Win+Shift+S` |
-| 静音 | `VK_MUTE` |
-| 音量加 / 大声点 | 音量 +3 格 |
-| 音量减 / 小声点 | 音量 -3 格 |
-| 播放 / 暂停 | 媒体播放键 |
-| 锁屏 / 锁定电脑 | 锁定工作站 |
-| 其他任何话 | 粘贴给 Agent |
-
-规则在 `commands.json`，改完重启生效：
+Python 版的规则形态留在这里，方便移植时照抄：
 
 ```jsonc
 {
   "rules": [
-    {
-      "match": ["打开浏览器", "上网"],          // 命中任一关键词即触发
-      "action": { "type": "run", "cmd": "start msedge" }
-    },
-    {
-      "match": ["截图"],
-      "action": { "type": "key", "vk": 83, "mods": ["win", "shift"] }
-    }
+    { "match": ["打开浏览器", "开浏览器", "上网"], "action": { "type": "run", "cmd": "start msedge" } },
+    { "match": ["截图"], "action": { "type": "key", "vk": 83, "mods": ["win", "shift"] } }
   ]
 }
 ```
 
-`action.type` 支持：
-
-| type | 字段 | 说明 |
-|---|---|---|
-| `run` | `cmd` | 执行命令/启动程序 |
-| `key` | `vk`、`mods`、`repeat` | 模拟按键，`mods` 可为 win/ctrl/alt/shift |
-| `paste` | `enter` | 粘贴文本，`enter: true` 则自动回车 |
-| `enter` | — | 粘贴并回车 |
-
-匹配时会先做归一化，去掉「帮我 / 请 / 一下 / 个 / 吧」这类口语填充词，所以「帮我截个图吧」也能命中「截图」。
+`action.type` 支持 `run`（`cmd`）、`key`（`vk`、`mods`、`repeat`）、`paste`（`enter`）、`enter`。
+匹配前先归一化，去掉「帮我 / 请 / 一下 / 个 / 吧」这类口语填充词，所以「帮我截个图吧」也能命中「截图」。
 
 ## 场景 Profile
 
@@ -527,8 +446,8 @@ agent/qoder 的实际用法：
     "vkey": 116,                       // 语音键的 vkey
     "confirm_window_ms": 250,          // 判定连发的时间窗
     "min_repeats": 2,                  // 至少几次才算长按
-    "silence_stop_ms": 700,            // 静音多久算说完（local 模式）
-    "min_record_ms": 300               // 短于此视为误触（local 模式）
+    "silence_stop_ms": 700,            // 静音多久算说完（本地后端）
+    "min_record_ms": 300               // 短于此视为误触（本地后端）
   },
   "media_voice": {                     // 耳机播放/暂停键 = 语音开关
     "enabled": true,
@@ -540,17 +459,19 @@ agent/qoder 的实际用法：
   "keys": { "38": "up", "40": "down" },        // vkey -> 语义名
   "actions": { "up": { "type": "key", "vk": 38 } },  // 语义名 -> 动作
   "voice": {
-    "input_device": null,              // null=系统默认，或填设备序号
+    "backend": "hotkey",               // hotkey=转发 Agent 语音键（默认，0 模型）
+                                       // sensevoice / qwen3 = 本地转写
+    "sensevoice_dir": "",              // 留空则找 exe 同目录 models\sensevoice，再退到 native\models
+    "qwen3_dir": "",
+    "input_device": null,              // null=系统默认，或填设备序号（本地后端才用）
     "sample_rate": 16000,
-    "asr_model": "small",              // small/medium/large，界面里的尺寸下拉会写这里
     "asr_language": "zh",
-    "paste": true,
-    "auto_enter": false,
-    "mode": "hotkey",                  // local=自己录音转写（可选）；hotkey=转给 Agent
+    "paste": true,                     // 转写后粘贴到前台窗口
+    "auto_enter": false,               // 粘贴后自动回车
     "hotkey": {
       "vk": 86,                        // vk 86 = V，即 Ctrl+Shift+V（Qoder 的语音键）
       "mods": ["ctrl", "shift"],
-      "trigger": "hold"                // hold=按住；toggle=按下开、松手再按一次关
+      "trigger": "hold"                // hold=按住；toggle=按一下开、再按一下关
     }
   },
   "ui": {
@@ -561,15 +482,20 @@ agent/qoder 的实际用法：
 }
 ```
 
-profile 里的 `voice.trigger` 只在 `hotkey` 模式下生效（当前）；`qoder` 和 `agent`
-（WorkBuddy）都是 `toggle`（Ctrl+Shift+V / Ctrl+D，每按一次切换开/关）。`local` 模式下这些都不参与。
+profile 里的 `voice.trigger` 只在转发热键这条路线下生效；`qoder` 和 `agent`（WorkBuddy）
+都是 `toggle`（Ctrl+Shift+V / Ctrl+D，每按一次切换开/关）。
 
-### 语音键的两种用法
+### 语音键的三条路线
 
-| mode | 行为 | 适用 |
+| `voice.backend` | 行为 | 代价 |
 |---|---|---|
-| `local` | 遥控器语音键 → 电脑麦克风录音 → 本地 whisper 转写 → 粘贴 | 完全离线；识别效果视模型而定（实测本机不如 Qoder） |
-| `hotkey`（当前） | 遥控器语音键 → 转给 Agent 自己的语音快捷键 | 省掉 462MB 模型，用 Qoder 自己的识别 |
+| `hotkey`（默认） | 语音键 → 转给前台 Agent 自己的语音快捷键 | 0 模型、不占内存；识别效果就是 Qoder / WorkBuddy 的效果 |
+| `sensevoice` | 语音键 → 电脑麦克风录音 → sherpa-onnx SenseVoiceSmall 转写 → 粘贴 | 模型约 230MB（下载包 158MB）；中文/粤语/英日韩，自带标点 ITN |
+| `qwen3` | 同上，换 Qwen3-ASR 0.6B int8 | 模型约 1GB（下载包 838MB）；语言更多，CPU 上比 SenseVoice 慢 |
+
+没有 `backend` 字段时兼容 Python 版配置里的 `mode: local`（按 `sensevoice` 处理）；
+`asr_model`（small/medium/large）是 Python 版 faster-whisper 的尺寸，原生版不读。
+本地后端实测：3 秒音频热态转写约 150ms，首帧含模型加载约 1.8s（CPU / int8）。
 
 `hotkey` 再分两种触发方式，写在 `voice.hotkey.trigger`（或 profile 的 `voice.trigger`）：
 
@@ -618,22 +544,21 @@ Qoder / WorkBuddy 场景在前台时，蓝牙耳机的**播放/暂停**手势会
 
 > 音量键不产生任何键码（AVRCP 绝对音量），接不了；耳机麦克风在系统里也没有录音端点。
 
-#### 图形界面里的本地模型开关与尺寸
+#### 语音设置里选路线
 
-语音卡片中间那行 `本地模型 [开关] [small ▾] 状态` 就是 `voice.mode` / `voice.asr_model`：
+语音卡片的 `模型设置` 打开对话框，四样东西对应 `config.json`：
 
-- **关**（默认，hotkey）：启动和切换时都不加载 whisper，语音键转给 Qoder / WorkBuddy 自己识别；
-  尺寸下拉只把选择写进配置，不占内存。
-- **开**（local）：立即在后台加载所选尺寸，右侧状态显示 `加载中… / 就绪 / 失败`，
-  事件流里能看到加载日志；关闭开关会释放模型（约 462MB）。
-- 尺寸切换立刻生效：开着就重新加载，关着只记下选择。`large` 实际就是 `large-v3`。
-- 两个选择都直接写回 `config.json`，下次启动照旧。`models/` 里没有对应目录时会先联网下载
-  （走 `voice.proxy`）；网络不稳就用 `tools\download_model.bat medium` 先下好再切换。
-- `测试麦克风` 需要本地模型转写一次：开关关着时临时加载，测完自动释放。
+- **识别方式** —— `转发当前应用热键（0 模型）` / `本地 SenseVoice（约 230MB）` /
+  `本地 Qwen3-ASR（约 1GB）`，写回 `voice.backend`；下面那行说明会随选择变，
+  热键路线会直接告诉你各场景转发成哪个组合键
+- **模型目录** —— SenseVoice / Qwen3 各一行，留空就用默认路径（先看 exe 同目录
+  `models\<名称>`，再退到 `native\models\<名称>`），右边实时显示 `✓ 已找到模型`
+  或 `未找到模型文件`；`下载脚本` 按钮直接跑 `tools\download_voice_models.bat`
+- **转写后粘贴到前台窗口 / 粘贴后自动回车** —— `voice.paste` / `voice.auto_enter`
+- **耳机播放键 = 语音开关** —— `media_voice.enabled`，下面一行灰字列出当前会接管的场景
 
-`hotkey` 模式下，按键映射页第一行会显示实际接法，启动时**不会加载本地 whisper 模型**
-（省 462MB 内存），默认就是这一种。切到 `local` 模式则会在启动时加载
-`models/faster-whisper-<尺寸>`，按键映射页第一行显示「本地 whisper · 按住录音」。
+选本地后端时，「开始监听」会预热麦克风（停止监听或切回热键时释放），Windows 的麦克风
+指示器在这段时间常亮是预期行为。选热键时程序完全不碰录音设备。
 
 切回 `hotkey` 时默认组合是 **Ctrl+Shift+V**（`vk 86` + ctrl/shift），也就是 Qoder 的语音键。
 换成别的组合只改一行：
@@ -823,7 +748,7 @@ python rc_probe\atvv_probe.py --seconds 40
 
 脚本会先找 `AB5E`，找不到退化试 `D1FF`，把每一帧写进 `rc_probe/atvv_raw.jsonl`，
 拿到音频就解成 `rc_probe/atvv_16k.wav`。换一支真 ATVV 遥控器，这套代码就能直接
-把遥控器麦克风接进 whisper，电脑麦克风可以彻底不用。
+把遥控器麦克风接进本地转写，电脑麦克风可以彻底不用。
 
 ### 5. 核心限制：默认映射是"叠加"，不是"替换"
 
@@ -893,6 +818,19 @@ Router 按映射处理。
 4. **硬件桥接**：ESP32-C6 / CH585D 从 BLE 空口直接抓，根本不进 Windows 键盘栈
    （参考 `flydog555/xiaomi-remote-voice-assistant` 的做法）。
 
+## 与 Python 版的关系
+
+- **当前实现是原生版**（`native/`，C++/Qt 6）。Python 版整体留在 `legacy-python` 分支，
+  那份 README 就是上面这些章节的 Python 语境版本（含 `tools\setup.bat` / PyInstaller 打包 /
+  faster-whisper 尺寸切换），本文不再重复。
+- **数据格式同一套**：`config.json` / `profiles.json` schema 两边通用，你现有的映射
+  （左键双击=退格、长按=PageUp 等）原生版直接可读；`voice.mode: local` 会被当成
+  `voice.backend: sensevoice`，`asr_model` 与 `commands.json` 原生版不读。
+- **共用单实例互斥量** `Local\AgentRMC.SingleInstance`：两版不能同时监听，后启动的那个
+  点「开始监听」会提示 `AgentRMC 已在运行`——这是故意的，避免同一个键注入两次。
+- 迁移与验收期间可以把两版并排跑（一版监听、一版只看界面），事件流互相对照。
+- 原生版的迁移记录、里程碑和构建细节见 [native/README.md](native/README.md)。
+
 ## 参考项目
 
 写这部分时参考的都是实测跑通过的开源实现，不是纸上协议：
@@ -929,6 +867,9 @@ Router 按映射处理。
 - [x] 启动即监听 + 单实例保护 + 托盘常驻（关窗只隐藏、启动不闪窗）
 - [x] 实测 NOLEGACY 的真正语义（按应用生效，用户态无法拦截原生键）
 - [x] 耳机播放键接管语音（前台场景吞键；AVRCP 无 keyup 只能 toggle；有活动播放会话时系统不注入按键，抢不到）
-- [x] 图形界面切换本地模型开关与 small/medium/large 尺寸（写回 config.json，热加载/释放）
+- [x] 语音设置里选路线 / 模型目录 / 粘贴回车 / 耳机开关（写回 config.json，热加载）
+- [x] 原生线 M1–M5：壳、配置与映射表、输入链、钩子接管、三条语音路线（细节见 native/README.md）
+- [ ] 原生线收尾：BLE 电量、跨屏 DPI 回归、托盘菜单、体积回归
+- [ ] 把语音指令表（`commands.json`）移植到原生版
 - [ ] TTS 播报 Agent 回复，形成语音闭环
 - [ ] 若换 ATVV 遥控器（RC003-MS / 遥控器 2 Pro），把 `rc_probe/atvv_probe.py` 的解码链并进主程序

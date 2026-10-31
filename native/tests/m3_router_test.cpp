@@ -27,6 +27,10 @@ public:
     void mouseClick() override { ++clicks; }
     void brightness(int delta) override { brightnesses.push_back(delta); }
     void run(const QString &cmd) override { runs.push_back(cmd); }
+    bool launch(const QString &appId) override {
+        launches.push_back(appId);
+        return appId != QStringLiteral("missing");
+    }
 
     void clear() {
         keys.clear();
@@ -35,6 +39,7 @@ public:
         clicks = 0;
         brightnesses.clear();
         runs.clear();
+        launches.clear();
     }
 
     std::vector<InjectedKey> keys;
@@ -43,6 +48,7 @@ public:
     int clicks = 0;
     std::vector<int> brightnesses;
     std::vector<QString> runs;
+    std::vector<QString> launches;
 };
 
 bool check(bool condition, const char *message) {
@@ -85,7 +91,14 @@ Profile makeProfile() {
         {"k37_d_backspace", keyAction(0x08, QStringLiteral("退格"))},
         {"k37_h_page_up", keyAction(0x21, "PageUp")},
         {"nav_next", keyAction(0x09, "Tab")},
+        {"open_qoder", QJsonObject{{"type", "launch"}, {"app", "qoder"},
+                                   {"label", QStringLiteral("打开 Qoder")}}},
+        {"open_missing",
+         QJsonObject{{"type", "launch"}, {"app", "missing"},
+                    {"label", QStringLiteral("打开 没装的")}}},
     };
+    profile.keys.insert("70", "open_qoder");
+    profile.keys.insert("71", "open_missing");
     profile.doubleMap = QJsonObject{{"37", "k37_d_backspace"}};
     profile.hold = QJsonObject{{"37", "k37_h_page_up"}};
     profile.nav = QJsonObject{
@@ -207,6 +220,24 @@ int main() {
     router.keyDown(27, 800.5);
     router.keyUp(27, 800.55);
     ok &= check(router.mode().isEmpty(), "cursor exit");
+
+    // 启动应用：交给注入器；打不开时报错误事件，不记成功。
+    fake.clear();
+    events.clear();
+    router.keyDown(70, 900.0);
+    router.keyUp(70, 900.05);
+    ok &= check(fake.launches.size() == 1 &&
+                    fake.launches.back() == QStringLiteral("qoder"),
+                "launch app");
+    ok &= check(!events.empty() &&
+                    events.back().contains(QString::fromUtf8("打开 Qoder")),
+                "launch event");
+    fake.clear();
+    events.clear();
+    router.keyDown(71, 901.0);
+    router.keyUp(71, 901.05);
+    ok &= check(events.size() == 1 && events.back().startsWith("error"),
+                "launch failure event");
 
     if (!ok) {
         return 1;

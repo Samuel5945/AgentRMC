@@ -1,5 +1,7 @@
 #include "Injector.h"
 
+#include "core/AppLauncher.h"
+
 #include <QHash>
 #include <QProcess>
 #include <QThread>
@@ -261,4 +263,8 @@ void WinInjector::run(const QString &cmd) {
     if (!cmd.trimmed().isEmpty()) {
         QProcess::startDetached("cmd.exe", QStringList{"/c", cmd});
     }
+}
+
+bool WinInjector::launch(const QString &appId) {
+    return AppLauncher::launch(appId);
 }

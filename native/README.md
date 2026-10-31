@@ -95,7 +95,16 @@ call "C:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\v
    音量/鼠标/导航模式后，模式内可用键画紫环，卡片徽标切换成模式名；当前鼠标所在
    屏幕的底部居中弹出 2 秒置顶提示（进入给操作说明，退出给已退出提示），不抢焦点。
    AgentRMC 本身不接 LLM；真正的 LLM 在 Qoder / WorkBuddy 服务端。
-6. **收尾**：BLE 电量、跨屏 DPI、托盘菜单、windeployqt 打包、体积回归。
+6. **v0.2.0 · 打开应用（已完成）**：`core/AppLauncher` 内置 10 个应用（浏览器 /
+   Chrome / Edge / Qoder / Qoder CN / WorkBuddy / DeepSeek / Codex / ZCode / 剪映）
+   和它们的中文叫法，找启动目标按「开始菜单 `.lnk` → Windows 应用 AUMID → 注册表
+   `http` 关联的默认浏览器 exe」的顺序，开始菜单递归扫一次并缓存，装完软件可在
+   「应用」页「重新扫描」。三个入口共用同一套解析：语音（本地识别转写后先过指令，
+   命中就启动、不再粘贴）、新增的「应用」页（安装状态 + 来源 + 当场点「打开」）、
+   按键映射的「启动应用」预设（单击/双击/长按都有，动作是 `{"type":"launch","app":…}`）。
+   转发热键路线没有本地文本，语音启动只在本地识别下生效；「应用」页右下角的
+   「语音启动」开关（`ui.voice_launch`，默认开）用来在口述时把这条行为整体关掉。
+7. **收尾**：BLE 电量、跨屏 DPI、托盘菜单、windeployqt 打包、体积回归。
 
 ## 数据与兼容性
 
@@ -103,7 +112,8 @@ call "C:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\v
   从仓库根目录播种，之后保留原生版自己的编辑（不会覆盖）。
 - 和 Python 版保持同一格式，用户现有映射（左键双击=退格、长按=PageUp 等）直接可读。
 - 映射页点格弹出预设菜单；单击支持「原生直通」，双击支持「关闭双击/双击模式」，
-  长按支持「关闭/连续触发/连发加速/按住某动作」，三格都支持自定义组合键。
+  长按支持「关闭/连续触发/连发加速/按住某动作」，三格都支持自定义组合键；
+  动作组里多了「启动应用」（`launch` + `app`，见根 README「语音打开应用」）。
 - 写回前自动把上一版保存为 `profiles.json.bak`。
 - Python 版继续保留，作为行为参照和验收 oracle；两版可以并排跑，事件日志对比。
 - 原生版和 Python 版共用单实例互斥量：Python 版在跑时，原生版的「开始监听」会提示
@@ -156,7 +166,8 @@ native\build\Release\AgentRMCAsrTest.exe native\models\sensevoice\test_wavs\zh.w
 ```
 
 覆盖：预设写回、`.bak`、同键原生去重、extends 继承、custom 动作；KeyRouter 的
-滚动/tap/双击/长按/媒体/导航/鼠标模式；接管下的直通补发、连发补发、模式标记和
+滚动/tap/双击/长按/媒体/导航/鼠标模式、`launch` 动作和打不开时的错误事件；
+`AppLauncher` 的说法归一化、10 个内置应用别名、句中含应用名不算指令、启动预设；接管下的直通补发、连发补发、模式标记和
 钩子吞键判定；语音后端解析、WAV 头、SenseVoice/Qwen3 模型发现；真实麦克风采集
 （含 1 秒预热、400ms 预录、松手等最后一块）；以及 SenseVoice 端到端转写
 （第二次为热态延迟）。`AgentRMCAsrTest` 只在启用 sherpa 时生成。

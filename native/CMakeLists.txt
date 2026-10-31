@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.24)
 
-project(AgentRMCNative VERSION 0.1.0 LANGUAGES CXX)
+project(AgentRMCNative VERSION 0.2.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -19,6 +19,9 @@ qt_add_executable(AgentRMCNative
     src/core/Profiles.h
     src/core/Presets.cpp
     src/core/Presets.h
+    src/core/AppLauncher.cpp
+    src/core/PinyinInitials.cpp
+    src/core/AppLauncher.h
     src/core/Injector.cpp
     src/core/Injector.h
     src/core/KeyRouter.cpp
@@ -37,8 +40,12 @@ qt_add_executable(AgentRMCNative
     src/core/AudioRecorder.h
     src/core/AsrEngine.cpp
     src/core/AsrEngine.h
+    src/core/PinyinInitials.cpp
+    src/core/PinyinInitials.h
     src/core/VoiceController.cpp
     src/core/VoiceController.h
+    src/ui/AppPage.cpp
+    src/ui/AppPage.h
     src/ui/MapWidgets.cpp
     src/ui/MapWidgets.h
     src/ui/KeymapPage.cpp
@@ -60,7 +67,7 @@ qt_add_executable(AgentRMCNative
 
 set_target_properties(AgentRMCNative PROPERTIES WIN32_EXECUTABLE TRUE)
 target_include_directories(AgentRMCNative PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
-target_link_libraries(AgentRMCNative PRIVATE Qt6::Widgets winmm)
+target_link_libraries(AgentRMCNative PRIVATE Qt6::Widgets winmm shell32)
 target_compile_options(AgentRMCNative PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
 target_compile_definitions(AgentRMCNative PRIVATE AGENTRMC_VERSION="${PROJECT_VERSION}")
 
@@ -92,30 +99,39 @@ add_executable(AgentRMCStoreTest
     tests/m2_store_test.cpp
     src/core/Profiles.cpp
     src/core/Profiles.h
+    src/core/AppLauncher.cpp
+    src/core/PinyinInitials.cpp
+    src/core/AppLauncher.h
     src/core/Presets.cpp
     src/core/Presets.h
 )
 target_include_directories(AgentRMCStoreTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
-target_link_libraries(AgentRMCStoreTest PRIVATE Qt6::Core)
+target_link_libraries(AgentRMCStoreTest PRIVATE Qt6::Core shell32)
 target_compile_options(AgentRMCStoreTest PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
 
 add_executable(AgentRMCRouterTest
     tests/m3_router_test.cpp
     src/core/KeyRouter.cpp
     src/core/KeyRouter.h
+    src/core/AppLauncher.cpp
+    src/core/PinyinInitials.cpp
+    src/core/AppLauncher.h
     src/core/Presets.cpp
     src/core/Presets.h
     src/core/Injector.cpp
     src/core/Injector.h
 )
 target_include_directories(AgentRMCRouterTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
-target_link_libraries(AgentRMCRouterTest PRIVATE Qt6::Core)
+target_link_libraries(AgentRMCRouterTest PRIVATE Qt6::Core shell32)
 target_compile_options(AgentRMCRouterTest PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
 
 add_executable(AgentRMCTakeoverTest
     tests/m4_takeover_test.cpp
     src/core/KeyRouter.cpp
     src/core/KeyRouter.h
+    src/core/AppLauncher.cpp
+    src/core/PinyinInitials.cpp
+    src/core/AppLauncher.h
     src/core/Presets.cpp
     src/core/Presets.h
     src/core/Injector.cpp
@@ -124,8 +140,23 @@ add_executable(AgentRMCTakeoverTest
     src/core/NativeHooks.h
 )
 target_include_directories(AgentRMCTakeoverTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
-target_link_libraries(AgentRMCTakeoverTest PRIVATE Qt6::Core)
+target_link_libraries(AgentRMCTakeoverTest PRIVATE Qt6::Core shell32)
 target_compile_options(AgentRMCTakeoverTest PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
+
+add_executable(AgentRMCAppTest
+    tests/app_launcher_test.cpp
+    src/core/AppLauncher.cpp
+    src/core/AppLauncher.h
+    src/core/PinyinInitials.cpp
+    src/core/PinyinInitials.h
+    src/core/Presets.cpp
+    src/core/Presets.h
+    src/core/Profiles.cpp
+    src/core/Profiles.h
+)
+target_include_directories(AgentRMCAppTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(AgentRMCAppTest PRIVATE Qt6::Core shell32)
+target_compile_options(AgentRMCAppTest PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
 
 add_executable(AgentRMCVoiceTest
     tests/m5_voice_test.cpp

@@ -15,7 +15,8 @@ namespace {
 
 constexpr int kBufferCount = 4;
 constexpr int kTargetRate = 16000;
-constexpr int kPrerollMs = 400;
+// 语音键要等按键自动重复（约 500ms）才开始记，preroll 得把这段补回来。
+constexpr int kPrerollMs = 800;
 
 struct CaptureFormat {
     int rate;

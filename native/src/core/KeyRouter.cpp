@@ -535,6 +535,15 @@ void KeyRouter::dispatch(const QString &profileName, const QString &name,
             }
         } else if (kind == "run") {
             injector_->run(action.value("cmd").toString());
+        } else if (kind == "launch") {
+            if (!injector_->launch(action.value("app").toString())) {
+                if (emit_) {
+                    emit_("error", name, profileName,
+                          QStringLiteral("打不开这个应用（没装，或快捷方式丢了）"),
+                          vk);
+                }
+                return;
+            }
         } else if (kind == "nav_toggle") {
             navMode_ = !navMode_;
             MessageBeep(MB_OK);

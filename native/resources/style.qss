@@ -392,6 +392,37 @@ QFrame#mapKeyRow[sel="true"] QLabel#mapCellChev {
     color: #8b949e;
 }
 
+QWidget#appHolder {
+    background: transparent;
+}
+
+QWidget#appRow {
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 8px;
+}
+
+QWidget#appRow:hover {
+    background: rgba(255, 255, 255, 8);
+    border: 1px solid rgba(255, 255, 255, 14);
+}
+
+QLabel#appName {
+    color: #dbe4ee;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+QLabel#appState {
+    color: #6b7684;
+    font-size: 10.5px;
+}
+
+QLabel#appStateMiss {
+    color: #d29922;
+    font-size: 10.5px;
+}
+
 QLabel#mapFoot {
     color: #5b6472;
     font-size: 10px;

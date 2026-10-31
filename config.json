@@ -65,7 +65,7 @@
     "input_device": null,
     "sample_rate": 16000,
     "asr_model": "small",
-    "asr_language": "zh",
+    "asr_language": "auto",
     "paste": true,
     "auto_enter": false,
     "mode": "hotkey",
@@ -81,6 +81,7 @@
   "ui": {
     "auto_listen": true,
     "start_minimized": true,
-    "close_to_tray": true
+    "close_to_tray": true,
+    "voice_launch": true
   }
 }

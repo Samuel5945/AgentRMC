@@ -120,7 +120,9 @@ private:
         SherpaOnnxOfflineRecognizerConfig config;
         std::memset(&config, 0, sizeof(config));
         config.feat_config.sample_rate = 16000;
-        config.feat_config.feature_dim = 80;
+        // Qwen3-ASR 的 Mel 特征是 128 维，SenseVoice 是 80 维，混用会转出乱码。
+        config.feat_config.feature_dim =
+            config_.family == QStringLiteral("qwen3") ? 128 : 80;
         config.model_config.num_threads = qBound(1, config_.threads, 8);
         config.model_config.provider = "cpu";
         config.model_config.debug = 0;
@@ -132,7 +134,6 @@ private:
         QByteArray encoder;
         QByteArray decoder;
         QByteArray tokenizer;
-        QByteArray language = config_.language.toUtf8();
 
         if (config_.family == QStringLiteral("qwen3")) {
             QString convPath;
@@ -167,7 +168,12 @@ private:
             model = modelPath.toUtf8();
             tokens = tokensPath.toUtf8();
             config.model_config.sense_voice.model = model.constData();
-            config.model_config.sense_voice.language = language.constData();
+            // auto = 中英混合：由模型按句判断语言，说英文应用名不会被硬翻成汉字。
+            QString lang = config_.language.trimmed().toLower();
+            if (lang.isEmpty() || lang == QStringLiteral("auto")) {
+                lang = QStringLiteral("auto");
+            }
+            config.model_config.sense_voice.language = lang.toUtf8().constData();
             config.model_config.sense_voice.use_itn = 1;
             config.model_config.tokens = tokens.constData();
         }

@@ -646,6 +646,12 @@ void KeymapPage::openMenu(int vk, const QString &gesture) {
             connect(action, &QAction::triggered, this,
                     [this, vk, gesture, id] { applyPreset(vk, gesture, id); });
         }
+        auto *apps = menu.addMenu(QStringLiteral("启动应用"));
+        for (const QString &id : Presets::appKinds()) {
+            auto *action = apps->addAction(Presets::actionLabel(id));
+            connect(action, &QAction::triggered, this,
+                    [this, vk, gesture, id] { applyPreset(vk, gesture, id); });
+        }
     }
     menu.exec(QCursor::pos());
 }

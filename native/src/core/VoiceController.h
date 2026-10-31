@@ -64,6 +64,7 @@ private:
     std::mutex engineMutex_;
     QString engineFamily_;
     QString engineDir_;
+    QString engineLang_;
     VoiceOptions options_;
     QTimer *tick_ = nullptr;
     State state_ = State::Idle;

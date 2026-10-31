@@ -34,6 +34,7 @@ private:
     QString senseDefault_;
     QString qwenDefault_;
     QComboBox *backend_ = nullptr;
+    QComboBox *language_ = nullptr;
     QLabel *senseState_ = nullptr;
     QLabel *qwenState_ = nullptr;
     QPushButton *senseImport_ = nullptr;

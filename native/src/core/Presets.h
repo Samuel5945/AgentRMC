@@ -12,6 +12,7 @@ QString actionLabel(const QString &kind);
 QJsonObject actionFor(const QString &kind, int vk, const QString &gesture);
 QVector<QPair<QString, QStringList>> groups();
 QStringList holdIds();
+QStringList appKinds();
 QStringList doubleModeIds();
 QString actionCn(const QString &sem);
 QString nativeLabel(int vk);

@@ -25,6 +25,7 @@ public:
     void mouseClick() override {}
     void brightness(int) override {}
     void run(const QString &) override {}
+    bool launch(const QString &) override { return true; }
 
     void clear() { keys.clear(); }
     std::vector<int> keys;

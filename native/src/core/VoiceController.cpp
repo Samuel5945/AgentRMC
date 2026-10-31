@@ -1,5 +1,6 @@
 #include "VoiceController.h"
 
+#include "core/AppLauncher.h"
 #include "core/AsrEngine.h"
 #include "core/Profiles.h"
 
@@ -301,11 +302,14 @@ void VoiceController::finishSession() {
         return;
     }
 
-    int capturedMs = 0;
-    const QByteArray pcm = recorder_.stopCapture(&capturedMs);
+    const QByteArray pcm = recorder_.stopCapture();
     state_ = State::Idle;
     beep(760, 70, !test_);
-    const bool tooShort = !test_ && capturedMs < options_.minRecordMs;
+    // 录音等按键重复（约 500ms）才开始记，按住的前一段靠 preroll 补回来，
+    // 所以判定和展示都用真实音频时长，不能用墙钟——不然正常的快说一句
+    // 会被误报「采样太短」。
+    const int audioMs = int(pcm.size()) / 32;  // 16k 单声道 16bit = 32 字节/毫秒
+    const bool tooShort = !test_ && audioMs < options_.minRecordMs;
     if (pcm.isEmpty() || tooShort) {
         test_ = false;
         setState(State::Idle, QStringLiteral("采样太短，按住久一点再说"));
@@ -315,7 +319,7 @@ void VoiceController::finishSession() {
     setState(State::Idle, QStringLiteral("转写中…"));
     emit eventReady(QStringLiteral("voice"),
                     QStringLiteral("录音 %1s · 转写中…")
-                        .arg(capturedMs / 1000.0, 0, 'f', 1));
+                        .arg(audioMs / 1000.0, 0, 'f', 1));
     runTranscription(pcm);
 }
 
@@ -395,10 +399,12 @@ void VoiceController::runTranscription(const QByteArray &pcm) {
         {
             std::lock_guard<std::mutex> lock(engineMutex_);
             if (!engine_ || engineFamily_ != config.family ||
-                engineDir_ != config.modelDir) {
+                engineDir_ != config.modelDir ||
+                engineLang_ != config.language) {
                 engine_ = createAsrEngine(config);
                 engineFamily_ = config.family;
                 engineDir_ = config.modelDir;
+                engineLang_ = config.language;
             }
             text = engine_->transcribe(pcm, 16000, &error);
         }
@@ -431,6 +437,22 @@ void VoiceController::deliver(const QString &text, int costMs,
         return;
     }
     lastText_ = text;
+    // 「打开剪映」这类话先当启动指令用，命中就不再往输入框里贴字。
+    const AppLaunchResult app = store_->uiBool("voice_launch", true)
+                                    ? AppLauncher::runVoice(text)
+                                    : AppLaunchResult{};
+    if (app.matched) {
+        emit transcribed(text, costMs);
+        if (app.ok) {
+            emit eventReady(QStringLiteral("voice"),
+                            QStringLiteral("已打开 ") + app.name);
+            setState(State::Idle, QStringLiteral("已打开 ") + app.name);
+        } else {
+            emit eventReady(QStringLiteral("error"), app.error);
+            setState(State::Idle, app.error);
+        }
+        return;
+    }
     // 先无条件写进剪贴板；只有前台正落在输入框里才自动粘贴。
     injector_.copyText(text);
     bool pasted = false;

@@ -1,5 +1,7 @@
 #include "Presets.h"
 
+#include "core/AppLauncher.h"
+
 #include <QHash>
 #include <QJsonArray>
 
@@ -67,6 +69,12 @@ const QHash<QString, QJsonObject> &specs() {
         m["play"] = keySpec(0xB3);
         m["fullscreen"] = keySpec(0x7A);
         m["mouse_click"] = QJsonObject{{"type", "click"}};
+        for (const AppEntry &entry : AppLauncher::catalog()) {
+            m[QStringLiteral("app_") + entry.id] =
+                QJsonObject{{"type", "launch"},
+                            {"app", entry.id},
+                            {"label", QStringLiteral("打开 ") + entry.name}};
+        }
         return m;
     }();
     return table;
@@ -178,6 +186,10 @@ const QHash<int, QString> &vkLabels() {
 }
 
 QString labelFor(const QString &kind) {
+    if (kind.startsWith(QStringLiteral("app_"))) {
+        return QStringLiteral("打开 ") +
+               AppLauncher::nameOf(kind.mid(QStringLiteral("app_").size()));
+    }
     if (kind == "mode_media") return QStringLiteral("音量/亮度模式");
     if (kind == "mode_cursor") return QStringLiteral("鼠标模式");
     if (kind == "nav_toggle") return QStringLiteral("导航模式");
@@ -215,6 +227,14 @@ QStringList holdIds() {
             "mute", "play", "fullscreen", "mouse_click"};
 }
 
+QStringList appKinds() {
+    QStringList kinds;
+    for (const QString &id : AppLauncher::appIds()) {
+        kinds << QStringLiteral("app_") + id;
+    }
+    return kinds;
+}
+
 QVector<QPair<QString, QStringList>> groups() {
     return {
         {QStringLiteral("导航 / 输入"),
@@ -230,6 +250,7 @@ QVector<QPair<QString, QStringList>> groups() {
         {QStringLiteral("系统"),
          {"volume_up", "volume_down", "mute", "play", "fullscreen"}},
         {QStringLiteral("鼠标"), {"mouse_click"}},
+        {QStringLiteral("启动应用"), appKinds()},
     };
 }
 
@@ -297,7 +318,7 @@ QJsonObject actionFor(const QString &kind, int vk, const QString &gesture) {
         return {};
     }
     QJsonObject action = spec;
-    const QString label = labels().value(kind, kind);
+    const QString label = labelFor(kind);
     action["label"] = label;
     const bool plain = action.value("mods").toArray().isEmpty();
     if (gesture == "single" && action.value("type").toString() == "key" &&
@@ -342,6 +363,9 @@ QString describeAction(const QJsonObject &act, bool holdInfo) {
         const QString cmd = act.value("cmd").toString();
         text = cmd.isEmpty() ? QStringLiteral("启动")
                              : QStringLiteral("启动 ") + cmd;
+    } else if (kind == "launch") {
+        text = QStringLiteral("打开 ") +
+               AppLauncher::nameOf(act.value("app").toString());
     } else if (kind == "paste") {
         text = QStringLiteral("粘贴") +
                (act.value("enter").toBool() ? QStringLiteral("并回车") : QString());

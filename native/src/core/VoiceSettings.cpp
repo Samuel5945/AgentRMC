@@ -161,10 +161,13 @@ VoiceOptions resolveVoiceOptions(const QJsonObject &config,
 
     options.senseVoiceDir = resolveModelDir(
         stringValue(voice, "sensevoice_dir"), appDir, QStringLiteral("sensevoice"),
-        {QStringLiteral("sherpa-onnx-sense-voice")});
+        {QStringLiteral("sensevoice"), QStringLiteral("sherpa-onnx-sense-voice")});
+    // 兜底目录名要和 ModelImport 的 installPath(backend) 一致（models/qwen3），
+    // 不然「导入模型包」装好了这里却找不到。
     options.qwen3Dir = resolveModelDir(
-        stringValue(voice, "qwen3_dir"), appDir, QStringLiteral("qwen3-asr"),
-        {QStringLiteral("sherpa-onnx-qwen3-asr")});
+        stringValue(voice, "qwen3_dir"), appDir, QStringLiteral("qwen3"),
+        {QStringLiteral("qwen3"), QStringLiteral("qwen3-asr"),
+         QStringLiteral("sherpa-onnx-qwen3-asr")});
 
     QJsonObject hotkey = voice.value("hotkey").toObject();
     const QJsonObject profileHotkey = profileVoice.value("hotkey").toObject();
@@ -188,7 +191,7 @@ VoiceOptions resolveVoiceOptions(const QJsonObject &config,
     options.paste = boolValue(voice, "paste", true);
     options.autoEnter = boolValue(voice, "auto_enter", false);
     options.sampleRate = qBound(8000, intValue(voice, "sample_rate", 16000), 48000);
-    options.language = stringValue(voice, "asr_language", QStringLiteral("zh"));
+    options.language = stringValue(voice, "asr_language", QStringLiteral("auto"));
     options.threads = qBound(1, intValue(voice, "threads", 4), 8);
 
     options.minRecordMs =

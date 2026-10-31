@@ -7,7 +7,7 @@
 实测机型为极米「快乐星球 O3」13 键 BLE 遥控器（VID `0x000D` / PID `0x3838`）；
 同款 HID 遥控器改 `config.json` 的 `device_mark` 即可复用。
 
-当前实现是 **C++/Qt 6 原生版**（`native/`，v0.1.0；本身不接 LLM，模型在 Qoder / WorkBuddy 服务端）。
+当前实现是 **C++/Qt 6 原生版**（`native/`，v0.2.0；本身不接 LLM，模型在 Qoder / WorkBuddy 服务端）。
 Python 版留在 `legacy-python` 分支，两版读写同一套 `config.json` / `profiles.json`。
 
 ```
@@ -58,17 +58,18 @@ native\tools\download_voice_models.bat qwen3         rem Qwen3-ASR 0.6B，下载
 AgentRMC/
 ├── native/                 ← 当前实现（C++/Qt 6 + sherpa-onnx）
 │   ├── src/core/           InputEngine（Raw Input + 钩子）、KeyRouter、Injector、
-│   │                       VoiceController、AsrEngine、AudioRecorder、ProfileStore、Presets
-│   ├── src/ui/             遥控器卡片、按键映射页、语音设置、使用引导、Toast、
+│   │                       VoiceController、AsrEngine、AudioRecorder、ProfileStore、Presets、
+│   │                       AppLauncher（按名字找应用并启动）
+│   ├── src/ui/             遥控器卡片、按键映射页、应用页、语音设置、使用引导、Toast、
 │   │                       ToggleSwitch、矢量键位图标（KeyIcon）
-│   ├── tests/              六个无头自测（store / router / takeover / voice / audio / asr）
+│   ├── tests/              无头自测（store / router / takeover / voice / app / audio / asr）
 │   ├── tools/              build.bat、download_voice_models.bat
 │   ├── models/             本地模型（git 忽略，需自行下载）
 │   ├── third_party/        sherpa-onnx 预编译库（git 忽略）
 │   └── README.md           迁移记录、里程碑、工具链、构建与体积
 ├── config.json             语音键码、耳机键、麦克风与 ASR 参数（开发期默认值）
 ├── profiles.json           场景表（按前台窗口切换键映射，支持 extends / 双击 / 长按 / 导航键表）
-├── commands.json           语音指令表（**只有 Python 版实现**，原生版不读，见「语音指令」）
+├── commands.json           任意语音指令表（只有 Python 线读；原生线用内置的「打开应用」，见下）
 ├── rc_probe/               探测与验收脚本，保留作协议分析参考
 │   ├── media_probe.py         低层钩子 + Raw Input 双路记录媒体键（只读）
 │   ├── sim_avrcp.py           模拟耳机 AVRCP 注入帧（带 INJ、只发 keydown）
@@ -202,12 +203,13 @@ keydown  keydown  keydown  ...  keydown   keyup
   徽标随状态切 `待机 / 监听中 / 模式名`；电源键与音量拨杆标灰（红外，电脑收不到）
 - **左下 · 语音卡片** —— 状态与当前接法（例：`Qoder · CTRL+SHIFT+V · 按一下开始/再按一次结束`）、
   `测试 3 秒`、`模型设置`、最近一次转写（超长截断，悬停看全文）、事件条数与 `清空`
-- **右 · 三页签** —— `事件流`（可清空）、`按键映射`、`使用引导`
+- **右 · 四页签** —— `事件流`（可清空）、`按键映射`、`应用`、`使用引导`
 - **顶栏** —— 状态点 + `监听中 / 未监听` + 当前场景，右侧 `使用引导` 和窗口按钮
 - **托盘** —— 左键唤回界面并置前；右键 显示主界面 / 隐藏到托盘、开始监听 / 停止监听、退出；
   窗口 `✕` **只是收进托盘，监听继续**（`ui.close_to_tray` 设 false 则关窗即退出）
 
-`ui.auto_listen`（默认 true）启动即监听；`ui.start_minimized` 启动就藏进托盘、不抢 Qoder 的焦点。
+`ui.auto_listen`（默认 true）启动即监听；`ui.start_minimized` 启动就藏进托盘、不抢 Qoder 的焦点；
+`ui.voice_launch`（默认 true）= 语音里的「打开 xx」当启动指令，见「语音打开应用」。
 单实例互斥量与 Python 版共用：另一版在跑时点「开始监听」会提示 `AgentRMC 已在运行`，
 避免每个键注入两次。跨屏与缩放：PassThrough DPI（175%/225% 不取整）+ 原生拖动 +
 切屏回夹 + 几何记忆。
@@ -222,7 +224,7 @@ keydown  keydown  keydown  ...  keydown   keyup
 下面是 `键位 / 单击 / 双击 / 长按` 四列，分成 方向键、功能键、语音与直通 三组。
 
 **单击、双击、长按三个单元格都可以直接点**，弹出常用动作预设（导航键、滚动、浏览器、
-编辑器、系统、鼠标、双击模式、按住重复/按住动作）。菜单最上面的 **`自定义组合键…`**
+编辑器、系统、鼠标、启动应用、双击模式、按住重复/按住动作）。菜单最上面的 **`自定义组合键…`**
 弹出一个录入框，**在键盘上按下想要的按键/组合（可含 Ctrl/Shift/Alt/Win）直接录入**，
 不用碰 JSON；Esc 取消。选完立刻写回 `profiles.json` 并热重载，同时保留上一版
 `profiles.json.bak`。语音键和对焦键是固定行为（语音接法 / F11 原生直通），单元格不可编辑。
@@ -290,25 +292,55 @@ native\build\Release\AgentRMCAsrTest.exe native\models\sensevoice\test_wavs\zh.w
 > `rc_probe/media_probe.py`（只读记录低层钩子 + Raw Input）配
 > `rc_probe/sim_avrcp.py`（注入一帧带 `INJ`、只发 keydown 的 `0xB3`）做 A/B 复现。
 
-## 语音指令（只有 Python 版实现）
+## 语音打开应用（v0.2.0）
 
-`commands.json` 那张「说"打开浏览器"就直接执行」的本地指令表，**只有 Python 版**读它；
-原生版不读 `commands.json`，转写结果一律走粘贴（转发热键路线则整个交给 Qoder / WorkBuddy
-自己的识别）。要这条能力就用 `legacy-python` 分支，或者按下面的格式把它补进原生版。
+本地识别（SenseVoice / Qwen3）转写出来的这句话，先当**启动指令**过一遍：命中就直接启动应用，
+不再往输入框里贴字。说法去掉标点、空格和「帮我 / 请 / 一下 / 吧」这类填充词后，等于
+「打开 / 启动 / 运行 / 开启 / 切换到 / 回到 / 调出 / 开」+ 应用名才算指令，所以
+「帮我打开剪映吧」会启动，「打开浏览器以后帮我查一下天气」仍然照正常流程粘贴。
 
-Python 版的规则形态留在这里，方便移植时照抄：
+| 应用 | 能说的名字 |
+|---|---|
+| 浏览器（默认浏览器） | 浏览器 / 默认浏览器 / 网页 / browser |
+| Chrome | chrome / 谷歌浏览器 / 谷歌 |
+| Edge | edge / 微软浏览器 |
+| Qoder | qoder / coder |
+| Qoder CN | qoder cn / qodercn / qoder 中国版 / qoder 中文版 |
+| WorkBuddy | workbuddy / work buddy / 工作伙伴 |
+| DeepSeek | deepseek / deep seek / 深度求索 / 深度搜索 |
+| Codex | codex / chatgpt / chat gpt / gpt / openai |
+| ZCode | zcode / z code |
+| 剪映 | 剪映 / 剪映专业版 / jianying / jianyingpro |
 
-```jsonc
-{
-  "rules": [
-    { "match": ["打开浏览器", "开浏览器", "上网"], "action": { "type": "run", "cmd": "start msedge" } },
-    { "match": ["截图"], "action": { "type": "key", "vk": 83, "mods": ["win", "shift"] } }
-  ]
-}
-```
+内置表之外，**开始菜单里的应用按名字原样说就能开**（递归扫 `%APPDATA%` 与 `%ProgramData%`
+的 Start Menu\Programs，忽略卸载类快捷方式），例如「打开 WorkBuddy AI」。装完新软件后
+在「应用」页点「重新扫描」即可。带尾巴的名字也认：`PotPlayer 64 bit` 说「打开 potplayer」
+就行；说岔了同样有拼音容错（「打开逗包」能开「豆包」），防误启动的守卫一致生效。
 
-`action.type` 支持 `run`（`cmd`）、`key`（`vk`、`mods`、`repeat`）、`paste`（`enter`）、`enter`。
-匹配前先归一化，去掉「帮我 / 请 / 一下 / 个 / 吧」这类口语填充词，所以「帮我截个图吧」也能命中「截图」。
+启动方式按能不能找到东西依次尝试：开始菜单 `.lnk`（`ShellExecuteW`）→ Windows 应用
+AUMID（`explorer.exe shell:AppsFolder\…`）→ 默认浏览器走注册表 `http` 关联拿到的真实 exe，
+拿不到就退回打开一个网页。没装就报「这台电脑上没装 xx」，事件流里红字可见。
+
+**中英混合不怕说岔**：SenseVoice 选「识别语言：自动 · 中英混合」（`voice.asr_language`，
+语音设置里可改）后英文应用名不会被硬翻成汉字；就算识别引擎还是把名字听岔了，模糊匹配
+会按三种口径在内置表里找最接近的——原样编辑距离（英文）、声母骨架（`WOKBER` / `WRK八点`
+→ WorkBuddy、`剪易` / `简验` → 剪映）、全拼骨架（`简面` ≈ 剪映，门槛更高）；汉字按拼音
+参与比对（内置 20892 字拼音表，`native/tools/gen_pinyin.py` 生成）。要求分数够高且明显
+甩开第二名才启动，所以「打开第二个」「打开zcode设置」「打开剪映专业版设置」这类口述不会
+被误当成指令。
+
+> 转发热键路线（默认，0 模型）没有本地文本，语音整个交给 Qoder / WorkBuddy 自己识别，
+> 所以语音启动只在本地识别下生效。不想装模型又想一键开应用，用下面的按键映射。
+>
+> 反过来说，这句话被当成指令就不会再贴进输入框。想对着 Agent 口述「打开剪映」这种内容时，
+> 在「应用」页右下角关掉 **语音启动**（`config.json → ui.voice_launch`，默认开）。
+
+**不用语音也能开**：「按键映射」的单击 / 双击 / 长按菜单里都有「启动应用」，选完写回
+`profiles.json`，动作是 `{"type": "launch", "app": "qoder"}`，由 KeyRouter 直接调起。
+「应用」页则列出每个应用的安装状态和来源，可以点「打开」当场试。
+
+Python 线的 `commands.json` 是另一套东西（任意关键词 → `run` / `key` / `paste`），
+**原生版不读它**；启动应用这条能力已经内置，不需要指令表。
 
 ## 场景 Profile
 
@@ -444,6 +476,7 @@ agent/qoder 的实际用法：
 | `key` | `vk`、`mods`、`repeat` | 模拟按键，`mods` 可为 `win`/`ctrl`/`alt`/`shift` |
 | `scroll` | `delta`、`repeat` | 滚轮，一格 120，正数向上；作用于鼠标所在窗口 |
 | `run` | `cmd` | 执行命令或启动程序 |
+| `launch` | `app` | 按应用 ID 启动（浏览器 / Qoder / 剪映…，见「语音打开应用」） |
 | `none` | `note` | 接管关：不注入，原生直通；接管开：Router 补发源键（OK/返回/F11 用它避免双触发） |
 | `brightness` | `delta` | 主显示器亮度 ±（DDC/CI，`dxva2`，不支持时提示失败） |
 | `mouse` | `dx`、`dy` | 鼠标相对移动 |
@@ -490,7 +523,8 @@ agent/qoder 的实际用法：
   "ui": {
     "auto_listen": true,               // 启动即监听
     "start_minimized": true,           // 启动藏在托盘，不闪窗口
-    "close_to_tray": true              // 关窗只隐藏继续监听；false = 关窗即退出
+    "close_to_tray": true,             // 关窗只隐藏继续监听；false = 关窗即退出
+    "voice_launch": true               // 「打开 xx」当启动指令；false = 只当口述内容
   }
 }
 ```
@@ -656,8 +690,8 @@ Qoder / WorkBuddy 场景在前台时，蓝牙耳机的**播放/暂停**手势会
 **10 秒验证**：用手机相机对着遥控器前端，按音量键——手机摄像头能看见红外，如果看到
 灯在闪，就是红外键，电脑端无解（除非外接红外接收器自己解码）。
 
-替代方案：语音说「音量加 / 小声点」，`commands.json` 里已经有这两条规则，走语音链路
-反而比按物理键更省事。
+替代方案：把音量加减绑到某个键（映射页选「音量 + / −」），或走语音链路——
+Python 线的 `commands.json` 里已经有「音量加 / 小声点」这两条规则。
 
 ### 3. `F11` 是变焦 / 对焦键，且**不能映射，只能直通**
 
@@ -883,6 +917,6 @@ Router 按映射处理。
 - [x] 语音设置里选路线 / 模型目录 / 粘贴回车 / 耳机开关（写回 config.json，热加载）
 - [x] 原生线 M1–M5：壳、配置与映射表、输入链、钩子接管、三条语音路线（细节见 native/README.md）
 - [ ] 原生线收尾：BLE 电量、跨屏 DPI 回归、托盘菜单、体积回归
-- [ ] 把语音指令表（`commands.json`）移植到原生版
+- [x] 语音打开应用（v0.2.0）：内置 10 个应用 + 开始菜单按名启动 + 「应用」页 + 按键预设
 - [ ] TTS 播报 Agent 回复，形成语音闭环
 - [ ] 若换 ATVV 遥控器（RC003-MS / 遥控器 2 Pro），把 `rc_probe/atvv_probe.py` 的解码链并进主程序

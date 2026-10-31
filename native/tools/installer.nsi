@@ -7,7 +7,7 @@ Unicode true
 
 !define APPNAME "AgentRMC"
 !define APPEXE "AgentRMCNative.exe"
-!define APPVERSION "0.1.0"
+!define APPVERSION "0.2.0"
 !define PUBLISHER "LIG"
 
 !define SRC "${__FILEDIR__}\..\build\Release"

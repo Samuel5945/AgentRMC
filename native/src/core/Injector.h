@@ -14,6 +14,7 @@ public:
     virtual void mouseClick() = 0;
     virtual void brightness(int delta) = 0;
     virtual void run(const QString &cmd) = 0;
+    virtual bool launch(const QString &appId) = 0;
     virtual bool copyText(const QString &text) { Q_UNUSED(text); return false; }
     virtual bool pasteText(const QString &text, bool autoEnter) {
         Q_UNUSED(text); Q_UNUSED(autoEnter); return false;
@@ -30,6 +31,7 @@ public:
     void mouseClick() override;
     void brightness(int delta) override;
     void run(const QString &cmd) override;
+    bool launch(const QString &appId) override;
     bool copyText(const QString &text) override;
     bool pasteText(const QString &text, bool autoEnter) override;
 

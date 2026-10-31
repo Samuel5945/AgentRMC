@@ -19,6 +19,7 @@ class QListWidget;
 class QPushButton;
 class QSystemTrayIcon;
 class InputEngine;
+class AppPage;
 class KeymapPage;
 class GuideDialog;
 class RemotePanel;
@@ -81,6 +82,7 @@ private:
     std::unique_ptr<ProfileStore> store_;
     InputEngine *engine_ = nullptr;
     KeymapPage *keymapPage_ = nullptr;
+    AppPage *appPage_ = nullptr;
     QLabel *statusDot_ = nullptr;
     QLabel *statusText_ = nullptr;
     QPushButton *listenButton_ = nullptr;

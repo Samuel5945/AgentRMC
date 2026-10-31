@@ -38,7 +38,6 @@ for %%f in (vc_redist.x64.exe dxcompiler.dll dxil.dll d3dcompiler_47.dll) do (
 
 rem Keep the native data copy across rebuilds; seed it on first build.
 if not exist "%ROOT%\native\build\Release\config.json" copy /y "%ROOT%\config.json" "%ROOT%\native\build\Release\" >nul
-if not exist "%ROOT%\native\build\Release\commands.json" copy /y "%ROOT%\commands.json" "%ROOT%\native\build\Release\" >nul
 if not exist "%ROOT%\native\build\Release\profiles.json" copy /y "%ROOT%\profiles.json" "%ROOT%\native\build\Release\" >nul
 
 echo Done -^> native\build\Release\AgentRMCNative.exe

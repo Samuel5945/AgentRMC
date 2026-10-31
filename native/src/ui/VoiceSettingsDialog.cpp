@@ -70,6 +70,30 @@ VoiceSettingsDialog::VoiceSettingsDialog(ProfileStore *store, QWidget *parent)
     backendRow->addWidget(backend_, 1);
     root->addLayout(backendRow);
 
+    auto *langRow = new QHBoxLayout;
+    auto *langLabel = new QLabel(QString::fromUtf8("识别语言"));
+    langLabel->setObjectName("muted");
+    langLabel->setFixedWidth(98);
+    language_ = new QComboBox;
+    language_->addItem(QString::fromUtf8("自动 · 中英混合（推荐）"), "auto");
+    language_->addItem(QString::fromUtf8("中文"), "zh");
+    language_->addItem(QString::fromUtf8("English"), "en");
+    language_->addItem(QString::fromUtf8("日本語"), "ja");
+    language_->addItem(QString::fromUtf8("한국어"), "ko");
+    language_->addItem(QString::fromUtf8("粤语"), "yue");
+    QString languageKey = voice.value("asr_language").toString().trimmed().toLower();
+    if (languageKey.isEmpty()) {
+        languageKey = QStringLiteral("auto");
+    }
+    const int langIndex = language_->findData(languageKey);
+    language_->setCurrentIndex(langIndex >= 0 ? langIndex : 0);
+    language_->setToolTip(QString::fromUtf8(
+        "只对 SenseVoice 生效。说「打开 WorkBuddy」这类中英混的话选自动，"
+        "英文应用名不会被硬翻成汉字。"));
+    langRow->addWidget(langLabel);
+    langRow->addWidget(language_, 1);
+    root->addLayout(langRow);
+
     auto addModelRow = [&](const QString &labelText, QLabel **state,
                            QPushButton **import) {
         auto *line = new QHBoxLayout;
@@ -265,6 +289,7 @@ void VoiceSettingsDialog::save() {
     }
     QJsonObject patch;
     patch["backend"] = backend;
+    patch["asr_language"] = language_->currentData().toString();
     patch["paste"] = paste_->isChecked();
     patch["auto_enter"] = autoEnter_->isChecked();
     if (!store_->updateVoice(patch)) {

@@ -1,5 +1,6 @@
 #include "MainWindow.h"
 
+#include "ui/AppPage.h"
 #include "ui/GuideDialog.h"
 #include "ui/KeymapPage.h"
 #include "ui/RemotePanel.h"
@@ -200,6 +201,27 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
                 }
             });
     tabs->addTab(keymapPage_, QString::fromUtf8("按键映射"));
+    appPage_ = new AppPage(store_.get());
+    connect(appPage_, &AppPage::launched, this,
+            [this](const QString &name, bool ok, const QString &error) {
+                if (ok) {
+                    appendEvent(QStringLiteral("voice"), QString(), QString(),
+                                QStringLiteral("已打开 ") + name, 0);
+                    if (toast_ != nullptr) {
+                        toast_->showText(QStringLiteral("已打开 ") + name, 1800);
+                    }
+                } else {
+                    appendEvent(QStringLiteral("error"), QString(), QString(),
+                                QStringLiteral("打不开 ") + name +
+                                    (error.isEmpty() ? QString()
+                                                     : QStringLiteral(" · ") + error),
+                                0);
+                    if (toast_ != nullptr) {
+                        toast_->showText(QStringLiteral("打不开 ") + name, 2400);
+                    }
+                }
+            });
+    tabs->addTab(appPage_, QString::fromUtf8("应用"));
     tabs->addTab(buildGuidePage(), QString::fromUtf8("使用引导"));
     connect(tabs, &QTabWidget::currentChanged, this, [this](int index) {
         if (remotePanel_ != nullptr) {
@@ -547,6 +569,19 @@ QWidget *MainWindow::buildGuidePage() {
                 {"什么时候用本地", "本地转写是通用输入：任何软件的输入框里都能直接出字；"
                                    "应用没有语音快捷键、或想离线识别时用它。SenseVoice 约 230MB"},
                 {"耳机", "电脑上没有媒体在播放时，耳机播放/暂停 = 同一个语音开关"}});
+    addSection(QString::fromUtf8("打开应用"),
+               {{"怎么说", "按住语音键说「打开剪映」「打开 Qoder」「打开浏览器」，"
+                          "松手后直接启动，不会再往输入框里贴这几个字"},
+                {"内置", "浏览器 / Chrome / Edge / Qoder / Qoder CN / WorkBuddy / "
+                         "DeepSeek / Codex / ZCode / 剪映，说「帮我打开…吧」也算"},
+                {"其它应用", "开始菜单里有的，按名字原样说就能开，例如「打开 WorkBuddy AI」"},
+                {"应用页", "右侧「应用」页能看到本机装没装、来源在哪，也可以直接点「打开」"},
+                {"遥控器", "「按键映射」的单击 / 双击 / 长按菜单里有「启动应用」，"
+                           "把常用的绑到键上，不用说话"},
+                {"前提", "语音启动只在本地识别（SenseVoice / Qwen3）下生效；"
+                         "转发热键时语音是整个交给前台应用的"},
+                {"不想被抢", "想把「打开剪映」这句话原样打给 Agent，就在「应用」页右下角"
+                            "关掉「语音启动」（默认开）"}});
     addSection(QString::fromUtf8("已知限制"),
                {{"电源 / 音量", "这两个键走红外，电脑收不到，无法映射"},
                 {"未开接管", "遥控器按键仍会原生送达前台，映射动作和原生动作可能同时生效"},

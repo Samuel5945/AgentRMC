@@ -293,7 +293,7 @@ void VoiceController::finishSession() {
     const bool tooShort = !test_ && capturedMs < options_.minRecordMs;
     if (pcm.isEmpty() || tooShort) {
         test_ = false;
-        setState(State::Idle, QStringLiteral("录音太短，已忽略"));
+        setState(State::Idle, QStringLiteral("采样太短，按住久一点再说"));
         return;
     }
     test_ = false;
@@ -311,7 +311,7 @@ void VoiceController::startTest() {
     updateOptions();
     if (options_.backend == VoiceBackend::Hotkey) {
         emit eventReady(QStringLiteral("error"),
-                        QStringLiteral("当前是 Qoder 热键模式；先切到本地模型再测试"));
+                        QStringLiteral("现在是转发模式，没有本地模型可测：切到本地识别后再试"));
         return;
     }
     QString error;
@@ -351,8 +351,8 @@ void VoiceController::beginTestCapture() {
     lastVoiceAt_ = recordAt_;
     recorder_.startCapture();
     state_ = State::Recording;
-    emit eventReady(QStringLiteral("voice"), QStringLiteral("测试录音 3 秒…"));
-    setState(State::Recording, QStringLiteral("测试录音 3 秒…"));
+    emit eventReady(QStringLiteral("voice"), QStringLiteral("试一句：现在说句话（录 3 秒）"));
+    setState(State::Recording, QStringLiteral("试一句：现在说句话（录 3 秒）"));
     QTimer::singleShot(3000, this, [this] {
         if (test_ && state_ == State::Recording) {
             finishSession();
@@ -411,7 +411,7 @@ void VoiceController::deliver(const QString &text, int costMs,
     }
     if (text.isEmpty()) {
         emit eventReady(QStringLiteral("voice"),
-                        QStringLiteral("没有识别到内容"));
+                        QStringLiteral("没听清：按住说完整一句再松手"));
         setState(State::Idle, QStringLiteral("就绪"));
         return;
     }

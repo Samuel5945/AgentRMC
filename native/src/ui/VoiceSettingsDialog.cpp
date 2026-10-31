@@ -254,8 +254,22 @@ void VoiceSettingsDialog::dropEvent(QDropEvent *event) {
 }
 
 void VoiceSettingsDialog::save() {
+    const QString backend = backend_->currentData().toString();
+    if (backend != QStringLiteral("hotkey")) {
+        const bool ready =
+            backend == QStringLiteral("qwen3")
+                ? qwen3Ready(qwenDefault_, nullptr, nullptr, nullptr, nullptr)
+                : senseVoiceReady(senseDefault_, nullptr, nullptr);
+        if (!ready) {
+            note_->setStyleSheet(QStringLiteral("color:#f85149;"));
+            note_->setText(QString::fromUtf8(
+                "这个模型还没导入，语音会不可用：先点上面的「导入模型包…」，"
+                "或把识别方式改回转发。"));
+            return;
+        }
+    }
     QJsonObject patch;
-    patch["backend"] = backend_->currentData().toString();
+    patch["backend"] = backend;
     patch["paste"] = paste_->isChecked();
     patch["auto_enter"] = autoEnter_->isChecked();
     if (!store_->updateVoice(patch)) {

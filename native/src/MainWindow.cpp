@@ -378,7 +378,9 @@ QWidget *MainWindow::buildVoiceCard() {
 
     auto *tools = new QHBoxLayout;
     tools->setSpacing(6);
-    voiceTest_ = new QPushButton(QString::fromUtf8("测试 3 秒"));
+    voiceTest_ = new QPushButton(QString::fromUtf8("试一句"));
+    voiceTest_->setToolTip(QString::fromUtf8(
+        "录 3 秒并转写一次，用来确认本地模型是否正常"));
     voiceTest_->setObjectName("ghostSmall");
     voiceTest_->setCursor(Qt::PointingHandCursor);
     connect(voiceTest_, &QPushButton::clicked, voice_,
@@ -520,7 +522,7 @@ QWidget *MainWindow::buildGuidePage() {
                {{"默认", "遥控器语音键转发给当前应用自己的语音快捷键"
                          "（Qoder Ctrl+Shift+V / WorkBuddy Ctrl+D），不用装模型"},
                 {"装本地模型", "把模型包（.zip）拖进窗口，或点「模型设置 → 导入模型包…」；"
-                               "装好会自动切到本地识别"},
+                               "装好后在「识别方式」里切到本地才会用上"},
                 {"什么时候用本地", "应用没有语音快捷键、或想离线识别时用；"
                                    "SenseVoice 约 230MB，中英文都够用"},
                 {"耳机", "电脑上没有媒体在播放时，耳机播放/暂停 = 同一个语音开关"}});
@@ -771,8 +773,8 @@ void MainWindow::refreshVoiceUi() {
         }
     }
     if (voiceTest_ != nullptr) {
-        voiceTest_->setEnabled(options.backend != VoiceBackend::Hotkey &&
-                              !voice_->busy());
+        // 只随识别方式变；录音中不再闪烁变灰（那会让人以为按钮被按了）。
+        voiceTest_->setEnabled(options.backend != VoiceBackend::Hotkey);
     }
 }
 
@@ -844,6 +846,15 @@ void MainWindow::openVoiceSettings() {
         refreshRemoteCard();
         appendEvent(QStringLiteral("status"), QString(),
                     QString(), QString::fromUtf8("语音设置已保存"), 0);
+        if (toast_ != nullptr) {
+            const bool local =
+                voice_->options().backend != VoiceBackend::Hotkey;
+            toast_->showText(
+                local ? QString::fromUtf8(
+                            "已切到本地识别：语音键按住说话，松手转写并粘贴")
+                      : QString::fromUtf8("已切回转发：语音键转发当前应用自己的语音快捷键"),
+                3200);
+        }
     });
     dialog->exec();
     dialog->deleteLater();
@@ -889,8 +900,7 @@ void MainWindow::onVoiceState(const QString &state, const QString &detail) {
         setVoiceStatus(detail, QStringLiteral("#7c9cff"), false);
     }
     if (voiceTest_ != nullptr) {
-        voiceTest_->setEnabled(voice_->options().backend != VoiceBackend::Hotkey &&
-                              !voice_->busy());
+        voiceTest_->setEnabled(voice_->options().backend != VoiceBackend::Hotkey);
     }
 }
 
@@ -1089,16 +1099,18 @@ void MainWindow::importDroppedModel(const QString &file) {
     const QString name = result.backend == QStringLiteral("qwen3")
                              ? QStringLiteral("Qwen3-ASR")
                              : QStringLiteral("SenseVoice");
-    store_->updateVoice(QJsonObject{{QStringLiteral("backend"), result.backend}});
-    voice_->reload();
-    refreshVoiceUi();
+    // 不擅自改识别方式：正在用的路线（默认转发）照旧，要用本地得自己切。
     appendEvent(QStringLiteral("voice"), QString::fromUtf8("模型已导入"),
-                QString(), QString::fromUtf8("%1 已装好，语音切到本地识别")
-                               .arg(name),
+                QString(),
+                QString::fromUtf8("%1 已装好；要用本地识别，在「模型设置 → "
+                                  "识别方式」里切过去")
+                    .arg(name),
                 0);
+    refreshVoiceUi();
     if (toast_ != nullptr) {
         toast_->showText(
-            QString::fromUtf8("%1 已装好，语音已切到本地识别").arg(name), 2600);
+            QString::fromUtf8("%1 已装好，可在「模型设置」里切到本地识别").arg(name),
+            3200);
     }
 }
 

@@ -38,6 +38,8 @@ qt_add_executable(AgentRMCNative
     src/core/Updater.h
     src/core/AudioRecorder.cpp
     src/core/AudioRecorder.h
+    src/core/AudioOut.cpp
+    src/core/AudioOut.h
     src/core/AsrEngine.cpp
     src/core/AsrEngine.h
     src/core/AsrClient.cpp

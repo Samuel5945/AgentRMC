@@ -48,6 +48,7 @@ struct VoiceOptions {
     QString ttsModel = QStringLiteral("mimo-v2.5-tts");
     QString ttsVoice = QStringLiteral("Chloe");
     QString ttsStyle;  // 音色/语气指令；空 = 用 TtsClient 里的内置默认
+    QString ttsOutputDevice;  // 输出设备名；空 = 跟随系统默认（切耳机在这里选）
     // 云端 ASR（base_url / api_key 留空时沿用 TTS 的配置——同一平台填一次
     // 就能两用；model 必填）。style: "chat"=MiMo 式音频进 chat/completions，
     // "transcriptions"=OpenAI 式 multipart /audio/transcriptions。

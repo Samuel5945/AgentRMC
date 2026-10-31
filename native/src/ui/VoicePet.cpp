@@ -488,7 +488,8 @@ void VoicePet::applyTtsOptions() {
     }
     const VoiceOptions options = voice_->options();
     tts_->setOptions(options.ttsEnabled, options.ttsBaseUrl, options.ttsApiKey,
-                     options.ttsModel, options.ttsVoice, options.ttsStyle);
+                     options.ttsModel, options.ttsVoice, options.ttsStyle,
+                     options.ttsOutputDevice);
 }
 
 void VoicePet::setVoiceFeedbackMuted(bool muted) {
@@ -497,7 +498,7 @@ void VoicePet::setVoiceFeedbackMuted(bool muted) {
     }
     if (muted) {
         tts_->setOptions(false, QString(), QString(), QString(), QString(),
-                         QString());
+                         QString(), QString());
         tts_->stop();
     } else {
         applyTtsOptions();

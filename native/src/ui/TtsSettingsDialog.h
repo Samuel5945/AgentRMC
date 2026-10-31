@@ -27,6 +27,7 @@ private:
 
     ProfileStore *store_ = nullptr;
     QCheckBox *enabled_ = nullptr;
+    QComboBox *output_ = nullptr;
     QLineEdit *baseUrl_ = nullptr;
     QLineEdit *apiKey_ = nullptr;
     QComboBox *model_ = nullptr;

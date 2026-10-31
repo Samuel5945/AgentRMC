@@ -172,7 +172,8 @@ int main(int argc, char *argv[]) {
         const VoiceOptions options = voice.options();
         TtsClient tts;
         tts.setOptions(options.ttsEnabled, options.ttsBaseUrl, options.ttsApiKey,
-                       options.ttsModel, options.ttsVoice, options.ttsStyle);
+                       options.ttsModel, options.ttsVoice, options.ttsStyle,
+                       options.ttsOutputDevice);
         if (!tts.ready()) {
             qWarning().noquote()
                 << "[tts] 没有 API Key：在语音设置的「TTS Key」里自填，"

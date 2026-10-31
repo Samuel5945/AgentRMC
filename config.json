@@ -82,6 +82,7 @@
       "base_url": "https://api.xiaomimimo.com/v1",
       "model": "mimo-v2.5-tts",
       "voice": "Chloe",
+      "output_device": "",
       "enabled": true
     },
     "asr_api": {

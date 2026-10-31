@@ -28,7 +28,8 @@ TtsClient::TtsClient(QObject *parent) : QObject(parent) {
 
 void TtsClient::setOptions(bool enabled, const QString &baseUrl,
                            const QString &apiKey, const QString &model,
-                           const QString &voice, const QString &style) {
+                           const QString &voice, const QString &style,
+                           const QString &outputDevice) {
     enabled_ = enabled;
     baseUrl_ = baseUrl.trimmed();
     while (baseUrl_.endsWith(QLatin1Char('/'))) {
@@ -42,6 +43,7 @@ void TtsClient::setOptions(bool enabled, const QString &baseUrl,
         voice_ = voice.trimmed();
     }
     style_ = style.trimmed();
+    outputDevice_ = outputDevice.trimmed();
 }
 
 void TtsClient::speak(const QString &text) {
@@ -98,6 +100,11 @@ void TtsClient::speak(const QString &text) {
 }
 
 void TtsClient::play(const QByteArray &wav) {
+    // 指定了输出设备就走 waveOut 直连（切耳机用）；起不来再退回系统默认。
+    if (!outputDevice_.isEmpty() &&
+        audio_.play(wav, outputDevice_)) {
+        return;
+    }
     // 换新音频会自然顶掉上一段；缓冲留在成员里保证异步播放期间内存有效。
     playing_ = wav;
     PlaySoundW(reinterpret_cast<LPCWSTR>(playing_.constData()), nullptr,
@@ -106,5 +113,6 @@ void TtsClient::play(const QByteArray &wav) {
 
 void TtsClient::stop() {
     PlaySoundW(nullptr, nullptr, SND_PURGE);
+    audio_.stop();
     playing_.clear();
 }

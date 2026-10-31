@@ -1,5 +1,6 @@
 #include "ui/TtsSettingsDialog.h"
 
+#include "core/AudioOut.h"
 #include "core/Profiles.h"
 #include "core/TtsClient.h"
 #include "core/VoiceSettings.h"
@@ -99,6 +100,21 @@ TtsSettingsDialog::TtsSettingsDialog(ProfileStore *store, QWidget *parent)
         "对应平台精品音色库的音色名；换模型/平台后记得换成它支持的音色。"));
     addRow(QString::fromUtf8("音色"), voice_);
 
+    // 输出设备：软件只能从这里的列表选，系统默认还是耳机自己定。
+    output_ = new QComboBox;
+    output_->addItem(QString::fromUtf8("跟随系统默认"), QString());
+    const QString savedDevice = tts.value("output_device").toString();
+    for (const QString &name : AudioOut::deviceNames()) {
+        output_->addItem(name, name);
+        if (name.compare(savedDevice, Qt::CaseInsensitive) == 0) {
+            output_->setCurrentIndex(output_->count() - 1);
+        }
+    }
+    output_->setToolTip(QString::fromUtf8(
+        "桌宠说话从哪个设备出声。列表来自当前插着的输出设备，"
+        "插上耳机/音箱后重新打开这个设置刷新。"));
+    addRow(QString::fromUtf8("输出设备"), output_);
+
     auto *previewRow = new QHBoxLayout;
     preview_ = new QPushButton(QString::fromUtf8("试听"));
     preview_->setObjectName("ghostSmall");
@@ -146,8 +162,10 @@ TtsSettingsDialog::TtsSettingsDialog(ProfileStore *store, QWidget *parent)
 }
 
 void TtsSettingsDialog::preview() {
+    // 试听直接用当前选中的输出设备，保存之前就能确认耳机里有没有声。
     tts_->setOptions(true, baseUrl_->text(), apiKey_->text(),
-                     model_->currentText(), voice_->currentText(), QString());
+                     model_->currentText(), voice_->currentText(), QString(),
+                     output_->currentData().toString());
     if (apiKey_->text().trimmed().isEmpty()) {
         note_->setStyleSheet(QStringLiteral("color:#d29922;"));
         note_->setText(QString::fromUtf8("先填 API Key 再试听。"));
@@ -171,6 +189,7 @@ void TtsSettingsDialog::save() {
     } else {
         patch["voice"] = voice_->currentText().trimmed();
     }
+    patch["output_device"] = output_->currentData().toString();
     if (!store_->updateVoice(QJsonObject{{"tts", patch}})) {
         note_->setText(QString::fromUtf8("保存失败：无法写入 config.json"));
         note_->setStyleSheet(QStringLiteral("color:#f85149;"));

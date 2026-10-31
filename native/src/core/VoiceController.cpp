@@ -502,9 +502,18 @@ void VoiceController::deliver(const QString &text, int costMs,
         setState(State::Idle, QStringLiteral("就绪"));
         return;
     }
-    // 桌宠对话模式：这句话不进剪贴板也不启动应用，直接喂给 LLM 聊。
+    // 桌宠对话模式：「打开 xx」照样直接启动（省一次 LLM 往返），确认话术
+    // 通过状态文案让桌宠念出来；其余的话才交给 LLM 聊。
     if (chatMode_) {
         emit transcribed(text, costMs);
+        const AppLaunchResult chatApp = store_->uiBool("voice_launch", true)
+                                            ? AppLauncher::runVoice(text)
+                                            : AppLaunchResult{};
+        if (chatApp.matched) {
+            setState(State::Idle, chatApp.ok ? QStringLiteral("已打开 ") + chatApp.name
+                                             : chatApp.error);
+            return;
+        }
         emit chatRequested(text);
         setState(State::Idle, QStringLiteral("桌宠对话中…"));
         return;

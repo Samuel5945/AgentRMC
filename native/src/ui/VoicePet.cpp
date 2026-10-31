@@ -298,8 +298,10 @@ VoicePet::VoicePet(ProfileStore *store, VoiceController *voice, QWidget *parent)
                 detail_ = detail;
                 refreshState();
                 update();
-                // 「已打开 xx」这类结果趁桌宠可见时念出来，算一问一答的反馈。
-                if (detail.startsWith(QString::fromUtf8("已打开"))) {
+                // 「已打开 xx」这类结果趁桌宠可见时念出来（对话模式下
+                // 启动确认也走这条），失败的话术（打不开…）同样念。
+                if (detail.startsWith(QString::fromUtf8("已打开")) ||
+                    detail.startsWith(QString::fromUtf8("打不开"))) {
                     speak(detail);
                 }
             });

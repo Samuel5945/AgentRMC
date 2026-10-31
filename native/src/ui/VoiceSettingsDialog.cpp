@@ -206,8 +206,9 @@ void VoiceSettingsDialog::refreshStatus() {
             "没装的话点上面的「导入模型包…」选 .tar.bz2，程序自己解压装好。"));
     } else if (backend == "qwen3") {
         note_->setText(QString::fromUtf8(
-            "Qwen3-ASR 0.6B int8：52 种语言/22 种方言，CPU 转写会比 SenseVoice 慢。"
-            "同样用「导入模型包…」安装。"));
+            "Qwen3-ASR 0.6B int8：52 种语言/22 种方言，中英混合和中文识别更准，"
+            "CPU 转写会比 SenseVoice 慢。模型包（约 880MB）在网盘/官网下载，"
+            "用「导入模型包…」装好，保存后生效。"));
     } else {
         note_->setText(QString::fromUtf8(
             "默认路线：不装模型，把语音键转成当前前台场景的热键"

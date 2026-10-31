@@ -96,6 +96,20 @@ int main(int argc, char *argv[]) {
     ok &= check(isApp(QStringLiteral("切换到剪映"), QStringLiteral("jianying")),
                 "switch verb");
 
+    // Adobe 系列说圈内缩写。
+    ok &= check(isApp(QStringLiteral("打开PS"), QStringLiteral("photoshop")),
+                "adobe ps abbreviation");
+    ok &= check(isApp(QStringLiteral("打开pr"), QStringLiteral("premiere")),
+                "adobe pr abbreviation");
+    ok &= check(isApp(QStringLiteral("打开AI"), QStringLiteral("illustrator")),
+                "adobe ai abbreviation");
+    ok &= check(isApp(QStringLiteral("打开photoshop"), QStringLiteral("photoshop")),
+                "photoshop full name");
+    ok &= check(!AppLauncher::matchVoice(QStringLiteral("打开ps设置")).matched,
+                "ps followed by content is dictation");
+    ok &= check(!AppLauncher::matchVoice(QStringLiteral("打开ai绘画")).matched,
+                "ai followed by content is dictation");
+
     // SenseVoice 会把 Qoder 听成 "coder"，还常带个字母尾巴。
     ok &= check(isApp(QStringLiteral("打开 CODER C"), QStringLiteral("qoder")),
                 "latin alias tolerates a short asr tail");

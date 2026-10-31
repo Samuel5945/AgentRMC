@@ -112,6 +112,29 @@ QString shortcutPath(const QString &flatName) {
     return g_shortcuts.value(flatName);
 }
 
+// 目录里的快捷方式名不带版本号（"Adobe Photoshop"），实际 lnk 往往是
+// 「Adobe Photoshop 2026」：精确找不到就按前缀找，取键名最大的（版本最新）。
+QString shortcutPathByPrefix(const QString &flatName) {
+    if (flatName.isEmpty()) {
+        return {};
+    }
+    QMutexLocker locker(&g_cacheMutex);
+    if (!g_shortcutsBuilt) {
+        buildShortcutCache();
+    }
+    QString best;
+    for (auto it = g_shortcuts.constBegin(); it != g_shortcuts.constEnd();
+         ++it) {
+        if (!it.key().startsWith(flatName) || it.key() == flatName) {
+            continue;
+        }
+        if (best.isEmpty() || it.key() > best) {
+            best = it.key();
+        }
+    }
+    return best.isEmpty() ? QString() : g_shortcuts.value(best);
+}
+
 QString firstQuotedPath(const QString &command) {
     const int start = command.indexOf(QLatin1Char('"'));
     if (start < 0) {
@@ -422,6 +445,19 @@ const QVector<AppEntry> &AppLauncher::catalog() {
           QStringLiteral("jianying"), QStringLiteral("jianyingpro")},
          {QStringLiteral("剪映专业版")},
          QStringLiteral("Bytedance.JianyingPro")},
+        // Adobe 系列按圈内的缩写说（PS / PR / AI）；快捷方式名不带版本号，
+        // 让 resolve 按前缀去对「Adobe Photoshop 2026」这类实际名字。
+        {QStringLiteral("photoshop"), QStringLiteral("Photoshop"),
+         {QStringLiteral("photoshop"), QStringLiteral("ps"),
+          QStringLiteral("adobe photoshop")},
+         {QStringLiteral("Adobe Photoshop")}, {}},
+        {QStringLiteral("premiere"), QStringLiteral("Premiere Pro"),
+         {QStringLiteral("premiere"), QStringLiteral("premiere pro"),
+          QStringLiteral("pr")},
+         {QStringLiteral("Adobe Premiere Pro")}, {}},
+        {QStringLiteral("illustrator"), QStringLiteral("Illustrator"),
+         {QStringLiteral("illustrator"), QStringLiteral("ai")},
+         {QStringLiteral("Adobe Illustrator")}, {}},
     };
     return table;
 }
@@ -466,7 +502,11 @@ AppTarget AppLauncher::resolve(const AppEntry &entry) {
         return target;
     }
     for (const QString &name : entry.shortcuts) {
-        const QString path = shortcutPath(normalize(name));
+        const QString flat = normalize(name);
+        QString path = shortcutPath(flat);
+        if (path.isEmpty()) {
+            path = shortcutPathByPrefix(flat);
+        }
         if (!path.isEmpty()) {
             target.found = true;
             target.kind = QStringLiteral("shortcut");

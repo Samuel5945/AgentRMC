@@ -31,6 +31,11 @@ Python 版留在 `legacy-python` 分支，两版读写同一套 `config.json` / 
 装上本地转写——**不装模型也能用**，默认路线是转发 Agent 自己的语音快捷键、0 模型。
 Windows 10/11，普通用户权限即可。
 
+可选升级：网盘里还有 **Qwen3-ASR 模型包**（`sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25.tar.bz2`，
+约 880MB），同一个链接里下载后直接拖进窗口导入，再在「模型设置 → 识别方式」切到
+**本地 Qwen3-ASR**——中英混合和中文识别明显更准，代价是转写比 SenseVoice 慢一些。
+导入认的是包里的模型文件，用原包（.tar.bz2）直接拖就行，不要再套一层压缩包。
+
 ## 快速开始
 
 ```bat
@@ -311,6 +316,9 @@ native\build\Release\AgentRMCAsrTest.exe native\models\sensevoice\test_wavs\zh.w
 | Codex | codex / chatgpt / chat gpt / gpt / openai |
 | ZCode | zcode / z code |
 | 剪映 | 剪映 / 剪映专业版 / jianying / jianyingpro |
+| Photoshop | photoshop / ps / adobe photoshop |
+| Premiere Pro | premiere / pr |
+| Illustrator | illustrator / ai |
 
 内置表之外，**开始菜单里的应用按名字原样说就能开**（递归扫 `%APPDATA%` 与 `%ProgramData%`
 的 Start Menu\Programs，忽略卸载类快捷方式），例如「打开 WorkBuddy AI」。装完新软件后

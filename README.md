@@ -18,6 +18,19 @@ Python 版留在 `legacy-python` 分支，两版读写同一套 `config.json` / 
                                                     └→ 耳机播放键 = 同一个开关（无 keyup，只能切换）
 ```
 
+## 下载
+
+不想自己构建的话，装这两个文件就够了（安装包约 14MB，模型包约 159MB）：
+
+| 网盘 | 链接 |
+|---|---|
+| 夸克 | <https://pan.quark.cn/s/47bf9d92c5f5> |
+| 百度 | <https://pan.baidu.com/s/1aBSAtOlzUX-Ih8rbLC5MVA?pwd=35c8>（提取码 `35c8`） |
+
+先装 `AgentRMC-Setup.exe`；再把 `SenseVoice语音模型.zip` 拖进窗口（或「模型设置 → 导入模型包…」）
+装上本地转写——**不装模型也能用**，默认路线是转发 Agent 自己的语音快捷键、0 模型。
+Windows 10/11，普通用户权限即可。
+
 ## 快速开始
 
 ```bat

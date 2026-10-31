@@ -5,6 +5,7 @@
 #include "core/VoiceSettings.h"
 
 #include <QApplication>
+#include <QClipboard>
 #include <QColor>
 #include <QContextMenuEvent>
 #include <QCursor>
@@ -45,6 +46,7 @@ public:
         setWindowFlags(Qt::Tool | Qt::FramelessWindowHint |
                        Qt::WindowStaysOnTopHint | Qt::NoDropShadowWindowHint);
         setAttribute(Qt::WA_TranslucentBackground);
+        setAttribute(Qt::WA_StyledBackground);  // plain QWidget：不设这个 QSS 背景不画
         setAttribute(Qt::WA_ShowWithoutActivating);
         setFocusPolicy(Qt::NoFocus);
         setFixedWidth(kCardWidth);
@@ -149,6 +151,17 @@ public:
     QString text_;
 
 protected:
+    void paintEvent(QPaintEvent *event) override {
+        Q_UNUSED(event);
+        // 顶层透明窗口的 QSS 背景不可靠，照 Toast 的办法自己画。
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing, true);
+        const QRectF box = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
+        painter.setPen(QPen(QColor(255, 255, 255, 26), 1.0));
+        painter.setBrush(QColor(15, 20, 29));
+        painter.drawRoundedRect(box, 12, 12);
+    }
+
     void enterEvent(QEnterEvent *event) override {
         QWidget::enterEvent(event);
         pet_->collapseTimer_->stop();
@@ -170,6 +183,34 @@ protected:
 
 private:
     VoicePet *pet_ = nullptr;
+};
+
+// 说话气泡：Toast 同款画法（自定义 paintEvent），保证半透明圆角底稳定渲染。
+class PetBubble final : public QLabel {
+public:
+    explicit PetBubble(QWidget *parent) : QLabel(parent) {
+        setObjectName("petBubble");
+        setWindowFlags(Qt::Tool | Qt::FramelessWindowHint |
+                       Qt::WindowStaysOnTopHint | Qt::NoDropShadowWindowHint);
+        setAttribute(Qt::WA_TranslucentBackground);
+        setAttribute(Qt::WA_ShowWithoutActivating);
+        setAttribute(Qt::WA_TransparentForMouseEvents);
+        setAlignment(Qt::AlignCenter);
+        setWordWrap(true);
+        setFixedWidth(220);
+        hide();
+    }
+
+protected:
+    void paintEvent(QPaintEvent *event) override {
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing, true);
+        const QRectF box = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
+        painter.setPen(QPen(QColor(255, 255, 255, 30), 1.0));
+        painter.setBrush(QColor(15, 20, 29, 242));
+        painter.drawRoundedRect(box, 10, 10);
+        QLabel::paintEvent(event);
+    }
 };
 
 VoicePet::VoicePet(ProfileStore *store, VoiceController *voice, QWidget *parent)
@@ -493,17 +534,7 @@ void VoicePet::ensureBubble() {
     if (bubble_ != nullptr) {
         return;
     }
-    bubble_ = new QLabel(this);
-    bubble_->setObjectName("petBubble");
-    bubble_->setWindowFlags(Qt::Tool | Qt::FramelessWindowHint |
-                            Qt::WindowStaysOnTopHint |
-                            Qt::NoDropShadowWindowHint);
-    bubble_->setAttribute(Qt::WA_TranslucentBackground);
-    bubble_->setAttribute(Qt::WA_ShowWithoutActivating);
-    bubble_->setAttribute(Qt::WA_TransparentForMouseEvents);
-    bubble_->setAlignment(Qt::AlignCenter);
-    bubble_->setWordWrap(true);
-    bubble_->setFixedWidth(220);
+    bubble_ = new PetBubble(this);
     bubble_->hide();
 }
 

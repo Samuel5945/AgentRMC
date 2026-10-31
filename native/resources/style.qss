@@ -641,3 +641,56 @@ QListWidget#voiceHistory::item {
 QListWidget#voiceHistory::item:hover {
     background: rgba(79, 140, 255, 36);
 }
+
+/* ---------- 语音桌宠 ---------- */
+
+QWidget#petCard {
+    background: #0f141d;
+    border: 1px solid rgba(255, 255, 255, 26);
+    border-radius: 12px;
+}
+
+QLabel#petStatus {
+    background: transparent;
+    color: #e6edf3;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+QLabel#petDetail {
+    background: transparent;
+    color: #8b949e;
+    font-size: 11px;
+}
+
+QPushButton#petMode {
+    background: rgba(255, 255, 255, 8);
+    border: 1px solid rgba(255, 255, 255, 16);
+    border-radius: 8px;
+    color: #8b949e;
+    font-size: 11px;
+    padding: 4px 2px;
+}
+
+QPushButton#petMode:checked {
+    background: rgba(79, 140, 255, 58);
+    border: 1px solid rgba(79, 140, 255, 130);
+    color: #e6edf3;
+}
+
+QLabel#petTranscript {
+    background: #121722;
+    border: 1px solid rgba(255, 255, 255, 14);
+    border-radius: 8px;
+    color: #e6edf3;
+    font-size: 11px;
+    padding: 6px 8px;
+}
+
+QLabel#petBubble {
+    background: rgba(15, 20, 29, 242);
+    border: 1px solid rgba(255, 255, 255, 30);
+    border-radius: 10px;
+    color: #e6edf3;
+    font-size: 12px;
+}

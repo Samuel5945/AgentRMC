@@ -115,8 +115,9 @@ VoiceWindow::VoiceWindow(VoiceController *voice, ProfileStore *store,
     setObjectName("voiceWindow");
     setWindowTitle(QString::fromUtf8("AgentRMC 语音"));
     setWindowFlags(Qt::Window | Qt::FramelessWindowHint);
-    // qss 里给了 12px 圆角，透明背景才能圆出效果。
+    // qss 里给了 12px 圆角，透明背景才能圆出效果；plain QWidget 要显式开 StyledBackground。
     setAttribute(Qt::WA_TranslucentBackground);
+    setAttribute(Qt::WA_StyledBackground);
     setFixedSize(380, 560);
 
     auto *root = new QVBoxLayout(this);
@@ -352,6 +353,17 @@ bool VoiceWindow::eventFilter(QObject *watched, QEvent *event) {
         copyText(transcript_->text());
     }
     return QWidget::eventFilter(watched, event);
+}
+
+void VoiceWindow::paintEvent(QPaintEvent *event) {
+    Q_UNUSED(event);
+    // 顶层透明窗口的 QSS 背景不可靠，照 Toast 的办法自己画圆角底。
+    QPainter painter(this);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    const QRectF box = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
+    painter.setPen(QPen(QColor(255, 255, 255, 22), 1.0));
+    painter.setBrush(QColor(0x0b, 0x0e, 0x14));
+    painter.drawRoundedRect(box, 12, 12);
 }
 
 void VoiceWindow::closeEvent(QCloseEvent *event) {

@@ -2,6 +2,7 @@
 #include <QDebug>
 #include <QFile>
 #include <QIcon>
+#include <QPainter>
 #include <QTabWidget>
 #include <QTimer>
 
@@ -12,7 +13,9 @@
 
 #include "MainWindow.h"
 #include "core/Profiles.h"
+#include "core/VoiceController.h"
 #include "ui/GuideDialog.h"
+#include "ui/VoicePet.h"
 #include "ui/VoiceSettingsDialog.h"
 
 int main(int argc, char *argv[]) {
@@ -30,6 +33,7 @@ int main(int argc, char *argv[]) {
     QString pin;
     QString settingsShot;
     QString guideShot;
+    QString petShot;
     int shotTab = -1;
     int guideStep = -1;
     const QStringList args = app.arguments();
@@ -42,6 +46,8 @@ int main(int argc, char *argv[]) {
             settingsShot = args.at(i + 1);
         } else if (args.at(i) == "--shot-guide") {
             guideShot = args.at(i + 1);
+        } else if (args.at(i) == "--shot-pet") {
+            petShot = args.at(i + 1);
         } else if (args.at(i) == "--tab") {
             shotTab = args.at(i + 1).toInt();
         } else if (args.at(i) == "--guide-step") {
@@ -53,7 +59,7 @@ int main(int argc, char *argv[]) {
     const bool trayStart = app.arguments().contains(QStringLiteral("--tray"));
     const QString ipcName = QStringLiteral("AgentRMC.Native.Wake");
     const bool shotMode = !shot.isEmpty() || !settingsShot.isEmpty() ||
-                          !guideShot.isEmpty();
+                          !guideShot.isEmpty() || !petShot.isEmpty();
     if (!shotMode) {
         if (HWND existing = FindWindowW(nullptr, L"AgentRMC Native")) {
             if (!trayStart) {
@@ -92,6 +98,40 @@ int main(int argc, char *argv[]) {
             const bool ok = dialog.grab().save(guideShot);
             qInfo().noquote() << "[shot]" << (ok ? "saved" : "failed")
                               << guideShot;
+            QCoreApplication::quit();
+        });
+        return app.exec();
+    }
+
+    if (!petShot.isEmpty()) {
+        // 桌宠验收图：球体 + 悬停卡片 + 气泡拼一张。
+        ProfileStore store(QCoreApplication::applicationDirPath() +
+                           "/profiles.json");
+        store.load();
+        store.loadConfig(QCoreApplication::applicationDirPath() + "/config.json");
+        VoiceController voice(&store);
+        VoicePet pet(&store, &voice);
+        pet.setAttribute(Qt::WA_DontShowOnScreen);
+        pet.present();
+        pet.expandCard();
+        pet.speak(QString::fromUtf8("你好，我是你的语音桌宠"));
+        QTimer::singleShot(450, &pet, [&pet, petShot] {
+            QPixmap canvas(320, 420);
+            canvas.fill(Qt::transparent);
+            QPainter painter(&canvas);
+            painter.drawPixmap(30, 8, pet.grab());
+            QWidget *card = pet.findChild<QWidget *>(QStringLiteral("petCard"));
+            if (card != nullptr) {
+                painter.drawPixmap(30, 110, card->grab());
+            }
+            QWidget *bubble =
+                pet.findChild<QWidget *>(QStringLiteral("petBubble"));
+            if (bubble != nullptr) {
+                painter.drawPixmap(30, 340, bubble->grab());
+            }
+            const bool ok = canvas.save(petShot);
+            qInfo().noquote() << "[shot]" << (ok ? "saved" : "failed")
+                              << petShot;
             QCoreApplication::quit();
         });
         return app.exec();

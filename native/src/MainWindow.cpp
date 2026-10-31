@@ -5,6 +5,7 @@
 #include "ui/KeymapPage.h"
 #include "ui/RemotePanel.h"
 #include "ui/Toast.h"
+#include "ui/VoicePet.h"
 #include "ui/VoiceSettingsDialog.h"
 #include "ui/VoiceWindow.h"
 
@@ -240,6 +241,26 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
     outer->addWidget(body, 1);
 
     toast_ = new Toast(this);
+    // 语音桌宠：主窗/语音面板关掉之后留在屏幕上的小球，跟着监听状态变色。
+    voicePet_ = new VoicePet(store_.get(), voice_);
+    connect(voicePet_, &VoicePet::fullUiRequested, this, &MainWindow::wake);
+    connect(voicePet_, &VoicePet::panelRequested, this,
+            &MainWindow::showVoicePanel);
+    connect(voicePet_, &VoicePet::listenToggleRequested, this,
+            &MainWindow::toggleListening);
+    connect(voicePet_, &VoicePet::hiddenByUser, this, [this] {
+        if (petAction_ != nullptr) {
+            const QSignalBlocker block(petAction_);
+            petAction_->setChecked(false);
+        }
+        appendEvent(QStringLiteral("status"), QString(), QString(),
+                    QString::fromUtf8("语音桌宠已关闭；托盘菜单里可重新打开"), 0);
+    });
+    // 桌宠/语音面板里切了识别方式时，主窗自己的控件也要跟上。
+    connect(voice_, &VoiceController::optionsChanged, this, [this] {
+        refreshVoiceUi();
+        refreshRemoteCard();
+    });
     refreshRemoteCard();
     for (QAbstractButton *button : findChildren<QAbstractButton *>()) {
         button->setFocusPolicy(Qt::NoFocus);
@@ -648,6 +669,15 @@ void MainWindow::buildTray() {
     auto *voicePanelAction = menu->addAction(QString::fromUtf8("语音面板"));
     connect(voicePanelAction, &QAction::triggered, this,
             &MainWindow::showVoicePanel);
+    petAction_ = menu->addAction(QString::fromUtf8("语音桌宠"));
+    petAction_->setCheckable(true);
+    petAction_->setChecked(voicePet_->petEnabled());
+    connect(petAction_, &QAction::toggled, this, [this](bool on) {
+        voicePet_->setPetEnabled(on);
+        if (on) {
+            voicePet_->present();
+        }
+    });
     listenAction_ = menu->addAction(QString::fromUtf8("开始监听"));
     connect(listenAction_, &QAction::triggered, this, [this] {
         toggleListening();
@@ -722,6 +752,8 @@ void MainWindow::showOnStartup(bool startHidden) {
     if (startHidden) {
         // 只留托盘时也要先把 HWND 建出来，第二次启动才能 FindWindow 叫回窗口。
         winId();
+        // 开机自启只留托盘：桌宠就是这时的“脸面”。
+        QTimer::singleShot(0, this, [this] { voicePet_->presentIfEnabled(); });
         return;
     }
     // 上次用的语音主界面就直接开它，不闪一下完整界面。
@@ -856,6 +888,9 @@ void MainWindow::updateListenUi() {
     if (voiceWindow_ != nullptr) {
         voiceWindow_->setListeningUi(running);
     }
+    if (voicePet_ != nullptr) {
+        voicePet_->setListening(running);
+    }
     updateTrayState();
 }
 
@@ -904,6 +939,10 @@ void MainWindow::showVoicePanel() {
             store_->setUiBool("voice_mode", false);
             voiceWindow_->hide();
             wake();
+        });
+        // 面板收起（✕）时把桌宠叫出来，监听状态不丢。
+        connect(voiceWindow_, &VoiceWindow::panelHidden, this, [this] {
+            voicePet_->presentIfEnabled();
         });
     }
     store_->setUiBool("voice_mode", true);
@@ -1458,6 +1497,8 @@ void MainWindow::showUpdateDialog(const UpdateInfo &info) {
 void MainWindow::closeEvent(QCloseEvent *event) {
     if (tray_ && !quitting_ && store_->uiBool("close_to_tray", true)) {
         hide();
+        // 关窗进托盘：语音桌宠顶上，监听/录音状态一眼可见。
+        voicePet_->presentIfEnabled();
         if (!trayHintShown_) {
             trayHintShown_ = true;
             tray_->showMessage(

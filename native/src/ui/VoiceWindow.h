@@ -33,6 +33,7 @@ signals:
 
 protected:
     void closeEvent(QCloseEvent *event) override;
+    void paintEvent(QPaintEvent *event) override;
     bool eventFilter(QObject *watched, QEvent *event) override;
 
 private:

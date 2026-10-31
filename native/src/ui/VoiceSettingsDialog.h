@@ -39,6 +39,7 @@ private:
     QLabel *senseState_ = nullptr;
     QLabel *qwenState_ = nullptr;
     QLabel *asrState_ = nullptr;
+    QLabel *llmState_ = nullptr;
     QPushButton *senseImport_ = nullptr;
     QPushButton *qwenImport_ = nullptr;
     QLabel *note_ = nullptr;

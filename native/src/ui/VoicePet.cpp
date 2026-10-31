@@ -597,6 +597,12 @@ void VoicePet::leaveEvent(QEvent *event) {
 
 void VoicePet::showEvent(QShowEvent *event) {
     QWidget::showEvent(event);
+    // 对话开关可能在语音主界面/设置里被改过，桌宠出现时以配置为准。
+    const bool stored = store_->uiBool(QStringLiteral("pet_chat"), false);
+    if (stored != chatMode_) {
+        chatMode_ = stored;
+        voice_->setChatMode(chatMode_);
+    }
     animTimer_->start(50);
 }
 

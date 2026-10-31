@@ -4,6 +4,7 @@
 #include "core/Profiles.h"
 #include "core/VoiceSettings.h"
 #include "ui/AsrSettingsDialog.h"
+#include "ui/LlmSettingsDialog.h"
 #include "ui/TtsSettingsDialog.h"
 
 #include <QAbstractButton>
@@ -174,6 +175,28 @@ VoiceSettingsDialog::VoiceSettingsDialog(ProfileStore *store, QWidget *parent)
     asrRow->addWidget(asrMore);
     root->addLayout(asrRow);
 
+    // 桌宠对话（LLM）：和云端 ASR 同款的状态 + 设置入口。
+    llmState_ = new QLabel;
+    llmState_->setObjectName("muted");
+    auto *llmRow = new QHBoxLayout;
+    auto *llmLabel = new QLabel(QString::fromUtf8("桌宠对话"));
+    llmLabel->setObjectName("muted");
+    llmLabel->setFixedWidth(98);
+    auto *llmMore = new QPushButton(QString::fromUtf8("设置…"));
+    llmMore->setObjectName("ghostSmall");
+    llmMore->setCursor(Qt::PointingHandCursor);
+    connect(llmMore, &QPushButton::clicked, this, [this] {
+        auto *dialog = new LlmSettingsDialog(store_, this);
+        connect(dialog, &LlmSettingsDialog::saved, this,
+                [this] { refreshStatus(); });
+        dialog->exec();
+        dialog->deleteLater();
+    });
+    llmRow->addWidget(llmLabel);
+    llmRow->addWidget(llmState_, 1);
+    llmRow->addWidget(llmMore);
+    root->addLayout(llmRow);
+
     note_ = new QLabel(QString::fromUtf8(
         "本地识别要先装模型：点「导入模型包…」挑一个 .zip，或者把模型包直接"
         "拖进主窗口，程序会自己解压装好，不用填路径。"));
@@ -291,6 +314,12 @@ void VoiceSettingsDialog::refreshStatus() {
                                   : QString::fromUtf8("未配置"));
     asrState_->setStyleSheet(cloudReady ? QStringLiteral("color:#3fb950;")
                                         : QStringLiteral("color:#d29922;"));
+    const bool llmReady =
+        !current.llmApiKey.isEmpty() && !current.llmApiModel.isEmpty();
+    llmState_->setText(llmReady ? QStringLiteral("✓ %1").arg(current.llmApiModel)
+                                : QString::fromUtf8("未配置"));
+    llmState_->setStyleSheet(llmReady ? QStringLiteral("color:#3fb950;")
+                                      : QStringLiteral("color:#d29922;"));
 
     const QString backend = backend_->currentData().toString();
     if (backend == "sensevoice") {

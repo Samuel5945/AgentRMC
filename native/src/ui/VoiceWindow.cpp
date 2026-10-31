@@ -269,7 +269,25 @@ VoiceWindow::VoiceWindow(VoiceController *voice, ProfileStore *store,
         dialog->exec();
         dialog->deleteLater();
     });
+    // 对话模式开关：说话 → 转写 → LLM → TTS 念回复，不再粘贴。
+    auto *chatMode = new QPushButton(QString::fromUtf8("对话"));
+    chatMode->setObjectName("ghostSmall");
+    chatMode->setCheckable(true);
+    chatMode->setChecked(store_->uiBool("pet_chat", false));
+    chatMode->setCursor(Qt::PointingHandCursor);
+    chatMode->setToolTip(QString::fromUtf8(
+        "桌宠对话模式：说话发给模型聊，回复用 TTS 念出来；"
+        "模型在「模型设置 → 桌宠对话」里配，桌宠右键也有开关"));
+    connect(chatMode, &QPushButton::toggled, this, [this](bool on) {
+        store_->setUiBool(QStringLiteral("pet_chat"), on);
+        voice_->setChatMode(on);
+        toast_->showText(on ? QString::fromUtf8(
+                                  "对话模式开：说话会得到模型的语音回复，不再粘贴")
+                            : QString::fromUtf8("已退出对话模式"),
+                          3000);
+    });
     foot->addWidget(backend_, 1);
+    foot->addWidget(chatMode);
     foot->addWidget(tts);
     foot->addWidget(settings);
     body->addLayout(foot);

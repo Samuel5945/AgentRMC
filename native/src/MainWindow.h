@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QByteArray>
 #include <QMainWindow>
 #include <QSet>
 
@@ -8,13 +9,17 @@
 #include "core/Profiles.h"
 
 class QCloseEvent;
+class QAction;
 class QComboBox;
+class QDragEnterEvent;
+class QDropEvent;
 class QLabel;
 class QListWidget;
 class QPushButton;
 class QSystemTrayIcon;
 class InputEngine;
 class KeymapPage;
+class GuideDialog;
 class RemotePanel;
 class Toast;
 class VoiceController;
@@ -26,8 +31,18 @@ public:
     explicit MainWindow(bool withTray, const QString &pin = QString(),
                         bool autoListen = true, QWidget *parent = nullptr);
 
+    // 启动时的可见性：手动启动开窗，首次运行再弹引导；--tray（开机自启）只留托盘。
+    void showOnStartup(bool startHidden);
+    // 把主界面叫回来（托盘点击、第二次启动、托盘菜单）。
+    void wake();
+
 protected:
     void closeEvent(QCloseEvent *event) override;
+    // 捕获「第二次启动」广播的自定义消息，把窗口叫回来。
+    bool nativeEvent(const QByteArray &eventType, void *message,
+                     qintptr *result) override;
+    // 模型包直接拖进窗口就能装（窗口级拦截，落在哪个子控件上都行）。
+    bool eventFilter(QObject *obj, QEvent *event) override;
 
 private:
     QWidget *buildHeader();
@@ -36,6 +51,11 @@ private:
     QWidget *buildLogPage();
     QWidget *buildGuidePage();
     void buildTray();
+    void importDroppedModel(const QString &file);
+    void showDropHint(bool on);
+    void updateTrayState();
+    bool autoStartEnabled() const;
+    void setAutoStart(bool on);
     void showGuide();
     void toggleListening();
     void updateListenUi();
@@ -75,5 +95,12 @@ private:
     QLabel *remoteDot_ = nullptr;
     QLabel *remoteState_ = nullptr;
     QSystemTrayIcon *tray_ = nullptr;
+    GuideDialog *guide_ = nullptr;
+    QLabel *dropHint_ = nullptr;
+    QAction *showAction_ = nullptr;
+    QAction *listenAction_ = nullptr;
+    QAction *autoStartAction_ = nullptr;
+    QString sceneName_;
+    bool trayHintShown_ = false;
     bool quitting_ = false;
 };

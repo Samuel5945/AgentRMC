@@ -61,10 +61,15 @@ QString VoiceController::hotkeyHint() {
     updateOptions();
     const Profile &profile = store_->current(true);
     const QString combo = voiceComboText(options_.hotkeyMods, options_.hotkeyVk);
-    return voiceProfileLabel(profile.name) + QStringLiteral(" · ") + combo +
-           (options_.hotkeyTrigger == QStringLiteral("toggle")
-                ? QStringLiteral(" · 按一下开始/再按一次结束")
-                : QStringLiteral(" · 按住说话"));
+    QString text =
+        voiceProfileLabel(profile.name) + QStringLiteral(" · ") + combo +
+        (options_.hotkeyTrigger == QStringLiteral("toggle")
+             ? QStringLiteral(" · 按一下开始/再按一次结束")
+             : QStringLiteral(" · 按住说话"));
+    if (profile.voice.isEmpty()) {
+        text += QString::fromUtf8(" · 这个场景没配语音快捷键，应用不响应时改用本地识别");
+    }
+    return text;
 }
 
 bool VoiceController::modelReady(QString *detail) {
@@ -83,13 +88,17 @@ bool VoiceController::modelReady(QString *detail) {
         QString reason;
         const bool ready = senseVoiceReady(options_.senseVoiceDir, nullptr, nullptr);
         if (detail != nullptr) {
-            *detail = ready ? QStringLiteral("模型就绪") : QStringLiteral("未找到 SenseVoice 模型");
+            *detail = ready ? QStringLiteral("模型就绪")
+                            : QStringLiteral("还没装 SenseVoice 模型："
+                                             "打开「模型设置 → 导入模型包…」装一下");
         }
         return ready;
     }
     const bool ready = qwen3Ready(options_.qwen3Dir, nullptr, nullptr, nullptr, nullptr);
     if (detail != nullptr) {
-        *detail = ready ? QStringLiteral("模型就绪") : QStringLiteral("未找到 Qwen3-ASR 模型");
+        *detail = ready ? QStringLiteral("模型就绪")
+                        : QStringLiteral("还没装 Qwen3-ASR 模型："
+                                         "打开「模型设置 → 导入模型包…」装一下");
     }
     return ready;
 #endif

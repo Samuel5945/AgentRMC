@@ -550,3 +550,4 @@ QToolTip {
     background: #161d2a;
     border: 1px solid rgba(255, 255, 255, 26);
 }
+

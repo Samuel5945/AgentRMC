@@ -7,6 +7,7 @@
 #include "ui/VoiceSettingsDialog.h"
 
 #include "core/InputEngine.h"
+#include "core/ModelImport.h"
 #include "core/Presets.h"
 #include "core/VoiceController.h"
 
@@ -19,6 +20,12 @@
 #include <QCloseEvent>
 #include <QComboBox>
 #include <QCoreApplication>
+#include <QDir>
+#include <QDragEnterEvent>
+#include <QDropEvent>
+#include <QFile>
+#include <QMimeData>
+#include <QSettings>
 #include <QCursor>
 #include <QDesktopServices>
 #include <QGuiApplication>
@@ -43,6 +50,11 @@
 #include <QToolButton>
 #include <QUrl>
 #include <QVBoxLayout>
+
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
 #include <QVector>
 #include <QWindow>
 
@@ -87,7 +99,9 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
                 voice_->setListening(running);
             });
     connect(engine_, &InputEngine::profileChanged, this,
-            [this](const QString &) {
+            [this](const QString &name) {
+                sceneName_ = name;
+                updateTrayState();
                 refreshRemoteCard();
                 if (!voice_->busy()) {
                     refreshVoiceUi();
@@ -126,6 +140,14 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
             });
     setWindowTitle("AgentRMC Native");
     setWindowIcon(QIcon(":/icons/icon.ico"));
+    setAcceptDrops(true);
+    dropHint_ = new QLabel(QString::fromUtf8("松手，导入这个模型包"), this);
+    dropHint_->setAlignment(Qt::AlignCenter);
+    dropHint_->setStyleSheet(QStringLiteral(
+        "background: rgba(11,14,20,225); color: #e6edf3; font-size: 18px;"
+        " border: 2px dashed rgba(79,140,255,190); border-radius: 12px;"));
+    dropHint_->hide();
+    qApp->installEventFilter(this);
     setWindowFlags(Qt::Window | Qt::FramelessWindowHint);
     setMinimumSize(880, 560);
 
@@ -385,6 +407,7 @@ QWidget *MainWindow::buildVoiceCard() {
     foot->addStretch(1);
     lay->addLayout(foot);
 
+
     refreshVoiceUi();
     return card;
 }
@@ -493,6 +516,14 @@ QWidget *MainWindow::buildGuidePage() {
                 {"接管原生键", "映射页右下角打开后，当前场景中映射键的原生事件被吞；"
                                "实体键盘同名键也会按遥控器映射处理，"
                                "双击键的单击会有一段判定延迟"}});
+    addSection(QString::fromUtf8("语音怎么用"),
+               {{"默认", "遥控器语音键转发给当前应用自己的语音快捷键"
+                         "（Qoder Ctrl+Shift+V / WorkBuddy Ctrl+D），不用装模型"},
+                {"装本地模型", "把模型包（.zip）拖进窗口，或点「模型设置 → 导入模型包…」；"
+                               "装好会自动切到本地识别"},
+                {"什么时候用本地", "应用没有语音快捷键、或想离线识别时用；"
+                                   "SenseVoice 约 230MB，中英文都够用"},
+                {"耳机", "电脑上没有媒体在播放时，耳机播放/暂停 = 同一个语音开关"}});
     addSection(QString::fromUtf8("已知限制"),
                {{"电源 / 音量", "这两个键走红外，电脑收不到，无法映射"},
                 {"未开接管", "遥控器按键仍会原生送达前台，映射动作和原生动作可能同时生效"},
@@ -517,11 +548,23 @@ void MainWindow::buildTray() {
     tray_ = new QSystemTrayIcon(icon, this);
 
     auto *menu = new QMenu(this);
-    auto *show = menu->addAction(QString::fromUtf8("显示主界面"));
-    connect(show, &QAction::triggered, this, [this] {
-        showNormal();
-        raise();
-        activateWindow();
+    showAction_ = menu->addAction(QString::fromUtf8("显示主界面"));
+    connect(showAction_, &QAction::triggered, this, &MainWindow::wake);
+    listenAction_ = menu->addAction(QString::fromUtf8("开始监听"));
+    connect(listenAction_, &QAction::triggered, this, [this] {
+        toggleListening();
+        updateListenUi();
+    });
+    menu->addSeparator();
+    autoStartAction_ = menu->addAction(QString::fromUtf8("开机自启"));
+    autoStartAction_->setCheckable(true);
+    autoStartAction_->setChecked(autoStartEnabled());
+    connect(autoStartAction_, &QAction::toggled, this, [this](bool on) {
+        setAutoStart(on);
+        if (autoStartEnabled() != on) {
+            QSignalBlocker block(autoStartAction_);
+            autoStartAction_->setChecked(!on);
+        }
     });
     menu->addSeparator();
     auto *quit = menu->addAction(QString::fromUtf8("退出 AgentRMC Native"));
@@ -530,31 +573,125 @@ void MainWindow::buildTray() {
         QApplication::quit();
     });
     tray_->setContextMenu(menu);
-    tray_->setToolTip("AgentRMC Native");
     tray_->show();
 
     connect(tray_, &QSystemTrayIcon::activated, this,
             [this](QSystemTrayIcon::ActivationReason reason) {
                 if (reason == QSystemTrayIcon::Trigger ||
                     reason == QSystemTrayIcon::DoubleClick) {
-                    showNormal();
-                    raise();
-                    activateWindow();
+                    wake();
                 }
             });
+    updateTrayState();
+}
+
+void MainWindow::updateTrayState() {
+    if (tray_ == nullptr) {
+        return;
+    }
+    const bool running = engine_ != nullptr && engine_->isRunning();
+    const QString scene =
+        sceneName_.isEmpty() ? store_->current(true).name : sceneName_;
+    tray_->setToolTip(QString::fromUtf8("AgentRMC · %1 · %2")
+                          .arg(running ? QString::fromUtf8("监听中")
+                                       : QString::fromUtf8("未监听"),
+                               voiceProfileLabel(scene)));
+    if (listenAction_ != nullptr) {
+        listenAction_->setText(running ? QString::fromUtf8("停止监听")
+                                       : QString::fromUtf8("开始监听"));
+    }
+}
+
+void MainWindow::showOnStartup(bool startHidden) {
+    // 首次运行按「这次安装」判断：标记文件放在 exe 同目录，重装/升级不会误判。
+    const QString marker =
+        QCoreApplication::applicationDirPath() + QStringLiteral("/.guide_seen");
+    const bool firstRun = !QFile::exists(marker);
+    if (startHidden && !store_->uiBool("start_minimized", true)) {
+        startHidden = false;
+    }
+    if (startHidden) {
+        // 只留托盘时也要先把 HWND 建出来，第二次启动才能 FindWindow 叫回窗口。
+        winId();
+        return;
+    }
+    wake();
+    if (firstRun) {
+        QFile file(marker);
+        if (file.open(QIODevice::WriteOnly)) {
+            file.write("1");
+        }
+        QTimer::singleShot(0, this, &MainWindow::showGuide);
+    }
+}
+
+void MainWindow::wake() {
+    showNormal();
+    raise();
+    activateWindow();
+}
+
+bool MainWindow::autoStartEnabled() const {
+    QSettings run(QStringLiteral("HKEY_CURRENT_USER\\Software\\Microsoft\\"
+                                 "Windows\\CurrentVersion\\Run"),
+                  QSettings::NativeFormat);
+    return !run.value(QStringLiteral("AgentRMCNative")).toString().isEmpty();
+}
+
+void MainWindow::setAutoStart(bool on) {
+    QSettings run(QStringLiteral("HKEY_CURRENT_USER\\Software\\Microsoft\\"
+                                 "Windows\\CurrentVersion\\Run"),
+                  QSettings::NativeFormat);
+    if (!on) {
+        run.remove(QStringLiteral("AgentRMCNative"));
+        return;
+    }
+    const QString exe =
+        QDir::toNativeSeparators(QCoreApplication::applicationFilePath());
+    run.setValue(QStringLiteral("AgentRMCNative"),
+                 QStringLiteral("\"%1\" --tray").arg(exe));
 }
 
 void MainWindow::showGuide() {
-    auto *dialog = new GuideDialog(this);
-    dialog->setAttribute(Qt::WA_DeleteOnClose);
-    const QSize size = dialog->sizeHint();
+    if (guide_ == nullptr) {
+        guide_ = new GuideDialog(this);
+        connect(guide_, &GuideDialog::useHotkeyRequested, this, [this] {
+            store_->updateVoice(QJsonObject{{QStringLiteral("backend"),
+                                             QStringLiteral("hotkey")}});
+            voice_->reload();
+            refreshVoiceUi();
+            guide_->setBackend(QStringLiteral("hotkey"));
+            if (toast_ != nullptr) {
+                toast_->showText(
+                    QString::fromUtf8("已切到转发模式（0 模型）"), 2400);
+            }
+        });
+        connect(guide_, &GuideDialog::modelPackageDropped, this,
+                [this](const QString &file) {
+                    guide_->hide();
+                    importDroppedModel(file);
+                    guide_->show();
+                    guide_->raise();
+                });
+        connect(guide_, &GuideDialog::openVoiceSettingsRequested, this, [this] {
+            // 引导是置顶窗口，直接开设置会被它挡住：先收起引导，设置关掉再放回来。
+            guide_->hide();
+            openVoiceSettings();
+            guide_->setBackend(voiceBackendKey(voice_->options().backend));
+            guide_->show();
+            guide_->raise();
+        });
+    }
+    guide_->setBackend(voiceBackendKey(voice_->options().backend));
+    guide_->showStep(0);
+    const QSize size = guide_->sizeHint();
     if (auto *screen = QGuiApplication::screenAt(QCursor::pos())) {
         const QRect area = screen->availableGeometry();
-        dialog->move(area.x() + (area.width() - size.width()) / 2,
+        guide_->move(area.x() + (area.width() - size.width()) / 2,
                      area.y() + (area.height() - size.height()) / 2);
     }
-    dialog->show();
-    dialog->raise();
+    guide_->show();
+    guide_->raise();
 }
 
 void MainWindow::toggleListening() {
@@ -588,6 +725,7 @@ void MainWindow::updateListenUi() {
         listenButton_->setText(running ? QStringLiteral("停止监听")
                                        : QStringLiteral("开始监听"));
     }
+    updateTrayState();
 }
 
 void MainWindow::refreshVoiceUi() {
@@ -609,14 +747,27 @@ void MainWindow::refreshVoiceUi() {
         }
     } else {
         const bool ready = voice_->modelReady();
-        setVoiceStatus(voice_->statusText(),
-                       ready ? QStringLiteral("#c9d1d9")
-                             : QStringLiteral("#d29922"),
-                       true);
-        if (voiceFoot_ != nullptr) {
-            voiceFoot_->setText(ready
-                                    ? QString::fromUtf8("本地转写 · 音频不出本机")
-                                    : QString::fromUtf8("模型未安装 · 打开“模型设置”"));
+        if (ready) {
+            voiceState_->setStyleSheet(QString());
+            setVoiceStatus(voice_->statusText(), QStringLiteral("#c9d1d9"), true);
+            if (voiceFoot_ != nullptr) {
+                voiceFoot_->setText(QString::fromUtf8("本地转写 · 音频不出本机"));
+            }
+        } else {
+            // 没装模型时，状态框本身就是拖拽区。
+            voiceState_->setTextFormat(Qt::PlainText);
+            voiceState_->setStyleSheet(QStringLiteral(
+                "QLabel#voiceBox { border: 1px dashed rgba(120,170,255,150);"
+                " border-radius: 10px; background: rgba(79,140,255,18);"
+                " color: #9ec1ff; padding: 8px; }"));
+            voiceState_->setText(
+                QString::fromUtf8("⇣  把模型包（.zip）拖到这里导入"));
+            voiceState_->setToolTip(
+                QString::fromUtf8("也可以点「模型设置 → 导入模型包…」选择文件"));
+            if (voiceFoot_ != nullptr) {
+                voiceFoot_->setText(
+                    QString::fromUtf8("未安装模型 · 拖入模型包，或点「模型设置」"));
+            }
         }
     }
     if (voiceTest_ != nullptr) {
@@ -801,6 +952,10 @@ void MainWindow::onEngineEvent(const QString &kind, const QString &name,
             }
         }
     }
+    if (guide_ != nullptr && guide_->isVisible() &&
+        kind == QStringLiteral("key") && !name.isEmpty()) {
+        guide_->noteKey(name);
+    }
     appendEvent(kind, name, profile, detail, vk);
 }
 
@@ -870,11 +1025,97 @@ void MainWindow::clearLog() {
     logCount_->setText(QStringLiteral("0 条"));
 }
 
+bool MainWindow::nativeEvent(const QByteArray &eventType, void *message,
+                             qintptr *result) {
+    static const UINT wakeMessage =
+        RegisterWindowMessageW(L"AgentRMC.Native.Wake");
+    auto *msg = static_cast<MSG *>(message);
+    if (msg != nullptr && wakeMessage != 0 && msg->message == wakeMessage) {
+        wake();
+        *result = 0;
+        return true;
+    }
+    return QMainWindow::nativeEvent(eventType, message, result);
+}
+
+bool MainWindow::eventFilter(QObject *obj, QEvent *event) {
+    const QEvent::Type type = event->type();
+    if (type == QEvent::DragEnter) {
+        auto *drag = static_cast<QDragEnterEvent *>(event);
+        if (!modelPackageFromMime(drag->mimeData()).isEmpty()) {
+            drag->acceptProposedAction();
+            showDropHint(true);
+            return true;
+        }
+    } else if (type == QEvent::DragLeave) {
+        showDropHint(false);
+    } else if (type == QEvent::Drop) {
+        auto *drop = static_cast<QDropEvent *>(event);
+        const QString file = modelPackageFromMime(drop->mimeData());
+        showDropHint(false);
+        if (!file.isEmpty()) {
+            drop->acceptProposedAction();
+            importDroppedModel(file);
+            return true;
+        }
+    }
+    return QMainWindow::eventFilter(obj, event);
+}
+
+void MainWindow::showDropHint(bool on) {
+    if (dropHint_ == nullptr) {
+        return;
+    }
+    if (!on) {
+        dropHint_->hide();
+        return;
+    }
+    dropHint_->setGeometry(rect());
+    dropHint_->raise();
+    dropHint_->show();
+}
+
+void MainWindow::importDroppedModel(const QString &file) {
+    const ModelImportResult result = importModelPackage(this, file);
+    if (!result.ok) {
+        appendEvent(QStringLiteral("error"), QString::fromUtf8("模型导入失败"),
+                    QString(), result.error, 0);
+        if (toast_ != nullptr) {
+            toast_->showText(QString::fromUtf8("模型导入失败：%1").arg(result.error),
+                             3200);
+        }
+        return;
+    }
+    const QString name = result.backend == QStringLiteral("qwen3")
+                             ? QStringLiteral("Qwen3-ASR")
+                             : QStringLiteral("SenseVoice");
+    store_->updateVoice(QJsonObject{{QStringLiteral("backend"), result.backend}});
+    voice_->reload();
+    refreshVoiceUi();
+    appendEvent(QStringLiteral("voice"), QString::fromUtf8("模型已导入"),
+                QString(), QString::fromUtf8("%1 已装好，语音切到本地识别")
+                               .arg(name),
+                0);
+    if (toast_ != nullptr) {
+        toast_->showText(
+            QString::fromUtf8("%1 已装好，语音已切到本地识别").arg(name), 2600);
+    }
+}
+
 void MainWindow::closeEvent(QCloseEvent *event) {
-    if (tray_ && !quitting_) {
+    if (tray_ && !quitting_ && store_->uiBool("close_to_tray", true)) {
         hide();
+        if (!trayHintShown_) {
+            trayHintShown_ = true;
+            tray_->showMessage(
+                QString::fromUtf8("AgentRMC 仍在后台"),
+                QString::fromUtf8("监听继续；点托盘图标叫回主界面"),
+                QSystemTrayIcon::Information, 3000);
+        }
         event->ignore();
         return;
     }
+    quitting_ = true;
     QMainWindow::closeEvent(event);
+    QApplication::quit();
 }

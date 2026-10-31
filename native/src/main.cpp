@@ -5,6 +5,11 @@
 #include <QTabWidget>
 #include <QTimer>
 
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+
 #include "MainWindow.h"
 #include "core/Profiles.h"
 #include "ui/GuideDialog.h"
@@ -26,6 +31,7 @@ int main(int argc, char *argv[]) {
     QString settingsShot;
     QString guideShot;
     int shotTab = -1;
+    int guideStep = -1;
     const QStringList args = app.arguments();
     for (int i = 1; i + 1 < args.size(); ++i) {
         if (args.at(i) == "--shot") {
@@ -38,6 +44,23 @@ int main(int argc, char *argv[]) {
             guideShot = args.at(i + 1);
         } else if (args.at(i) == "--tab") {
             shotTab = args.at(i + 1).toInt();
+        } else if (args.at(i) == "--guide-step") {
+            guideStep = args.at(i + 1).toInt();
+        }
+    }
+
+    // 开机自启带 --tray：只留托盘；手动双击图标时不带，直接开窗口。
+    const bool trayStart = app.arguments().contains(QStringLiteral("--tray"));
+    const QString ipcName = QStringLiteral("AgentRMC.Native.Wake");
+    const bool shotMode = !shot.isEmpty() || !settingsShot.isEmpty() ||
+                          !guideShot.isEmpty();
+    if (!shotMode) {
+        if (HWND existing = FindWindowW(nullptr, L"AgentRMC Native")) {
+            if (!trayStart) {
+                PostMessageW(existing,
+                             RegisterWindowMessageW(L"AgentRMC.Native.Wake"), 0, 0);
+            }
+            return 0;
         }
     }
 
@@ -60,6 +83,9 @@ int main(int argc, char *argv[]) {
 
     if (!guideShot.isEmpty()) {
         GuideDialog dialog;
+        if (guideStep >= 0) {
+            dialog.showStep(guideStep);
+        }
         dialog.setAttribute(Qt::WA_DontShowOnScreen);
         dialog.show();
         QTimer::singleShot(350, &dialog, [&dialog, guideShot] {
@@ -75,6 +101,11 @@ int main(int argc, char *argv[]) {
     // 页签截图要看到整页内容，离屏时把窗口拉高。
     win.resize(1000, shotTab >= 0 ? 1400 : 640);
 
+    if (!shotMode) {
+        // 托盘常驻：窗口隐藏/关闭不该让进程退出。
+        QApplication::setQuitOnLastWindowClosed(false);
+    }
+
     if (!shot.isEmpty()) {
         if (shotTab >= 0) {
             if (auto *tabs = win.findChild<QTabWidget *>()) {
@@ -89,7 +120,7 @@ int main(int argc, char *argv[]) {
             QCoreApplication::quit();
         });
     } else {
-        win.show();
+        win.showOnStartup(trayStart);
     }
     return app.exec();
 }

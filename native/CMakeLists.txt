@@ -12,6 +12,7 @@ qt_standard_project_setup()
 
 qt_add_executable(AgentRMCNative
     src/main.cpp
+    resources/app.rc
     src/MainWindow.cpp
     src/MainWindow.h
     src/core/Profiles.cpp
@@ -28,6 +29,8 @@ qt_add_executable(AgentRMCNative
     src/core/NativeHooks.h
     src/core/VoiceSettings.cpp
     src/core/VoiceSettings.h
+    src/core/ModelImport.cpp
+    src/core/ModelImport.h
     src/core/AudioRecorder.cpp
     src/core/AudioRecorder.h
     src/core/AsrEngine.cpp

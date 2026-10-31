@@ -788,6 +788,13 @@ void MainWindow::showGuide() {
                     guide_->show();
                     guide_->raise();
                 });
+        connect(guide_, &GuideDialog::voiceModeRequested, this, [this] {
+            store_->setUiBool("voice_mode", true);
+            if (guide_ != nullptr) {
+                guide_->close();
+            }
+            showVoicePanel();
+        });
         connect(guide_, &GuideDialog::openVoiceSettingsRequested, this, [this] {
             // 引导是置顶窗口，直接开设置会被它挡住：先收起引导，设置关掉再放回来。
             guide_->hide();

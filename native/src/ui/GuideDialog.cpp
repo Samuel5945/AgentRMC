@@ -24,6 +24,8 @@ namespace {
 
 constexpr int kTileWidth = 300;
 constexpr int kTileHeight = 340;
+// 页序：0 分支选择，1-4 遥控器流程，5 无遥控器语音路线。
+constexpr int kVoiceOnlyPage = 5;
 
 const char *const kPairingSteps[] = {
     "遥控器靠近要连接的设备",
@@ -132,10 +134,12 @@ GuideDialog::GuideDialog(QWidget *parent) : QDialog(parent) {
     root->addLayout(head);
 
     pages_ = new QStackedWidget;
+    pages_->addWidget(buildChoicePage());
     pages_->addWidget(buildPairingPage());
     pages_->addWidget(buildKeyTestPage());
     pages_->addWidget(buildVoicePage());
     pages_->addWidget(buildGesturePage());
+    pages_->addWidget(buildVoiceOnlyPage());
     root->addWidget(pages_);
 
     auto *foot = new QHBoxLayout;
@@ -146,8 +150,11 @@ GuideDialog::GuideDialog(QWidget *parent) : QDialog(parent) {
     prev_ = new QPushButton(QString::fromUtf8("上一步"));
     prev_->setObjectName("ghostSmall");
     prev_->setCursor(Qt::PointingHandCursor);
-    connect(prev_, &QPushButton::clicked, this,
-            [this] { showStep(pages_->currentIndex() - 1); });
+    connect(prev_, &QPushButton::clicked, this, [this] {
+        // 无遥控器路线的上一步回到分支选择页，别串进遥控器流程。
+        showStep(pages_->currentIndex() == kVoiceOnlyPage ? 0
+                                                          : pages_->currentIndex() - 1);
+    });
     next_ = new QPushButton(QString::fromUtf8("下一步"));
     next_->setObjectName("primary");
     next_->setCursor(Qt::PointingHandCursor);
@@ -205,6 +212,40 @@ void GuideDialog::dropEvent(QDropEvent *event) {
     emit modelPackageDropped(file);
 }
 
+QWidget *GuideDialog::buildChoicePage() {
+    auto *page = new QWidget;
+    auto *lay = new QVBoxLayout(page);
+    lay->setContentsMargins(0, 4, 0, 0);
+    lay->setSpacing(14);
+
+    auto *intro = new QLabel(QString::fromUtf8(
+        "开始之前选一下：这台电脑怎么用？之后随时可以在语音卡片里切换。"));
+    intro->setObjectName("secBody");
+    intro->setWordWrap(true);
+    lay->addWidget(intro);
+
+    auto *cards = new QHBoxLayout;
+    cards->setSpacing(16);
+    auto makeCard = [&cards](const QString &title, const QString &desc,
+                             const std::function<void()> &action) {
+        auto *card = new QPushButton(QString::fromUtf8("%1\n\n%2").arg(title, desc));
+        card->setObjectName("choiceCard");
+        card->setCursor(Qt::PointingHandCursor);
+        card->setFixedHeight(190);
+        connect(card, &QPushButton::clicked, card, action);
+        cards->addWidget(card, 1);
+    };
+    makeCard(QString::fromUtf8("🎮  有遥控器"),
+             QString::fromUtf8("先蓝牙配对，按键控制电脑、按住语音键说话"),
+             [this] { showStep(1); });
+    makeCard(QString::fromUtf8("🎙  没有遥控器"),
+             QString::fromUtf8("键盘热键 / 麦克风按钮一键说话，语音就是主界面"),
+             [this] { showStep(kVoiceOnlyPage); });
+    lay->addLayout(cards);
+    lay->addStretch(1);
+    return page;
+}
+
 QWidget *GuideDialog::buildPairingPage() {
     auto *page = new QWidget;
     auto *lay = new QHBoxLayout(page);
@@ -230,7 +271,7 @@ QWidget *GuideDialog::buildPairingPage() {
     auto *rightLay = new QVBoxLayout(right);
     rightLay->setContentsMargins(0, 0, 0, 0);
     rightLay->setSpacing(10);
-    rightLay->addWidget(guide::heading(QString::fromUtf8("1 · 配对遥控器")));
+    rightLay->addWidget(guide::heading(QString::fromUtf8("2 · 配对遥控器")));
     int index = 1;
     for (const char *step : kPairingSteps) {
         rightLay->addWidget(
@@ -251,12 +292,49 @@ QWidget *GuideDialog::buildPairingPage() {
     return page;
 }
 
+QWidget *GuideDialog::buildVoiceOnlyPage() {
+    auto *page = new QWidget;
+    auto *lay = new QVBoxLayout(page);
+    lay->setContentsMargins(0, 0, 0, 0);
+    lay->setSpacing(14);
+    lay->addWidget(guide::heading(QString::fromUtf8("语音主界面 · 不需要遥控器")));
+
+    lay->addWidget(guide::row(
+        QString::fromUtf8("热键"),
+        QString::fromUtf8("全局键盘热键（默认 Ctrl+Alt+V）一键开始/结束说话，"
+                          "任何界面下都生效；被别的程序占用时在语音设置里换一个"),
+        68));
+    lay->addWidget(guide::row(
+        QString::fromUtf8("麦克风"),
+        QString::fromUtf8("语音主界面的大按钮点击开始、再点结束；说完停嘴几秒自动收尾。"
+                          "没遥控器也能完整用语音，遥控器以后接上随时能用"),
+        68));
+    lay->addWidget(guide::row(
+        QString::fromUtf8("转写"),
+        QString::fromUtf8("结果自动复制/粘贴，说「打开 xx」还能直接启动应用；"
+                          "想本地识别先在语音设置里导入模型包"),
+        68));
+    lay->addStretch(1);
+
+    auto *enterRow = new QHBoxLayout;
+    auto *enter = new QPushButton(QString::fromUtf8("进入语音主界面"));
+    enter->setObjectName("primary");
+    enter->setCursor(Qt::PointingHandCursor);
+    enter->setFixedWidth(150);
+    connect(enter, &QPushButton::clicked, this,
+            [this] { emit voiceModeRequested(); });
+    enterRow->addStretch(1);
+    enterRow->addWidget(enter);
+    lay->addLayout(enterRow);
+    return page;
+}
+
 QWidget *GuideDialog::buildKeyTestPage() {
     auto *page = new QWidget;
     auto *lay = new QVBoxLayout(page);
     lay->setContentsMargins(0, 0, 0, 0);
     lay->setSpacing(14);
-    lay->addWidget(guide::heading(QString::fromUtf8("2 · 试按一下")));
+    lay->addWidget(guide::heading(QString::fromUtf8("3 · 试按一下")));
     auto *body = new QLabel(QString::fromUtf8(
         "连上之后随便按几个键：左边遥控器卡片上对应的键位会亮起，"
         "右下角显示刚触发的「键位 · 动作」。"));
@@ -286,7 +364,7 @@ QWidget *GuideDialog::buildVoicePage() {
     auto *lay = new QVBoxLayout(page);
     lay->setContentsMargins(0, 0, 0, 0);
     lay->setSpacing(14);
-    lay->addWidget(guide::heading(QString::fromUtf8("3 · 语音怎么用")));
+    lay->addWidget(guide::heading(QString::fromUtf8("4 · 语音怎么用")));
 
     auto makeChoice = [this, lay](const QString &name, const QString &text,
                                   QLabel **mark, const QString &buttonText,
@@ -339,7 +417,7 @@ QWidget *GuideDialog::buildGesturePage() {
     auto *lay = new QVBoxLayout(page);
     lay->setContentsMargins(0, 0, 0, 0);
     lay->setSpacing(9);
-    lay->addWidget(guide::heading(QString::fromUtf8("4 · 手势与模式")));
+    lay->addWidget(guide::heading(QString::fromUtf8("5 · 手势与模式")));
     for (const auto &gesture : kGestures) {
         lay->addWidget(guide::row(QString::fromUtf8(gesture.key),
                                   QString::fromUtf8(gesture.text), 84));
@@ -385,14 +463,25 @@ void GuideDialog::setBackend(const QString &backend) {
 
 void GuideDialog::updateStepUi() {
     const int index = pages_->currentIndex();
-    stepLabel_->setText(
-        QString::fromUtf8("第 %1 / %2 步").arg(index + 1).arg(pages_->count()));
+    // 分支页只管选择，语音路线不算步数：步数按遥控器流程显示。
+    if (index == 0) {
+        stepLabel_->setText(QString::fromUtf8("先选一条路线"));
+    } else if (index == kVoiceOnlyPage) {
+        stepLabel_->setText(QString::fromUtf8("语音路线"));
+    } else {
+        stepLabel_->setText(QString::fromUtf8("第 %1 / %2 步")
+                                .arg(index)
+                                .arg(pages_->count() - 2));
+    }
     // 每步按自己的内容定高，别被第 1 步的配图撑成空白页。
     if (QWidget *page = pages_->currentWidget()) {
         pages_->setFixedHeight(page->sizeHint().height());
     }
     adjustSize();
-    prev_->setEnabled(index > 0);
+    prev_->setVisible(index != 0);
+    next_->setVisible(index != 0 && index != kVoiceOnlyPage);
+    prev_->setText(index == kVoiceOnlyPage ? QString::fromUtf8("重选路线")
+                                           : QString::fromUtf8("上一步"));
     next_->setText(index + 1 >= pages_->count()
                        ? QString::fromUtf8("开始使用")
                        : QString::fromUtf8("下一步"));

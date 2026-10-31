@@ -583,6 +583,20 @@ QToolTip {
 }
 
 
+QPushButton#choiceCard {
+    background: #121722;
+    border: 1px solid rgba(255, 255, 255, 22);
+    border-radius: 14px;
+    color: #e6edf3;
+    font-size: 16px;
+    padding: 18px;
+}
+
+QPushButton#choiceCard:hover {
+    border-color: rgba(79, 140, 255, 150);
+    background: #161d2a;
+}
+
 /* ---------- 语音主界面（无遥控器简洁版） ---------- */
 
 QWidget#voiceWindow {

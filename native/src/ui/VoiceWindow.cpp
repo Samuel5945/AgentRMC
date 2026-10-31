@@ -12,6 +12,8 @@
 #include <QHBoxLayout>
 #include <QMouseEvent>
 #include <QPainter>
+#include <QSignalBlocker>
+#include <QToolButton>
 #include <QVBoxLayout>
 #include <QWindow>
 
@@ -113,6 +115,8 @@ VoiceWindow::VoiceWindow(VoiceController *voice, ProfileStore *store,
     setObjectName("voiceWindow");
     setWindowTitle(QString::fromUtf8("AgentRMC 语音"));
     setWindowFlags(Qt::Window | Qt::FramelessWindowHint);
+    // qss 里给了 12px 圆角，透明背景才能圆出效果。
+    setAttribute(Qt::WA_TranslucentBackground);
     setFixedSize(380, 560);
 
     auto *root = new QVBoxLayout(this);
@@ -135,14 +139,19 @@ VoiceWindow::VoiceWindow(VoiceController *voice, ProfileStore *store,
     full->setCursor(Qt::PointingHandCursor);
     full->setToolTip(QString::fromUtf8("切回完整主界面"));
     connect(full, &QPushButton::clicked, this, &VoiceWindow::fullUiRequested);
-    auto *minBtn = new QPushButton(QString::fromUtf8("—"));
+    auto *minBtn = new QToolButton;
+    minBtn->setText(QString::fromUtf8("—"));
     minBtn->setObjectName("winBtn");
+    minBtn->setFixedSize(28, 24);
     minBtn->setCursor(Qt::PointingHandCursor);
-    connect(minBtn, &QPushButton::clicked, this, &QWidget::showMinimized);
-    auto *closeBtn = new QPushButton(QString::fromUtf8("✕"));
+    connect(minBtn, &QToolButton::clicked, this, &QWidget::showMinimized);
+    auto *closeBtn = new QToolButton;
+    closeBtn->setText(QString::fromUtf8("✕"));
     closeBtn->setObjectName("closeBtn");
+    closeBtn->setFixedSize(28, 24);
     closeBtn->setCursor(Qt::PointingHandCursor);
-    connect(closeBtn, &QPushButton::clicked, this, &QWidget::hide);
+    // 走 close()：收面板 = 回托盘并把桌宠叫出来，和标题栏 ✕ 语义一致。
+    connect(closeBtn, &QToolButton::clicked, this, &QWidget::close);
     head->addWidget(statusDot_);
     head->addWidget(title);
     head->addStretch(1);
@@ -280,6 +289,15 @@ VoiceWindow::VoiceWindow(VoiceController *voice, ProfileStore *store,
                 transcript_->setText(text);
                 pushHistory(text, costMs);
             });
+    connect(voice_, &VoiceController::optionsChanged, this, [this] {
+        // 桌宠/主界面那边也可能切了识别方式，把下拉框拉回来。
+        const QSignalBlocker block(backend_);
+        const int synced = backend_->findData(voiceBackendKey(voice_->options().backend));
+        if (synced >= 0) {
+            backend_->setCurrentIndex(synced);
+        }
+        refreshHint();
+    });
     connect(voice_, &VoiceController::eventReady, this,
             [this](const QString &kind, const QString &text) {
                 if (kind == QStringLiteral("error")) {
@@ -340,4 +358,5 @@ void VoiceWindow::closeEvent(QCloseEvent *event) {
     // ✕ 的语义是回托盘，不是退出；真退出走托盘菜单。
     event->ignore();
     hide();
+    emit panelHidden();
 }

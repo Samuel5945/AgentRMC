@@ -20,7 +20,8 @@ QWidget *row(const QString &key, const QString &text, int keyWidth);
 
 }  // namespace guide
 
-// 首次启动的四步引导：配对 → 试按键 → 选语音 → 手势。
+// 首次启动的分支引导：先选「有遥控器 / 没遥控器」，再分别走
+// 配对四步或语音主界面路线。
 class GuideDialog final : public QDialog {
     Q_OBJECT
 
@@ -37,6 +38,8 @@ signals:
     void useHotkeyRequested();
     void openVoiceSettingsRequested();
     void modelPackageDropped(const QString &file);
+    // 无遥控器路线里点了「进入语音主界面」。
+    void voiceModeRequested();
 
 protected:
     void keyPressEvent(QKeyEvent *event) override;
@@ -47,10 +50,12 @@ protected:
     void dropEvent(QDropEvent *event) override;
 
 private:
+    QWidget *buildChoicePage();
     QWidget *buildPairingPage();
     QWidget *buildKeyTestPage();
     QWidget *buildVoicePage();
     QWidget *buildGesturePage();
+    QWidget *buildVoiceOnlyPage();
     void updateStepUi();
 
     QStackedWidget *pages_ = nullptr;

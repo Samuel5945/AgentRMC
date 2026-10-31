@@ -500,6 +500,7 @@ void VoiceController::reload() {
         recorder_.close();
     }
     setState(State::Idle, QStringLiteral("就绪"));
+    emit optionsChanged();
 }
 
 void VoiceController::setListening(bool listening) {

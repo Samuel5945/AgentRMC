@@ -28,6 +28,8 @@ public:
 signals:
     // 用户点了「完整界面」：主窗负责把自己 wake 回来。
     void fullUiRequested();
+    // 面板被收起（✕）：主窗负责把桌宠叫出来。
+    void panelHidden();
 
 protected:
     void closeEvent(QCloseEvent *event) override;

@@ -25,6 +25,7 @@ class GuideDialog;
 class RemotePanel;
 class Toast;
 class VoiceController;
+class VoicePet;
 class VoiceWindow;
 
 class MainWindow final : public QMainWindow {
@@ -108,9 +109,11 @@ private:
     QSystemTrayIcon *tray_ = nullptr;
     GuideDialog *guide_ = nullptr;
     VoiceWindow *voiceWindow_ = nullptr;
+    VoicePet *voicePet_ = nullptr;
     QLabel *dropHint_ = nullptr;
     QAction *showAction_ = nullptr;
     QAction *listenAction_ = nullptr;
+    QAction *petAction_ = nullptr;
     QAction *autoStartAction_ = nullptr;
     QString sceneName_;
     bool trayHintShown_ = false;

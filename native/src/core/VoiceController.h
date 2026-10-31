@@ -46,6 +46,8 @@ signals:
     void stateChanged(const QString &state, const QString &detail);
     void eventReady(const QString &kind, const QString &text);
     void transcribed(const QString &text, int costMs);
+    // reload() 后发：识别方式等选项变了，让主窗/语音面板/桌宠同步自己的模式控件。
+    void optionsChanged();
 
 private:
     enum class State { Idle, Pending, Recording };

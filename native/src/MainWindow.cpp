@@ -6,6 +6,7 @@
 #include "ui/RemotePanel.h"
 #include "ui/Toast.h"
 #include "ui/VoiceSettingsDialog.h"
+#include "ui/VoiceWindow.h"
 
 #include "core/InputEngine.h"
 #include "core/ModelImport.h"
@@ -83,6 +84,9 @@ protected:
         QWidget::mousePressEvent(event);
     }
 };
+
+// 全局语音热键（无遥控器触发用）的注册 ID。
+constexpr UINT kVoiceHotkeyId = 0xB00B;
 
 }  // namespace
 
@@ -433,8 +437,16 @@ QWidget *MainWindow::buildVoiceCard() {
     settings->setCursor(Qt::PointingHandCursor);
     connect(settings, &QPushButton::clicked, this,
             &MainWindow::openVoiceSettings);
+    auto *voicePanel = new QPushButton(QString::fromUtf8("语音主界面"));
+    voicePanel->setObjectName("ghostSmall");
+    voicePanel->setCursor(Qt::PointingHandCursor);
+    voicePanel->setToolTip(QString::fromUtf8(
+        "切到无遥控器的简洁语音界面：大按钮一键说话"));
+    connect(voicePanel, &QPushButton::clicked, this,
+            &MainWindow::showVoicePanel);
     tools->addWidget(voiceTest_);
     tools->addWidget(settings);
+    tools->addWidget(voicePanel);
     tools->addStretch(1);
     lay->addLayout(tools);
 
@@ -633,6 +645,9 @@ void MainWindow::buildTray() {
     auto *menu = new QMenu(this);
     showAction_ = menu->addAction(QString::fromUtf8("显示主界面"));
     connect(showAction_, &QAction::triggered, this, &MainWindow::wake);
+    auto *voicePanelAction = menu->addAction(QString::fromUtf8("语音面板"));
+    connect(voicePanelAction, &QAction::triggered, this,
+            &MainWindow::showVoicePanel);
     listenAction_ = menu->addAction(QString::fromUtf8("开始监听"));
     connect(listenAction_, &QAction::triggered, this, [this] {
         toggleListening();
@@ -709,7 +724,13 @@ void MainWindow::showOnStartup(bool startHidden) {
         winId();
         return;
     }
-    wake();
+    // 上次用的语音主界面就直接开它，不闪一下完整界面。
+    if (store_->uiBool("voice_mode", false)) {
+        winId();  // 热键注册和二次启动唤醒都要 HWND
+        showVoicePanel();
+    } else {
+        wake();
+    }
     if (firstRun) {
         QFile file(marker);
         if (file.open(QIODevice::WriteOnly)) {
@@ -819,7 +840,77 @@ void MainWindow::updateListenUi() {
         listenButton_->setText(running ? QStringLiteral("停止监听")
                                        : QStringLiteral("开始监听"));
     }
+    // 无遥控器的语音触发：监听开着才注册全局热键，停了就还给别人。
+    if (running) {
+        registerVoiceHotkey();
+    } else {
+        unregisterVoiceHotkey();
+    }
+    if (voiceWindow_ != nullptr) {
+        voiceWindow_->setListeningUi(running);
+    }
     updateTrayState();
+}
+
+void MainWindow::registerVoiceHotkey() {
+    unregisterVoiceHotkey();
+    const VoiceOptions options = voice_->options();
+    if (!options.kbHotkeyEnabled) {
+        return;
+    }
+    UINT mods = 0;
+    for (const QString &mod : options.kbHotkeyMods) {
+        if (mod == QStringLiteral("ctrl")) {
+            mods |= MOD_CONTROL;
+        } else if (mod == QStringLiteral("alt")) {
+            mods |= MOD_ALT;
+        } else if (mod == QStringLiteral("shift")) {
+            mods |= MOD_SHIFT;
+        } else if (mod == QStringLiteral("win")) {
+            mods |= MOD_WIN;
+        }
+    }
+    if (RegisterHotKey(reinterpret_cast<HWND>(winId()), kVoiceHotkeyId, mods,
+                       UINT(options.kbHotkeyVk))) {
+        voiceHotkeyRegistered_ = true;
+        return;
+    }
+    appendEvent(QStringLiteral("error"), QString(), QString(),
+                QString::fromUtf8("全局语音热键注册失败（组合键被别的程序占用），"
+                                  "可在「模型设置」里换一个"),
+                0);
+}
+
+void MainWindow::unregisterVoiceHotkey() {
+    if (!voiceHotkeyRegistered_) {
+        return;
+    }
+    UnregisterHotKey(reinterpret_cast<HWND>(winId()), kVoiceHotkeyId);
+    voiceHotkeyRegistered_ = false;
+}
+
+void MainWindow::showVoicePanel() {
+    if (voiceWindow_ == nullptr) {
+        voiceWindow_ = new VoiceWindow(voice_, store_.get());
+        voiceWindow_->setListeningUi(engine_ != nullptr && engine_->isRunning());
+        connect(voiceWindow_, &VoiceWindow::fullUiRequested, this, [this] {
+            store_->setUiBool("voice_mode", false);
+            voiceWindow_->hide();
+            wake();
+        });
+    }
+    store_->setUiBool("voice_mode", true);
+    if (const QPoint cursor = QCursor::pos();
+        QGuiApplication::screenAt(cursor) != nullptr) {
+        const QRect screen = QGuiApplication::screenAt(cursor)->geometry();
+        voiceWindow_->move(screen.center() - QRect(QPoint(0, 0),
+                                                   voiceWindow_->size())
+                                                  .center());
+    }
+    hide();
+    voiceWindow_->show();
+    voiceWindow_->raise();
+    voiceWindow_->activateWindow();
 }
 
 void MainWindow::refreshVoiceUi() {
@@ -936,6 +1027,10 @@ void MainWindow::openVoiceSettings() {
         voice_->reload();
         refreshVoiceUi();
         refreshRemoteCard();
+        // 键盘热键可能改了：注销再按新配置注册。
+        if (engine_ != nullptr && engine_->isRunning()) {
+            registerVoiceHotkey();
+        }
         appendEvent(QStringLiteral("status"), QString(),
                     QString(), QString::fromUtf8("语音设置已保存"), 0);
         if (toast_ != nullptr) {
@@ -1134,6 +1229,13 @@ bool MainWindow::nativeEvent(const QByteArray &eventType, void *message,
     auto *msg = static_cast<MSG *>(message);
     if (msg != nullptr && wakeMessage != 0 && msg->message == wakeMessage) {
         wake();
+        *result = 0;
+        return true;
+    }
+    // 全局语音热键（无遥控器触发）：一键开始/结束，复用耳机键的状态机。
+    if (msg != nullptr && msg->message == WM_HOTKEY &&
+        msg->wParam == kVoiceHotkeyId) {
+        voice_->mediaToggle();
         *result = 0;
         return true;
     }

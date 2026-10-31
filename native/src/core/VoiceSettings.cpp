@@ -179,6 +179,16 @@ VoiceOptions resolveVoiceOptions(const QJsonObject &config,
     }
     options.hotkeyVk = intValue(hotkey, "vk", 0x56);
 
+    // 无遥控器的全局键盘热键；热键模式注入前台用的组合是另一回事，
+    // 默认给 Ctrl+Alt+V 避开它。
+    const QJsonObject kbHotkey = voice.value("keyboard_hotkey").toObject();
+    options.kbHotkeyEnabled = boolValue(kbHotkey, "enabled", true);
+    options.kbHotkeyMods = stringList(kbHotkey.value("mods"));
+    if (options.kbHotkeyMods.isEmpty()) {
+        options.kbHotkeyMods = {QStringLiteral("ctrl"), QStringLiteral("alt")};
+    }
+    options.kbHotkeyVk = intValue(kbHotkey, "vk", 0x56);
+
     QString trigger = stringValue(profileVoice, "trigger");
     if (trigger.isEmpty()) {
         trigger = stringValue(hotkey, "trigger", QStringLiteral("hold"));

@@ -29,6 +29,9 @@ public:
     QString hotkeyHint();
     bool modelReady(QString *detail = nullptr);
     bool busy() const { return state_ != State::Idle || transcribing_; }
+    bool recording() const { return state_ == State::Recording; }
+    // 麦克风实时电平（0~1，未开麦时为 0），给语音主界面画电平环。
+    double micLevel() const { return recorder_.level(); }
 
 public slots:
     void voiceDown();

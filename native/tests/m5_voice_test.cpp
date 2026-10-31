@@ -89,6 +89,33 @@ int main() {
         check(voiceComboText(options.hotkeyMods, options.hotkeyVk) ==
                   "CTRL+SHIFT+V",
               "combo text");
+        // 无遥控器的全局键盘热键：默认开、Ctrl+Alt+V，可关可换。
+        check(options.kbHotkeyEnabled, "kb hotkey default on");
+        check(options.kbHotkeyMods == QStringList({"ctrl", "alt"}),
+              "kb hotkey default mods");
+        check(options.kbHotkeyVk == 0x56, "kb hotkey default vk");
+    }
+
+    {
+        QJsonObject config = baseConfig();
+        QJsonObject voice = config.value("voice").toObject();
+        voice["keyboard_hotkey"] = QJsonObject{{"enabled", false}};
+        config["voice"] = voice;
+        const VoiceOptions options =
+            resolveVoiceOptions(config, QJsonObject{}, appDir);
+        check(!options.kbHotkeyEnabled, "kb hotkey disabled");
+    }
+
+    {
+        QJsonObject config = baseConfig();
+        QJsonObject voice = config.value("voice").toObject();
+        voice["keyboard_hotkey"] = QJsonObject{
+            {"enabled", true}, {"mods", QJsonArray{"alt"}}, {"vk", 66}};
+        config["voice"] = voice;
+        const VoiceOptions options =
+            resolveVoiceOptions(config, QJsonObject{}, appDir);
+        check(options.kbHotkeyMods == QStringList({"alt"}), "kb hotkey alt");
+        check(options.kbHotkeyVk == 66, "kb hotkey vk b");
     }
 
     {

@@ -94,6 +94,38 @@ VoiceSettingsDialog::VoiceSettingsDialog(ProfileStore *store, QWidget *parent)
     langRow->addWidget(language_, 1);
     root->addLayout(langRow);
 
+    // 无遥控器的全局键盘热键：一键开始/结束说话。
+    auto *kbRow = new QHBoxLayout;
+    auto *kbLabel = new QLabel(QString::fromUtf8("键盘热键"));
+    kbLabel->setObjectName("muted");
+    kbLabel->setFixedWidth(98);
+    kbHotkey_ = new QComboBox;
+    kbHotkey_->addItem(QString::fromUtf8("关闭"), "off");
+    kbHotkey_->addItem(QString::fromUtf8("Ctrl+Alt+V"), "ctrl+alt+86");
+    kbHotkey_->addItem(QString::fromUtf8("Ctrl+Alt+B"), "ctrl+alt+66");
+    kbHotkey_->addItem(QString::fromUtf8("Ctrl+Shift+Space"), "ctrl+shift+32");
+    kbHotkey_->addItem(QString::fromUtf8("Alt+V"), "alt+86");
+    kbHotkey_->setToolTip(QString::fromUtf8(
+        "不插遥控器也能用：全局一键开始/结束说话，静音后自动收尾。"
+        "组合键被别的程序占用时会注册失败，换一个即可。"));
+    const QJsonObject kb = voice.value("keyboard_hotkey").toObject();
+    if (!kb.value("enabled").toBool(true)) {
+        kbHotkey_->setCurrentIndex(0);
+    } else {
+        QStringList mods;
+        for (const QJsonValue &value : kb.value("mods").toArray()) {
+            mods.append(value.toString().toLower());
+        }
+        const QString key = QString("%1+%2")
+                                .arg(mods.join(QLatin1Char('+')))
+                                .arg(int(kb.value("vk").toDouble(0x56)));
+        const int kbIndex = kbHotkey_->findData(key);
+        kbHotkey_->setCurrentIndex(kbIndex >= 0 ? kbIndex : 1);
+    }
+    kbRow->addWidget(kbLabel);
+    kbRow->addWidget(kbHotkey_, 1);
+    root->addLayout(kbRow);
+
     auto addModelRow = [&](const QString &labelText, QLabel **state,
                            QPushButton **import) {
         auto *line = new QHBoxLayout;
@@ -291,6 +323,20 @@ void VoiceSettingsDialog::save() {
     QJsonObject patch;
     patch["backend"] = backend;
     patch["asr_language"] = language_->currentData().toString();
+    const QString kbKey = kbHotkey_->currentData().toString();
+    if (kbKey == QStringLiteral("off")) {
+        patch["keyboard_hotkey"] = QJsonObject{{"enabled", false}};
+    } else {
+        const QStringList parts = kbKey.split(QLatin1Char('+'));
+        QJsonArray mods;
+        for (int i = 0; i < parts.size() - 1; ++i) {
+            mods.append(parts.at(i));
+        }
+        patch["keyboard_hotkey"] =
+            QJsonObject{{"enabled", true},
+                        {"mods", mods},
+                        {"vk", parts.last().toInt()}};
+    }
     patch["paste"] = paste_->isChecked();
     patch["auto_enter"] = autoEnter_->isChecked();
     if (!store_->updateVoice(patch)) {

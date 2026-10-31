@@ -62,6 +62,8 @@ qt_add_executable(AgentRMCNative
     src/ui/GuideDialog.h
     src/ui/VoiceSettingsDialog.cpp
     src/ui/VoiceSettingsDialog.h
+    src/ui/VoiceWindow.cpp
+    src/ui/VoiceWindow.h
     resources/app.qrc
 )
 

@@ -25,6 +25,7 @@ class GuideDialog;
 class RemotePanel;
 class Toast;
 class VoiceController;
+class VoiceWindow;
 
 class MainWindow final : public QMainWindow {
     Q_OBJECT
@@ -64,6 +65,9 @@ private:
     void showGuide();
     void toggleListening();
     void updateListenUi();
+    void registerVoiceHotkey();
+    void unregisterVoiceHotkey();
+    void showVoicePanel();
     void onEngineEvent(const QString &kind, const QString &name,
                        const QString &profile, const QString &detail, int vk);
     void onEngineRunning(bool running, const QString &message);
@@ -103,6 +107,7 @@ private:
     QLabel *remoteState_ = nullptr;
     QSystemTrayIcon *tray_ = nullptr;
     GuideDialog *guide_ = nullptr;
+    VoiceWindow *voiceWindow_ = nullptr;
     QLabel *dropHint_ = nullptr;
     QAction *showAction_ = nullptr;
     QAction *listenAction_ = nullptr;
@@ -111,4 +116,5 @@ private:
     bool trayHintShown_ = false;
     bool quitting_ = false;
     bool updating_ = false;
+    bool voiceHotkeyRegistered_ = false;
 };

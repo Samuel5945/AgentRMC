@@ -582,3 +582,48 @@ QToolTip {
     border: 1px solid rgba(255, 255, 255, 26);
 }
 
+
+/* ---------- 语音主界面（无遥控器简洁版） ---------- */
+
+QWidget#voiceWindow {
+    background: #0b0e14;
+}
+
+QWidget#voiceHeader {
+    background: #121722;
+    border-bottom: 1px solid rgba(255, 255, 255, 18);
+}
+
+QPushButton#micButton {
+    background: transparent;
+    border: none;
+}
+
+QLabel#voiceStateLine {
+    color: #dbe4ee;
+    font-size: 13px;
+}
+
+QLabel#voiceTranscript {
+    background: #121722;
+    border: 1px solid rgba(255, 255, 255, 18);
+    border-radius: 12px;
+    padding: 10px;
+    color: #e6edf3;
+    font-size: 14px;
+}
+
+QListWidget#voiceHistory {
+    background: transparent;
+    color: #c9d1d9;
+    font-size: 12px;
+}
+
+QListWidget#voiceHistory::item {
+    padding: 5px 6px;
+    border-radius: 6px;
+}
+
+QListWidget#voiceHistory::item:hover {
+    background: rgba(79, 140, 255, 36);
+}

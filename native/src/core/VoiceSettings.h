@@ -18,6 +18,9 @@ struct VoiceOptions {
     QStringList hotkeyMods;
     int hotkeyVk = 0x56;  // V
     QString hotkeyTrigger = QStringLiteral("hold");
+    bool kbHotkeyEnabled = true;   // 无遥控器的全局键盘热键（一键说话/收尾）
+    QStringList kbHotkeyMods = {QStringLiteral("ctrl"), QStringLiteral("alt")};
+    int kbHotkeyVk = 0x56;  // V → Ctrl+Alt+V
     bool paste = true;
     bool autoEnter = false;
     int sampleRate = 16000;

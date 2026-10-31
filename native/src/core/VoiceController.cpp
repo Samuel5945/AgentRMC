@@ -22,6 +22,21 @@ constexpr double kMediaVoiceFloor = 0.02;
 
 }  // namespace
 
+namespace {
+
+// 只要前台不是本程序，就直接粘贴（不再判断是不是输入框）。
+bool foregroundIsOtherApp() {
+    HWND fg = GetForegroundWindow();
+    if (fg == nullptr) {
+        return false;
+    }
+    DWORD pid = 0;
+    GetWindowThreadProcessId(fg, &pid);
+    return pid != 0 && pid != GetCurrentProcessId();
+}
+
+}  // namespace
+
 VoiceController::VoiceController(ProfileStore *store, QObject *parent)
     : QObject(parent), store_(store) {
     tick_ = new QTimer(this);
@@ -416,16 +431,17 @@ void VoiceController::deliver(const QString &text, int costMs,
         return;
     }
     lastText_ = text;
+    // 先无条件写进剪贴板；只有前台正落在输入框里才自动粘贴。
+    injector_.copyText(text);
     bool pasted = false;
-    if (options_.paste) {
+    if (options_.paste && foregroundIsOtherApp()) {
         pasted = injector_.pasteText(text, options_.autoEnter);
-    } else {
-        injector_.copyText(text);
     }
     emit transcribed(text, costMs);
     setState(State::Idle,
              pasted ? QStringLiteral("已粘贴 · %1s").arg(costMs / 1000.0, 0, 'f', 1)
-                    : QStringLiteral("已识别（未粘贴）"));
+                    : QStringLiteral("已复制到剪贴板 · %1s")
+                          .arg(costMs / 1000.0, 0, 'f', 1));
 }
 
 void VoiceController::setState(State state, const QString &detail) {

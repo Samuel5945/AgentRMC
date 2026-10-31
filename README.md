@@ -170,7 +170,7 @@ keydown  keydown  keydown  ...  keydown   keyup
 │  InputEngine ──▶ KeyRouter ──▶ Injector                    │
 │   单击 / 双击 / 长按 · 连发加速 · 音量·鼠标·导航模式 · 接管 │
 │        │                                                   │
-│        └──▶ VoiceController（一套语音键状态机，三条路线共用）
+│        └──▶ VoiceController（一套语音键状态机，四条路线共用）
 │             转发热键 │ SenseVoice │ Qwen3-ASR │ 耳机开关   │
 │                      └─ AsrEngine（sherpa-onnx C API）     │
 │  ProfileStore / Presets（同一套 config.json、profiles.json）
@@ -240,8 +240,31 @@ keydown  keydown  keydown  ...  keydown   keyup
   藏起来只露一条 20px 的边条，鼠标碰上去就弹出，离开 1.6 秒再缩回去
 - **关闭** —— 卡片或右键菜单里的 `✕` 会记住关闭状态，想再叫出来走托盘菜单「语音桌宠」
 
-`ui.pet_enabled`（默认 true）控制是否自动弹出。桌宠里预留了 `speak()` 气泡接口
-（切识别方式时已经会用它给一句确认），之后接小米免费 TTS 后把合成文本喂进来，桌宠就能开口说话。
+**语音反馈（TTS，OpenAI 兼容协议）**：桌宠接了 TTS 出声，默认对准
+[MiMo-V2.5-TTS](https://mimo.mi.com/models/zh-CN/mimo-v2.5-tts)（限时免费）。
+**Base URL / API Key / TTS 模型 / 音色全部用户自填**，不会随仓库分发：
+
+- **自填入口**：语音主界面底部「语音反馈」，或语音设置里的「桌宠语音反馈 → 设置…」，
+  两处开的是同一个对话框，含「试听」按钮（不保存也能先验证 key 和模型）
+- Base URL 填 OpenAI 兼容根地址（默认 `https://api.xiaomimimo.com/v1`），
+  换成 OpenAI / 硅基流动 / DashScope 等同样可用；模型名可直接改
+  （mimo-v2.5-tts / gpt-4o-mini-tts / tts-1 / cosyvoice-v2…）
+- Key 只落本机 `config.json` 的 `voice.tts.api_key`，也可以设环境变量
+  `MIMO_API_KEY` 不落盘
+- 出声时机：桌宠可见时切识别方式、复制、打开应用的确认，以及右键菜单「朗读最近一句」；
+  右键菜单的「语音反馈」随时开关（写回 `voice.tts.enabled`）
+- 没填 key 就只有气泡不出声；合成失败（如余额不足）气泡提示一次，不刷屏
+- 手动自检：`AgentRMCNative.exe --tts-test "你好" --tts-save out.wav`（保存 WAV 便于验证）
+
+**桌宠对话闭环（LLM）**：右键桌宠开「对话模式」（`ui.pet_chat` 持久化）后，
+说话 → 转写（本地或云端）→ 发给 LLM → 回复用气泡展示 + TTS 念出来，
+**不再粘贴到输入框、也不触发应用启动**。带最近 4 轮对话记忆，收起桌宠即退出对话。
+配置走右键「对话设置…」：`voice.llm_api.{base_url, api_key, model, system}`，
+base_url / key 同样留空沿用 TTS 的，模型默认 `mimo-v2.6-flash`（快，适合语音对话），
+「人设」可自定义回复风格。对话模式下切回转发（hotkey）路线时对话不生效——
+那条路线上语音根本不经过本程序。
+
+`ui.pet_enabled`（默认 true）控制桌宠是否自动弹出。
 
 `ui.auto_listen`（默认 true）启动即监听；`ui.start_minimized` 启动就藏进托盘、不抢 Qoder 的焦点；
 `ui.voice_launch`（默认 true）= 语音里的「打开 xx」当启动指令，见「语音打开应用」。
@@ -570,15 +593,22 @@ agent/qoder 的实际用法：
 profile 里的 `voice.trigger` 只在转发热键这条路线下生效；`qoder` 和 `agent`（WorkBuddy）
 都是 `toggle`（Ctrl+Shift+V / Ctrl+D，每按一次切换开/关）。
 
-### 语音键的三条路线
+### 语音键的四条路线
 
 | `voice.backend` | 行为 | 代价 |
 |---|---|---|
 | `hotkey`（默认） | 语音键 → 转给前台 Agent 自己的语音快捷键 | 0 模型、不占内存；识别效果就是 Qoder / WorkBuddy 的效果 |
 | `sensevoice` | 语音键 → 电脑麦克风录音 → sherpa-onnx SenseVoiceSmall 转写 → 粘贴 | 模型约 230MB（下载包 158MB）；中文/粤语/英日韩，自带标点 ITN |
 | `qwen3` | 同上，换 Qwen3-ASR 0.6B int8 | 模型约 1GB（下载包 838MB）；语言更多，CPU 上比 SenseVoice 慢 |
+| `api`（云端） | 麦克风录音 → 上传到 OpenAI 兼容 `/audio/transcriptions` → 回填文本粘贴 | 不装模型；音频要出本机，模型/地址在「语音设置 → 云端 ASR」自填 |
 
-没有 `backend` 字段时兼容 Python 版配置里的 `mode: local`（按 `sensevoice` 处理）；
+云端 ASR 的 `voice.asr_api.{base_url, api_key, model, style}`：**base_url / api_key 留空就沿用
+语音反馈（TTS）的配置**，同一个平台填一次两处能用；model 必填。协议两种：
+`style: "chat"`（默认）把音频作为 `input_audio` 发进 `/chat/completions`，小米 MiMo 的
+`mimo-v2.5-asr` 就是这种，**和 TTS 共用一个 key 直接可用**；`style: "transcriptions"` 是
+multipart 上传 `/audio/transcriptions`，OpenAI whisper / 硅基流动 SenseVoiceSmall /
+Groq 走这种。没有 `backend` 字段时兼容 Python 版配置里的
+`mode: local`（按 `sensevoice` 处理）；
 `asr_model`（small/medium/large）是 Python 版 faster-whisper 的尺寸，原生版不读。
 本地后端实测：3 秒音频热态转写约 150ms，首帧含模型加载约 1.8s（CPU / int8）。
 

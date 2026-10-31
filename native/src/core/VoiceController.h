@@ -12,6 +12,7 @@
 #include "core/Injector.h"
 #include "core/VoiceSettings.h"
 
+class AsrClient;
 class AsrEngine;
 class ProfileStore;
 class QTimer;
@@ -30,6 +31,7 @@ public:
     bool modelReady(QString *detail = nullptr);
     bool busy() const { return state_ != State::Idle || transcribing_; }
     bool recording() const { return state_ == State::Recording; }
+    bool chatMode() const { return chatMode_; }
     // 麦克风实时电平（0~1，未开麦时为 0），给语音主界面画电平环。
     double micLevel() const { return recorder_.level(); }
 
@@ -41,6 +43,8 @@ public slots:
     void startTest();
     void reload();
     void setListening(bool listening);
+    // 桌宠对话模式：转写不再粘贴/启动应用，改发给 chatRequested 喂 LLM。
+    void setChatMode(bool on);
 
 signals:
     void stateChanged(const QString &state, const QString &detail);
@@ -48,6 +52,8 @@ signals:
     void transcribed(const QString &text, int costMs);
     // reload() 后发：识别方式等选项变了，让主窗/语音面板/桌宠同步自己的模式控件。
     void optionsChanged();
+    // 对话模式下的一句转写（chatMode 才会发）。
+    void chatRequested(const QString &text);
 
 private:
     enum class State { Idle, Pending, Recording };
@@ -57,6 +63,7 @@ private:
     void finishSession();
     void beginTestCapture();
     void runTranscription(const QByteArray &pcm);
+    void runCloudTranscription(const QByteArray &pcm);
     void deliver(const QString &text, int costMs, const QString &error);
     void setState(State state, const QString &detail);
     void beep(int frequency, int durationMs, bool enabled);
@@ -65,6 +72,7 @@ private:
     ProfileStore *store_ = nullptr;
     WinInjector injector_;
     AudioRecorder recorder_;
+    AsrClient *asr_ = nullptr;  // 云端 ASR 路线；本地路线仍是 engine_
     std::unique_ptr<AsrEngine> engine_;
     std::mutex engineMutex_;
     QString engineFamily_;
@@ -77,6 +85,7 @@ private:
     bool test_ = false;
     bool transcribing_ = false;
     bool listening_ = false;
+    bool chatMode_ = false;
     bool toggleCombo_ = false;
     bool holdCombo_ = false;
     int repeats_ = 0;

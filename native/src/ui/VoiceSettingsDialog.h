@@ -38,6 +38,7 @@ private:
     QComboBox *kbHotkey_ = nullptr;
     QLabel *senseState_ = nullptr;
     QLabel *qwenState_ = nullptr;
+    QLabel *asrState_ = nullptr;
     QPushButton *senseImport_ = nullptr;
     QPushButton *qwenImport_ = nullptr;
     QLabel *note_ = nullptr;
@@ -45,4 +46,5 @@ private:
     QCheckBox *autoEnter_ = nullptr;
     QCheckBox *headset_ = nullptr;
     QLabel *mediaHint_ = nullptr;
+    QCheckBox *ttsEnabled_ = nullptr;
 };

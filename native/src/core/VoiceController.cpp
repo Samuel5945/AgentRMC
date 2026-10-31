@@ -1,6 +1,7 @@
 #include "VoiceController.h"
 
 #include "core/AppLauncher.h"
+#include "core/AsrClient.h"
 #include "core/AsrEngine.h"
 #include "core/Profiles.h"
 
@@ -44,6 +45,21 @@ VoiceController::VoiceController(ProfileStore *store, QObject *parent)
     tick_->setInterval(50);
     connect(tick_, &QTimer::timeout, this, &VoiceController::tick);
     tick_->start();
+
+    // 云端 ASR 路线：结果和本地路线一样汇进 deliver()。
+    asr_ = new AsrClient(this);
+    connect(asr_, &AsrClient::transcribed, this,
+            [this](const QString &text, qint64 costMs) {
+                if (alive_.load()) {
+                    deliver(text, int(costMs), QString());
+                }
+            });
+    connect(asr_, &AsrClient::failed, this,
+            [this](const QString &error, qint64 costMs) {
+                if (alive_.load()) {
+                    deliver(QString(), int(costMs), error);
+                }
+            });
 }
 
 VoiceController::~VoiceController() {
@@ -94,6 +110,19 @@ bool VoiceController::modelReady(QString *detail) {
         if (detail != nullptr) *detail = QStringLiteral("0 模型，转发给前台");
         return true;
     }
+    if (options_.backend == VoiceBackend::CloudAsr) {
+        // 云端路线不依赖本地运行库，key/model 配好就能用。
+        const bool ready =
+            !options_.asrApiKey.isEmpty() && !options_.asrApiModel.isEmpty();
+        if (detail != nullptr) {
+            *detail = ready
+                          ? QStringLiteral("云端模型 %1 · 音频将上传")
+                                .arg(options_.asrApiModel)
+                          : QStringLiteral("云端 ASR 还没配置："
+                                           "语音设置 → 云端 ASR 填模型和 Key");
+        }
+        return ready;
+    }
 #ifndef AGENTRMC_WITH_SHERPA
     if (detail != nullptr) {
         *detail = QStringLiteral("当前构建未包含 sherpa-onnx 运行库");
@@ -124,6 +153,12 @@ QString VoiceController::statusText() {
     updateOptions();
     if (options_.backend == VoiceBackend::Hotkey) {
         return hotkeyHint();
+    }
+    if (options_.backend == VoiceBackend::CloudAsr) {
+        QString detail;
+        const bool ready = modelReady(&detail);
+        return QStringLiteral("云端 ASR · %1")
+            .arg(ready ? options_.asrApiModel : detail);
     }
     QString detail;
     const bool ready = modelReady(&detail);
@@ -381,6 +416,11 @@ void VoiceController::beginTestCapture() {
 
 void VoiceController::runTranscription(const QByteArray &pcm) {
     transcribing_ = true;
+    updateOptions();
+    if (options_.backend == VoiceBackend::CloudAsr) {
+        runCloudTranscription(pcm);
+        return;
+    }
     AsrConfig config;
     config.family = options_.backend == VoiceBackend::Qwen3Asr
                         ? QStringLiteral("qwen3")
@@ -420,6 +460,32 @@ void VoiceController::runTranscription(const QByteArray &pcm) {
     });
 }
 
+void VoiceController::runCloudTranscription(const QByteArray &pcm) {
+    asr_->setOptions(options_.asrApiBaseUrl, options_.asrApiKey,
+                     options_.asrApiModel, options_.language,
+                     options_.asrApiStyle);
+    if (!asr_->ready()) {
+        transcribing_ = false;
+        emit eventReady(QStringLiteral("error"),
+                        QStringLiteral("云端 ASR 还没配置："
+                                       "语音设置 → 云端 ASR 填模型和 Key"));
+        setState(State::Idle, QStringLiteral("就绪"));
+        return;
+    }
+    const QByteArray wav = wavFromPcm16(pcm, options_.sampleRate);
+    emit eventReady(QStringLiteral("voice"),
+                    QStringLiteral("已上传 %1 KB · 云端转写中…")
+                        .arg(AsrClient::sizeHint(wav)));
+    asr_->transcribe(wav);
+}
+
+void VoiceController::setChatMode(bool on) {
+    chatMode_ = on;
+    if (!on && state_ == State::Idle) {
+        setState(State::Idle, QStringLiteral("就绪"));
+    }
+}
+
 void VoiceController::deliver(const QString &text, int costMs,
                               const QString &error) {
     transcribing_ = false;
@@ -434,6 +500,13 @@ void VoiceController::deliver(const QString &text, int costMs,
         emit eventReady(QStringLiteral("voice"),
                         QStringLiteral("没听清：按住说完整一句再松手"));
         setState(State::Idle, QStringLiteral("就绪"));
+        return;
+    }
+    // 桌宠对话模式：这句话不进剪贴板也不启动应用，直接喂给 LLM 聊。
+    if (chatMode_) {
+        emit transcribed(text, costMs);
+        emit chatRequested(text);
+        setState(State::Idle, QStringLiteral("桌宠对话中…"));
         return;
     }
     lastText_ = text;

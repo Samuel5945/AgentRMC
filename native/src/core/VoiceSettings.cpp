@@ -87,6 +87,9 @@ VoiceBackend voiceBackendFromString(const QString &value) {
     if (key == "qwen3" || key == "qwen3-asr" || key == "qwen3asr") {
         return VoiceBackend::Qwen3Asr;
     }
+    if (key == "api" || key == "cloud" || key == "cloudasr") {
+        return VoiceBackend::CloudAsr;
+    }
     return VoiceBackend::Hotkey;
 }
 
@@ -96,6 +99,8 @@ QString voiceBackendKey(VoiceBackend backend) {
         return QStringLiteral("sensevoice");
     case VoiceBackend::Qwen3Asr:
         return QStringLiteral("qwen3");
+    case VoiceBackend::CloudAsr:
+        return QStringLiteral("api");
     case VoiceBackend::Hotkey:
     default:
         return QStringLiteral("hotkey");
@@ -108,6 +113,8 @@ QString voiceBackendLabel(VoiceBackend backend) {
         return QStringLiteral("本地 SenseVoice");
     case VoiceBackend::Qwen3Asr:
         return QStringLiteral("本地 Qwen3-ASR");
+    case VoiceBackend::CloudAsr:
+        return QStringLiteral("云端 ASR（联网）");
     case VoiceBackend::Hotkey:
     default:
         return QStringLiteral("转发热键（0 模型）");
@@ -220,6 +227,57 @@ VoiceOptions resolveVoiceOptions(const QJsonObject &config,
     options.mediaScopeExplicit = !options.mediaProfiles.isEmpty();
     options.mediaSilenceMs = intValue(media, "silence_ms", 6000);
     options.mediaAutoStopMs = intValue(media, "auto_stop_ms", 30000);
+
+    const QJsonObject tts = voice.value("tts").toObject();
+    options.ttsEnabled = boolValue(tts, "enabled", true);
+    options.ttsApiKey = stringValue(tts, "api_key").trimmed();
+    if (options.ttsApiKey.isEmpty()) {
+        // 自用部署不想把 key 落盘时走环境变量。
+        options.ttsApiKey =
+            qEnvironmentVariable("MIMO_API_KEY").trimmed();
+    }
+    options.ttsBaseUrl = stringValue(
+        tts, "base_url", QStringLiteral("https://api.xiaomimimo.com/v1"));
+    if (options.ttsBaseUrl.endsWith(QLatin1Char('/'))) {
+        options.ttsBaseUrl.chop(1);
+    }
+    options.ttsModel =
+        stringValue(tts, "model", QStringLiteral("mimo-v2.5-tts"));
+    options.ttsVoice = stringValue(tts, "voice", QStringLiteral("Chloe"));
+    options.ttsStyle = stringValue(tts, "style");
+
+    // 云端 ASR：base_url / key 留空就沿用 TTS 的，一个平台填一次两处能用。
+    const QJsonObject asrApi = voice.value("asr_api").toObject();
+    options.asrApiBaseUrl = stringValue(asrApi, "base_url").trimmed();
+    if (options.asrApiBaseUrl.isEmpty()) {
+        options.asrApiBaseUrl = options.ttsBaseUrl;
+    }
+    while (options.asrApiBaseUrl.endsWith(QLatin1Char('/'))) {
+        options.asrApiBaseUrl.chop(1);
+    }
+    options.asrApiKey = stringValue(asrApi, "api_key").trimmed();
+    if (options.asrApiKey.isEmpty()) {
+        options.asrApiKey = options.ttsApiKey;
+    }
+    options.asrApiModel = stringValue(asrApi, "model").trimmed();
+    options.asrApiStyle = stringValue(asrApi, "style", QStringLiteral("chat"));
+
+    // 桌宠对话闭环：同样的兜底链。
+    const QJsonObject llmApi = voice.value("llm_api").toObject();
+    options.llmApiBaseUrl = stringValue(llmApi, "base_url").trimmed();
+    if (options.llmApiBaseUrl.isEmpty()) {
+        options.llmApiBaseUrl = options.ttsBaseUrl;
+    }
+    while (options.llmApiBaseUrl.endsWith(QLatin1Char('/'))) {
+        options.llmApiBaseUrl.chop(1);
+    }
+    options.llmApiKey = stringValue(llmApi, "api_key").trimmed();
+    if (options.llmApiKey.isEmpty()) {
+        options.llmApiKey = options.ttsApiKey;
+    }
+    options.llmApiModel =
+        stringValue(llmApi, "model", QStringLiteral("mimo-v2.6-flash"));
+    options.llmApiSystem = stringValue(llmApi, "system");
     return options;
 }
 

@@ -417,6 +417,7 @@ QWidget *MainWindow::buildVoiceCard() {
     voiceBackend_->addItem(QString::fromUtf8("转发热键 · 0 模型"), "hotkey");
     voiceBackend_->addItem(QString::fromUtf8("本地 SenseVoice"), "sensevoice");
     voiceBackend_->addItem(QString::fromUtf8("本地 Qwen3-ASR"), "qwen3");
+    voiceBackend_->addItem(QString::fromUtf8("云端 ASR（需联网）"), "api");
     voiceBackend_->setCursor(Qt::PointingHandCursor);
     const int backendIndex = voiceBackend_->findData(
         voiceBackendKey(voice_->options().backend));
@@ -429,6 +430,12 @@ QWidget *MainWindow::buildVoiceCard() {
                 lastTranscript_.clear();
                 refreshVoiceUi();
                 refreshRemoteCard();
+                if (key == QStringLiteral("api") && !voice_->modelReady()) {
+                    toast_->showText(
+                        QString::fromUtf8(
+                            "云端 ASR 还没配好：语音设置 → 云端 ASR 填模型和 Key"),
+                        3600);
+                }
                 appendEvent(QStringLiteral("status"), QString(),
                             QString(),
                             QString::fromUtf8("语音后端切换为 ") +
@@ -975,6 +982,17 @@ void MainWindow::refreshVoiceUi() {
         setVoiceStatus(voice_->statusText(), QStringLiteral("#9ec1ff"), true);
         if (voiceFoot_ != nullptr) {
             voiceFoot_->setText(QString::fromUtf8("0 模型 · 跟随前台场景转发"));
+        }
+    } else if (options.backend == VoiceBackend::CloudAsr) {
+        // 云端路线没有「拖模型包」这个动作，配置入口走语音设置。
+        const bool ready = voice_->modelReady();
+        setVoiceStatus(voice_->statusText(),
+                       ready ? QStringLiteral("#c9d1d9")
+                             : QStringLiteral("#d29922"),
+                       true);
+        if (voiceFoot_ != nullptr) {
+            voiceFoot_->setText(
+                QString::fromUtf8("云端转写 · 音频将上传到所填服务"));
         }
     } else {
         const bool ready = voice_->modelReady();

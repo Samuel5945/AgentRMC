@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QJsonArray>
 #include <QPoint>
 #include <QString>
 #include <QWidget>
@@ -12,7 +13,9 @@ class QMouseEvent;
 class QPaintEvent;
 class QShowEvent;
 class QTimer;
+class LlmClient;
 class ProfileStore;
+class TtsClient;
 class VoiceController;
 
 // 语音桌宠：主窗/语音面板关掉之后留在屏幕上的小圆球。
@@ -42,8 +45,16 @@ public:
     // 悬停展开/收起卡片（也供截图模式用）。
     void expandCard();
 
-    // TTS 预留口：文本气泡，默认时长按字数估。
+    // 会话级静音（不落盘）：截图/演示模式不想真发 TTS 请求时用。
+    void setVoiceFeedbackMuted(bool muted);
+
+    // 气泡反馈 + TTS 出声（接小米 MiMo TTS，key 用户自填；没 key 只有气泡）。
     void speak(const QString &text, int durationMs = 0);
+
+    // 桌宠对话闭环（ui.pet_chat 持久化）：开着时转写不再粘贴，改喂 LLM，
+    // 回复用 TTS 念出来；收起桌宠自动退出对话。
+    bool chatMode() const { return chatMode_; }
+    void setChatMode(bool on);
 
 signals:
     void fullUiRequested();
@@ -80,12 +91,26 @@ private:
     void applyDockPos(bool peek);
     void maybeSnap();
     void refreshState();
+    void applyTtsOptions();
+    void applyLlmOptions();
+    void setTtsEnabled(bool on);
+    void bubbleOnly(const QString &text, int durationMs);
+    void askLlm(const QString &text);
+    void openLlmSettings();
     void tick();
 
     ProfileStore *store_ = nullptr;
     VoiceController *voice_ = nullptr;
     Card *card_ = nullptr;
     QLabel *bubble_ = nullptr;
+    TtsClient *tts_ = nullptr;
+    LlmClient *llm_ = nullptr;
+    QString lastText_;  // 最近一次转写，右键菜单「朗读最近一句」用
+    bool ttsErrorShown_ = false;  // TTS 失败提示一次就够，不刷屏
+
+    bool chatMode_ = false;
+    bool llmBusy_ = false;
+    QJsonArray chatHistory_;  // user/assistant 轮次，system 每次请求现拼
 
     bool listening_ = false;
     bool recording_ = false;

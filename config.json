@@ -76,6 +76,25 @@
         "shift"
       ],
       "trigger": "hold"
+    },
+    "tts": {
+      "api_key": "",
+      "base_url": "https://api.xiaomimimo.com/v1",
+      "model": "mimo-v2.5-tts",
+      "voice": "Chloe",
+      "enabled": true
+    },
+    "asr_api": {
+      "api_key": "",
+      "base_url": "",
+      "model": "",
+      "style": "chat"
+    },
+    "llm_api": {
+      "api_key": "",
+      "base_url": "",
+      "model": "mimo-v2.6-flash",
+      "system": ""
     }
   },
   "ui": {

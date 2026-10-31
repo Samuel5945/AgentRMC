@@ -9,6 +9,7 @@ enum class VoiceBackend {
     Hotkey = 0,
     SenseVoice = 1,
     Qwen3Asr = 2,
+    CloudAsr = 3,
 };
 
 struct VoiceOptions {
@@ -38,6 +39,27 @@ struct VoiceOptions {
     int mediaAutoStopMs = 30000;  // 耳机起的热键会话：没有录音信号，到时释放组合键
     int threads = 4;
     QString language = QStringLiteral("zh");
+    // 桌宠语音反馈（OpenAI 兼容 TTS，默认小米 MiMo）。key 由用户自填：
+    // config.json 的 voice.tts.api_key，或环境变量 MIMO_API_KEY（不进仓库）。
+    // base_url/model 开放可配，任何 OpenAI 兼容的 TTS 都能接。
+    bool ttsEnabled = true;
+    QString ttsApiKey;
+    QString ttsBaseUrl = QStringLiteral("https://api.xiaomimimo.com/v1");
+    QString ttsModel = QStringLiteral("mimo-v2.5-tts");
+    QString ttsVoice = QStringLiteral("Chloe");
+    QString ttsStyle;  // 音色/语气指令；空 = 用 TtsClient 里的内置默认
+    // 云端 ASR（base_url / api_key 留空时沿用 TTS 的配置——同一平台填一次
+    // 就能两用；model 必填）。style: "chat"=MiMo 式音频进 chat/completions，
+    // "transcriptions"=OpenAI 式 multipart /audio/transcriptions。
+    QString asrApiBaseUrl;  // 空 = 用 ttsBaseUrl
+    QString asrApiKey;      // 空 = 用 ttsApiKey（再退到 MIMO_API_KEY）
+    QString asrApiModel;
+    QString asrApiStyle = QStringLiteral("chat");
+    // 桌宠对话闭环（LLM，OpenAI 兼容 chat/completions）。同样留空沿用 TTS。
+    QString llmApiBaseUrl;  // 空 = 用 ttsBaseUrl
+    QString llmApiKey;      // 空 = 用 ttsApiKey
+    QString llmApiModel = QStringLiteral("mimo-v2.6-flash");
+    QString llmApiSystem;   // 人设/风格；空 = 用 VoicePet 的内置默认
 };
 
 VoiceBackend voiceBackendFromString(const QString &value);

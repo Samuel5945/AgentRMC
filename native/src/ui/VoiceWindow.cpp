@@ -1,6 +1,7 @@
 #include "VoiceWindow.h"
 
 #include "Toast.h"
+#include "TtsSettingsDialog.h"
 #include "VoiceSettingsDialog.h"
 #include "core/Profiles.h"
 #include "core/VoiceController.h"
@@ -220,6 +221,7 @@ VoiceWindow::VoiceWindow(VoiceController *voice, ProfileStore *store,
     backend_->addItem(QString::fromUtf8("转发热键 · 0 模型"), "hotkey");
     backend_->addItem(QString::fromUtf8("SenseVoice"), "sensevoice");
     backend_->addItem(QString::fromUtf8("Qwen3-ASR"), "qwen3");
+    backend_->addItem(QString::fromUtf8("云端 ASR"), "api");
     const QString backendKey = [&] {
         const QString value = store_->voiceConfig().value("backend").toString();
         return value.isEmpty() ? QStringLiteral("hotkey") : value;
@@ -231,6 +233,13 @@ VoiceWindow::VoiceWindow(VoiceController *voice, ProfileStore *store,
                 const QString key = backend_->itemData(comboIndex).toString();
                 store_->updateVoice(QJsonObject{{"backend", key}});
                 voice_->reload();
+                if (key == QStringLiteral("api") && !voice_->modelReady()) {
+                    toast_->showText(
+                        QString::fromUtf8(
+                            "云端 ASR 还没配好：模型设置 → 云端 ASR 填模型和 Key"),
+                        3600);
+                    return;
+                }
                 toast_->showText(QString::fromUtf8("识别引擎已切换"));
             });
     auto *settings = new QPushButton(QString::fromUtf8("模型设置"));
@@ -245,7 +254,23 @@ VoiceWindow::VoiceWindow(VoiceController *voice, ProfileStore *store,
         dialog->exec();
         dialog->deleteLater();
     });
+    // 语音主界面里直接自填 TTS 的 Base URL / API Key / 模型。
+    auto *tts = new QPushButton(QString::fromUtf8("语音反馈"));
+    tts->setObjectName("ghostSmall");
+    tts->setCursor(Qt::PointingHandCursor);
+    tts->setToolTip(
+        QString::fromUtf8("桌宠语音反馈：Base URL / API Key / TTS 模型自填"));
+    connect(tts, &QPushButton::clicked, this, [this] {
+        auto *dialog = new TtsSettingsDialog(store_, this);
+        connect(dialog, &TtsSettingsDialog::saved, this, [this] {
+            voice_->reload();
+            refreshHint();
+        });
+        dialog->exec();
+        dialog->deleteLater();
+    });
     foot->addWidget(backend_, 1);
+    foot->addWidget(tts);
     foot->addWidget(settings);
     body->addLayout(foot);
 

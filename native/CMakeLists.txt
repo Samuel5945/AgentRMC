@@ -7,7 +7,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 
-find_package(Qt6 6.8 REQUIRED COMPONENTS Widgets)
+find_package(Qt6 6.8 REQUIRED COMPONENTS Widgets Network)
 qt_standard_project_setup()
 
 qt_add_executable(AgentRMCNative
@@ -40,12 +40,22 @@ qt_add_executable(AgentRMCNative
     src/core/AudioRecorder.h
     src/core/AsrEngine.cpp
     src/core/AsrEngine.h
+    src/core/AsrClient.cpp
+    src/core/AsrClient.h
+    src/core/LlmClient.cpp
+    src/core/LlmClient.h
     src/core/PinyinInitials.cpp
     src/core/PinyinInitials.h
     src/core/VoiceController.cpp
     src/core/VoiceController.h
+    src/core/TtsClient.cpp
+    src/core/TtsClient.h
     src/ui/AppPage.cpp
     src/ui/AppPage.h
+    src/ui/AsrSettingsDialog.cpp
+    src/ui/AsrSettingsDialog.h
+    src/ui/LlmSettingsDialog.cpp
+    src/ui/LlmSettingsDialog.h
     src/ui/MapWidgets.cpp
     src/ui/MapWidgets.h
     src/ui/KeymapPage.cpp
@@ -58,6 +68,8 @@ qt_add_executable(AgentRMCNative
     src/ui/KeyIcon.h
     src/ui/Toast.cpp
     src/ui/Toast.h
+    src/ui/TtsSettingsDialog.cpp
+    src/ui/TtsSettingsDialog.h
     src/ui/GuideDialog.cpp
     src/ui/GuideDialog.h
     src/ui/VoiceSettingsDialog.cpp
@@ -71,7 +83,7 @@ qt_add_executable(AgentRMCNative
 
 set_target_properties(AgentRMCNative PROPERTIES WIN32_EXECUTABLE TRUE)
 target_include_directories(AgentRMCNative PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
-target_link_libraries(AgentRMCNative PRIVATE Qt6::Widgets winmm shell32)
+target_link_libraries(AgentRMCNative PRIVATE Qt6::Widgets Qt6::Network winmm shell32)
 target_compile_options(AgentRMCNative PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
 target_compile_definitions(AgentRMCNative PRIVATE AGENTRMC_VERSION="${PROJECT_VERSION}")
 

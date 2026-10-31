@@ -694,3 +694,8 @@ QLabel#petBubble {
     color: #e6edf3;
     font-size: 12px;
 }
+
+QPushButton#petMode {
+    font-size: 10px;
+    padding: 4px 0;
+}

@@ -3,6 +3,8 @@
 #include "core/ModelImport.h"
 #include "core/Profiles.h"
 #include "core/VoiceSettings.h"
+#include "ui/AsrSettingsDialog.h"
+#include "ui/TtsSettingsDialog.h"
 
 #include <QAbstractButton>
 #include <QCheckBox>
@@ -150,6 +152,28 @@ VoiceSettingsDialog::VoiceSettingsDialog(ProfileStore *store, QWidget *parent)
     connect(qwenImport_, &QPushButton::clicked, this,
             [this] { importModel(false); });
 
+    // 云端 ASR：不是本地模型包，给状态 + 设置入口。
+    asrState_ = new QLabel;
+    asrState_->setObjectName("muted");
+    auto *asrRow = new QHBoxLayout;
+    auto *asrLabel = new QLabel(QString::fromUtf8("云端 ASR"));
+    asrLabel->setObjectName("muted");
+    asrLabel->setFixedWidth(98);
+    auto *asrMore = new QPushButton(QString::fromUtf8("设置…"));
+    asrMore->setObjectName("ghostSmall");
+    asrMore->setCursor(Qt::PointingHandCursor);
+    connect(asrMore, &QPushButton::clicked, this, [this] {
+        auto *dialog = new AsrSettingsDialog(store_, this);
+        connect(dialog, &AsrSettingsDialog::saved, this,
+                [this] { refreshStatus(); });
+        dialog->exec();
+        dialog->deleteLater();
+    });
+    asrRow->addWidget(asrLabel);
+    asrRow->addWidget(asrState_, 1);
+    asrRow->addWidget(asrMore);
+    root->addLayout(asrRow);
+
     note_ = new QLabel(QString::fromUtf8(
         "本地识别要先装模型：点「导入模型包…」挑一个 .zip，或者把模型包直接"
         "拖进主窗口，程序会自己解压装好，不用填路径。"));
@@ -196,6 +220,33 @@ VoiceSettingsDialog::VoiceSettingsDialog(ProfileStore *store, QWidget *parent)
     mediaHint_->setWordWrap(true);
     root->addWidget(mediaHint_);
 
+    // 桌宠语音反馈：详细配置（Base URL / API Key / 模型 / 音色）在共享的
+    // TtsSettingsDialog 里编辑，语音主界面和这里开的是同一个。
+    const QJsonObject tts = voice.value("tts").toObject();
+    auto *ttsRow = new QHBoxLayout;
+    ttsEnabled_ = new QCheckBox(QString::fromUtf8("桌宠语音反馈（TTS · 限时免费）"));
+    ttsEnabled_->setChecked(tts.value("enabled").toBool(true));
+    auto *ttsMore = new QPushButton(QString::fromUtf8("设置…"));
+    ttsMore->setObjectName("ghostSmall");
+    ttsMore->setCursor(Qt::PointingHandCursor);
+    connect(ttsMore, &QPushButton::clicked, this, [this] {
+        auto *dialog = new TtsSettingsDialog(store_, this);
+        connect(dialog, &TtsSettingsDialog::saved, this, [this] {
+            // 那边可能改了开关，拉回来别让本对话框保存时盖掉。
+            ttsEnabled_->setChecked(store_->voiceConfig()
+                                        .value("tts")
+                                        .toObject()
+                                        .value("enabled")
+                                        .toBool(true));
+        });
+        dialog->exec();
+        dialog->deleteLater();
+    });
+    ttsRow->addWidget(ttsEnabled_);
+    ttsRow->addStretch(1);
+    ttsRow->addWidget(ttsMore);
+    root->addLayout(ttsRow);
+
     auto *foot = new QHBoxLayout;
     auto *cancel = new QPushButton(QString::fromUtf8("取消"));
     cancel->setObjectName("ghostSmall");
@@ -230,6 +281,16 @@ void VoiceSettingsDialog::refreshStatus() {
     };
     state(senseState_, senseDefault_, true);
     state(qwenState_, qwenDefault_, false);
+
+    const VoiceOptions current = resolveVoiceOptions(
+        store_->config(), QJsonObject{},
+        QCoreApplication::applicationDirPath());
+    const bool cloudReady =
+        !current.asrApiKey.isEmpty() && !current.asrApiModel.isEmpty();
+    asrState_->setText(cloudReady ? QStringLiteral("✓ %1").arg(current.asrApiModel)
+                                  : QString::fromUtf8("未配置"));
+    asrState_->setStyleSheet(cloudReady ? QStringLiteral("color:#3fb950;")
+                                        : QStringLiteral("color:#d29922;"));
 
     const QString backend = backend_->currentData().toString();
     if (backend == "sensevoice") {
@@ -347,6 +408,14 @@ void VoiceSettingsDialog::save() {
     QJsonObject mediaPatch;
     mediaPatch["enabled"] = headset_->isChecked();
     if (!store_->updateMediaVoice(mediaPatch)) {
+        note_->setText(QString::fromUtf8("保存失败：无法写入 config.json"));
+        note_->setStyleSheet(QStringLiteral("color:#f85149;"));
+        return;
+    }
+    // tts 对象整体读改写：本对话框只管开关，详细字段归 TtsSettingsDialog。
+    QJsonObject tts = store_->voiceConfig().value("tts").toObject();
+    tts["enabled"] = ttsEnabled_->isChecked();
+    if (!store_->updateVoice(QJsonObject{{"tts", tts}})) {
         note_->setText(QString::fromUtf8("保存失败：无法写入 config.json"));
         note_->setStyleSheet(QStringLiteral("color:#f85149;"));
         return;

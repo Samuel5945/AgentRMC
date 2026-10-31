@@ -1,8 +1,11 @@
 #include "ui/VoicePet.h"
 
+#include "core/LlmClient.h"
 #include "core/Profiles.h"
+#include "core/TtsClient.h"
 #include "core/VoiceController.h"
 #include "core/VoiceSettings.h"
+#include "ui/LlmSettingsDialog.h"
 
 #include <QApplication>
 #include <QClipboard>
@@ -33,6 +36,11 @@ constexpr int kPetSize = 84;    // 桌宠球体直径
 constexpr int kPeek = 20;       // 贴边藏起来后露出的边条宽度
 constexpr int kSnapDist = 80;   // 拖到离屏幕边多近算贴边
 constexpr int kCardWidth = 244;
+// 对话模式的默认人设：回复要被念出来，所以要求口语化、短。
+constexpr const char *kDefaultChatSystem =
+    "你是 AgentRMC 的语音桌宠，一个待在屏幕边上的小助手。用户在用语音和你聊天："
+    "回复要口语化、简短（一般不超过两句话、50 字以内），不要用列表、markdown、"
+    "表情或颜文字，因为你的回复会被朗读出来。默认用中文回答。";
 
 }  // namespace
 
@@ -68,7 +76,8 @@ public:
         modes->setSpacing(4);
         const QStringList names = {QString::fromUtf8("转发"),
                                    QStringLiteral("SenseVoice"),
-                                   QStringLiteral("Qwen3")};
+                                   QStringLiteral("Qwen3"),
+                                   QString::fromUtf8("云端")};
         for (int i = 0; i < names.size(); ++i) {
             auto *button = new QPushButton(names.at(i), this);
             button->setObjectName("petMode");
@@ -226,6 +235,43 @@ VoicePet::VoicePet(ProfileStore *store, VoiceController *voice, QWidget *parent)
     animTimer_ = new QTimer(this);
     connect(animTimer_, &QTimer::timeout, this, &VoicePet::tick);
 
+    tts_ = new TtsClient(this);
+    applyTtsOptions();
+    connect(tts_, &TtsClient::failed, this, [this](const QString &error) {
+        // 余额不足这类错误每次会话只提示一次，别在每次反馈时刷气泡。
+        if (ttsErrorShown_) {
+            return;
+        }
+        ttsErrorShown_ = true;
+        speak(QString::fromUtf8("语音反馈失败：%1").arg(error), 5000);
+    });
+
+    // 对话闭环：转写进来 → LLM → 回复用 TTS 念出来。
+    llm_ = new LlmClient(this);
+    applyLlmOptions();
+    connect(llm_, &LlmClient::replied, this,
+            [this](const QString &text, qint64) {
+                llmBusy_ = false;
+                chatHistory_.append(
+                    QJsonObject{{"role", "assistant"}, {"content", text}});
+                while (chatHistory_.size() > 8) {
+                    chatHistory_.removeFirst();
+                }
+                speak(text);
+            });
+    connect(llm_, &LlmClient::failed, this,
+            [this](const QString &error, qint64) {
+                llmBusy_ = false;
+                bubbleOnly(QString::fromUtf8("对话失败：%1").arg(error), 4200);
+            });
+    connect(voice_, &VoiceController::chatRequested, this,
+            [this](const QString &text) {
+                bubbleOnly(QString::fromUtf8("你：%1").arg(text), 2400);
+                askLlm(text);
+            });
+    chatMode_ = store_->uiBool(QStringLiteral("pet_chat"), false);
+    voice_->setChatMode(chatMode_);
+
     collapseTimer_ = new QTimer(this);
     collapseTimer_->setSingleShot(true);
     connect(collapseTimer_, &QTimer::timeout, this, [this] {
@@ -252,15 +298,22 @@ VoicePet::VoicePet(ProfileStore *store, VoiceController *voice, QWidget *parent)
                 detail_ = detail;
                 refreshState();
                 update();
+                // 「已打开 xx」这类结果趁桌宠可见时念出来，算一问一答的反馈。
+                if (detail.startsWith(QString::fromUtf8("已打开"))) {
+                    speak(detail);
+                }
             });
     connect(voice_, &VoiceController::transcribed, this,
             [this](const QString &text, int costMs) {
+                lastText_ = text;
                 if (card_ != nullptr) {
                     card_->setTranscript(text, costMs);
                 }
             });
-    connect(voice_, &VoiceController::optionsChanged, this,
-            [this] { refreshState(); });
+    connect(voice_, &VoiceController::optionsChanged, this, [this] {
+        applyTtsOptions();
+        refreshState();
+    });
     refreshState();
 }
 
@@ -324,6 +377,17 @@ void VoicePet::speak(const QString &text, int durationMs) {
     if (text.isEmpty() || !isVisible()) {
         return;
     }
+    bubbleOnly(text, durationMs);
+    // TTS 异步合成，好了直接喇叭出声；没配 key 或关了开关就只有气泡。
+    if (tts_ != nullptr && tts_->ready()) {
+        tts_->speak(text);
+    }
+}
+
+void VoicePet::bubbleOnly(const QString &text, int durationMs) {
+    if (text.isEmpty() || !isVisible()) {
+        return;
+    }
     ensureBubble();
     bubble_->setText(text);
     bubble_->adjustSize();
@@ -349,6 +413,106 @@ void VoicePet::speak(const QString &text, int durationMs) {
     bubbleTimer_->start(durationMs > 0
                             ? durationMs
                             : qMin(7000, 1800 + 90 * text.size()));
+}
+
+void VoicePet::applyLlmOptions() {
+    if (llm_ == nullptr) {
+        return;
+    }
+    const VoiceOptions options = voice_->options();
+    llm_->setOptions(options.llmApiBaseUrl, options.llmApiKey,
+                     options.llmApiModel, options.llmApiSystem);
+}
+
+void VoicePet::setChatMode(bool on) {
+    if (chatMode_ == on) {
+        return;
+    }
+    chatMode_ = on;
+    store_->setUiBool(QStringLiteral("pet_chat"), on);
+    voice_->setChatMode(on);
+    chatHistory_ = QJsonArray{};
+    llmBusy_ = false;
+    if (on) {
+        bubbleOnly(llm_ != nullptr && llm_->ready()
+                       ? QString::fromUtf8("对话模式开：直接说话吧")
+                       : QString::fromUtf8(
+                             "对话模式开，但还没配模型：右键 → 对话设置"),
+                   3600);
+    } else {
+        bubbleOnly(QString::fromUtf8("已退出对话模式"), 2000);
+    }
+}
+
+void VoicePet::askLlm(const QString &text) {
+    if (!llm_->ready()) {
+        bubbleOnly(QString::fromUtf8("对话还没配置：右键 → 对话设置 填模型和 Key"),
+                   4200);
+        return;
+    }
+    if (llmBusy_) {
+        bubbleOnly(QString::fromUtf8("上一条还在想…"), 1600);
+        return;
+    }
+    const VoiceOptions options = voice_->options();
+    chatHistory_.append(QJsonObject{{"role", "user"}, {"content", text}});
+    while (chatHistory_.size() > 8) {
+        chatHistory_.removeFirst();
+    }
+    QJsonArray messages;
+    messages.append(QJsonObject{
+        {"role", "system"},
+        {"content", options.llmApiSystem.isEmpty()
+                        ? QString::fromUtf8(kDefaultChatSystem)
+                        : options.llmApiSystem}});
+    for (const QJsonValue &entry : chatHistory_) {
+        messages.append(entry);
+    }
+    llmBusy_ = true;
+    llm_->chat(messages);
+}
+
+void VoicePet::openLlmSettings() {
+    auto *dialog = new LlmSettingsDialog(store_, this);
+    connect(dialog, &LlmSettingsDialog::saved, this,
+            [this] { applyLlmOptions(); });
+    dialog->exec();
+    dialog->deleteLater();
+}
+
+void VoicePet::applyTtsOptions() {
+    if (tts_ == nullptr) {
+        return;
+    }
+    const VoiceOptions options = voice_->options();
+    tts_->setOptions(options.ttsEnabled, options.ttsBaseUrl, options.ttsApiKey,
+                     options.ttsModel, options.ttsVoice, options.ttsStyle);
+}
+
+void VoicePet::setVoiceFeedbackMuted(bool muted) {
+    if (tts_ == nullptr) {
+        return;
+    }
+    if (muted) {
+        tts_->setOptions(false, QString(), QString(), QString(), QString(),
+                         QString());
+        tts_->stop();
+    } else {
+        applyTtsOptions();
+    }
+}
+
+void VoicePet::setTtsEnabled(bool on) {
+    // updateVoice 是浅合并：整个 tts 对象读出来改完再写回，才不会丢 api_key。
+    QJsonObject tts = store_->voiceConfig().value("tts").toObject();
+    tts["enabled"] = on;
+    if (!store_->updateVoice(QJsonObject{{"tts", tts}})) {
+        return;
+    }
+    applyTtsOptions();
+    if (!on) {
+        tts_->stop();
+    }
 }
 
 void VoicePet::paintEvent(QPaintEvent *event) {
@@ -439,6 +603,12 @@ void VoicePet::hideEvent(QHideEvent *event) {
     if (bubble_ != nullptr) {
         bubble_->hide();
     }
+    if (tts_ != nullptr) {
+        tts_->stop();  // 桌宠收起时别让声音悬在半空
+    }
+    if (chatMode_) {
+        setChatMode(false);  // 对话跟着桌宠走，收起即退出（会持久化）
+    }
     collapseCard();
 }
 
@@ -502,7 +672,8 @@ void VoicePet::contextMenuEvent(QContextMenuEvent *event) {
     const QVector<std::pair<int, QString>> backends = {
         {int(VoiceBackend::Hotkey), QString::fromUtf8("转发热键 · 0 模型")},
         {int(VoiceBackend::SenseVoice), QStringLiteral("SenseVoice")},
-        {int(VoiceBackend::Qwen3Asr), QStringLiteral("Qwen3-ASR")}};
+        {int(VoiceBackend::Qwen3Asr), QStringLiteral("Qwen3-ASR")},
+        {int(VoiceBackend::CloudAsr), QString::fromUtf8("云端 ASR（联网）")}};
     for (const auto &entry : backends) {
         QAction *action = mode->addAction(entry.second);
         action->setCheckable(true);
@@ -511,6 +682,24 @@ void VoicePet::contextMenuEvent(QContextMenuEvent *event) {
                 [this, entry] { setBackend(entry.first); });
     }
 
+    menu.addSeparator();
+    QAction *chat = menu.addAction(QString::fromUtf8("对话模式"));
+    chat->setCheckable(true);
+    chat->setChecked(chatMode_);
+    connect(chat, &QAction::triggered, this,
+            [this] { setChatMode(!chatMode_); });
+    QAction *chatSettings = menu.addAction(QString::fromUtf8("对话设置…"));
+    connect(chatSettings, &QAction::triggered, this,
+            [this] { openLlmSettings(); });
+    QAction *read = menu.addAction(QString::fromUtf8("朗读最近一句"));
+    read->setEnabled(!lastText_.isEmpty());
+    connect(read, &QAction::triggered, this, [this] { speak(lastText_); });
+    QAction *tts = menu.addAction(QString::fromUtf8("语音反馈"));
+    tts->setCheckable(true);
+    tts->setChecked(tts_ != nullptr && tts_->ready());
+    tts->setEnabled(!voice_->options().ttsApiKey.isEmpty());
+    connect(tts, &QAction::toggled, this,
+            [this](bool on) { setTtsEnabled(on); });
     menu.addSeparator();
     QAction *full = menu.addAction(QString::fromUtf8("显示主界面"));
     connect(full, &QAction::triggered, this, [this] { openFullUi(); });

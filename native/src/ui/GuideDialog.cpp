@@ -321,8 +321,8 @@ QWidget *GuideDialog::buildVoicePage() {
                &hotkeyMark_, QString::fromUtf8("用这个"),
                [this] { emit useHotkeyRequested(); });
     makeChoice(QString::fromUtf8("本地"),
-               QString::fromUtf8("离线识别：导入约 230MB 的模型后本机转写（"
-                                 "模型包可直接拖进窗口），再到「模型设置」里切过来"),
+               QString::fromUtf8("离线识别，任何软件的输入框都能出字：导入约 230MB 的模型"
+                                 "（可直接拖进窗口），再到「模型设置」里切过来"),
                &localMark_, QString::fromUtf8("导入模型…"),
                [this] { emit openVoiceSettingsRequested(); });
 

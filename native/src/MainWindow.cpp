@@ -9,6 +9,7 @@
 #include "core/InputEngine.h"
 #include "core/ModelImport.h"
 #include "core/Presets.h"
+#include "core/Updater.h"
 #include "core/VoiceController.h"
 
 #include <QAbstractButton>
@@ -20,12 +21,17 @@
 #include <QCloseEvent>
 #include <QComboBox>
 #include <QCoreApplication>
+#include <QCheckBox>
 #include <QDir>
 #include <QDragEnterEvent>
 #include <QDropEvent>
 #include <QFile>
 #include <QMimeData>
 #include <QSettings>
+#include <QDateTime>
+#include <QDialog>
+#include <QPointer>
+#include <QThreadPool>
 #include <QCursor>
 #include <QDesktopServices>
 #include <QGuiApplication>
@@ -216,6 +222,18 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
         QTimer::singleShot(0, this, &MainWindow::toggleListening);
     }
     if (withTray) {
+        QTimer::singleShot(12000, this, [this] {
+            QSettings settings;
+            const qint64 last = settings
+                                    .value(QStringLiteral("update/last_check"), 0)
+                                    .toLongLong();
+            if (QDateTime::currentSecsSinceEpoch() - last < 12 * 3600) {
+                return;
+            }
+            checkUpdates(false);
+        });
+    }
+    if (withTray) {
         buildTray();
     }
 }
@@ -250,6 +268,13 @@ QWidget *MainWindow::buildHeader() {
     lay->addWidget(statusDot_, 0, Qt::AlignVCenter);
     lay->addWidget(statusText_);
     lay->addSpacing(6);
+
+    updateButton_ = new QPushButton(QString::fromUtf8("检查更新"));
+    updateButton_->setObjectName("ghostText");
+    updateButton_->setCursor(Qt::PointingHandCursor);
+    connect(updateButton_, &QPushButton::clicked, this,
+            [this] { checkUpdates(true); });
+    lay->addWidget(updateButton_);
 
     auto *guideButton = new QPushButton(QString::fromUtf8("使用引导"));
     guideButton->setObjectName("ghost");
@@ -519,14 +544,39 @@ QWidget *MainWindow::buildGuidePage() {
                          "（Qoder Ctrl+Shift+V / WorkBuddy Ctrl+D），不用装模型"},
                 {"装本地模型", "把模型包（.zip）拖进窗口，或点「模型设置 → 导入模型包…」；"
                                "装好后在「识别方式」里切到本地才会用上"},
-                {"什么时候用本地", "应用没有语音快捷键、或想离线识别时用；"
-                                   "SenseVoice 约 230MB，中英文都够用"},
+                {"什么时候用本地", "本地转写是通用输入：任何软件的输入框里都能直接出字；"
+                                   "应用没有语音快捷键、或想离线识别时用它。SenseVoice 约 230MB"},
                 {"耳机", "电脑上没有媒体在播放时，耳机播放/暂停 = 同一个语音开关"}});
     addSection(QString::fromUtf8("已知限制"),
                {{"电源 / 音量", "这两个键走红外，电脑收不到，无法映射"},
                 {"未开接管", "遥控器按键仍会原生送达前台，映射动作和原生动作可能同时生效"},
                 {"双击判定", "两次按下间隔 0.45 秒以内才算双击，慢速连点会当成两次单击"},
                 {"任务栏闪", "开始/结束录音时任务栏闪一下，是 Windows 麦克风指示器"}});
+
+    auto *links = new QHBoxLayout;
+    auto *site = new QPushButton(QString::fromUtf8("官网  ↗"));
+    site->setObjectName("ghostSmall");
+    site->setCursor(Qt::PointingHandCursor);
+    connect(site, &QPushButton::clicked, this, [] {
+        QDesktopServices::openUrl(
+            QUrl(QStringLiteral("https://ligdesign.win/agentrmc")));
+    });
+    auto *github = new QPushButton(QString::fromUtf8("GitHub  ↗"));
+    github->setObjectName("ghostSmall");
+    github->setCursor(Qt::PointingHandCursor);
+    connect(github, &QPushButton::clicked, this, [] {
+        QDesktopServices::openUrl(
+            QUrl(QStringLiteral("https://github.com/Samuel5945/AgentRMC")));
+    });
+    auto *version = new QLabel(
+        QString::fromUtf8("当前版本 v%1").arg(appVersion()));
+    version->setObjectName("muted");
+    links->addWidget(site);
+    links->addWidget(github);
+    links->addSpacing(8);
+    links->addWidget(version);
+    links->addStretch(1);
+    cl->addLayout(links);
     cl->addStretch(1);
 
     hl->addWidget(card);
@@ -552,6 +602,17 @@ void MainWindow::buildTray() {
     connect(listenAction_, &QAction::triggered, this, [this] {
         toggleListening();
         updateListenUi();
+    });
+    auto *update = menu->addAction(QString::fromUtf8("检查更新"));
+    connect(update, &QAction::triggered, this, [this] { checkUpdates(true); });
+    auto *site = menu->addAction(QString::fromUtf8("官网"));
+    connect(site, &QAction::triggered, this, [] {
+        QDesktopServices::openUrl(QUrl(QStringLiteral("https://ligdesign.win/agentrmc")));
+    });
+    auto *github = menu->addAction(QString::fromUtf8("GitHub 仓库"));
+    connect(github, &QAction::triggered, this, [] {
+        QDesktopServices::openUrl(
+            QUrl(QStringLiteral("https://github.com/Samuel5945/AgentRMC")));
     });
     menu->addSeparator();
     autoStartAction_ = menu->addAction(QString::fromUtf8("开机自启"));
@@ -1107,6 +1168,146 @@ void MainWindow::importDroppedModel(const QString &file) {
         toast_->showText(
             QString::fromUtf8("%1 已装好，可在「模型设置」里切到本地识别").arg(name),
             3200);
+    }
+}
+
+void MainWindow::checkUpdates(bool manual) {
+    if (updating_) {
+        return;
+    }
+    updating_ = true;
+    if (updateButton_ != nullptr) {
+        updateButton_->setText(QString::fromUtf8("检查中…"));
+    }
+    QString url = store_->config()
+                      .value(QStringLiteral("ui"))
+                      .toObject()
+                      .value(QStringLiteral("update_url"))
+                      .toString();
+    if (url.trimmed().isEmpty()) {
+        url = QStringLiteral("https://ligdesign.win/agentrmc-update.json");
+    }
+    QPointer<MainWindow> self(this);
+    QThreadPool::globalInstance()->start([self, url, manual] {
+        const UpdateInfo info = fetchUpdateInfo(url);
+        if (self == nullptr) {
+            return;
+        }
+        QMetaObject::invokeMethod(
+            self, [self, info, manual] { self->onUpdateChecked(info, manual); },
+            Qt::QueuedConnection);
+    });
+}
+
+void MainWindow::onUpdateChecked(const UpdateInfo &info, bool manual) {
+    updating_ = false;
+    if (updateButton_ != nullptr) {
+        updateButton_->setText(QString::fromUtf8("检查更新"));
+    }
+    QSettings settings;
+    if (!info.ok) {
+        if (manual && toast_ != nullptr) {
+            toast_->showText(QString::fromUtf8("检查更新失败：%1").arg(info.error),
+                             3200);
+        }
+        return;
+    }
+    settings.setValue(QStringLiteral("update/last_check"),
+                      QDateTime::currentSecsSinceEpoch());
+    if (!versionIsNewer(info.version, appVersion())) {
+        if (manual && toast_ != nullptr) {
+            toast_->showText(
+                QString::fromUtf8("已是最新版本 v%1").arg(appVersion()), 2400);
+        }
+        return;
+    }
+    if (!manual &&
+        settings.value(QStringLiteral("update/skip_version")).toString() ==
+            info.version) {
+        return;
+    }
+    showUpdateDialog(info);
+}
+
+void MainWindow::showUpdateDialog(const UpdateInfo &info) {
+    QDialog dialog(this);
+    dialog.setWindowFlags(Qt::Dialog | Qt::FramelessWindowHint);
+    dialog.setFixedWidth(560);
+    dialog.setStyleSheet(QStringLiteral(
+        "QDialog { background: #0f141d; border: 1px solid rgba(255,255,255,24);"
+        " border-radius: 12px; }"
+        "QLabel { color: #c9d1d9; font-size: 12px; }"
+        "QLabel#newVer { color: #e6edf3; font-size: 15px; font-weight: 600; }"
+        "QCheckBox { color: #8b949e; font-size: 11px; }"
+        "QPushButton { color: #c9d1d9; background: rgba(255,255,255,8);"
+        " border: 1px solid rgba(255,255,255,20); border-radius: 8px;"
+        " padding: 5px 12px; }"
+        "QPushButton:hover { background: rgba(255,255,255,14); }"
+        "QPushButton#primary { background: #4f8cff; color: #ffffff;"
+        " border: none; }"
+        "QPushButton#primary:hover { background: #6ba0ff; }"));
+
+    auto *lay = new QVBoxLayout(&dialog);
+    lay->setContentsMargins(20, 16, 20, 16);
+    lay->setSpacing(10);
+
+    auto *title =
+        new QLabel(QString::fromUtf8("发现新版本 v%1").arg(info.version));
+    title->setObjectName("newVer");
+    lay->addWidget(title);
+
+    QString meta = QString::fromUtf8("当前 v%1").arg(appVersion());
+    if (!info.date.isEmpty()) {
+        meta = QString::fromUtf8("%1 · 发布于 %2").arg(meta, info.date);
+    }
+    lay->addWidget(new QLabel(meta));
+
+    if (!info.title.isEmpty()) {
+        auto *headline = new QLabel(info.title);
+        headline->setStyleSheet(QStringLiteral("color:#e6edf3;"));
+        headline->setWordWrap(true);
+        lay->addWidget(headline);
+    }
+    for (const QString &note : info.notes) {
+        auto *line = new QLabel(QString::fromUtf8("· ") + note);
+        line->setWordWrap(true);
+        lay->addWidget(line);
+    }
+
+    auto *skip = new QCheckBox(QString::fromUtf8("跳过这个版本"));
+    lay->addWidget(skip);
+
+    auto *buttons = new QHBoxLayout;
+    auto *later = new QPushButton(QString::fromUtf8("稍后"));
+    connect(later, &QPushButton::clicked, &dialog, &QDialog::reject);
+    auto *quark = new QPushButton(QString::fromUtf8("夸克网盘"));
+    quark->setVisible(!info.quark.isEmpty());
+    connect(quark, &QPushButton::clicked, &dialog, [&dialog, info] {
+        QDesktopServices::openUrl(QUrl(info.quark));
+        dialog.accept();
+    });
+    auto *download = new QPushButton(QString::fromUtf8("去下载"));
+    download->setObjectName("primary");
+    connect(download, &QPushButton::clicked, &dialog, [&dialog, info] {
+        const QString target =
+            !info.baidu.isEmpty() ? info.baidu
+                                  : (!info.site.isEmpty() ? info.site : info.quark);
+        if (!target.isEmpty()) {
+            QDesktopServices::openUrl(QUrl(target));
+        }
+        dialog.accept();
+    });
+    buttons->addWidget(skip);
+    buttons->addStretch(1);
+    buttons->addWidget(later);
+    buttons->addWidget(quark);
+    buttons->addWidget(download);
+    lay->addLayout(buttons);
+
+    dialog.exec();
+    if (skip->isChecked()) {
+        QSettings settings;
+        settings.setValue(QStringLiteral("update/skip_version"), info.version);
     }
 }
 

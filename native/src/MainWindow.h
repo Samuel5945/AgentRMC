@@ -12,6 +12,7 @@ class QCloseEvent;
 class QAction;
 class QComboBox;
 class QDragEnterEvent;
+struct UpdateInfo;
 class QDropEvent;
 class QLabel;
 class QListWidget;
@@ -51,6 +52,9 @@ private:
     QWidget *buildLogPage();
     QWidget *buildGuidePage();
     void buildTray();
+    void checkUpdates(bool manual);
+    void onUpdateChecked(const UpdateInfo &info, bool manual);
+    void showUpdateDialog(const UpdateInfo &info);
     void importDroppedModel(const QString &file);
     void showDropHint(bool on);
     void updateTrayState();
@@ -80,6 +84,7 @@ private:
     QLabel *statusDot_ = nullptr;
     QLabel *statusText_ = nullptr;
     QPushButton *listenButton_ = nullptr;
+    QPushButton *updateButton_ = nullptr;
     QListWidget *logList_ = nullptr;
     QLabel *logCount_ = nullptr;
     QLabel *logEmpty_ = nullptr;
@@ -103,4 +108,5 @@ private:
     QString sceneName_;
     bool trayHintShown_ = false;
     bool quitting_ = false;
+    bool updating_ = false;
 };

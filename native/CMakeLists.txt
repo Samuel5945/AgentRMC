@@ -31,6 +31,8 @@ qt_add_executable(AgentRMCNative
     src/core/VoiceSettings.h
     src/core/ModelImport.cpp
     src/core/ModelImport.h
+    src/core/Updater.cpp
+    src/core/Updater.h
     src/core/AudioRecorder.cpp
     src/core/AudioRecorder.h
     src/core/AsrEngine.cpp

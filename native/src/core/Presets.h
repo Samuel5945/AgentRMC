@@ -15,6 +15,7 @@ QStringList holdIds();
 QStringList doubleModeIds();
 QString actionCn(const QString &sem);
 QString nativeLabel(int vk);
+QString remoteKeyName(int vk);
 QString vkLabel(int vk);
 QString comboText(const QStringList &mods, int vk);
 QString modeLabel(const QString &kind);

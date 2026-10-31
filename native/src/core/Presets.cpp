@@ -237,6 +237,22 @@ QString actionCn(const QString &sem) {
     return actionNames().value(sem);
 }
 
+QString remoteKeyName(int vk) {
+    switch (vk) {
+    case 38: return QStringLiteral("上键");
+    case 40: return QStringLiteral("下键");
+    case 37: return QStringLiteral("左键");
+    case 39: return QStringLiteral("右键");
+    case 13: return QStringLiteral("确定键");
+    case 27: return QStringLiteral("返回键");
+    case 93: return QStringLiteral("菜单键");
+    case 36: return QStringLiteral("主页键");
+    case 116: return QStringLiteral("语音键");
+    case 122: return QStringLiteral("对焦键");
+    default: return vkLabel(vk);
+    }
+}
+
 QString nativeLabel(int vk) {
     static const QHash<int, QString> table = {
         {38, QString::fromUtf8("↑")}, {40, QString::fromUtf8("↓")},

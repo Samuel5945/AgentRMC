@@ -193,21 +193,16 @@ void VoiceSettingsDialog::refreshStatus() {
 }
 
 void VoiceSettingsDialog::importModel(bool senseVoice) {
-    // 不用系统对话框：无边框弹窗上它可能开在父窗口后面，表现成「点了没反应」。
-    QFileDialog dialog(this, QString::fromUtf8("选择模型包"),
-                       QStandardPaths::writableLocation(
-                           QStandardPaths::DownloadLocation),
-                       QString::fromUtf8(
-                           "模型包 (*.zip *.tar.bz2 *.tbz2 *.tar.gz *.tgz)"));
-    dialog.setOption(QFileDialog::DontUseNativeDialog, true);
-    dialog.setFileMode(QFileDialog::ExistingFile);
-    dialog.setAcceptMode(QFileDialog::AcceptOpen);
-    if (dialog.exec() != QDialog::Accepted || dialog.selectedFiles().isEmpty()) {
+    // 用系统文件对话框：Qt 自绘的那种会继承深色主题的浅灰字，落在白底上看不清。
+    const QString file = QFileDialog::getOpenFileName(
+        this, QString::fromUtf8("选择模型包"),
+        QStandardPaths::writableLocation(QStandardPaths::DownloadLocation),
+        QString::fromUtf8("模型包 (*.zip *.tar.bz2 *.tbz2 *.tar.gz *.tgz)"));
+    if (file.isEmpty()) {
         return;
     }
-    importFromPath(dialog.selectedFiles().first(),
-                   senseVoice ? QStringLiteral("sensevoice")
-                              : QStringLiteral("qwen3"));
+    importFromPath(file, senseVoice ? QStringLiteral("sensevoice")
+                                    : QStringLiteral("qwen3"));
 }
 
 void VoiceSettingsDialog::importFromPath(const QString &file,

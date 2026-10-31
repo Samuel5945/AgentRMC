@@ -237,12 +237,8 @@ QWidget *MainWindow::buildHeader() {
     auto *brand = new QLabel("AgentRMC");
     brand->setObjectName("brand");
 
-    auto *tag = new QLabel("NATIVE");
-    tag->setObjectName("tag");
-
     lay->addWidget(logo);
     lay->addWidget(brand);
-    lay->addWidget(tag);
     lay->addStretch(1);
 
     statusDot_ = new QLabel;
@@ -963,8 +959,8 @@ void MainWindow::onEngineEvent(const QString &kind, const QString &name,
         }
     }
     if (guide_ != nullptr && guide_->isVisible() &&
-        kind == QStringLiteral("key") && !name.isEmpty()) {
-        guide_->noteKey(name);
+        kind == QStringLiteral("key") && vk != 0) {
+        guide_->noteKey(Presets::remoteKeyName(vk));
     }
     appendEvent(kind, name, profile, detail, vk);
 }

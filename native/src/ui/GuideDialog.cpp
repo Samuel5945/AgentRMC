@@ -2,6 +2,7 @@
 
 #include "core/ModelImport.h"
 
+#include <QAbstractButton>
 #include <QDesktopServices>
 #include <QDragEnterEvent>
 #include <QDropEvent>
@@ -163,6 +164,10 @@ GuideDialog::GuideDialog(QWidget *parent) : QDialog(parent) {
     foot->addWidget(prev_);
     foot->addWidget(next_);
     root->addLayout(foot);
+
+    for (QAbstractButton *button : findChildren<QAbstractButton *>()) {
+        button->setFocusPolicy(Qt::NoFocus);
+    }
 
     dropHint_ = new QLabel(QString::fromUtf8("松手，导入这个模型包"), this);
     dropHint_->setAlignment(Qt::AlignCenter);

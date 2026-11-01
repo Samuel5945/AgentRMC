@@ -12,7 +12,6 @@
 #include <QJsonObject>
 #include <QLabel>
 #include <QLineEdit>
-#include <QMessageBox>
 #include <QPushButton>
 #include <QRegularExpression>
 #include <QScrollArea>
@@ -285,10 +284,43 @@ void AppPage::addCustomApp() {
 }
 
 void AppPage::removeCustomApp(const QString &name, const QString &path) {
-    if (QMessageBox::question(this, QString::fromUtf8("移除自定义应用"),
-                              QString::fromUtf8("不再通过语音/按键打开「%1」？"
-                                                "应用本身不会被卸载。")
-                                  .arg(name)) != QMessageBox::Yes) {
+    // 不用 QMessageBox：它的按钮没有样式规则，深色弹窗里原生按钮几乎看不清，
+    // 也没法落「确认」文案。这里用添加应用同款的深色对话框。
+    QDialog dialog(this);
+    dialog.setObjectName("voiceDialog");
+    dialog.setWindowFlags(Qt::Dialog | Qt::FramelessWindowHint);
+    dialog.setModal(true);
+    dialog.setFixedWidth(360);
+
+    auto *root = new QVBoxLayout(&dialog);
+    root->setContentsMargins(18, 16, 18, 16);
+    root->setSpacing(12);
+
+    auto *title = new QLabel(QString::fromUtf8("移除自定义应用"));
+    title->setObjectName("captureTitle");
+    root->addWidget(title);
+
+    auto *text = new QLabel(QString::fromUtf8(
+        "不再通过语音/按键打开「%1」？应用本身不会被卸载。").arg(name));
+    text->setWordWrap(true);
+    root->addWidget(text);
+
+    auto *foot = new QHBoxLayout;
+    auto *cancel = new QPushButton(QString::fromUtf8("取消"));
+    cancel->setObjectName("ghostSmall");
+    cancel->setCursor(Qt::PointingHandCursor);
+    connect(cancel, &QPushButton::clicked, &dialog, &QDialog::reject);
+    auto *confirm = new QPushButton(QString::fromUtf8("确认移除"));
+    confirm->setObjectName("primary");
+    confirm->setCursor(Qt::PointingHandCursor);
+    confirm->setFixedWidth(86);
+    connect(confirm, &QPushButton::clicked, &dialog, &QDialog::accept);
+    foot->addStretch(1);
+    foot->addWidget(cancel);
+    foot->addWidget(confirm);
+    root->addLayout(foot);
+
+    if (dialog.exec() != QDialog::Accepted) {
         return;
     }
     QJsonArray apps;

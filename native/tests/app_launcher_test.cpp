@@ -201,6 +201,27 @@ int main(int argc, char *argv[]) {
                     Presets::appKinds().first() == QStringLiteral("app_browser"),
                 "app kinds are prefixed");
 
+    // 运行中新增自定义应用：目录刷新后立刻要能出现在「启动应用」里并保存。
+    // （曾经 app_ 动作被固化进 Presets 的 static 表，后加的应用保存必失败。）
+    const QJsonObject customEntry{
+        {QStringLiteral("name"), QStringLiteral("我的工具")},
+        {QStringLiteral("path"), QStringLiteral("C:/tools/mytool.exe")}};
+    AppLauncher::setCustomApps(AppLauncher::parseCustomApps(
+        QJsonArray{customEntry}));
+    ok &= check(Presets::appKinds().contains(
+                    QStringLiteral("app_custom:我的工具")),
+                "custom app shows up in app kinds");
+    const QJsonObject customAction = Presets::actionFor(
+        QStringLiteral("app_custom:我的工具"), 93, QStringLiteral("single"));
+    ok &= check(customAction.value("type").toString() ==
+                        QStringLiteral("launch") &&
+                    customAction.value("app").toString() ==
+                        QStringLiteral("custom:我的工具"),
+                "custom app action resolves after runtime add");
+    ok &= check(Presets::describeAction(customAction, false) ==
+                    QStringLiteral("打开 我的工具"),
+                "describe custom launch");
+
     // 「启动应用」预设要能写回 profiles.json，并原样读回来给 Router 用。
     QTemporaryDir dir;
     ok &= check(dir.isValid(), "temp dir");
@@ -233,6 +254,17 @@ int main(int argc, char *argv[]) {
                 "written action is launch");
     ok &= check(written.value("app").toString() == QStringLiteral("qoder"),
                 "written app id");
+    ok &= check(store.apply(QStringLiteral("default"), 93, QStringLiteral("single"),
+                            QStringLiteral("app_custom:我的工具")),
+                "custom app preset saves");
+    const Profile *savedCustom = store.find(QStringLiteral("default"));
+    const QJsonObject writtenCustom = savedCustom->actions.value(
+        savedCustom->keys.value(QStringLiteral("93")).toString()).toObject();
+    ok &= check(writtenCustom.value("type").toString() ==
+                    QStringLiteral("launch") &&
+                    writtenCustom.value("app").toString() ==
+                        QStringLiteral("custom:我的工具"),
+                "custom app action written to profiles");
 
     if (!ok) {
         return 1;

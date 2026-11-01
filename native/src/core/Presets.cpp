@@ -69,12 +69,8 @@ const QHash<QString, QJsonObject> &specs() {
         m["play"] = keySpec(0xB3);
         m["fullscreen"] = keySpec(0x7A);
         m["mouse_click"] = QJsonObject{{"type", "click"}};
-        for (const AppEntry &entry : AppLauncher::catalog()) {
-            m[QStringLiteral("app_") + entry.id] =
-                QJsonObject{{"type", "launch"},
-                            {"app", entry.id},
-                            {"label", QStringLiteral("打开 ") + entry.name}};
-        }
+        // app_ 前缀的动作不进这张静态表：自定义应用会在运行中增删，
+        // 固化进 static 的话，新加的应用点保存永远拿不到动作（actionFor 为空）。
         return m;
     }();
     return table;
@@ -312,6 +308,17 @@ QJsonObject actionFor(const QString &kind, int vk, const QString &gesture) {
     if (kind == "nav_toggle") {
         return QJsonObject{{"type", "nav_toggle"},
                            {"label", QStringLiteral("导航模式")}};
+    }
+    // 启动应用按当前目录动态拼：自定义应用随时可能被加进来。
+    if (kind.startsWith(QStringLiteral("app_"))) {
+        const QString id = kind.mid(QStringLiteral("app_").size());
+        const AppEntry *entry = AppLauncher::findApp(id);
+        if (entry == nullptr) {
+            return {};
+        }
+        return QJsonObject{{"type", "launch"},
+                           {"app", id},
+                           {"label", QStringLiteral("打开 ") + entry->name}};
     }
     const QJsonObject spec = specs().value(kind);
     if (spec.isEmpty()) {

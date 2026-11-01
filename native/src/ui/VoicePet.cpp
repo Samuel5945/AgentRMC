@@ -264,7 +264,8 @@ VoicePet::VoicePet(ProfileStore *store, VoiceController *voice, QWidget *parent)
                 while (chatHistory_.size() > 8) {
                     chatHistory_.removeFirst();
                 }
-                speak(text);
+                // 对话回复可单独选音色（tts.chat_voice），空 = 跟随语音反馈。
+                speakAs(text);
             });
     connect(llm_, &LlmClient::failed, this,
             [this](const QString &error, qint64) {
@@ -412,6 +413,17 @@ void VoicePet::speak(const QString &text, int durationMs) {
     // TTS 异步合成，好了直接喇叭出声；没配 key 或关了开关就只有气泡。
     if (tts_ != nullptr && tts_->ready()) {
         tts_->speak(text);
+    }
+}
+
+void VoicePet::speakAs(const QString &text) {
+    // 对话回复专用：tts.chat_voice 非空时用独立音色，空 = 跟随语音反馈。
+    if (text.isEmpty() || !isVisible()) {
+        return;
+    }
+    bubbleOnly(text, 0);
+    if (tts_ != nullptr && tts_->ready()) {
+        tts_->speak(text, voice_->options().ttsChatVoice);
     }
 }
 

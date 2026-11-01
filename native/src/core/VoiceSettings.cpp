@@ -246,6 +246,7 @@ VoiceOptions resolveVoiceOptions(const QJsonObject &config,
     options.ttsVoice = stringValue(tts, "voice", QStringLiteral("Chloe"));
     options.ttsStyle = stringValue(tts, "style");
     options.ttsOutputDevice = stringValue(tts, "output_device");
+    options.ttsChatVoice = stringValue(tts, "chat_voice").trimmed();
 
     // 云端 ASR：base_url / key 留空就沿用 TTS 的，一个平台填一次两处能用。
     const QJsonObject asrApi = voice.value("asr_api").toObject();

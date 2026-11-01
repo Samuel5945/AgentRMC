@@ -29,6 +29,7 @@ private:
     QLineEdit *apiKey_ = nullptr;
     QComboBox *model_ = nullptr;
     QLineEdit *system_ = nullptr;
+    QComboBox *chatVoice_ = nullptr;  // 回复音色；空 = 跟随语音反馈
     QPushButton *test_ = nullptr;
     QLabel *note_ = nullptr;
     LlmClient *llm_ = nullptr;

@@ -27,7 +27,8 @@ public:
                     const QString &outputDevice = QString());
     // 有 key 且开关打开才算就绪；没就绪时 speak() 静默跳过（气泡照常显示）。
     bool ready() const { return enabled_ && !apiKey_.isEmpty(); }
-    void speak(const QString &text);
+    // voiceOverride 非空时本句用它（对话回复可单独选音色），空 = 全局音色。
+    void speak(const QString &text, const QString &voiceOverride = QString());
     // 停止当前播放（SND_PURGE / waveOut reset），下次 speak 会覆盖缓冲。
     void stop();
 

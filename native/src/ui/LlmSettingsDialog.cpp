@@ -82,6 +82,21 @@ LlmSettingsDialog::LlmSettingsDialog(ProfileStore *store, QWidget *parent)
         "人设/风格指令；留空用内置默认（口语化、两句话以内）"));
     addRow(QString::fromUtf8("人设"), system_);
 
+    // 回复音色：对话模式的朗读可独立于「语音反馈」选音色；空 = 跟随。
+    chatVoice_ = new QComboBox;
+    chatVoice_->setEditable(true);
+    chatVoice_->addItem(QStringLiteral("Chloe"));
+    const QJsonObject ttsObj = store_->voiceConfig().value("tts").toObject();
+    chatVoice_->setCurrentText(ttsObj.value("chat_voice").toString().trimmed());
+    if (chatVoice_->lineEdit() != nullptr) {
+        chatVoice_->lineEdit()->setPlaceholderText(
+            QString::fromUtf8("留空 = 跟随语音反馈的音色"));
+    }
+    chatVoice_->setToolTip(QString::fromUtf8(
+        "对话模式朗读回复用的音色；留空 = 跟随「语音反馈 → 设置」里的音色。"
+        "换 TTS 平台/模型后记得换成它支持的音色名。"));
+    addRow(QString::fromUtf8("回复音色"), chatVoice_);
+
     auto *testRow = new QHBoxLayout;
     test_ = new QPushButton(QString::fromUtf8("测试"));
     test_->setObjectName("ghostSmall");
@@ -163,6 +178,19 @@ void LlmSettingsDialog::save() {
         patch["system"] = persona;
     }
     if (!store_->updateVoice(QJsonObject{{"llm_api", patch}})) {
+        note_->setText(QString::fromUtf8("保存失败：无法写入 config.json"));
+        note_->setStyleSheet(QStringLiteral("color:#f85149;"));
+        return;
+    }
+    // 回复音色存在 voice.tts 里（TTS 合成配置一处管），空 = 删掉跟随全局。
+    QJsonObject tts = store_->voiceConfig().value("tts").toObject();
+    const QString chatVoice = chatVoice_->currentText().trimmed();
+    if (chatVoice.isEmpty()) {
+        tts.remove("chat_voice");
+    } else {
+        tts["chat_voice"] = chatVoice;
+    }
+    if (!store_->updateVoice(QJsonObject{{"tts", tts}})) {
         note_->setText(QString::fromUtf8("保存失败：无法写入 config.json"));
         note_->setStyleSheet(QStringLiteral("color:#f85149;"));
         return;

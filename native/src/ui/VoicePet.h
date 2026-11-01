@@ -97,6 +97,7 @@ private:
     void applyLlmOptions();
     void setTtsEnabled(bool on);
     void bubbleOnly(const QString &text, int durationMs);
+    void speakAs(const QString &text);  // 对话回复朗读：tts.chat_voice 独立音色
     void askLlm(const QString &text);
     void openLlmSettings();
     void importThemePackage();

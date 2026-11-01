@@ -46,7 +46,8 @@ void TtsClient::setOptions(bool enabled, const QString &baseUrl,
     outputDevice_ = outputDevice.trimmed();
 }
 
-void TtsClient::speak(const QString &text) {
+void TtsClient::speak(const QString &text,
+                      const QString &voiceOverride) {
     if (text.trimmed().isEmpty()) {
         return;
     }
@@ -65,7 +66,9 @@ void TtsClient::speak(const QString &text) {
                                                 : style_}});
     messages.append(QJsonObject{{"role", "assistant"}, {"content", text}});
     body["messages"] = messages;
-    body["audio"] = QJsonObject{{"format", "wav"}, {"voice", voice_}};
+    body["audio"] = QJsonObject{
+        {"format", "wav"},
+        {"voice", voiceOverride.isEmpty() ? voice_ : voiceOverride}};
 
     QNetworkRequest request{QUrl(baseUrl_ + QStringLiteral("/chat/completions"))};
     request.setHeader(QNetworkRequest::ContentTypeHeader,

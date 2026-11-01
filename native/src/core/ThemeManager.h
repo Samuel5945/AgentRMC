@@ -41,6 +41,7 @@ public:
     QString mainBackground;            // 绝对路径，空 = 没有背景图
     QString panelBackground;
     qreal dim = 0.55;                  // 背景上的压暗遮罩，保文字可读
+    QString voiceStyle;                // 主题音色描述；用户没自填音色描述时用
 
     bool hasPetSprite() const { return !petStates.isEmpty(); }
     QString paletteValue(const QString &token) const {

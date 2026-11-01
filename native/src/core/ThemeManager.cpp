@@ -316,6 +316,8 @@ Theme ThemeManager::loadTheme(const QString &id) const {
         theme.mainBackground = QFile::exists(mainBg) ? mainBg : QString();
         theme.panelBackground = QFile::exists(panelBg) ? panelBg : QString();
         theme.dim = qBound(0.0, backgrounds.value("dim").toDouble(0.55), 0.9);
+        theme.voiceStyle =
+            root.value("voice").toObject().value("style").toString().trimmed();
         return theme;
     }
     return theme;  // 主题不存在/损坏：回落 classic

@@ -2,6 +2,7 @@
 
 #include "core/AudioOut.h"
 #include "core/Profiles.h"
+#include "core/ThemeManager.h"
 #include "core/TtsClient.h"
 #include "core/VoiceSettings.h"
 
@@ -102,8 +103,13 @@ TtsSettingsDialog::TtsSettingsDialog(ProfileStore *store, QWidget *parent)
 
     // 文字音色设定：MiMo 这类 TTS 支持用一句描述定制嗓音和语气，空 = 默认。
     styleEdit_ = new QLineEdit(tts.value("style").toString());
-    styleEdit_->setPlaceholderText(QString::fromUtf8(
-        "例：温柔的年轻女性，语速稍慢、声音清亮；留空 = 内置默认（轻快清晰）"));
+    const QString themeStyle =
+        ThemeManager::instance().current().voiceStyle;
+    styleEdit_->setPlaceholderText(
+        themeStyle.isEmpty()
+            ? QString::fromUtf8("例：温柔的年轻女性，语速稍慢、声音清亮；"
+                                "留空 = 内置默认（轻快清晰）")
+            : themeStyle + QString::fromUtf8("（当前主题的音色，正在生效）"));
     styleEdit_->setToolTip(QString::fromUtf8(
         "用一句自然语言描述想要的嗓音、语气、语速，合成时作为指令发给模型。"
         "想正式一点可以写「沉稳的男声，播音腔」；对话多的话别写太长的句子。"));

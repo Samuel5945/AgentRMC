@@ -552,8 +552,13 @@ void VoicePet::applyTtsOptions() {
         return;
     }
     const VoiceOptions options = voice_->options();
+    // 音色跟随主题：用户没写自己的音色描述时，用主题带的（鲸鱼娘=萌系少女）。
+    QString style = options.ttsStyle;
+    if (style.isEmpty()) {
+        style = ThemeManager::instance().current().voiceStyle;
+    }
     tts_->setOptions(options.ttsEnabled, options.ttsBaseUrl, options.ttsApiKey,
-                     options.ttsModel, options.ttsVoice, options.ttsStyle,
+                     options.ttsModel, options.ttsVoice, style,
                      options.ttsOutputDevice);
 }
 

@@ -8,11 +8,13 @@
 
 #include <QCheckBox>
 #include <QComboBox>
+#include <QDesktopServices>
 #include <QCoreApplication>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
+#include <QUrl>
 #include <QVBoxLayout>
 
 TtsSettingsDialog::TtsSettingsDialog(ProfileStore *store, QWidget *parent)
@@ -164,6 +166,13 @@ TtsSettingsDialog::TtsSettingsDialog(ProfileStore *store, QWidget *parent)
             &TtsSettingsDialog::preview);
     previewRow->addWidget(preview_);
     previewRow->addStretch(1);
+    auto *mimoReg = new QPushButton(QString::fromUtf8("没有 Key？免费注册小米 MiMo"));
+    mimoReg->setObjectName("guideLink");
+    mimoReg->setCursor(Qt::PointingHandCursor);
+    connect(mimoReg, &QPushButton::clicked, this, [] {
+        QDesktopServices::openUrl(QUrl(QStringLiteral("https://platform.xiaomimimo.com?ref=5JPFPY")));
+    });
+    previewRow->addWidget(mimoReg);
     root->addLayout(previewRow);
 
     note_ = new QLabel(QString::fromUtf8(

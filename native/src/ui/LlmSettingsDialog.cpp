@@ -5,10 +5,12 @@
 #include "core/VoiceSettings.h"
 
 #include <QComboBox>
+#include <QDesktopServices>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
+#include <QUrl>
 #include <QVBoxLayout>
 
 LlmSettingsDialog::LlmSettingsDialog(ProfileStore *store, QWidget *parent)
@@ -81,6 +83,16 @@ LlmSettingsDialog::LlmSettingsDialog(ProfileStore *store, QWidget *parent)
     system_->setPlaceholderText(QString::fromUtf8(
         "人设/风格指令；留空用内置默认（口语化、两句话以内）"));
     addRow(QString::fromUtf8("人设"), system_);
+
+    // MiMo 平台免费注册入口（对话模型 mimo-v2.6-flash 就在这个平台）。
+    // MiMo 平台免费注册入口：TTS/云端 ASR/对话模型都能用免费额度。
+    auto *mimoReg = new QPushButton(QString::fromUtf8("免费注册小米 MiMo（有免费额度）"));
+    mimoReg->setObjectName("guideLink");
+    mimoReg->setCursor(Qt::PointingHandCursor);
+    connect(mimoReg, &QPushButton::clicked, this, [] {
+        QDesktopServices::openUrl(QUrl(QStringLiteral("https://platform.xiaomimimo.com?ref=5JPFPY")));
+    });
+    addRow(QString::fromUtf8("没有 Key？"), mimoReg);
 
     // 回复音色：对话模式的朗读可独立于「语音反馈」选音色；空 = 跟随。
     chatVoice_ = new QComboBox;

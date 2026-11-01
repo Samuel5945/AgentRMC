@@ -4,10 +4,12 @@
 #include "core/VoiceSettings.h"
 
 #include <QComboBox>
+#include <QDesktopServices>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
+#include <QUrl>
 #include <QVBoxLayout>
 
 AsrSettingsDialog::AsrSettingsDialog(ProfileStore *store, QWidget *parent)
@@ -78,6 +80,16 @@ AsrSettingsDialog::AsrSettingsDialog(ProfileStore *store, QWidget *parent)
     apiKey_->setToolTip(QString::fromUtf8(
         "只保存在本机 config.json。不同平台才需要单独填。"));
     addRow(QString::fromUtf8("API Key"), apiKey_);
+
+    // MiMo 平台免费注册入口（TTS/云端 ASR 同一个 Key）。
+    // MiMo 平台免费注册入口：TTS/云端 ASR/对话模型都能用免费额度。
+    auto *mimoReg = new QPushButton(QString::fromUtf8("免费注册小米 MiMo（有免费额度）"));
+    mimoReg->setObjectName("guideLink");
+    mimoReg->setCursor(Qt::PointingHandCursor);
+    connect(mimoReg, &QPushButton::clicked, this, [] {
+        QDesktopServices::openUrl(QUrl(QStringLiteral("https://platform.xiaomimimo.com?ref=5JPFPY")));
+    });
+    addRow(QString::fromUtf8("没有 Key？"), mimoReg);
 
     model_ = new QComboBox;
     model_->setEditable(true);

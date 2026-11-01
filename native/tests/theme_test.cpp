@@ -65,7 +65,8 @@ int main(int argc, char *argv[]) {
                          "fps": 4, "bob": 2, "tilt": 3}
             }
         },
-        "backgrounds": {"main": "backgrounds/main.png", "dim": 0.7}
+        "backgrounds": {"main": "backgrounds/main.png", "dim": 0.7},
+        "voice": {"name": "冰糖", "style": "软软糯糯的少女音"}
     })");
     writeFile(themeDir + QStringLiteral("/theme.json"), manifest);
     writeFile(themeDir + QStringLiteral("/pet/idle_0.png"),
@@ -78,6 +79,13 @@ int main(int argc, char *argv[]) {
     check(info.valid && error.isEmpty(), "valid manifest parses");
     check(info.id == QStringLiteral("xiaoai") && info.displayName.contains(QStringLiteral("鲸鱼娘")),
           "manifest id/displayName read");
+
+    // voice 节点：音色名与描述都解析出来，跟随主题用。
+    const Theme body = ThemeManager::parseThemeBody(info);
+    check(body.voiceName == QStringLiteral("冰糖"),
+          "voice.name parsed into voiceName");
+    check(body.voiceStyle == QStringLiteral("软软糯糯的少女音"),
+          "voice.style parsed into voiceStyle");
 
     // 缺 displayName 的清单必须被判坏。
     QDir().mkpath(dir.filePath(QStringLiteral("broken")));

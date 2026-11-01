@@ -95,22 +95,28 @@ TtsSettingsDialog::TtsSettingsDialog(ProfileStore *store, QWidget *parent)
     voice_ = new QComboBox;
     voice_->setEditable(true);
     voice_->addItem(QStringLiteral("Chloe（默认）"), QStringLiteral("Chloe"));
-    // 第二档跟随主题：当前主题带了音色描述（如鲸鱼娘）才出现这一项，
-    // 选中 = 清空自定义描述，主题音色（换主题自动跟着换）接管。
+    // 第二档跟随主题：音色名与描述都取主题带的（如鲸鱼娘），换主题自动跟着换。
+    // 当前主题两样都没带时该项不存在（跟随 = 退回 Chloe + 默认描述，没意义）。
     const Theme &activeTheme = ThemeManager::instance().current();
-    if (!activeTheme.voiceStyle.isEmpty()) {
+    if (!activeTheme.voiceStyle.isEmpty() || !activeTheme.voiceName.isEmpty()) {
         voice_->addItem(QStringLiteral("跟随主题 · %1").arg(activeTheme.displayName),
                         QStringLiteral("@theme"));
     }
     const QString savedVoice = tts.value("voice").toString().trimmed();
     const QString savedStyle = tts.value("style").toString().trimmed();
-    if (savedVoice.isEmpty() || savedVoice.compare(QStringLiteral("Chloe"),
-                                                   Qt::CaseInsensitive) == 0) {
+    if (isFollowThemeVoice(savedVoice) ||
+        savedVoice.compare(QStringLiteral("Chloe"), Qt::CaseInsensitive) == 0) {
+        // 旧版「跟随主题 · X」文案先归一成 @theme 再匹配。
+        const QString normalized =
+            isFollowThemeVoice(savedVoice) ? QStringLiteral("@theme") : savedVoice;
+        const int saved = voice_->findData(normalized);
         // 没写自定义描述且主题带音色 = 主题音色正在生效，选回「跟随主题」。
         voice_->setCurrentIndex(
-            savedStyle.isEmpty() && !activeTheme.voiceStyle.isEmpty()
-                ? voice_->findData(QStringLiteral("@theme"))
-                : 0);
+            saved >= 0
+                ? saved
+                : (savedStyle.isEmpty() && voice_->findData(QStringLiteral("@theme")) >= 0
+                       ? voice_->findData(QStringLiteral("@theme"))
+                       : 0));
     } else {
         const int saved = voice_->findData(savedVoice);
         if (saved >= 0) {
@@ -125,8 +131,9 @@ TtsSettingsDialog::TtsSettingsDialog(ProfileStore *store, QWidget *parent)
         }
     });
     voice_->setToolTip(QString::fromUtf8(
-        "Chloe = 平台默认音色；跟随主题 = 用当前主题自带的音色（换主题自动换）；"
-        "也可以直接手输平台支持的任意音色名。换模型/平台后记得换配套音色。"));
+        "Chloe = 平台默认音色；跟随主题 = 音色名与描述都用当前主题自带的"
+        "（换主题/主题轮播自动跟着换）；也可以直接手输平台支持的任意音色名。"
+        "换模型/平台后记得换配套音色。"));
     addRow(QString::fromUtf8("音色"), voice_);
 
     // 文字音色设定：MiMo 这类 TTS 支持用一句描述定制嗓音和语气，空 = 默认。
@@ -226,8 +233,10 @@ void TtsSettingsDialog::preview() {
     QString voiceName = resolvedVoiceName();
     QString style = styleEdit_->text();
     if (voice_->currentData().toString() == QStringLiteral("@theme")) {
-        voiceName = QStringLiteral("Chloe");
-        style = ThemeManager::instance().current().voiceStyle;
+        const Theme &theme = ThemeManager::instance().current();
+        voiceName = theme.voiceName.isEmpty() ? QStringLiteral("Chloe")
+                                              : theme.voiceName;
+        style = theme.voiceStyle;
     }
     tts_->setOptions(true, baseUrl_->text(), apiKey_->text(),
                      model_->currentText(), voiceName, style,
@@ -252,12 +261,14 @@ void TtsSettingsDialog::save() {
     patch["model"] = model_->currentText().trimmed();
     if (voice_->currentData().toString() == QStringLiteral("@theme")) {
         styleEdit_->clear();  // 跟随主题：不落自定义描述
-    }
-    const QString resolved = resolvedVoiceName();
-    if (resolved.isEmpty()) {
-        patch.remove("voice");
+        patch["voice"] = QStringLiteral("@theme");  // 落哨兵，运行时按主题解析
     } else {
-        patch["voice"] = resolved;
+        const QString resolved = resolvedVoiceName();
+        if (resolved.isEmpty()) {
+            patch.remove("voice");
+        } else {
+            patch["voice"] = resolved;
+        }
     }
     if (styleEdit_->text().trimmed().isEmpty()) {
         patch.remove("style");

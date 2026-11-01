@@ -173,11 +173,23 @@ int main(int argc, char *argv[]) {
                            "/profiles.json");
         store.load();
         store.loadConfig(QCoreApplication::applicationDirPath() + "/config.json");
+        ThemeManager::instance().init(&store);  // 跟随主题解析要拿到当前主题
         VoiceController voice(&store);
         const VoiceOptions options = voice.options();
+        // 跟随主题：与 VoicePet 同规则解析（自检跑在主题扫描之后，能拿到当前主题）。
+        QString ttsVoice = options.ttsVoice;
+        QString ttsStyle = options.ttsStyle;
+        if (isFollowThemeVoice(ttsVoice)) {
+            const Theme &theme = ThemeManager::instance().current();
+            ttsVoice = theme.voiceName.isEmpty() ? QStringLiteral("Chloe")
+                                                 : theme.voiceName;
+            if (ttsStyle.isEmpty()) {
+                ttsStyle = theme.voiceStyle;
+            }
+        }
         TtsClient tts;
         tts.setOptions(options.ttsEnabled, options.ttsBaseUrl, options.ttsApiKey,
-                       options.ttsModel, options.ttsVoice, options.ttsStyle,
+                       options.ttsModel, ttsVoice, ttsStyle,
                        options.ttsOutputDevice);
         if (!tts.ready()) {
             qWarning().noquote()

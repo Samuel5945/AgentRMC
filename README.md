@@ -255,6 +255,10 @@ keydown  keydown  keydown  ...  keydown   keyup
   （mimo-v2.5-tts / gpt-4o-mini-tts / tts-1 / cosyvoice-v2…）
 - Key 只落本机 `config.json` 的 `voice.tts.api_key`，也可以设环境变量
   `MIMO_API_KEY` 不落盘
+- 音色可「跟随主题」：主题包 `theme.json` 的 `voice` 节点带 `name`（音色 ID，
+  如 MiMo 的 冰糖 / Chloe）和 `style`（嗓音语气描述），选「跟随主题」后音色名
+  与描述都取当前主题的，换主题/主题轮播立即跟着换；主题没写 `name` 时回落
+  Chloe——指令驱动的 TTS 只有钉死音色名才不会每句都漂
 - 出声时机：桌宠可见时切识别方式、复制、打开应用的确认，以及右键菜单「朗读最近一句」；
   右键菜单的「语音反馈」随时开关（写回 `voice.tts.enabled`）
 - 没填 key 就只有气泡不出声；合成失败（如余额不足）气泡提示一次，不刷屏

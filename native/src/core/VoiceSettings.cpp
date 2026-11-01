@@ -244,10 +244,14 @@ VoiceOptions resolveVoiceOptions(const QJsonObject &config,
     options.ttsModel =
         stringValue(tts, "model", QStringLiteral("mimo-v2.5-tts"));
     options.ttsVoice = stringValue(tts, "voice", QStringLiteral("Chloe"));
-    // 旧版本下拉把界面文案误存进 voice（「Chloe（默认）」等），兜底还原。
-    if (options.ttsVoice.contains(QLatin1Char('（')) ||
-        options.ttsVoice.contains(QStringLiteral("跟随主题"))) {
-        options.ttsVoice = QStringLiteral("Chloe");
+    // 「跟随主题」归一化为 @theme 哨兵，运行时按当前主题解析音色名与描述；
+    // 旧版本下拉把界面文案误存进 voice（「跟随主题 · X」等）也一并识别。
+    if (options.ttsVoice.trimmed().isEmpty()) {
+        options.ttsVoice = QStringLiteral("Chloe");  // 没配过 = 平台默认音色
+    } else if (isFollowThemeVoice(options.ttsVoice)) {
+        options.ttsVoice = QStringLiteral("@theme");
+    } else if (options.ttsVoice.contains(QLatin1Char('（'))) {
+        options.ttsVoice = QStringLiteral("Chloe");  // 「Chloe（默认）」等误存文案
     }
     options.ttsStyle = stringValue(tts, "style");
     options.ttsOutputDevice = stringValue(tts, "output_device");

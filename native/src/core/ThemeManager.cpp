@@ -258,69 +258,73 @@ void ThemeManager::rescan() {
     }
 }
 
-Theme ThemeManager::loadTheme(const QString &id) const {
+Theme ThemeManager::parseThemeBody(const ThemeInfo &info) {
     Theme theme;
-    theme.id = QStringLiteral("classic");
-    theme.displayName = QStringLiteral("经典");
-    theme.palette = classicPalette();
-    if (id == QStringLiteral("classic")) {
+    QFile file(info.dir + QStringLiteral("/theme.json"));
+    if (!file.open(QIODevice::ReadOnly)) {
         return theme;
     }
+    const QJsonObject root =
+        QJsonDocument::fromJson(file.readAll()).object();
+
+    theme.id = info.id;
+    theme.displayName = info.displayName;
+    theme.author = info.author;
+
+    QHash<QString, QString> overrides;
+    const QJsonObject palette = root.value("palette").toObject();
+    for (auto it = palette.begin(); it != palette.end(); ++it) {
+        overrides.insert(it.key(), it.value().toString());
+    }
+    theme.palette = mergePalette(overrides);
+
+    const QJsonObject character = root.value("character").toObject();
+    theme.characterName = character.value("name").toString();
+    theme.persona = character.value("persona").toString();
+
+    const QJsonObject pet = root.value("pet").toObject();
+    theme.ring = pet.value("ring").toBool(true);
+    const QJsonObject states = pet.value("states").toObject();
+    for (auto it = states.begin(); it != states.end(); ++it) {
+        const QJsonObject entry = it.value().toObject();
+        ThemePetState state;
+        state.frames = resolveFrames(info.dir, entry.value("frames").toArray());
+        if (state.frames.isEmpty()) {
+            continue;
+        }
+        state.fps = qBound(1, entry.value("fps").toInt(2), 12);
+        state.bob = qBound(0, entry.value("bob").toInt(3), 12);
+        state.tilt = qBound(0, entry.value("tilt").toInt(0), 15);
+        theme.petStates.insert(it.key(), state);
+    }
+
+    const QJsonObject backgrounds = root.value("backgrounds").toObject();
+    const QString mainBg = absolutePath(
+        info.dir, backgrounds.value("main").toString());
+    const QString panelBg = absolutePath(
+        info.dir, backgrounds.value("panel").toString());
+    theme.mainBackground = QFile::exists(mainBg) ? mainBg : QString();
+    theme.panelBackground = QFile::exists(panelBg) ? panelBg : QString();
+    theme.dim = qBound(0.0, backgrounds.value("dim").toDouble(0.55), 0.9);
+    const QJsonObject voiceObj = root.value("voice").toObject();
+    theme.voiceName = voiceObj.value("name").toString().trimmed();
+    theme.voiceStyle = voiceObj.value("style").toString().trimmed();
+    return theme;
+}
+
+Theme ThemeManager::loadTheme(const QString &id) const {
     for (const ThemeInfo &info : infos_) {
         if (info.id != id || !info.valid) {
             continue;
         }
-        QFile file(info.dir + QStringLiteral("/theme.json"));
-        if (!file.open(QIODevice::ReadOnly)) {
-            return theme;
-        }
-        const QJsonObject root =
-            QJsonDocument::fromJson(file.readAll()).object();
-
-        theme.id = info.id;
-        theme.displayName = info.displayName;
-        theme.author = info.author;
-
-        QHash<QString, QString> overrides;
-        const QJsonObject palette = root.value("palette").toObject();
-        for (auto it = palette.begin(); it != palette.end(); ++it) {
-            overrides.insert(it.key(), it.value().toString());
-        }
-        theme.palette = mergePalette(overrides);
-
-        const QJsonObject character = root.value("character").toObject();
-        theme.characterName = character.value("name").toString();
-        theme.persona = character.value("persona").toString();
-
-        const QJsonObject pet = root.value("pet").toObject();
-        theme.ring = pet.value("ring").toBool(true);
-        const QJsonObject states = pet.value("states").toObject();
-        for (auto it = states.begin(); it != states.end(); ++it) {
-            const QJsonObject entry = it.value().toObject();
-            ThemePetState state;
-            state.frames = resolveFrames(info.dir, entry.value("frames").toArray());
-            if (state.frames.isEmpty()) {
-                continue;
-            }
-            state.fps = qBound(1, entry.value("fps").toInt(2), 12);
-            state.bob = qBound(0, entry.value("bob").toInt(3), 12);
-            state.tilt = qBound(0, entry.value("tilt").toInt(0), 15);
-            theme.petStates.insert(it.key(), state);
-        }
-
-        const QJsonObject backgrounds = root.value("backgrounds").toObject();
-        const QString mainBg = absolutePath(
-            info.dir, backgrounds.value("main").toString());
-        const QString panelBg = absolutePath(
-            info.dir, backgrounds.value("panel").toString());
-        theme.mainBackground = QFile::exists(mainBg) ? mainBg : QString();
-        theme.panelBackground = QFile::exists(panelBg) ? panelBg : QString();
-        theme.dim = qBound(0.0, backgrounds.value("dim").toDouble(0.55), 0.9);
-        theme.voiceStyle =
-            root.value("voice").toObject().value("style").toString().trimmed();
-        return theme;
+        return parseThemeBody(info);
     }
-    return theme;  // 主题不存在/损坏：回落 classic
+    // classic 永远内置兜底；主题不存在/损坏也回落到它。
+    Theme theme;
+    theme.id = QStringLiteral("classic");
+    theme.displayName = QStringLiteral("经典");
+    theme.palette = classicPalette();
+    return theme;
 }
 
 void ThemeManager::applyQss() {

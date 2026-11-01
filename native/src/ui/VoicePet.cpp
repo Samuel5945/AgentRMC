@@ -299,6 +299,7 @@ VoicePet::VoicePet(ProfileStore *store, VoiceController *voice, QWidget *parent)
                 sprite_->setState(spriteState());
                 refreshState();
                 update();
+                applyTtsOptions();  // 音色跟随主题：轮播/切主题立即跟着换
             });
 
     collapseTimer_ = new QTimer(this);
@@ -431,7 +432,11 @@ void VoicePet::speakAs(const QString &text) {
     }
     emit chatReplied(text);  // 桌宠收起时回复文本落语音面板/事件流
     if (tts_ != nullptr && tts_->ready()) {
-        tts_->speak(text, voice_->options().ttsChatVoice);
+        // 对话音色哨兵（@theme 等）归一成空 = 跟随全局已解析的音色，
+        // 别把字面量发给服务端。
+        const QString chatVoice = voice_->options().ttsChatVoice;
+        tts_->speak(text, isFollowThemeVoice(chatVoice) ? QString()
+                                                        : chatVoice);
     }
 }
 
@@ -586,13 +591,20 @@ void VoicePet::applyTtsOptions() {
         return;
     }
     const VoiceOptions options = voice_->options();
-    // 音色跟随主题：用户没写自己的音色描述时，用主题带的（鲸鱼娘=萌系少女）。
+    // 音色跟随主题：音色名与描述都取主题带的（鲸鱼娘=萌系少女），换主题
+    // 立即跟着换；指令驱动 TTS 只有钉死 audio.voice 音色才不会每句都漂。
+    QString voice = options.ttsVoice;
     QString style = options.ttsStyle;
-    if (style.isEmpty()) {
-        style = ThemeManager::instance().current().voiceStyle;
+    if (isFollowThemeVoice(voice)) {
+        const Theme &theme = ThemeManager::instance().current();
+        voice = theme.voiceName.isEmpty() ? QStringLiteral("Chloe")
+                                          : theme.voiceName;
+        if (style.isEmpty()) {
+            style = theme.voiceStyle;
+        }
     }
     tts_->setOptions(options.ttsEnabled, options.ttsBaseUrl, options.ttsApiKey,
-                     options.ttsModel, options.ttsVoice, style,
+                     options.ttsModel, voice, style,
                      options.ttsOutputDevice);
 }
 

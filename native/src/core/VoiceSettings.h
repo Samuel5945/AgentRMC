@@ -64,6 +64,14 @@ struct VoiceOptions {
     QString llmApiSystem;   // 人设/风格；空 = 用 VoicePet 的内置默认
 };
 
+// voice.tts.voice 的「跟随主题」哨兵与历史形态：空 / "@theme" / 旧版误存的
+// 「跟随主题 · X」界面文案都算跟随主题；其它值一律视为用户自选的音色名。
+inline bool isFollowThemeVoice(const QString &voice) {
+    const QString trimmed = voice.trimmed();
+    return trimmed.isEmpty() || trimmed == QStringLiteral("@theme") ||
+           trimmed.contains(QStringLiteral("跟随主题"));
+}
+
 VoiceBackend voiceBackendFromString(const QString &value);
 QString voiceBackendKey(VoiceBackend backend);
 QString voiceBackendLabel(VoiceBackend backend);

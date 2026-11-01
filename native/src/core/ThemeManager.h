@@ -41,6 +41,7 @@ public:
     QString mainBackground;            // 绝对路径，空 = 没有背景图
     QString panelBackground;
     qreal dim = 0.55;                  // 背景上的压暗遮罩，保文字可读
+    QString voiceName;                 // 主题音色名（TTS 的 audio.voice 参数）；空 = Chloe
     QString voiceStyle;                // 主题音色描述；用户没自填音色描述时用
 
     bool hasPetSprite() const { return !petStates.isEmpty(); }
@@ -89,6 +90,8 @@ public:
     static QHash<QString, QString> mergePalette(
         const QHash<QString, QString> &overrides);
     static ThemeInfo parseThemeDir(const QString &dir, QString *error);
+    // theme.json 清单正文 → Theme（palette 已合并 classic 默认）；纯函数供测试。
+    static Theme parseThemeBody(const ThemeInfo &info);
     static QString renderQss(const QString &qssTemplate,
                              const QHash<QString, QString> &palette,
                              const QString &rootBackgroundImage);

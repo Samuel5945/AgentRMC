@@ -81,8 +81,15 @@ QStringList AudioOut::deviceNames() {
     const UINT count = waveOutGetNumDevs();
     for (UINT i = 0; i < count; ++i) {
         WAVEOUTCAPSW caps = {};
-        if (waveOutGetDevCapsW(i, &caps, sizeof(caps)) == MMSYSERR_NOERROR) {
-            names.append(QString::fromWCharArray(caps.szPname));
+        if (waveOutGetDevCapsW(i, &caps, sizeof(caps)) != MMSYSERR_NOERROR) {
+            continue;
+        }
+        // 蓝牙耳机会同时出「Stereo」和「Hands-Free AG Audio」两个端点；
+        // 往 Hands-Free 放声音同样会把耳机切进通话通道（A2DP 挂起），
+        // TTS 播报用不上它，列表里直接滤掉防误选。
+        const QString name = QString::fromWCharArray(caps.szPname);
+        if (!name.contains(QStringLiteral("hands-free"), Qt::CaseInsensitive)) {
+            names.append(name);
         }
     }
     return names;

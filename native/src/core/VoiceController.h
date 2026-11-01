@@ -62,6 +62,8 @@ private:
     enum class State { Idle, Pending, Recording };
 
     void updateOptions();
+    // 监听期间是否常开麦克风：蓝牙耳机永远 false（占麦克风会挂起 A2DP）。
+    bool shouldHoldMic();
     void startSession(bool media);
     void finishSession();
     void beginTestCapture();
@@ -91,6 +93,7 @@ private:
     bool chatMode_ = false;
     bool toggleCombo_ = false;
     bool holdCombo_ = false;
+    bool micAlwaysOn_ = false;  // true = 监听期间常开（非蓝牙，保 preroll）
     int repeats_ = 0;
     qint64 pendingAt_ = 0;
     qint64 recordAt_ = 0;

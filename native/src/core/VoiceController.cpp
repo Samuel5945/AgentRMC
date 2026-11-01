@@ -16,11 +16,57 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+#include <mmdeviceapi.h>
 
 namespace {
 
 // 耳机麦克风的可说话峰值（RMS，约 -34 dBFS），高于它算还在说话。
 constexpr double kMediaVoiceFloor = 0.02;
+
+// 蓝牙耳机只要被占着麦克风，整个耳机就会切进通话（HFP）通道、A2DP 立刻挂起，
+// 表现是「软件一开，耳机没声音」。蓝牙麦克风的采集端点名必带 Hands-Free，
+// 拿它当判定：蓝牙时不预开麦克风（preroll 没了认了），改成说话期间临时开。
+const PROPERTYKEY kPKEYDeviceFriendlyName = {
+    {0xa45c254e, 0xdf1c, 0x4efd,
+     {0x80, 0x20, 0x67, 0xd1, 0x46, 0xa8, 0x50, 0xe0}},
+    14};  // PKEY_Device_FriendlyName
+
+bool defaultCaptureIsBluetooth() {
+    static const bool comReady = [] {
+        CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+        return true;  // 失败 = 别处已按别的模式初始化过 COM，照样能用
+    }();
+    Q_UNUSED(comReady);
+
+    IMMDeviceEnumerator *enumerator = nullptr;
+    if (FAILED(CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr,
+                                CLSCTX_ALL, __uuidof(IMMDeviceEnumerator),
+                                reinterpret_cast<void **>(&enumerator)))) {
+        return false;
+    }
+    IMMDevice *device = nullptr;
+    const HRESULT hr =
+        enumerator->GetDefaultAudioEndpoint(eCapture, eConsole, &device);
+    enumerator->Release();
+    if (FAILED(hr)) {
+        return false;
+    }
+    IPropertyStore *store = nullptr;
+    bool bluetooth = false;
+    if (SUCCEEDED(device->OpenPropertyStore(STGM_READ, &store))) {
+        PROPVARIANT name{};
+        if (SUCCEEDED(store->GetValue(kPKEYDeviceFriendlyName, &name)) &&
+            name.vt == VT_LPWSTR && name.pwszVal != nullptr) {
+            bluetooth = QString::fromWCharArray(name.pwszVal)
+                            .contains(QStringLiteral("hands-free"),
+                                      Qt::CaseInsensitive);
+        }
+        PropVariantClear(&name);
+        store->Release();
+    }
+    device->Release();
+    return bluetooth;
+}
 
 }  // namespace
 
@@ -77,6 +123,12 @@ QString VoiceController::appDir() const {
 void VoiceController::updateOptions() {
     options_ = resolveVoiceOptions(store_->config(), store_->current(true).voice,
                                    appDir());
+}
+
+// 非蓝牙麦克风常开，换取 preroll 补回按键判定期间的开头几百毫秒；
+// 蓝牙麦克风绝不常开（会占死耳机通道），startSession 里有「没开就临时开」的分支。
+bool VoiceController::shouldHoldMic() {
+    return !defaultCaptureIsBluetooth();
 }
 
 VoiceOptions VoiceController::options() {
@@ -338,6 +390,10 @@ void VoiceController::finishSession() {
     }
 
     const QByteArray pcm = recorder_.stopCapture();
+    if (!micAlwaysOn_) {
+        // 蓝牙麦克风：说完立刻归还设备，耳机马上回音乐通道。
+        recorder_.close();
+    }
     state_ = State::Idle;
     beep(760, 70, !test_);
     // 录音等按键重复（约 500ms）才开始记，按住的前一段靠 preroll 补回来，
@@ -572,7 +628,9 @@ void VoiceController::reload() {
         engineFamily_.clear();
         engineDir_.clear();
     }
-    if (listening_ && options_.backend != VoiceBackend::Hotkey) {
+    micAlwaysOn_ = listening_ && options_.backend != VoiceBackend::Hotkey &&
+                   shouldHoldMic();
+    if (micAlwaysOn_) {
         if (!recorder_.isOpen()) {
             QString error;
             if (!recorder_.open(&error)) {
@@ -580,6 +638,8 @@ void VoiceController::reload() {
             }
         }
     } else {
+        // 蓝牙麦克风长期占用会把耳机整个切进通话通道（A2DP 挂起），
+        // 所以蓝牙一律不预开：开始说话时再开，说完立刻关。
         recorder_.close();
     }
     setState(State::Idle, QStringLiteral("就绪"));
@@ -594,10 +654,12 @@ void VoiceController::setListening(bool listening) {
             test_ = false;
             setState(State::Idle, QStringLiteral("已停止监听"));
         }
+        micAlwaysOn_ = false;
         recorder_.close();
         return;
     }
-    if (options_.backend != VoiceBackend::Hotkey && !recorder_.isOpen()) {
+    micAlwaysOn_ = options_.backend != VoiceBackend::Hotkey && shouldHoldMic();
+    if (micAlwaysOn_ && !recorder_.isOpen()) {
         QString error;
         if (!recorder_.open(&error)) {
             emit eventReady(QStringLiteral("error"), error);

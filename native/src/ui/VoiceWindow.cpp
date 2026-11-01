@@ -104,8 +104,13 @@ public:
 
 protected:
     void mousePressEvent(QMouseEvent *event) override {
-        if (windowHandle() != nullptr && event->button() == Qt::LeftButton) {
-            windowHandle()->startSystemMove();
+        // 本控件是子控件，自己的 windowHandle() 是空的；必须从顶层窗口拿。
+        if (event->button() == Qt::LeftButton) {
+            if (auto *handle = window()->windowHandle()) {
+                handle->startSystemMove();
+                event->accept();
+                return;
+            }
         }
         QWidget::mousePressEvent(event);
     }
@@ -214,6 +219,12 @@ VoiceWindow::VoiceWindow(VoiceController *voice, ProfileStore *store,
     history_->setFocusPolicy(Qt::NoFocus);
     history_->setWordWrap(true);
     history_->setSpacing(2);
+    // 原生滚动条在深色小面板上又粗又突兀：都藏掉，滚轮照常滚。
+    // 横向按像素滚 + 只认视口宽，长句子换行而不是把列表撑出一根横条。
+    history_->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    history_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    history_->setHorizontalScrollMode(QAbstractItemView::ScrollPerPixel);
+    history_->setTextElideMode(Qt::ElideNone);
     connect(history_, &QListWidget::itemClicked, this,
             [this](QListWidgetItem *item) { copyText(item->data(Qt::UserRole).toString()); });
     body->addWidget(history_, 1);
@@ -395,10 +406,11 @@ void VoiceWindow::copyText(const QString &text) {
 
 void VoiceWindow::pushHistory(const QString &text, int costMs) {
     auto *item = new QListWidgetItem(history_);
-    item->setText(QStringLiteral("%1    · %2s")
+    item->setText(QStringLiteral("%1  ·  %2s")
                       .arg(text,
                            QString::number(costMs / 1000.0, 'f', 1)));
     item->setData(Qt::UserRole, text);
+    item->setToolTip(text);
     history_->insertItem(0, item);
     while (history_->count() > 30) {
         delete history_->takeItem(history_->count() - 1);
@@ -410,6 +422,19 @@ bool VoiceWindow::eventFilter(QObject *watched, QEvent *event) {
         copyText(transcript_->text());
     }
     return QWidget::eventFilter(watched, event);
+}
+
+void VoiceWindow::mousePressEvent(QMouseEvent *event) {
+    // 面板空白处也能拖走：子控件（按钮/列表）各自吃掉自己的按下事件，
+    // 落到这里的就是背景。顶层窗口自己有 windowHandle()。
+    if (event->button() == Qt::LeftButton) {
+        if (auto *handle = windowHandle()) {
+            handle->startSystemMove();
+            event->accept();
+            return;
+        }
+    }
+    QWidget::mousePressEvent(event);
 }
 
 void VoiceWindow::showChatReply(const QString &text) {

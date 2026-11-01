@@ -634,12 +634,16 @@ QListWidget#voiceHistory {
 }
 
 QListWidget#voiceHistory::item {
-    padding: 5px 6px;
-    border-radius: 6px;
+    padding: 6px 8px;
+    border-radius: 8px;
 }
 
 QListWidget#voiceHistory::item:hover {
     background: @a36@;
+}
+
+QListWidget#voiceHistory::item:pressed {
+    background: @a58@;
 }
 
 /* ---------- 语音桌宠 ---------- */

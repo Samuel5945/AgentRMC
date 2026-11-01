@@ -125,6 +125,7 @@ Section "Uninstall"
     /SD IDNO IDNO keepModels
   RMDir /r "$INSTDIR\models"
 keepModels:
+  RMDir /r "$INSTDIR\themes"
   Delete "$INSTDIR\config.json"
   Delete "$INSTDIR\profiles.json"
   Delete "$INSTDIR\profiles.json.bak"

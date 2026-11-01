@@ -12,6 +12,7 @@
 #include "core/InputEngine.h"
 #include "core/ModelImport.h"
 #include "core/Presets.h"
+#include "core/ThemeManager.h"
 #include "core/Updater.h"
 #include "core/VoiceController.h"
 
@@ -98,6 +99,8 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
         QCoreApplication::applicationDirPath() + "/profiles.json");
     store_->load();
     store_->loadConfig(QCoreApplication::applicationDirPath() + "/config.json");
+    // 主题在窗口构建前应用：渲染 QSS + 载入 ui.theme 指向的主题。
+    ThemeManager::instance().init(store_.get());
     if (!pin.isEmpty()) {
         store_->setPinned(pin);
     }
@@ -165,6 +168,8 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
 
     auto *root = new QWidget;
     root->setObjectName("root");
+    // 主题背景图走 QSS background-image；plain QWidget 显式声明按样式表绘制。
+    root->setAttribute(Qt::WA_StyledBackground, true);
     setCentralWidget(root);
 
     auto *outer = new QVBoxLayout(root);

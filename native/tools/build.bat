@@ -40,4 +40,7 @@ rem Keep the native data copy across rebuilds; seed it on first build.
 if not exist "%ROOT%\native\build\Release\config.json" copy /y "%ROOT%\config.json" "%ROOT%\native\build\Release\" >nul
 if not exist "%ROOT%\native\build\Release\profiles.json" copy /y "%ROOT%\profiles.json" "%ROOT%\native\build\Release\" >nul
 
+rem Themes are loose folders next to the exe so users can drop in new ones.
+if exist "%ROOT%\themes" robocopy "%ROOT%\themes" "%ROOT%\native\build\Release\themes" /E /NFL /NDL /NJH /NJS >nul
+
 echo Done -^> native\build\Release\AgentRMCNative.exe

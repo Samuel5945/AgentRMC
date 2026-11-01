@@ -2,6 +2,7 @@
 
 #include "core/ModelImport.h"
 #include "core/Profiles.h"
+#include "core/ThemeManager.h"
 #include "core/VoiceSettings.h"
 #include "ui/AsrSettingsDialog.h"
 #include "ui/LlmSettingsDialog.h"
@@ -11,13 +12,20 @@
 #include <QCheckBox>
 #include <QComboBox>
 #include <QCoreApplication>
+#include <QDesktopServices>
+#include <QDir>
 #include <QDragEnterEvent>
 #include <QDropEvent>
 #include <QFileDialog>
 #include <QHBoxLayout>
+#include <QIcon>
+#include <QImage>
 #include <QLabel>
+#include <QPixmap>
 #include <QPushButton>
+#include <QSignalBlocker>
 #include <QStandardPaths>
+#include <QUrl>
 #include <QVBoxLayout>
 
 VoiceSettingsDialog::VoiceSettingsDialog(ProfileStore *store, QWidget *parent)
@@ -51,6 +59,62 @@ VoiceSettingsDialog::VoiceSettingsDialog(ProfileStore *store, QWidget *parent)
         QCoreApplication::applicationDirPath());
     senseDefault_ = defaults.senseVoiceDir;
     qwenDefault_ = defaults.qwen3Dir;
+
+    // 主题：切换即时生效（渲染 QSS + 广播），选择持久化在 ui.theme。
+    auto *themeRow = new QHBoxLayout;
+    auto *themeLabel = new QLabel(QString::fromUtf8("主题"));
+    themeLabel->setObjectName("muted");
+    themeLabel->setFixedWidth(98);
+    theme_ = new QComboBox;
+    theme_->setIconSize(QSize(22, 22));
+    connect(theme_, &QComboBox::currentIndexChanged, this, [this](int index) {
+        const QString id = theme_->itemData(index).toString();
+        if (!id.isEmpty()) {
+            ThemeManager::instance().setTheme(id);
+        }
+    });
+    reloadThemes();
+    auto *themeImport = new QPushButton(QString::fromUtf8("导入主题包…"));
+    themeImport->setObjectName("ghostSmall");
+    themeImport->setCursor(Qt::PointingHandCursor);
+    themeImport->setToolTip(QString::fromUtf8(
+        "选一个主题包 .zip（theme.json + pet/ + backgrounds/），"
+        "装进 themes 并立即换上；同名主题会被更新覆盖。"));
+    connect(themeImport, &QPushButton::clicked, this, [this] {
+        const QString file = QFileDialog::getOpenFileName(
+            this, QString::fromUtf8("选择主题包"),
+            QStandardPaths::writableLocation(QStandardPaths::DownloadLocation),
+            QString::fromUtf8("主题包 (*.zip)"));
+        if (file.isEmpty()) {
+            return;
+        }
+        QString error;
+        const QString id =
+            ThemeManager::instance().importThemePackage(file, &error);
+        if (id.isEmpty()) {
+            note_->setStyleSheet(QStringLiteral("color:#f85149;"));
+            note_->setText(QString::fromUtf8("导入失败：%1").arg(error));
+            return;
+        }
+        reloadThemes();
+        note_->setStyleSheet(QStringLiteral("color:#3fb950;"));
+        note_->setText(QString::fromUtf8("主题包已导入并启用。"));
+    });
+    auto *themeDir = new QPushButton(QString::fromUtf8("打开主题目录"));
+    themeDir->setObjectName("ghostSmall");
+    themeDir->setCursor(Qt::PointingHandCursor);
+    themeDir->setToolTip(QString::fromUtf8(
+        "每个主题一个文件夹（theme.json + pet 状态帧 + backgrounds）。"
+        "把新主题文件夹丢进去，重开设置就能选。"));
+    connect(themeDir, &QPushButton::clicked, this, [] {
+        QDir().mkpath(ThemeManager::themesRoot());
+        QDesktopServices::openUrl(QUrl::fromLocalFile(ThemeManager::themesRoot()));
+    });
+    themeRow->addWidget(themeLabel);
+    themeRow->addWidget(theme_, 1);
+    themeRow->addWidget(themeImport);
+    themeRow->addWidget(themeDir);
+    root->addLayout(themeRow);
 
     auto *backendRow = new QHBoxLayout;
     auto *backendLabel = new QLabel(QString::fromUtf8("识别方式"));
@@ -292,6 +356,34 @@ VoiceSettingsDialog::VoiceSettingsDialog(ProfileStore *store, QWidget *parent)
         button->setFocusPolicy(Qt::NoFocus);
     }
     refreshStatus();
+}
+
+void VoiceSettingsDialog::reloadThemes() {
+    const QSignalBlocker block(theme_);
+    theme_->clear();
+    const ThemeManager &themes = ThemeManager::instance();
+    for (const ThemeInfo &info : themes.themes()) {
+        QIcon icon;
+        if (!info.preview.isEmpty()) {
+            const QImage art = ThemeManager::cachedImage(info.preview);
+            if (!art.isNull()) {
+                icon = QIcon(QPixmap::fromImage(art.scaled(
+                    44, 44, Qt::KeepAspectRatio, Qt::SmoothTransformation)));
+            }
+        }
+        theme_->addItem(icon, info.displayName, info.id);
+        const int index = theme_->count() - 1;
+        if (!info.valid) {
+            theme_->setItemText(
+                index, QStringLiteral("%1（清单损坏）").arg(info.displayName));
+            theme_->setItemData(index,
+                                QStringLiteral("解析失败：%1").arg(info.error),
+                                Qt::ToolTipRole);
+            theme_->setItemData(index, false, Qt::UserRole - 1);  // 置灰
+        }
+    }
+    const int index = theme_->findData(themes.currentId());
+    theme_->setCurrentIndex(index >= 0 ? index : 0);
 }
 
 void VoiceSettingsDialog::refreshStatus() {

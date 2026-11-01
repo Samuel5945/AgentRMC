@@ -31,6 +31,8 @@ public:
     const QJsonObject &config() const { return config_; }
     bool uiBool(const QString &key, bool fallback = false) const;
     bool setUiBool(const QString &key, bool value);
+    QString uiString(const QString &key, const QString &fallback = QString()) const;
+    bool setUiString(const QString &key, const QString &value);
     QJsonObject voiceConfig() const;
     bool updateVoice(const QJsonObject &patch);
     bool updateMediaVoice(const QJsonObject &patch);

@@ -175,6 +175,25 @@ bool ProfileStore::setUiBool(const QString &key, bool value) {
     return true;
 }
 
+QString ProfileStore::uiString(const QString &key,
+                               const QString &fallback) const {
+    const QJsonObject ui = config_.value("ui").toObject();
+    const QJsonValue value = ui.value(key);
+    return value.isString() ? value.toString() : fallback;
+}
+
+bool ProfileStore::setUiString(const QString &key, const QString &value) {
+    QJsonObject root = config_;
+    QJsonObject ui = root.value("ui").toObject();
+    ui[key] = value;
+    root["ui"] = ui;
+    if (!saveConfig(root)) {
+        return false;
+    }
+    config_ = root;
+    return true;
+}
+
 QJsonObject ProfileStore::voiceConfig() const {
     return config_.value("voice").toObject();
 }

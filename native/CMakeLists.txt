@@ -52,6 +52,8 @@ qt_add_executable(AgentRMCNative
     src/core/VoiceController.h
     src/core/TtsClient.cpp
     src/core/TtsClient.h
+    src/core/ThemeManager.cpp
+    src/core/ThemeManager.h
     src/ui/AppPage.cpp
     src/ui/AppPage.h
     src/ui/AsrSettingsDialog.cpp
@@ -78,6 +80,8 @@ qt_add_executable(AgentRMCNative
     src/ui/VoiceSettingsDialog.h
     src/ui/VoicePet.cpp
     src/ui/VoicePet.h
+    src/ui/PetSprite.cpp
+    src/ui/PetSprite.h
     src/ui/VoiceWindow.cpp
     src/ui/VoiceWindow.h
     resources/app.qrc
@@ -184,6 +188,23 @@ add_executable(AgentRMCVoiceTest
 target_include_directories(AgentRMCVoiceTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(AgentRMCVoiceTest PRIVATE Qt6::Core)
 target_compile_options(AgentRMCVoiceTest PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
+
+add_executable(AgentRMCThemeTest
+    tests/theme_test.cpp
+    src/core/ThemeManager.cpp
+    src/core/ThemeManager.h
+    src/core/Profiles.cpp
+    src/core/Profiles.h
+    src/core/Presets.cpp
+    src/core/Presets.h
+    src/core/AppLauncher.cpp
+    src/core/AppLauncher.h
+    src/core/PinyinInitials.cpp
+    src/core/PinyinInitials.h
+)
+target_include_directories(AgentRMCThemeTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(AgentRMCThemeTest PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets)
+target_compile_options(AgentRMCThemeTest PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
 
 add_executable(AgentRMCAudioTest
     tests/m5_audio_cli.cpp

@@ -1,0 +1,67 @@
+{
+  "id": "xiaoai-whale",
+  "displayName": "鲸鱼娘",
+  "author": "",
+  "character": {
+    "name": "鲸鱼娘",
+    "persona": "你是「鲸鱼娘」，AgentRMC 的语音桌宠，一只化身女仆的温柔鲸鱼娘。你性格开朗体贴，说话简洁口语化，回答通常不超过两三句话，适合语音朗读，喜欢用海洋、鲸鱼和深海打比方。用户让你执行本机操作时，用平实的语言汇报结果并主动给出下一步建议；遇到不确定的事情先向用户确认再动手。全程使用中文交流，除非用户使用其他语言。"
+  },
+  "palette": {},
+  "pet": {
+    "canvas": 512,
+    "display_size": 84,
+    "ring": true,
+    "states": {
+      "idle": {
+        "frames": [
+          "pet/idle_0.png",
+          "pet/idle_1.png"
+        ],
+        "fps": 2,
+        "bob": 3,
+        "tilt": 2
+      },
+      "listening": {
+        "frames": [
+          "pet/listening_0.png",
+          "pet/listening_1.png"
+        ],
+        "fps": 2,
+        "bob": 3,
+        "tilt": 2
+      },
+      "recording": {
+        "frames": [
+          "pet/recording_0.png",
+          "pet/recording_1.png"
+        ],
+        "fps": 2,
+        "bob": 3,
+        "tilt": 2
+      },
+      "transcribing": {
+        "frames": [
+          "pet/transcribing_0.png",
+          "pet/transcribing_1.png"
+        ],
+        "fps": 2,
+        "bob": 3,
+        "tilt": 2
+      },
+      "chat": {
+        "frames": [
+          "pet/chat_0.png",
+          "pet/chat_1.png"
+        ],
+        "fps": 2,
+        "bob": 3,
+        "tilt": 2
+      }
+    }
+  },
+  "backgrounds": {
+    "main": "backgrounds/main.png",
+    "panel": "backgrounds/panel.png",
+    "dim": 0.35
+  }
+}

@@ -29,6 +29,7 @@ protected:
 private:
     void save();
     void refreshStatus();
+    void reloadThemes();
     // 让小白只挑一个模型包：解压、找模型目录、装到程序自己的 models\ 下。
     void importModel(bool senseVoice);
     void importFromPath(const QString &file, const QString &expectedBackend);
@@ -36,6 +37,7 @@ private:
     ProfileStore *store_ = nullptr;
     QString senseDefault_;
     QString qwenDefault_;
+    QComboBox *theme_ = nullptr;
     QComboBox *backend_ = nullptr;
     QComboBox *language_ = nullptr;
     QComboBox *kbHotkey_ = nullptr;

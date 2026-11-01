@@ -15,6 +15,7 @@
 #include "core/AsrClient.h"
 #include "core/LlmClient.h"
 #include "core/Profiles.h"
+#include "core/ThemeManager.h"
 #include "core/TtsClient.h"
 #include "core/VoiceController.h"
 #include "ui/GuideDialog.h"
@@ -27,11 +28,8 @@ int main(int argc, char *argv[]) {
     QApplication::setApplicationName("AgentRMCNative");
     QApplication::setOrganizationName("LIG");
     QApplication::setApplicationVersion(AGENTRMC_VERSION);
-
-    QFile qss(":/style.qss");
-    if (qss.open(QIODevice::ReadOnly | QIODevice::Text)) {
-        app.setStyleSheet(QString::fromUtf8(qss.readAll()));
-    }
+    // QSS 由 ThemeManager 渲染 @token@ 后再 setStyleSheet（init 时应用），
+    // 这里绝不能直接加载 :/style.qss——那是带占位符的模板。
 
     QString shot;
     QString pin;
@@ -99,6 +97,7 @@ int main(int argc, char *argv[]) {
                            "/profiles.json");
         store.load();
         store.loadConfig(QCoreApplication::applicationDirPath() + "/config.json");
+        ThemeManager::instance().init(&store);
         VoiceSettingsDialog dialog(&store);
         dialog.setAttribute(Qt::WA_DontShowOnScreen);
         dialog.show();
@@ -112,6 +111,11 @@ int main(int argc, char *argv[]) {
     }
 
     if (!guideShot.isEmpty()) {
+        ProfileStore store(QCoreApplication::applicationDirPath() +
+                           "/profiles.json");
+        store.load();
+        store.loadConfig(QCoreApplication::applicationDirPath() + "/config.json");
+        ThemeManager::instance().init(&store);
         GuideDialog dialog;
         if (guideStep >= 0) {
             dialog.showStep(guideStep);
@@ -133,6 +137,7 @@ int main(int argc, char *argv[]) {
                            "/profiles.json");
         store.load();
         store.loadConfig(QCoreApplication::applicationDirPath() + "/config.json");
+        ThemeManager::instance().init(&store);
         VoiceController voice(&store);
         VoicePet pet(&store, &voice);
         pet.setAttribute(Qt::WA_DontShowOnScreen);
@@ -210,6 +215,7 @@ int main(int argc, char *argv[]) {
                            "/profiles.json");
         store.load();
         store.loadConfig(QCoreApplication::applicationDirPath() + "/config.json");
+        ThemeManager::instance().init(&store);
         TtsSettingsDialog dialog(&store);
         dialog.setAttribute(Qt::WA_DontShowOnScreen);
         dialog.show();

@@ -45,3 +45,6 @@ native/third_party/
 
 # ---------- ZCode 工作区 ----------
 .zcode/
+
+# ---------- 主题生成候选帧（人工挑选素材，不入库）----------
+themes-candidate/

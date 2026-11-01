@@ -4,6 +4,7 @@
 #include "TtsSettingsDialog.h"
 #include "VoiceSettingsDialog.h"
 #include "core/Profiles.h"
+#include "core/ThemeManager.h"
 #include "core/VoiceController.h"
 #include "core/VoiceSettings.h"
 
@@ -11,8 +12,10 @@
 #include <QClipboard>
 #include <QCloseEvent>
 #include <QHBoxLayout>
+#include <QImage>
 #include <QMouseEvent>
 #include <QPainter>
+#include <QPainterPath>
 #include <QSignalBlocker>
 #include <QToolButton>
 #include <QVBoxLayout>
@@ -351,6 +354,8 @@ VoiceWindow::VoiceWindow(VoiceController *voice, ProfileStore *store,
         }
         refreshHint();
     });
+    connect(&ThemeManager::instance(), &ThemeManager::themeChanged, this,
+            [this](const Theme &) { update(); });
     connect(voice_, &VoiceController::eventReady, this,
             [this](const QString &kind, const QString &text) {
                 if (kind == QStringLiteral("error")) {
@@ -413,8 +418,38 @@ void VoiceWindow::paintEvent(QPaintEvent *event) {
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing, true);
     const QRectF box = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
+
+    // 主题带面板背景就先铺图再压暗，保住文字可读；classic 走纯色底。
+    const Theme &theme = ThemeManager::instance().current();
+    const QImage art = ThemeManager::cachedImage(theme.panelBackground);
+    if (!art.isNull()) {
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(QColor(0x0b, 0x0e, 0x14));
+        painter.drawRoundedRect(box, 12, 12);
+        painter.save();
+        QPainterPath clip;
+        clip.addRoundedRect(rect(), 12, 12);
+        painter.setClipPath(clip);
+        QImage scaled = art.scaled(size(), Qt::KeepAspectRatioByExpanding,
+                                   Qt::SmoothTransformation);
+        painter.drawImage(
+            QRect((width() - scaled.width()) / 2,
+                  (height() - scaled.height()) / 2, scaled.width(),
+                  scaled.height()),
+            scaled);
+        painter.setOpacity(theme.dim);
+        painter.setBrush(QColor(0x0b, 0x0e, 0x14));
+        painter.drawRoundedRect(box, 12, 12);
+        painter.restore();
+        painter.setOpacity(1.0);
+    } else {
+        painter.setPen(QPen(QColor(255, 255, 255, 22), 1.0));
+        painter.setBrush(QColor(0x0b, 0x0e, 0x14));
+        painter.drawRoundedRect(box, 12, 12);
+        return;
+    }
     painter.setPen(QPen(QColor(255, 255, 255, 22), 1.0));
-    painter.setBrush(QColor(0x0b, 0x0e, 0x14));
+    painter.setBrush(Qt::NoBrush);
     painter.drawRoundedRect(box, 12, 12);
 }
 

@@ -2,17 +2,22 @@
 
 #include "core/LlmClient.h"
 #include "core/Profiles.h"
+#include "core/ThemeManager.h"
 #include "core/TtsClient.h"
 #include "core/VoiceController.h"
 #include "core/VoiceSettings.h"
 #include "ui/LlmSettingsDialog.h"
+#include "ui/PetSprite.h"
 
 #include <QApplication>
 #include <QClipboard>
 #include <QColor>
 #include <QContextMenuEvent>
 #include <QCursor>
+#include <QDesktopServices>
+#include <QDir>
 #include <QEnterEvent>
+#include <QFileDialog>
 #include <QGuiApplication>
 #include <QHBoxLayout>
 #include <QHideEvent>
@@ -23,8 +28,10 @@
 #include <QPushButton>
 #include <QScreen>
 #include <QShowEvent>
+#include <QStandardPaths>
 #include <QStringList>
 #include <QTimer>
+#include <QUrl>
 #include <QVBoxLayout>
 #include <QVector>
 
@@ -279,6 +286,17 @@ VoicePet::VoicePet(ProfileStore *store, VoiceController *voice, QWidget *parent)
     chatMode_ = store_->uiBool(QStringLiteral("pet_chat"), false);
     voice_->setChatMode(chatMode_);
 
+    // 精灵形象：主题有帧就播帧+程序动画，没有就画原来的圆球。
+    sprite_ = new PetSprite(this);
+    sprite_->applyTheme(ThemeManager::instance().current());
+    connect(&ThemeManager::instance(), &ThemeManager::themeChanged, this,
+            [this](const Theme &theme) {
+                sprite_->applyTheme(theme);
+                sprite_->setState(spriteState());
+                refreshState();
+                update();
+            });
+
     collapseTimer_ = new QTimer(this);
     collapseTimer_->setSingleShot(true);
     connect(collapseTimer_, &QTimer::timeout, this, [this] {
@@ -311,6 +329,7 @@ VoicePet::VoicePet(ProfileStore *store, VoiceController *voice, QWidget *parent)
                     detail.startsWith(QString::fromUtf8("打不开"))) {
                     speak(detail);
                 }
+                sprite_->setState(spriteState());
             });
     connect(voice_, &VoiceController::transcribed, this,
             [this](const QString &text, int costMs) {
@@ -476,9 +495,7 @@ void VoicePet::askLlm(const QString &text) {
     QJsonArray messages;
     messages.append(QJsonObject{
         {"role", "system"},
-        {"content", options.llmApiSystem.isEmpty()
-                        ? QString::fromUtf8(kDefaultChatSystem)
-                        : options.llmApiSystem}});
+        {"content", chatPersona()}});
     for (const QJsonValue &entry : chatHistory_) {
         messages.append(entry);
     }
@@ -492,6 +509,30 @@ void VoicePet::openLlmSettings() {
             [this] { applyLlmOptions(); });
     dialog->exec();
     dialog->deleteLater();
+}
+
+void VoicePet::importThemePackage() {
+    // 用系统文件对话框（同模型导入的理由：Qt 自绘的在深色主题下看不清）。
+    const QString file = QFileDialog::getOpenFileName(
+        this, QString::fromUtf8("选择主题包"),
+        QStandardPaths::writableLocation(QStandardPaths::DownloadLocation),
+        QString::fromUtf8("主题包 (*.zip)"));
+    if (file.isEmpty()) {
+        return;
+    }
+    QString error;
+    const QString id = ThemeManager::instance().importThemePackage(file, &error);
+    if (id.isEmpty()) {
+        bubbleOnly(QString::fromUtf8("导入失败：%1").arg(error), 6000);
+        return;
+    }
+    ThemeManager::instance().setTheme(id);  // 导入即换上
+    for (const ThemeInfo &info : ThemeManager::instance().themes()) {
+        if (info.id == id) {
+            speak(QString::fromUtf8("已导入并换上「%1」").arg(info.displayName));
+            return;
+        }
+    }
 }
 
 void VoicePet::applyTtsOptions() {
@@ -566,6 +607,25 @@ void VoicePet::paintEvent(QPaintEvent *event) {
         const double r = radius + 5;
         painter.drawArc(QRectF(center.x() - r, center.y() - r, r * 2, r * 2),
                         -(phase_ % 360) * 16, 100 * 16);
+    }
+
+    // 主题精灵：帧 + 程序浮动/摆动；没有帧就走下面的圆球画法。
+    QPixmap frame;
+    qreal rotation = 0;
+    qreal dy = 0;
+    if (sprite_ != nullptr && sprite_->current(&frame, &rotation, &dy)) {
+        painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
+        painter.save();
+        painter.translate(center.x(), center.y() + dy);
+        painter.rotate(rotation);
+        const QSize scaled =
+            frame.size().scaled(rect().size(), Qt::KeepAspectRatio);
+        painter.drawPixmap(
+            QRect(-scaled.width() / 2, -scaled.height() / 2, scaled.width(),
+                  scaled.height()),
+            frame);
+        painter.restore();
+        return;
     }
 
     painter.setPen(Qt::NoPen);
@@ -721,6 +781,33 @@ void VoicePet::contextMenuEvent(QContextMenuEvent *event) {
     tts->setEnabled(!voice_->options().ttsApiKey.isEmpty());
     connect(tts, &QAction::toggled, this,
             [this](bool on) { setTtsEnabled(on); });
+    menu.addSeparator();
+    // 主题子菜单：形象/配色随时切，还能直接导入主题包（.zip）。
+    QMenu *themeMenu = menu.addMenu(QString::fromUtf8("主题"));
+    const Theme &active = ThemeManager::instance().current();
+    for (const ThemeInfo &info : ThemeManager::instance().themes()) {
+        QAction *entry = themeMenu->addAction(info.displayName);
+        entry->setCheckable(true);
+        entry->setChecked(active.id == info.id);
+        entry->setEnabled(info.valid);
+        if (!info.valid) {
+            entry->setToolTip(info.error);
+        }
+        connect(entry, &QAction::triggered, this,
+                [this, info] { ThemeManager::instance().setTheme(info.id); });
+    }
+    themeMenu->addSeparator();
+    QAction *themeImport = themeMenu->addAction(
+        QString::fromUtf8("导入主题包…"));
+    connect(themeImport, &QAction::triggered, this,
+            [this] { importThemePackage(); });
+    QAction *themeDir = themeMenu->addAction(
+        QString::fromUtf8("打开主题目录"));
+    connect(themeDir, &QAction::triggered, this, [this] {
+        QDir().mkpath(ThemeManager::themesRoot());
+        QDesktopServices::openUrl(
+            QUrl::fromLocalFile(ThemeManager::themesRoot()));
+    });
     menu.addSeparator();
     QAction *full = menu.addAction(QString::fromUtf8("显示主界面"));
     connect(full, &QAction::triggered, this, [this] { openFullUi(); });
@@ -938,5 +1025,32 @@ void VoicePet::tick() {
     }
     phase_ = (phase_ + 1) % 100000;
     level_ = recording_ ? voice_->micLevel() : qMax(0.0, level_ - 0.08);
+    sprite_->advance(50);
     update();
+}
+
+QString VoicePet::chatPersona() const {
+    const VoiceOptions options = voice_->options();
+    if (!options.llmApiSystem.isEmpty()) {
+        return options.llmApiSystem;
+    }
+    // 名字跟主题走：主题带了人设就用主题的（换主题 = 换角色）。
+    const QString persona = ThemeManager::instance().current().persona;
+    return persona.isEmpty() ? QString::fromUtf8(kDefaultChatSystem) : persona;
+}
+
+QString VoicePet::spriteState() const {
+    if (recording_) {
+        return QStringLiteral("recording");
+    }
+    if (transcribing_) {
+        return QStringLiteral("transcribing");
+    }
+    if (chatMode_) {
+        return QStringLiteral("chat");
+    }
+    if (listening_) {
+        return QStringLiteral("listening");
+    }
+    return QStringLiteral("idle");
 }

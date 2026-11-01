@@ -107,6 +107,9 @@ QHash<QString, QString> ThemeManager::classicPalette() {
     m_.insert(QStringLiteral("bg"), QStringLiteral("#0b0e14"));
     m_.insert(QStringLiteral("bubble.bg"), QStringLiteral("rgba(15, 20, 29, 242)"));
     m_.insert(QStringLiteral("card.bg"), QStringLiteral("#121722"));
+    // 卡片渐变第二停：主题想给卡片做半透明时单独改它；raised 还被
+    // QMenu/QToolTip/下拉弹出层当顶层窗口底色用，不能跟着变透明。
+    m_.insert(QStringLiteral("card.bg2"), QStringLiteral("#161d2a"));
     m_.insert(QStringLiteral("danger"), QStringLiteral("#e5484d"));
     m_.insert(QStringLiteral("dialog.bg"), QStringLiteral("#0f141d"));
     m_.insert(QStringLiteral("faint"), QStringLiteral("#46505e"));
@@ -116,6 +119,7 @@ QHash<QString, QString> ThemeManager::classicPalette() {
     m_.insert(QStringLiteral("line"), QStringLiteral("#4a5568"));
     m_.insert(QStringLiteral("muted"), QStringLiteral("#8b949e"));
     m_.insert(QStringLiteral("muted.2"), QStringLiteral("#5b6472"));
+    m_.insert(QStringLiteral("msgbox.bg"), QStringLiteral("#121722"));
     m_.insert(QStringLiteral("on.accent"), QStringLiteral("white"));
     m_.insert(QStringLiteral("raised"), QStringLiteral("#161d2a"));
     m_.insert(QStringLiteral("text"), QStringLiteral("#e6edf3"));

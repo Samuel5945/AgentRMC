@@ -10,6 +10,10 @@
 当前实现是 **C++/Qt 6 原生版**（`native/`，v0.2.0；按键映射不接 LLM，动作直接交给 Qoder / WorkBuddy 服务端；只有桌宠对话模式会调用你在「对话设置」里自配的 LLM）。
 Python 版留在 `legacy-python` 分支，两版读写同一套 `config.json` / `profiles.json`。
 
+![AgentRMC · 经典主题与鲸鱼娘主题](assets/readme-showcase.gif)
+
+*经典主题 ⇄ 鲸鱼娘主题：形象、背景、音色整套切换，主题包即拖即用（见「主题系统与自定义应用」）。*
+
 ```
 遥控器 → HID → Raw Input ─┬→ 按键 → 场景 Profile → 动作（按键/滚动/鼠标/模式/启动程序）
 蓝牙耳机 → AVRCP 注入键 ──┘
@@ -20,7 +24,7 @@ Python 版留在 `legacy-python` 分支，两版读写同一套 `config.json` / 
 
 ## 下载
 
-不想自己构建的话，装这两个文件就够了（安装包约 14MB，模型包约 159MB）：
+不想自己构建的话，装这两个文件就够了（安装包约 20MB，模型包约 159MB）：
 
 | 网盘 | 链接 |
 |---|---|
@@ -349,6 +353,31 @@ native\build\Release\AgentRMCAsrTest.exe native\models\sensevoice\test_wavs\zh.w
 > 无头测试全绿不等于输入链路对：耳机键这类只在真机出现的差异，用
 > `rc_probe/media_probe.py`（只读记录低层钩子 + Raw Input）配
 > `rc_probe/sim_avrcp.py`（注入一帧带 `INJ`、只发 keydown 的 `0xB3`）做 A/B 复现。
+
+## 主题系统与自定义应用（v0.2.0）
+
+界面形象、背景、配色、音色是一套可切换的「主题」，入口在 **语音设置 → 主题** 下拉
+和 **桌宠右键 → 主题**，切换即时生效：
+
+- **经典**：默认深色配色 + 代码绘制的圆球桌宠；
+- **鲸鱼娘**：Q 版鲸鱼娘桌宠（idle / 监听 / 录音 / 转写 / 对话五个状态各 2 帧动画，
+  萌系治愈少女音）、深海背景 + 半透明卡片、专属人设——对话模式里她就是「鲸鱼娘」。
+
+音色跟随主题：主题可自带 `voice.style` 音色描述（鲸鱼娘=萌系治愈少女音），你在
+TTS 设置里自己写的「音色描述」优先级更高。音色下拉支持 Chloe（默认）/ 跟随主题 /
+自定义手输，「音色描述」支持文字定制嗓音（试听即时验证）。
+
+**主题包**就是一个文件夹：`theme.json`（清单+配色+人设+音色）+ `pet/` 状态帧 +
+`backgrounds/` 背景 + `preview.png`。把文件夹丢进程序目录的 `themes\`，或
+「桌宠右键 → 主题 → 导入主题包…」选一个 .zip 自动装好；同名主题 = 更新。
+生成新主题形象可以用 `tools/theme/gen_theme.py`（ComfyUI + Qwen-Image 2.1
+参考图直出透明 PNG，`character_backgrounds.py` 生成带角色的背景）。
+
+**自定义应用**：「应用」页 → 添加应用，填名称和一个 exe/快捷方式/网址路径，
+说「打开 名称」即可启动（可配别名），按键映射的「打开 xx」动作下拉也会自动带上。
+内置表含 Chrome / Edge / Qoder / WorkBuddy / DeepSeek / Codex / ZCode / 剪映 /
+PS / PR / AI / OpenSquilla 等。对话模式不再随桌宠收起退出：桌宠收起后回复仍以
+语音给出，文字落语音面板与事件流。
 
 ## 语音打开应用（v0.2.0）
 

@@ -5,6 +5,7 @@
 #include "core/VoiceSettings.h"
 
 #include <QComboBox>
+#include <QCoreApplication>
 #include <QDesktopServices>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -158,7 +159,22 @@ LlmSettingsDialog::LlmSettingsDialog(ProfileStore *store, QWidget *parent)
 }
 
 void LlmSettingsDialog::test() {
-    llm_->setOptions(baseUrl_->text(), apiKey_->text(), model_->currentText(),
+    // 和真实对话同一条回退链：Key/Base URL 留空 = 沿用语音反馈（TTS）的，
+    // 不然 TTS 那边填了 Key、这里留空时点测试会误报「还差配置」。
+    QString baseUrl = baseUrl_->text().trimmed();
+    QString apiKey = apiKey_->text().trimmed();
+    if (baseUrl.isEmpty() || apiKey.isEmpty()) {
+        const VoiceOptions opts = resolveVoiceOptions(
+            store_->config(), QJsonObject{},
+            QCoreApplication::applicationDirPath());
+        if (baseUrl.isEmpty()) {
+            baseUrl = opts.llmApiBaseUrl;
+        }
+        if (apiKey.isEmpty()) {
+            apiKey = opts.llmApiKey;
+        }
+    }
+    llm_->setOptions(baseUrl, apiKey, model_->currentText(),
                      system_->text());
     if (!llm_->ready()) {
         note_->setStyleSheet(QStringLiteral("color:#d29922;"));

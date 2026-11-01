@@ -246,6 +246,7 @@ VoicePet::VoicePet(ProfileStore *store, VoiceController *voice, QWidget *parent)
     applyTtsOptions();
     connect(tts_, &TtsClient::failed, this, [this](const QString &error) {
         // 余额不足这类错误每次会话只提示一次，别在每次反馈时刷气泡。
+        emit voiceFeedbackError(error);
         if (ttsErrorShown_) {
             return;
         }
@@ -406,11 +407,13 @@ void VoicePet::presentIfEnabled() {
 }
 
 void VoicePet::speak(const QString &text, int durationMs) {
-    if (text.isEmpty() || !isVisible()) {
+    if (text.isEmpty()) {
         return;
     }
-    bubbleOnly(text, durationMs);
-    // TTS 异步合成，好了直接喇叭出声；没配 key 或关了开关就只有气泡。
+    // 气泡只在桌宠可见时出；语音反馈是声音，桌宠收起也照说。
+    if (isVisible()) {
+        bubbleOnly(text, durationMs);
+    }
     if (tts_ != nullptr && tts_->ready()) {
         tts_->speak(text);
     }
@@ -418,10 +421,13 @@ void VoicePet::speak(const QString &text, int durationMs) {
 
 void VoicePet::speakAs(const QString &text) {
     // 对话回复专用：tts.chat_voice 非空时用独立音色，空 = 跟随语音反馈。
-    if (text.isEmpty() || !isVisible()) {
+    if (text.isEmpty()) {
         return;
     }
-    bubbleOnly(text, 0);
+    if (isVisible()) {
+        bubbleOnly(text, 0);
+    }
+    emit chatReplied(text);  // 桌宠收起时回复文本落语音面板/事件流
     if (tts_ != nullptr && tts_->ready()) {
         tts_->speak(text, voice_->options().ttsChatVoice);
     }
@@ -704,9 +710,8 @@ void VoicePet::hideEvent(QHideEvent *event) {
     if (tts_ != nullptr) {
         tts_->stop();  // 桌宠收起时别让声音悬在半空
     }
-    if (chatMode_) {
-        setChatMode(false);  // 对话跟着桌宠走，收起即退出（会持久化）
-    }
+    // 对话模式不再跟着桌宠收起退出：回复照常语音给出（语音面板/事件流可见），
+    // 开关在语音面板「对话」按钮和桌宠右键菜单，用户显式控制。
     collapseCard();
 }
 

@@ -257,6 +257,19 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
             &MainWindow::showVoicePanel);
     connect(voicePet_, &VoicePet::listenToggleRequested, this,
             &MainWindow::toggleListening);
+    // 桌宠收起时对话回复照常给出：语音面板转写框 + 事件流。
+    connect(voicePet_, &VoicePet::chatReplied, this, [this](const QString &text) {
+        if (voiceWindow_ != nullptr) {
+            voiceWindow_->showChatReply(text);
+        }
+        appendEvent(QStringLiteral("voice"), QString(), QString(),
+                    QString::fromUtf8("鲸鱼娘：%1").arg(text), 0);
+    });
+    connect(voicePet_, &VoicePet::voiceFeedbackError, this,
+            [this](const QString &error) {
+                appendEvent(QStringLiteral("error"), QString(), QString(),
+                            QString::fromUtf8("语音反馈失败：%1").arg(error), 0);
+            });
     connect(voicePet_, &VoicePet::hiddenByUser, this, [this] {
         if (petAction_ != nullptr) {
             const QSignalBlocker block(petAction_);

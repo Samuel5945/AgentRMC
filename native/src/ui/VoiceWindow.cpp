@@ -412,6 +412,11 @@ bool VoiceWindow::eventFilter(QObject *watched, QEvent *event) {
     return QWidget::eventFilter(watched, event);
 }
 
+void VoiceWindow::showChatReply(const QString &text) {
+    transcript_->setText(QString::fromUtf8("鲸鱼娘：%1").arg(text));
+    pushHistory(text, 0);
+}
+
 void VoiceWindow::paintEvent(QPaintEvent *event) {
     Q_UNUSED(event);
     // 顶层透明窗口的 QSS 背景不可靠，照 Toast 的办法自己画圆角底。

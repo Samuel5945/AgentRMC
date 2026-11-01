@@ -63,6 +63,9 @@ signals:
     void panelRequested();
     void listenToggleRequested();
     void hiddenByUser();
+    // 对话模式的一条回复（桌宠可见时有气泡，收起时靠它落到面板/事件流）。
+    void chatReplied(const QString &text);
+    void voiceFeedbackError(const QString &error);
 
 protected:
     void paintEvent(QPaintEvent *event) override;

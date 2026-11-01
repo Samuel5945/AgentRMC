@@ -121,7 +121,8 @@ LlmSettingsDialog::LlmSettingsDialog(ProfileStore *store, QWidget *parent)
 
     note_ = new QLabel(QString::fromUtf8(
         "右键桌宠开「对话模式」后：说话 → 转写 → 模型回答 → TTS 念出来，"
-        "回复不再粘贴到输入框。桌宠收起即退出对话模式。"));
+        "回复不再粘贴到输入框。对话开关在语音主界面「对话」按钮和桌宠右键，"
+        "桌宠收起后回复仍会用语音给出（文字落语音面板/事件流）。"));
     note_->setObjectName("dialogNote");
     note_->setWordWrap(true);
     root->addWidget(note_);

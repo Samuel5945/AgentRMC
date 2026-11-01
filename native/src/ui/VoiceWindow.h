@@ -36,6 +36,10 @@ protected:
     void paintEvent(QPaintEvent *event) override;
     bool eventFilter(QObject *watched, QEvent *event) override;
 
+public:
+    // 桌宠收起时对话回复的落点：转写框显示 + 进「最近」历史。
+    void showChatReply(const QString &text);
+
 private:
     void copyText(const QString &text);
     void pushHistory(const QString &text, int costMs);

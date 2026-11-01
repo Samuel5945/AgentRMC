@@ -24,6 +24,7 @@ signals:
 private:
     void save();
     void preview();
+    QString resolvedVoiceName() const;
 
     ProfileStore *store_ = nullptr;
     QCheckBox *enabled_ = nullptr;

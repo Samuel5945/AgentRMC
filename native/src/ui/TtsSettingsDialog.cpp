@@ -211,9 +211,19 @@ TtsSettingsDialog::TtsSettingsDialog(ProfileStore *store, QWidget *parent)
     });
 }
 
+QString TtsSettingsDialog::resolvedVoiceName() const {
+    // 预设项的显示文案（「Chloe（默认）」）不是真实音色名，真实名在 userData；
+    // 自定义手输的项没有 data，取输入文本本身。
+    const QString data = voice_->currentData().toString();
+    if (!data.isEmpty() && data != QStringLiteral("@theme")) {
+        return data;
+    }
+    return voice_->currentText().trimmed();
+}
+
 void TtsSettingsDialog::preview() {
     // 试听直接用当前选中的输出设备，保存之前就能确认耳机里有没有声。
-    QString voiceName = voice_->currentText().trimmed();
+    QString voiceName = resolvedVoiceName();
     QString style = styleEdit_->text();
     if (voice_->currentData().toString() == QStringLiteral("@theme")) {
         voiceName = QStringLiteral("Chloe");
@@ -243,10 +253,11 @@ void TtsSettingsDialog::save() {
     if (voice_->currentData().toString() == QStringLiteral("@theme")) {
         styleEdit_->clear();  // 跟随主题：不落自定义描述
     }
-    if (voice_->currentText().trimmed().isEmpty()) {
+    const QString resolved = resolvedVoiceName();
+    if (resolved.isEmpty()) {
         patch.remove("voice");
     } else {
-        patch["voice"] = voice_->currentText().trimmed();
+        patch["voice"] = resolved;
     }
     if (styleEdit_->text().trimmed().isEmpty()) {
         patch.remove("style");

@@ -29,7 +29,8 @@ public:
 
     // 播放整段 WAV；deviceName 为空或找不到时退回系统默认（WAVE_MAPPER）。
     // 返回 false = 起播失败（调用方可退回 PlaySound）。
-    bool play(const QByteArray &wav, const QString &deviceName);
+    bool play(const QByteArray &wav, const QString &deviceName,
+              QString *error = nullptr);
     void stop();
 
 private:

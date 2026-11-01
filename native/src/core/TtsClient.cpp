@@ -79,11 +79,23 @@ void TtsClient::speak(const QString &text,
     connect(reply, &QNetworkReply::finished, this, [this, reply] {
         reply->deleteLater();
         busy_ = false;
+        const QByteArray bodyBytes = reply->readAll();
         if (reply->error() != QNetworkReply::NoError) {
-            emit failed(reply->errorString());
+            // 4xx 把服务器的具体原因带上（无效音色名/额度不足一目了然）。
+            const QString serverMessage =
+                QJsonDocument::fromJson(bodyBytes)
+                    .object()
+                    .value("error")
+                    .toObject()
+                    .value("message")
+                    .toString();
+            emit failed(serverMessage.isEmpty()
+                            ? reply->errorString()
+                            : QStringLiteral("%1（%2）").arg(reply->errorString(),
+                                                            serverMessage));
             return;
         }
-        const QJsonObject message = QJsonDocument::fromJson(reply->readAll())
+        const QJsonObject message = QJsonDocument::fromJson(bodyBytes)
                                         .object()
                                         .value("choices")
                                         .toArray()
@@ -103,19 +115,18 @@ void TtsClient::speak(const QString &text,
 }
 
 void TtsClient::play(const QByteArray &wav) {
-    // 指定了输出设备就走 waveOut 直连（切耳机用）；起不来再退回系统默认。
-    if (!outputDevice_.isEmpty() &&
-        audio_.play(wav, outputDevice_)) {
+    // 统一走 waveOut（空设备名 = WAVE_MAPPER 系统默认）：失败有错误码可报；
+    // PlaySound 的失败是静默的，出了问题无从排查。
+    QString error;
+    if (!audio_.play(wav, outputDevice_, &error)) {
+        emit failed(error.isEmpty() ? QStringLiteral("音频播放失败") : error);
         return;
     }
-    // 换新音频会自然顶掉上一段；缓冲留在成员里保证异步播放期间内存有效。
+    // 缓冲留在成员里保证异步播放期间内存有效。
     playing_ = wav;
-    PlaySoundW(reinterpret_cast<LPCWSTR>(playing_.constData()), nullptr,
-               SND_MEMORY | SND_ASYNC | SND_NODEFAULT);
 }
 
 void TtsClient::stop() {
-    PlaySoundW(nullptr, nullptr, SND_PURGE);
     audio_.stop();
     playing_.clear();
 }

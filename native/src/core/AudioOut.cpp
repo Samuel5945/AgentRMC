@@ -95,18 +95,27 @@ QStringList AudioOut::deviceNames() {
     return names;
 }
 
-bool AudioOut::play(const QByteArray &wav, const QString &deviceName) {
+bool AudioOut::play(const QByteArray &wav, const QString &deviceName,
+                    QString *error) {
     std::lock_guard<std::mutex> lock(mutex_);
     stop();
 
     WavView view;
     if (!parseWav(wav, &view)) {
+        if (error != nullptr) {
+            *error = QStringLiteral("返回的不是可播放的 PCM WAV");
+        }
         return false;
     }
     if (waveOutOpen(&hwo_, UINT(resolveDevice(deviceName)), &view.wfx,
                     reinterpret_cast<DWORD_PTR>(doneEvent_), 0,
                     CALLBACK_EVENT) != MMSYSERR_NOERROR) {
         hwo_ = nullptr;
+        if (error != nullptr) {
+            *error = QStringLiteral("打不开音频输出设备 %1（可能已拔出或被独占）")
+                         .arg(deviceName.isEmpty() ? QStringLiteral("系统默认")
+                                                   : deviceName);
+        }
         return false;
     }
 

@@ -244,6 +244,11 @@ VoiceOptions resolveVoiceOptions(const QJsonObject &config,
     options.ttsModel =
         stringValue(tts, "model", QStringLiteral("mimo-v2.5-tts"));
     options.ttsVoice = stringValue(tts, "voice", QStringLiteral("Chloe"));
+    // 旧版本下拉把界面文案误存进 voice（「Chloe（默认）」等），兜底还原。
+    if (options.ttsVoice.contains(QLatin1Char('（')) ||
+        options.ttsVoice.contains(QStringLiteral("跟随主题"))) {
+        options.ttsVoice = QStringLiteral("Chloe");
+    }
     options.ttsStyle = stringValue(tts, "style");
     options.ttsOutputDevice = stringValue(tts, "output_device");
     options.ttsChatVoice = stringValue(tts, "chat_voice").trimmed();

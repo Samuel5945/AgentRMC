@@ -52,6 +52,9 @@ signals:
     void transcribed(const QString &text, int costMs);
     // reload() 后发：识别方式等选项变了，让主窗/语音面板/桌宠同步自己的模式控件。
     void optionsChanged();
+    // setChatMode() 后发：对话模式可能在桌宠右键/语音面板任一处开关，
+    // 两边的勾选态和缓存都靠它互相同步。
+    void chatModeChanged(bool on);
     // 对话模式下的一句转写（chatMode 才会发）。
     void chatRequested(const QString &text);
 

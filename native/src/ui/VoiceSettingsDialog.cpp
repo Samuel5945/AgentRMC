@@ -166,7 +166,7 @@ VoiceSettingsDialog::VoiceSettingsDialog(ProfileStore *store, QWidget *parent)
     connect(asrMore, &QPushButton::clicked, this, [this] {
         auto *dialog = new AsrSettingsDialog(store_, this);
         connect(dialog, &AsrSettingsDialog::saved, this,
-                [this] { refreshStatus(); });
+                [this] { refreshStatus(); emit optionsApplied(); });
         dialog->exec();
         dialog->deleteLater();
     });
@@ -188,7 +188,7 @@ VoiceSettingsDialog::VoiceSettingsDialog(ProfileStore *store, QWidget *parent)
     connect(llmMore, &QPushButton::clicked, this, [this] {
         auto *dialog = new LlmSettingsDialog(store_, this);
         connect(dialog, &LlmSettingsDialog::saved, this,
-                [this] { refreshStatus(); });
+                [this] { refreshStatus(); emit optionsApplied(); });
         dialog->exec();
         dialog->deleteLater();
     });
@@ -261,6 +261,7 @@ VoiceSettingsDialog::VoiceSettingsDialog(ProfileStore *store, QWidget *parent)
                                         .toObject()
                                         .value("enabled")
                                         .toBool(true));
+            emit optionsApplied();
         });
         dialog->exec();
         dialog->deleteLater();

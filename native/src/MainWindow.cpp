@@ -1107,6 +1107,11 @@ void MainWindow::openVoiceSettings() {
                 3200);
         }
     });
+    // 子对话框保存的 TTS/云端 ASR/桌宠对话配置立即生效，不等外层「保存」。
+    connect(dialog, &VoiceSettingsDialog::optionsApplied, this, [this] {
+        voice_->reload();
+        refreshVoiceUi();
+    });
     dialog->exec();
     dialog->deleteLater();
 }

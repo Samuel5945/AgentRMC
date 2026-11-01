@@ -269,6 +269,13 @@ VoicePet::VoicePet(ProfileStore *store, VoiceController *voice, QWidget *parent)
                 bubbleOnly(QString::fromUtf8("你：%1").arg(text), 2400);
                 askLlm(text);
             });
+    // 对话模式可能在语音面板那边开关：控制器广播过来，桌宠缓存必须跟进，
+    // 不然 hideEvent 判断的还是旧值，「收起即退出对话模式」会失效。
+    connect(voice_, &VoiceController::chatModeChanged, this, [this](bool on) {
+        chatMode_ = on;
+        chatHistory_ = QJsonArray{};
+        llmBusy_ = false;
+    });
     chatMode_ = store_->uiBool(QStringLiteral("pet_chat"), false);
     voice_->setChatMode(chatMode_);
 
@@ -314,6 +321,9 @@ VoicePet::VoicePet(ProfileStore *store, VoiceController *voice, QWidget *parent)
             });
     connect(voice_, &VoiceController::optionsChanged, this, [this] {
         applyTtsOptions();
+        // LLM 配置（模型/Key/地址）也可能是在主界面或语音面板里改的，
+        // 不在这里重读的话，对话会一直打到桌宠构造时的旧配置上。
+        applyLlmOptions();
         refreshState();
     });
     refreshState();
@@ -447,6 +457,8 @@ void VoicePet::setChatMode(bool on) {
 }
 
 void VoicePet::askLlm(const QString &text) {
+    // 兜底重读：配置在哪保存的都算数，别依赖某条保存路径记得触发 reload。
+    applyLlmOptions();
     if (!llm_->ready()) {
         bubbleOnly(QString::fromUtf8("对话还没配置：右键 → 对话设置 填模型和 Key"),
                    4200);

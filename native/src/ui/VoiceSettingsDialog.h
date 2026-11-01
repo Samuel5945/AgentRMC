@@ -18,6 +18,9 @@ public:
 
 signals:
     void saved();
+    // 子对话框（TTS / 云端 ASR / 桌宠对话）保存了配置：外层就算点「取消」，
+    // 持有 VoiceController 的一侧也要 reload，新配置才立即生效。
+    void optionsApplied();
 
 protected:
     void dragEnterEvent(QDragEnterEvent *event) override;

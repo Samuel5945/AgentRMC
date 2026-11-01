@@ -247,10 +247,13 @@ VoiceWindow::VoiceWindow(VoiceController *voice, ProfileStore *store,
     settings->setCursor(Qt::PointingHandCursor);
     connect(settings, &QPushButton::clicked, this, [this] {
         auto *dialog = new VoiceSettingsDialog(store_, this);
-        connect(dialog, &VoiceSettingsDialog::saved, this, [this] {
+        const auto apply = [this] {
             voice_->reload();
             refreshHint();
-        });
+        };
+        connect(dialog, &VoiceSettingsDialog::saved, this, apply);
+        // 子对话框里保存的配置立即生效，不等外层「保存」。
+        connect(dialog, &VoiceSettingsDialog::optionsApplied, this, apply);
         dialog->exec();
         dialog->deleteLater();
     });
@@ -285,6 +288,12 @@ VoiceWindow::VoiceWindow(VoiceController *voice, ProfileStore *store,
                                   "对话模式开：说话会得到模型的语音回复，不再粘贴")
                             : QString::fromUtf8("已退出对话模式"),
                           3000);
+    });
+    // 桌宠右键那边也可能开关对话模式：按钮勾选态跟着控制器的广播走，
+    // 挡住 toggled 信号防止又写回一遍配置。
+    connect(voice_, &VoiceController::chatModeChanged, this, [this, chatMode](bool on) {
+        const QSignalBlocker block(chatMode);
+        chatMode->setChecked(on);
     });
     foot->addWidget(backend_, 1);
     foot->addWidget(chatMode);

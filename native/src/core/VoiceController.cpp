@@ -484,6 +484,7 @@ void VoiceController::setChatMode(bool on) {
     if (!on && state_ == State::Idle) {
         setState(State::Idle, QStringLiteral("就绪"));
     }
+    emit chatModeChanged(on);
 }
 
 void VoiceController::deliver(const QString &text, int costMs,

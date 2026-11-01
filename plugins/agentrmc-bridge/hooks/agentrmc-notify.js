@@ -4,7 +4,12 @@
 //   node agentrmc-notify.js permission
 //   node agentrmc-notify.js stop
 // stdin 是 hook 事件 JSON（可能为空），脚本从中挑有用的字段拼文案，
-// POST 到本机 AgentRMC 的通知口（127.0.0.1:45915/notify）。
+// 一律 POST /notify，事件类型原样交给原生端决定怎么提醒：
+//   permission → 气泡 + TTS 念出来 + 把 ZCode 主窗口拉到前台；
+//   stop       → 念「ZCode 已完成…」+ 拉前台（任务一般很长，完成值得出声）。
+// （拉前台曾在这个脚本里用 detached PowerShell 做，运行环境会把 detached
+// 子进程连带清掉，从来没生效过；改由常驻的原生端自己做，可靠且省一次
+// PowerShell 冷启动。）
 // 任何一步失败都静默退出 0——通知是锦上添花，绝不能挡会话。
 'use strict';
 
@@ -34,11 +39,17 @@ process.stdin.on('end', () => {
 
   let message = '';
   if (event === 'stop') {
-    message = project ? `任务完成【${project}】，等你回来验收` : '任务完成，等你回来验收';
+    // 完成走语音：ZCode 已完成任务 X，等你回来验收。
+    message = project ? `ZCode 已完成任务 ${project}，等你回来验收` : 'ZCode 已完成任务，等你回来验收';
   } else if (event === 'permission') {
     const detail = String(input.file_path || input.path || input.command || input.url || '');
     const short = detail.length > 60 ? detail.slice(0, 57) + '…' : detail;
-    message = `等你确认${tool ? ' ' + tool : ''}${short ? '：' + short : ''}`;
+    if (tool === 'AskUserQuestion') {
+      // 方案选择对人是「选哪个」，念中文比念工具名顺。
+      message = '等你选方案';
+    } else {
+      message = `等你确认${tool ? ' ' + tool : ''}${short ? '：' + short : ''}`;
+    }
     if (project) message += `【${project}】`;
   } else {
     message = String(hook.message || '有新消息');

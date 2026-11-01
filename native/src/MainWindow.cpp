@@ -72,6 +72,55 @@
 
 namespace {
 
+// 把 Agent（ZCode）主窗口拉到前台。按进程映像名枚举顶层可见窗口，
+// 直接调 Win32——hook 里 detached PowerShell 中转会被运行环境连带清掉
+// 从来没生效过，常驻的原生端自己做才可靠。
+// ALT 按放一下是绕 SetForegroundWindow 前台限制的通用手法。
+struct FindAgentWindowCtx {
+    const wchar_t *exe;
+    HWND found = nullptr;
+};
+
+BOOL CALLBACK findAgentWindow(HWND hwnd, LPARAM lparam) {
+    auto *ctx = reinterpret_cast<FindAgentWindowCtx *>(lparam);
+    if (!IsWindowVisible(hwnd) || GetWindowTextLengthW(hwnd) == 0) {
+        return TRUE;
+    }
+    DWORD pid = 0;
+    GetWindowThreadProcessId(hwnd, &pid);
+    HANDLE proc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+    if (proc == nullptr) {
+        return TRUE;
+    }
+    wchar_t path[MAX_PATH] = {};
+    DWORD size = MAX_PATH;
+    const BOOL ok = QueryFullProcessImageNameW(proc, 0, path, &size);
+    CloseHandle(proc);
+    if (ok) {
+        const wchar_t *name = wcsrchr(path, L'\\');
+        name = name != nullptr ? name + 1 : path;
+        if (_wcsicmp(name, ctx->exe) == 0) {
+            ctx->found = hwnd;
+            return FALSE;
+        }
+    }
+    return TRUE;
+}
+
+void raiseAgentWindow() {
+    FindAgentWindowCtx ctx{L"ZCode.exe", nullptr};
+    EnumWindows(findAgentWindow, reinterpret_cast<LPARAM>(&ctx));
+    if (ctx.found == nullptr) {
+        return;
+    }
+    if (IsIconic(ctx.found)) {
+        ShowWindow(ctx.found, SW_RESTORE);
+    }
+    keybd_event(VK_MENU, 0, 0, 0);
+    keybd_event(VK_MENU, 0, KEYEVENTF_KEYUP, 0);
+    SetForegroundWindow(ctx.found);
+}
+
 class TitleBar final : public QWidget {
 public:
     using QWidget::QWidget;
@@ -321,7 +370,35 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
                         appendEvent(QStringLiteral("status"), QString(),
                                     QString(),
                                     QStringLiteral("ZCode · ") + message, 0);
+                        if (kind == QStringLiteral("stop")) {
+                            // 任务完成：念出来 + 把 ZCode 拉回前台；气泡停满 7s（和 permission 一致）。
+                            if (voicePet_ != nullptr) {
+                                voicePet_->speak(message, 7000);
+                            }
+                            raiseAgentWindow();
+                            return;
+                        }
+                        if (kind == QStringLiteral("permission")) {
+                            // 等确认要把人喊回来：气泡停久一点 + 语音，桌宠收起也照念；
+                            // 收起又没 TTS 时退回托盘，别让提醒凭空消失。
+                            if (voicePet_ != nullptr) {
+                                voicePet_->speak(message, 7000);
+                                if (!voicePet_->isVisible() &&
+                                    !voicePet_->ttsReady() && tray_ != nullptr) {
+                                    tray_->showMessage(
+                                        title, message,
+                                        QSystemTrayIcon::Information, 6000);
+                                }
+                            } else if (tray_ != nullptr) {
+                                tray_->showMessage(
+                                    title, message,
+                                    QSystemTrayIcon::Information, 6000);
+                            }
+                            raiseAgentWindow();
+                            return;
+                        }
                         if (kind == QStringLiteral("speak")) {
+                            // MCP 主动让桌宠说话：只念，不抢前台。
                             if (voicePet_ != nullptr) {
                                 voicePet_->speak(message);
                             }

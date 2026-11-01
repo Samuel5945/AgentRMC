@@ -50,10 +50,13 @@ public:
     // 会话级静音（不落盘）：截图/演示模式不想真发 TTS 请求时用。
     void setVoiceFeedbackMuted(bool muted);
 
+    // TTS 是否就绪（key 已填）；决定 Agent 等确认的通知要不要托盘兜底。
+    bool ttsReady() const;
+
     // 气泡反馈 + TTS 出声（接小米 MiMo TTS，key 用户自填；没 key 只有气泡）。
     void speak(const QString &text, int durationMs = 0);
 
-    // Agent 进度通知（ZCode 任务完成/等确认）：只冒气泡不出声，别打断在放的东西。
+    // Agent 普通进度通知：只冒气泡不出声，别打断在放的东西（等确认走 speak）。
     void notify(const QString &text);
 
     // 桌宠状态快照（AgentBridge GET /state 的应答），给 Agent 决策用。

@@ -450,8 +450,10 @@ Python 线的 `commands.json` 是另一套东西（任意关键词 → `run` / `
 `plugins/agentrmc-bridge/` 是打包好的 ZCode 插件（hooks + MCP + skill，全部零依赖
 node 脚本，安装包已带在程序目录 `plugins\` 下）：
 
-- **hooks 自动提醒**：ZCode 需要确认工具调用（PermissionRequest）、一轮回答结束
-  （Stop）时，桌宠自动冒气泡。AgentRMC 没开就静默跳过（实测 <100ms），不拖慢会话。
+- **hooks 自动提醒**：ZCode 需要确认工具调用（PermissionRequest）时桌宠冒气泡；
+  一轮回答结束（Stop）时桌宠念「ZCode 已完成…」（TTS）并把 ZCode 主窗口拉到
+  前台——任务一般很长，完成值得出声。AgentRMC 没开就静默跳过（实测 <100ms），
+  不拖慢会话。
 - **MCP 主动交互**：三个工具——`pet_notify`（阶段进度气泡）、`pet_speak`（让桌宠
   TTS 说一句话）、`pet_state`（查桌宠状态），随附 `agentrmc-pet` skill 约束使用
   礼仪（一句话以内、不刷屏、完成提醒不重复发）。

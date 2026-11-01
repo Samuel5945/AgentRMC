@@ -4,7 +4,7 @@
     {
       "name": "agentrmc-bridge",
       "source": "./agentrmc-bridge",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "description": "AgentRMC pet bridge for ZCode: auto bubble alerts on permission/task completion via hooks, plus MCP tools to report progress, make the pet speak and query pet state.",
       "displayName": "AgentRMC Bridge",
       "displayName_i18n": { "zh-CN": "AgentRMC 桌宠联动" },

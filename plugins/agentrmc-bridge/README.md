@@ -2,9 +2,10 @@
 
 把 [AgentRMC](https://github.com/AgentRMC/Agentrmc) 桌宠接进 ZCode：
 
-- **自动提醒（hooks）**：ZCode 需要确认工具调用（PermissionRequest）、一轮
-  回答结束（Stop）时，桌宠自动冒气泡提示；桌宠收起时走系统托盘。AgentRMC
-  没开就静默跳过（<100ms），不拖慢会话。
+- **自动提醒（hooks）**：ZCode 需要确认工具调用（PermissionRequest）时桌宠
+  气泡 + TTS 语音提醒（方案选择会念「等你选方案」），并把 ZCode 主窗口拉到
+  前台；一轮回答结束（Stop）时桌宠念「ZCode 已完成…」同样拉前台（任务一般
+  很长，完成值得出声）。AgentRMC 没开就静默跳过（<100ms），不拖慢会话。
 - **主动交互（MCP）**：三个工具——`pet_notify`（阶段进度气泡）、
   `pet_speak`（让桌宠 TTS 说一句话）、`pet_state`（查桌宠状态），配
   `agentrmc-pet` skill 教模型何时用、怎么不刷屏。

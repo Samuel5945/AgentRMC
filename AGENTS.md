@@ -5,6 +5,13 @@
 - native 端（Qt/C++）代码改完、测试通过后，**必须出包**：运行
   `native\tools\package.bat`（= build.bat 构建 + windeployqt + NSIS），
   产出 `dist\AgentRMC-Setup.exe`，把这份安装包作为交付物告诉用户。
+- 打包成功后**直接静默装到本机**（用户约定）：`dist\AgentRMC-Setup.exe /S`，
+  安装器按注册表 `HKCU\Software\AgentRMC\InstallDir` 原地升级（本机装在
+  `D:\apps\AgentRMC`，不是默认的 %LOCALAPPDATA%）。注意 Git Bash 里
+  `reg query ... /v X` 的 `/v` 会被 MSYS 吞掉，要查就查整个键。装完手动启动
+  安装目录里的 AgentRMCNative.exe——静默模式会跳过完成页的「立即启动」，
+  应用不会自己起来。安装器自己会 taskkill 旧实例，不用先关应用；装完用
+  `curl http://127.0.0.1:45915/state` 验证新实例活着。
 - 可带参数 `lean` 跳过本地语音模型（同 build.bat）。
 - 打包链路依赖：VS 自带 CMake、Qt 6.8.3（`native\.qt\`）、
   NSIS（`C:\Program Files (x86)\NSIS\makensis.exe`）。

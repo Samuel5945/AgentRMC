@@ -23,5 +23,6 @@ description: 与 AgentRMC 桌宠交互：汇报任务阶段进度、让桌宠出
 - 一句话以内；长内容用户来不及看，也念不完。
 - 一次任务最多几条提示，别连续调用刷屏；进度更新用 pet_notify，收尾才用
   pet_speak。
-- 权限确认（PermissionRequest）和任务完成（Stop）的提醒是 hook 自动发的，
-  不要再用 pet_notify 发「任务完成」。
+- 权限确认（PermissionRequest）的提醒是 hook 自动发的（只冒气泡）；任务完成
+  （Stop）也是 hook 自动发——桌宠会念「ZCode 已完成…」并把 ZCode 窗口拉到
+  前台。两者都不要再用 pet_notify / pet_speak 重复发。

@@ -2,12 +2,15 @@
 
 #include <QByteArray>
 #include <QObject>
+#include <QPair>
 #include <QString>
+#include <QVector>
 
 #include "core/AudioOut.h"
 
 class QJsonArray;
 class QNetworkAccessManager;
+class QTimer;
 
 // 通用 OpenAI 兼容 TTS 客户端：文本 → base64 wav，winmm 播放。
 // 默认对准小米 MiMo（https://api.xiaomimimo.com/v1 + mimo-v2.5-tts），
@@ -29,7 +32,7 @@ public:
     bool ready() const { return enabled_ && !apiKey_.isEmpty(); }
     // voiceOverride 非空时本句用它（对话回复可单独选音色），空 = 全局音色。
     void speak(const QString &text, const QString &voiceOverride = QString());
-    // 停止当前播放（SND_PURGE / waveOut reset），下次 speak 会覆盖缓冲。
+    // 清空队列并停止当前播放（waveOut reset）；桌宠收起/静音时用。
     void stop();
 
 signals:
@@ -37,11 +40,18 @@ signals:
     void failed(const QString &error);
 
 private:
+    // 有空闲就取下一句去合成；合成完上一段还在播就先暂存。
+    void pump();
     void play(const QByteArray &wav);
+    void onIdleTick();
 
     QNetworkAccessManager *http_ = nullptr;
     bool enabled_ = true;
-    bool busy_ = false;
+    bool synthesizing_ = false;  // 一次只合成一句
+    static constexpr int kMaxPending = 3;  // 队列上限，连发提醒别刷屏
+    QVector<QPair<QString, QString>> pending_;  // {text, voiceOverride} 排队
+    QByteArray stashed_;  // 合成完但上一段还没播完，先存这儿
+    int generation_ = 0;  // stop() 自增：在路上的合成回来直接扔
     QString baseUrl_ = QStringLiteral("https://api.xiaomimimo.com/v1");
     QString apiKey_;
     QString model_ = QStringLiteral("mimo-v2.5-tts");
@@ -49,5 +59,6 @@ private:
     QString style_;
     QString outputDevice_;
     AudioOut audio_;
-    QByteArray playing_;  // SND_ASYNC 播放期间内存必须活着
+    QByteArray playing_;  // 异步播放期间内存必须活着
+    QTimer *idleTimer_ = nullptr;  // 100ms 轮询上一段播没播完，衔接下一句
 };

@@ -33,6 +33,9 @@ public:
               QString *error = nullptr);
     void stop();
 
+    // 是否正在出声；上层用它衔接下一句，别把没念完的掐了。
+    bool playing() const { return playing_; }
+
 private:
     void drain();
 
@@ -43,4 +46,5 @@ private:
     HWAVEOUT hwo_ = nullptr;
     HANDLE doneEvent_ = nullptr;
     std::atomic_bool stop_{false};
+    std::atomic_bool playing_{false};
 };

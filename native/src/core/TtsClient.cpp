@@ -6,6 +6,7 @@
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QNetworkRequest>
+#include <QTimer>
 #include <QUrl>
 
 #ifndef NOMINMAX
@@ -24,6 +25,9 @@ constexpr const char *kDefaultStyle =
 
 TtsClient::TtsClient(QObject *parent) : QObject(parent) {
     http_ = new QNetworkAccessManager(this);
+    idleTimer_ = new QTimer(this);
+    idleTimer_->setInterval(100);
+    connect(idleTimer_, &QTimer::timeout, this, [this] { onIdleTick(); });
 }
 
 void TtsClient::setOptions(bool enabled, const QString &baseUrl,
@@ -48,14 +52,24 @@ void TtsClient::setOptions(bool enabled, const QString &baseUrl,
 
 void TtsClient::speak(const QString &text,
                       const QString &voiceOverride) {
-    if (text.trimmed().isEmpty()) {
+    if (text.trimmed().isEmpty() || !ready()) {
+        // 没就绪静默跳过（气泡由上层照常出）。
         return;
     }
-    if (!ready() || busy_) {
-        // 一次只合成一句：上一条还在路上时丢弃新的（气泡仍然照常出）。
+    // 排队播报：上一句没念完不打断也不丢，念完接着念；队列满才丢最新的。
+    if (pending_.size() >= kMaxPending) {
         return;
     }
-    busy_ = true;
+    pending_.append({text, voiceOverride});
+    pump();
+}
+
+void TtsClient::pump() {
+    if (synthesizing_ || pending_.isEmpty()) {
+        return;
+    }
+    const QPair<QString, QString> item = pending_.takeFirst();
+    synthesizing_ = true;
 
     QJsonObject body;
     body["model"] = model_;
@@ -64,11 +78,12 @@ void TtsClient::speak(const QString &text,
                                 {"content", style_.isEmpty()
                                                 ? QString::fromUtf8(kDefaultStyle)
                                                 : style_}});
-    messages.append(QJsonObject{{"role", "assistant"}, {"content", text}});
+    messages.append(QJsonObject{{"role", "assistant"},
+                                {"content", item.first}});
     body["messages"] = messages;
     body["audio"] = QJsonObject{
         {"format", "wav"},
-        {"voice", voiceOverride.isEmpty() ? voice_ : voiceOverride}};
+        {"voice", item.second.isEmpty() ? voice_ : item.second}};
 
     QNetworkRequest request{QUrl(baseUrl_ + QStringLiteral("/chat/completions"))};
     request.setHeader(QNetworkRequest::ContentTypeHeader,
@@ -76,42 +91,76 @@ void TtsClient::speak(const QString &text,
     request.setRawHeader("Authorization", "Bearer " + apiKey_.toUtf8());
     QNetworkReply *reply = http_->post(
         request, QJsonDocument(body).toJson(QJsonDocument::Compact));
-    connect(reply, &QNetworkReply::finished, this, [this, reply] {
-        reply->deleteLater();
-        busy_ = false;
-        const QByteArray bodyBytes = reply->readAll();
-        if (reply->error() != QNetworkReply::NoError) {
-            // 4xx 把服务器的具体原因带上（无效音色名/额度不足一目了然）。
-            const QString serverMessage =
-                QJsonDocument::fromJson(bodyBytes)
-                    .object()
-                    .value("error")
-                    .toObject()
-                    .value("message")
-                    .toString();
-            emit failed(serverMessage.isEmpty()
-                            ? reply->errorString()
-                            : QStringLiteral("%1（%2）").arg(reply->errorString(),
-                                                            serverMessage));
-            return;
-        }
-        const QJsonObject message = QJsonDocument::fromJson(bodyBytes)
-                                        .object()
-                                        .value("choices")
-                                        .toArray()
-                                        .at(0)
-                                        .toObject()
-                                        .value("message")
-                                        .toObject();
-        const QByteArray wav = QByteArray::fromBase64(
-            message.value("audio").toObject().value("data").toString().toUtf8());
-        if (wav.size() < 44) {  // 连 WAV 头都不到，肯定不是音频
-            emit failed(QStringLiteral("TTS 返回内容不是音频"));
-            return;
-        }
-        play(wav);
-        emit audioReady(wav);
-    });
+    connect(reply, &QNetworkReply::finished, this,
+            [this, reply, generation = generation_] {
+                reply->deleteLater();
+                synthesizing_ = false;
+                if (generation != generation_) {
+                    return;  // 中途 stop() 过：这句直接扔
+                }
+                const QByteArray bodyBytes = reply->readAll();
+                if (reply->error() != QNetworkReply::NoError) {
+                    // 4xx 把服务器的具体原因带上（无效音色名/额度不足一目了然）。
+                    const QString serverMessage =
+                        QJsonDocument::fromJson(bodyBytes)
+                            .object()
+                            .value("error")
+                            .toObject()
+                            .value("message")
+                            .toString();
+                    emit failed(serverMessage.isEmpty()
+                                    ? reply->errorString()
+                                    : QStringLiteral("%1（%2）").arg(
+                                          reply->errorString(), serverMessage));
+                    pump();
+                    return;
+                }
+                const QJsonObject message = QJsonDocument::fromJson(bodyBytes)
+                                                .object()
+                                                .value("choices")
+                                                .toArray()
+                                                .at(0)
+                                                .toObject()
+                                                .value("message")
+                                                .toObject();
+                const QByteArray wav = QByteArray::fromBase64(
+                    message.value("audio").toObject().value("data").toString().toUtf8());
+                if (wav.size() < 44) {  // 连 WAV 头都不到，肯定不是音频
+                    emit failed(QStringLiteral("TTS 返回内容不是音频"));
+                    pump();
+                    return;
+                }
+                if (audio_.playing()) {
+                    stashed_ = wav;  // 上一段播完由 onIdleTick 接上
+                } else {
+                    play(wav);
+                }
+                idleTimer_->start();
+                pump();  // 排队还有就继续合成，跟播放并行
+            });
+}
+
+void TtsClient::onIdleTick() {
+    if (audio_.playing()) {
+        return;
+    }
+    if (!stashed_.isEmpty()) {
+        const QByteArray wav = stashed_;
+        stashed_.clear();
+        play(wav);  // 播完下一个 tick 再轮到排队的
+        return;
+    }
+    idleTimer_->stop();
+    pump();
+}
+
+void TtsClient::stop() {
+    ++generation_;
+    pending_.clear();
+    stashed_.clear();
+    audio_.stop();
+    playing_.clear();
+    idleTimer_->stop();
 }
 
 void TtsClient::play(const QByteArray &wav) {
@@ -124,9 +173,5 @@ void TtsClient::play(const QByteArray &wav) {
     }
     // 缓冲留在成员里保证异步播放期间内存有效。
     playing_ = wav;
-}
-
-void TtsClient::stop() {
-    audio_.stop();
-    playing_.clear();
+    emit audioReady(wav);
 }

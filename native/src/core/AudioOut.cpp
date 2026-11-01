@@ -137,6 +137,7 @@ bool AudioOut::play(const QByteArray &wav, const QString &deviceName,
         hwo_ = nullptr;
         return false;
     }
+    playing_ = true;
     worker_ = std::thread([this] { drain(); });
     return true;
 }
@@ -156,6 +157,7 @@ void AudioOut::drain() {
     }
     waveOutClose(hwo_);
     hwo_ = nullptr;
+    playing_ = false;
 }
 
 void AudioOut::stop() {

@@ -442,6 +442,10 @@ void VoicePet::notify(const QString &text) {
     bubbleOnly(text, 6000);
 }
 
+bool VoicePet::ttsReady() const {
+    return tts_ != nullptr && tts_->ready();
+}
+
 QString VoicePet::stateJson() const {
     const QJsonObject obj{
         {QStringLiteral("pet_visible"), isVisible()},

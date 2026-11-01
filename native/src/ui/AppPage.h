@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QFrame>
+#include <QJsonArray>
 
 class QLabel;
 class QVBoxLayout;
@@ -18,6 +19,10 @@ signals:
 
 private:
     void rebuild();
+    // 弹「名称 / 路径 / 别名」小对话框，存进 ui.custom_apps 并立即生效。
+    void addCustomApp();
+    void removeCustomApp(const QString &name, const QString &path);
+    void persistCustomApps(const QJsonArray &apps);
 
     ProfileStore *store_ = nullptr;
     QVBoxLayout *rows_ = nullptr;

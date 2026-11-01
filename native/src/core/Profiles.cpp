@@ -194,6 +194,23 @@ bool ProfileStore::setUiString(const QString &key, const QString &value) {
     return true;
 }
 
+QJsonArray ProfileStore::uiArray(const QString &key) const {
+    const QJsonValue value = config_.value("ui").toObject().value(key);
+    return value.isArray() ? value.toArray() : QJsonArray{};
+}
+
+bool ProfileStore::setUiArray(const QString &key, const QJsonArray &value) {
+    QJsonObject root = config_;
+    QJsonObject ui = root.value("ui").toObject();
+    ui[key] = value;
+    root["ui"] = ui;
+    if (!saveConfig(root)) {
+        return false;
+    }
+    config_ = root;
+    return true;
+}
+
 QJsonObject ProfileStore::voiceConfig() const {
     return config_.value("voice").toObject();
 }

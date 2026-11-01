@@ -33,6 +33,8 @@ public:
     bool setUiBool(const QString &key, bool value);
     QString uiString(const QString &key, const QString &fallback = QString()) const;
     bool setUiString(const QString &key, const QString &value);
+    QJsonArray uiArray(const QString &key) const;
+    bool setUiArray(const QString &key, const QJsonArray &value);
     QJsonObject voiceConfig() const;
     bool updateVoice(const QJsonObject &patch);
     bool updateMediaVoice(const QJsonObject &patch);

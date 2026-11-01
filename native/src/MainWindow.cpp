@@ -9,6 +9,7 @@
 #include "ui/VoiceSettingsDialog.h"
 #include "ui/VoiceWindow.h"
 
+#include "core/AppLauncher.h"
 #include "core/InputEngine.h"
 #include "core/ModelImport.h"
 #include "core/Presets.h"
@@ -101,6 +102,9 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
     store_->loadConfig(QCoreApplication::applicationDirPath() + "/config.json");
     // 主题在窗口构建前应用：渲染 QSS + 载入 ui.theme 指向的主题。
     ThemeManager::instance().init(store_.get());
+    // ui.custom_apps 里的自定义应用灌进启动目录（应用页/语音「打开 xx」共用）。
+    AppLauncher::setCustomApps(
+        AppLauncher::parseCustomApps(store_->uiArray("custom_apps")));
     if (!pin.isEmpty()) {
         store_->setPinned(pin);
     }

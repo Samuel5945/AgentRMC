@@ -6,6 +6,8 @@
 #include <QDirIterator>
 #include <QFileInfo>
 #include <QHash>
+#include <QJsonArray>
+#include <QJsonObject>
 #include <QMutex>
 #include <QMutexLocker>
 #include <QProcess>
@@ -402,8 +404,11 @@ bool launchTarget(const AppTarget &target, QString *error) {
 
 }  // namespace
 
-const QVector<AppEntry> &AppLauncher::catalog() {
-    static const QVector<AppEntry> table = {
+namespace {
+
+// 内置应用表；目录对外 = 这张表 + setCustomApps 灌进来的自定义应用。
+QVector<AppEntry> buildBuiltinCatalog() {
+    return QVector<AppEntry>{
         {QStringLiteral("browser"), QStringLiteral("浏览器"),
          {QStringLiteral("浏览器"), QStringLiteral("默认浏览器"),
           QStringLiteral("网页"), QStringLiteral("browser")},
@@ -458,8 +463,63 @@ const QVector<AppEntry> &AppLauncher::catalog() {
         {QStringLiteral("illustrator"), QStringLiteral("Illustrator"),
          {QStringLiteral("illustrator"), QStringLiteral("ai")},
          {QStringLiteral("Adobe Illustrator")}, {}},
+        {QStringLiteral("opensquilla"), QStringLiteral("OpenSquilla"),
+         {QStringLiteral("opensquilla"), QStringLiteral("squilla"),
+          QStringLiteral("open squilla")},
+         {QStringLiteral("OpenSquilla")}, {}},
     };
-    return table;
+}
+
+}  // namespace
+
+QVector<AppEntry> g_customApps;
+bool g_catalogDirty = true;
+
+QVector<AppEntry> AppLauncher::parseCustomApps(const QJsonArray &raw) {
+    QVector<AppEntry> apps;
+    for (const QJsonValue &value : raw) {
+        const QJsonObject obj = value.toObject();
+        const QString name = obj.value("name").toString().trimmed();
+        const QString path = obj.value("path").toString().trimmed();
+        if (name.isEmpty() || path.isEmpty()) {
+            continue;
+        }
+        AppEntry entry;
+        QString slug;
+        for (const QChar ch : name) {
+            slug.append(ch.isLetterOrNumber() ? ch.toLower()
+                                              : QLatin1Char('_'));
+        }
+        entry.id = QStringLiteral("custom:") + slug;
+        entry.name = name;
+        entry.customPath = path;
+        for (const QJsonValue &alias : obj.value("aliases").toArray()) {
+            const QString text = alias.toString().trimmed();
+            if (!text.isEmpty()) {
+                entry.aliases << text;
+            }
+        }
+        apps.append(entry);
+    }
+    return apps;
+}
+
+void AppLauncher::setCustomApps(const QVector<AppEntry> &apps) {
+    g_customApps = apps;
+    g_catalogDirty = true;
+}
+
+// 目录 = 内置表 + 自定义。只在主线程读写（应用页/启动流程都在主线程），
+// setCustomApps 用脏标记让下一次 catalog() 重新拼。
+const QVector<AppEntry> &AppLauncher::catalog() {
+    static const QVector<AppEntry> builtin = buildBuiltinCatalog();
+    static QVector<AppEntry> merged;
+    if (g_catalogDirty) {
+        merged = builtin;
+        merged += g_customApps;
+        g_catalogDirty = false;
+    }
+    return merged;
 }
 
 QStringList AppLauncher::appIds() {
@@ -486,6 +546,18 @@ QString AppLauncher::nameOf(const QString &id) {
 
 AppTarget AppLauncher::resolve(const AppEntry &entry) {
     AppTarget target;
+    if (!entry.customPath.isEmpty()) {
+        // 自定义应用：路径指向 exe/lnk/文件夹/URL，一律交给 ShellExecute。
+        const bool isUrl = entry.customPath.contains(QStringLiteral("://"));
+        if (!isUrl && !QFileInfo::exists(entry.customPath)) {
+            return target;  // 文件没了：按「没装」显示
+        }
+        target.found = true;
+        target.kind = isUrl ? QStringLiteral("url") : QStringLiteral("shortcut");
+        target.target = entry.customPath;
+        target.detail = QStringLiteral("自定义");
+        return target;
+    }
     if (entry.id == QStringLiteral("browser")) {
         const QString exe = defaultBrowserExe();
         target.found = true;

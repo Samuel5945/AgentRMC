@@ -4,11 +4,19 @@
 #include "core/Profiles.h"
 #include "ui/ToggleSwitch.h"
 
+#include <QDialog>
+#include <QFileDialog>
 #include <QFrame>
 #include <QHBoxLayout>
+#include <QJsonArray>
+#include <QJsonObject>
 #include <QLabel>
+#include <QLineEdit>
+#include <QMessageBox>
 #include <QPushButton>
+#include <QRegularExpression>
 #include <QScrollArea>
+#include <QStandardPaths>
 #include <QVBoxLayout>
 
 AppPage::AppPage(ProfileStore *store, QWidget *parent)
@@ -22,6 +30,13 @@ AppPage::AppPage(ProfileStore *store, QWidget *parent)
     auto *head = new QHBoxLayout;
     auto *title = new QLabel(QString::fromUtf8("应用启动"));
     title->setObjectName("cardTitle");
+    auto *add = new QPushButton(QString::fromUtf8("添加应用"));
+    add->setObjectName("ghostText");
+    add->setCursor(Qt::PointingHandCursor);
+    add->setToolTip(QString::fromUtf8(
+        "加一个自定义应用：填名字和一个 exe/快捷方式/网址路径，"
+        "之后说「打开 名字」就能启动。"));
+    connect(add, &QPushButton::clicked, this, [this] { addCustomApp(); });
     auto *rescan = new QPushButton(QString::fromUtf8("重新扫描"));
     rescan->setObjectName("ghostText");
     rescan->setCursor(Qt::PointingHandCursor);
@@ -32,6 +47,7 @@ AppPage::AppPage(ProfileStore *store, QWidget *parent)
     });
     head->addWidget(title);
     head->addStretch(1);
+    head->addWidget(add);
     head->addWidget(rescan);
     lay->addLayout(head);
 
@@ -136,6 +152,18 @@ void AppPage::rebuild() {
         });
         r->addWidget(open);
 
+        if (entry.id.startsWith(QStringLiteral("custom:"))) {
+            auto *del = new QPushButton(QString::fromUtf8("删"));
+            del->setObjectName("ghostSmall");
+            del->setCursor(Qt::PointingHandCursor);
+            del->setToolTip(QString::fromUtf8("从自定义应用里移除（不影响应用本身）"));
+            const QString name = entry.name;
+            const QString path = entry.customPath;
+            connect(del, &QPushButton::clicked, this,
+                    [this, name, path] { removeCustomApp(name, path); });
+            r->addWidget(del);
+        }
+
         rows_->addWidget(row);
     }
     rows_->addStretch(1);
@@ -146,4 +174,131 @@ void AppPage::rebuild() {
                           "可以在「按键映射」里把「打开 xx」设成某个键的单击 / 双击 / 长按。")
             .arg(installed)
             .arg(catalog.size()));
+}
+
+void AppPage::persistCustomApps(const QJsonArray &apps) {
+    store_->setUiArray(QStringLiteral("custom_apps"), apps);
+    AppLauncher::setCustomApps(AppLauncher::parseCustomApps(apps));
+    rebuild();
+}
+
+void AppPage::addCustomApp() {
+    // 语音设置同款深色小对话框。
+    QDialog dialog(this);
+    dialog.setObjectName("voiceDialog");
+    dialog.setWindowFlags(Qt::Dialog | Qt::FramelessWindowHint);
+    dialog.setFixedWidth(460);
+
+    auto *root = new QVBoxLayout(&dialog);
+    root->setContentsMargins(18, 16, 18, 16);
+    root->setSpacing(10);
+
+    auto *head = new QHBoxLayout;
+    auto *title = new QLabel(QString::fromUtf8("添加自定义应用"));
+    title->setObjectName("captureTitle");
+    head->addWidget(title);
+    head->addStretch(1);
+    root->addLayout(head);
+
+    const auto addRow = [root](const QString &text) {
+        auto *label = new QLabel(text);
+        label->setObjectName("muted");
+        root->addWidget(label);
+        auto *edit = new QLineEdit;
+        root->addWidget(edit);
+        return edit;
+    };
+    QLineEdit *nameEdit = addRow(QString::fromUtf8("名称（说话用）"));
+    nameEdit->setPlaceholderText(QString::fromUtf8("例如：OpenSquilla"));
+    QLineEdit *pathEdit = addRow(QString::fromUtf8("路径（exe / .lnk / 网址）"));
+    pathEdit->setPlaceholderText(QString::fromUtf8("C:\\Program Files\\...\\app.exe"));
+    QLineEdit *aliasEdit = addRow(QString::fromUtf8("别名（可选，空格分隔）"));
+    aliasEdit->setPlaceholderText(QString::fromUtf8("例如：squilla 斯齐拉"));
+
+    auto *browse = new QPushButton(QString::fromUtf8("浏览…"));
+    browse->setObjectName("ghostSmall");
+    browse->setCursor(Qt::PointingHandCursor);
+    connect(browse, &QPushButton::clicked, this, [this, pathEdit] {
+        const QString file = QFileDialog::getOpenFileName(
+            this, QString::fromUtf8("选择应用"),
+            QStandardPaths::writableLocation(QStandardPaths::HomeLocation),
+            QString::fromUtf8("程序/快捷方式 (*.exe *.lnk *.url *.bat *.cmd);;所有文件 (*.*)"));
+        if (!file.isEmpty()) {
+            pathEdit->setText(file);
+        }
+    });
+    root->addWidget(browse);
+
+    auto *note = new QLabel(QString::fromUtf8(
+        "保存后说「打开 名称」即可启动；名字也会出现在按键映射的"
+        "「打开 xx」动作里。"));
+    note->setObjectName("dialogNote");
+    note->setWordWrap(true);
+    root->addWidget(note);
+
+    auto *foot = new QHBoxLayout;
+    auto *cancel = new QPushButton(QString::fromUtf8("取消"));
+    cancel->setObjectName("ghostSmall");
+    cancel->setCursor(Qt::PointingHandCursor);
+    connect(cancel, &QPushButton::clicked, &dialog, &QDialog::reject);
+    auto *save = new QPushButton(QString::fromUtf8("保存"));
+    save->setObjectName("primary");
+    save->setCursor(Qt::PointingHandCursor);
+    save->setFixedWidth(86);
+    foot->addStretch(1);
+    foot->addWidget(cancel);
+    foot->addWidget(save);
+    root->addLayout(foot);
+
+    connect(save, &QPushButton::clicked, &dialog, [&] {
+        const QString name = nameEdit->text().trimmed();
+        const QString path = pathEdit->text().trimmed();
+        if (name.isEmpty() || path.isEmpty()) {
+            note->setStyleSheet(QStringLiteral("color:#f85149;"));
+            note->setText(QString::fromUtf8("名称和路径都要填。"));
+            return;
+        }
+        QJsonArray apps = store_->uiArray(QStringLiteral("custom_apps"));
+        for (const QJsonValue &value : apps) {
+            if (value.toObject().value("name").toString().compare(
+                    name, Qt::CaseInsensitive) == 0) {
+                note->setStyleSheet(QStringLiteral("color:#f85149;"));
+                note->setText(QString::fromUtf8("已经有叫这个名字的自定义应用了。"));
+                return;
+            }
+        }
+        QJsonObject entry{{"name", name}, {"path", path}};
+        QJsonArray aliases;
+        for (const QString &alias : aliasEdit->text().split(
+                 QRegularExpression(QStringLiteral("[\\s,，]+")),
+                 Qt::SkipEmptyParts)) {
+            aliases.append(alias.trimmed());
+        }
+        if (!aliases.isEmpty()) {
+            entry["aliases"] = aliases;
+        }
+        apps.append(entry);
+        persistCustomApps(apps);
+        dialog.accept();
+    });
+    dialog.exec();
+}
+
+void AppPage::removeCustomApp(const QString &name, const QString &path) {
+    if (QMessageBox::question(this, QString::fromUtf8("移除自定义应用"),
+                              QString::fromUtf8("不再通过语音/按键打开「%1」？"
+                                                "应用本身不会被卸载。")
+                                  .arg(name)) != QMessageBox::Yes) {
+        return;
+    }
+    QJsonArray apps;
+    for (const QJsonValue &value : store_->uiArray(QStringLiteral("custom_apps"))) {
+        const QJsonObject obj = value.toObject();
+        if (obj.value("name").toString() == name &&
+            obj.value("path").toString() == path) {
+            continue;
+        }
+        apps.append(value);
+    }
+    persistCustomApps(apps);
 }

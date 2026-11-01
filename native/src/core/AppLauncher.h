@@ -2,6 +2,7 @@
 
 #include <QString>
 #include <QStringList>
+#include <QJsonArray>
 #include <QVector>
 
 struct AppEntry {
@@ -10,6 +11,7 @@ struct AppEntry {
     QStringList aliases;
     QStringList shortcuts;
     QString aumid;
+    QString customPath;  // 自定义应用的可执行/快捷方式/URL；空 = 内置表条目
 };
 
 struct AppTarget {
@@ -42,6 +44,11 @@ public:
     static QStringList appIds();
     static const AppEntry *findApp(const QString &id);
     static QString nameOf(const QString &id);
+
+    // 自定义应用（ui.custom_apps）：MainWindow 启动时、应用页增删后调用。
+    // 目录 = 内置表 + 自定义，keymap 的应用动作下拉也会跟着带上。
+    static void setCustomApps(const QVector<AppEntry> &apps);
+    static QVector<AppEntry> parseCustomApps(const QJsonArray &raw);
 
     static AppTarget resolve(const QString &id);
     static AppTarget resolve(const AppEntry &entry);

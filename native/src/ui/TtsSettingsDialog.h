@@ -32,6 +32,7 @@ private:
     QLineEdit *apiKey_ = nullptr;
     QComboBox *model_ = nullptr;
     QComboBox *voice_ = nullptr;
+    QLineEdit *styleEdit_ = nullptr;
     QPushButton *preview_ = nullptr;
     QLabel *note_ = nullptr;
     TtsClient *tts_ = nullptr;

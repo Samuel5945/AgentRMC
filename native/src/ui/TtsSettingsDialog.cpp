@@ -100,6 +100,15 @@ TtsSettingsDialog::TtsSettingsDialog(ProfileStore *store, QWidget *parent)
         "对应平台精品音色库的音色名；换模型/平台后记得换成它支持的音色。"));
     addRow(QString::fromUtf8("音色"), voice_);
 
+    // 文字音色设定：MiMo 这类 TTS 支持用一句描述定制嗓音和语气，空 = 默认。
+    styleEdit_ = new QLineEdit(tts.value("style").toString());
+    styleEdit_->setPlaceholderText(QString::fromUtf8(
+        "例：温柔的年轻女性，语速稍慢、声音清亮；留空 = 内置默认（轻快清晰）"));
+    styleEdit_->setToolTip(QString::fromUtf8(
+        "用一句自然语言描述想要的嗓音、语气、语速，合成时作为指令发给模型。"
+        "想正式一点可以写「沉稳的男声，播音腔」；对话多的话别写太长的句子。"));
+    addRow(QString::fromUtf8("音色描述"), styleEdit_);
+
     // 输出设备：软件只能从这里的列表选，系统默认还是耳机自己定。
     output_ = new QComboBox;
     output_->addItem(QString::fromUtf8("跟随系统默认"), QString());
@@ -164,8 +173,8 @@ TtsSettingsDialog::TtsSettingsDialog(ProfileStore *store, QWidget *parent)
 void TtsSettingsDialog::preview() {
     // 试听直接用当前选中的输出设备，保存之前就能确认耳机里有没有声。
     tts_->setOptions(true, baseUrl_->text(), apiKey_->text(),
-                     model_->currentText(), voice_->currentText(), QString(),
-                     output_->currentData().toString());
+                     model_->currentText(), voice_->currentText(),
+                     styleEdit_->text(), output_->currentData().toString());
     if (apiKey_->text().trimmed().isEmpty()) {
         note_->setStyleSheet(QStringLiteral("color:#d29922;"));
         note_->setText(QString::fromUtf8("先填 API Key 再试听。"));
@@ -188,6 +197,11 @@ void TtsSettingsDialog::save() {
         patch.remove("voice");
     } else {
         patch["voice"] = voice_->currentText().trimmed();
+    }
+    if (styleEdit_->text().trimmed().isEmpty()) {
+        patch.remove("style");
+    } else {
+        patch["style"] = styleEdit_->text().trimmed();
     }
     patch["output_device"] = output_->currentData().toString();
     if (!store_->updateVoice(QJsonObject{{"tts", patch}})) {

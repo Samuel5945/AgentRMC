@@ -15,6 +15,13 @@
 #include <QPushButton>
 #include <QVBoxLayout>
 
+namespace {
+// 「鲸鱼娘」预设音色：选中下拉里的鲸鱼娘项 = 用这段描述合成（音色名仍走 Chloe）。
+constexpr const char *kWhaleVoiceStyle =
+    "软软糯糯的十几岁少女音，可爱治愈系，语气温柔甜美、带一点点慵懒，"
+    "语速稍慢、句尾轻轻上扬，像一只小鲸鱼在你耳边呢喃，吐字清晰但奶声奶气";
+}  // namespace
+
 TtsSettingsDialog::TtsSettingsDialog(ProfileStore *store, QWidget *parent)
     : QDialog(parent), store_(store) {
     // 复用语音设置对话框的整套深色样式。
@@ -92,13 +99,30 @@ TtsSettingsDialog::TtsSettingsDialog(ProfileStore *store, QWidget *parent)
 
     voice_ = new QComboBox;
     voice_->setEditable(true);
-    voice_->addItem(QStringLiteral("Chloe"));
-    voice_->setCurrentText(tts.value("voice").toString());
-    if (voice_->currentText().isEmpty()) {
-        voice_->setCurrentText(defaults.ttsVoice);
+    voice_->addItem(QStringLiteral("Chloe（默认）"), QStringLiteral("Chloe"));
+    voice_->addItem(QStringLiteral("鲸鱼娘 · 萌系治愈少女音"),
+                    QStringLiteral("@whale"));
+    const QString savedVoice = tts.value("voice").toString().trimmed();
+    if (savedVoice.isEmpty() ||
+        savedVoice.compare(QStringLiteral("Chloe"), Qt::CaseInsensitive) == 0) {
+        voice_->setCurrentIndex(0);
+    } else {
+        const int saved = voice_->findData(savedVoice);
+        if (saved >= 0) {
+            voice_->setCurrentIndex(saved);
+        } else {
+            voice_->setCurrentText(savedVoice);  // 自定义音色名
+        }
     }
+    // 选中鲸鱼娘：描述框当场填上那段萌系设定，可看可改，试听即时验证。
+    connect(voice_, &QComboBox::currentIndexChanged, this, [this](int index) {
+        if (voice_->itemData(index).toString() == QStringLiteral("@whale")) {
+            styleEdit_->setText(QString::fromUtf8(kWhaleVoiceStyle));
+        }
+    });
     voice_->setToolTip(QString::fromUtf8(
-        "对应平台精品音色库的音色名；换模型/平台后记得换成它支持的音色。"));
+        "Chloe = 平台默认音色；鲸鱼娘 = 萌系治愈少女音（音色描述里那段设定）；"
+        "也可以直接手输平台支持的任意音色名。换模型/平台后记得换配套音色。"));
     addRow(QString::fromUtf8("音色"), voice_);
 
     // 文字音色设定：MiMo 这类 TTS 支持用一句描述定制嗓音和语气，空 = 默认。
@@ -178,9 +202,15 @@ TtsSettingsDialog::TtsSettingsDialog(ProfileStore *store, QWidget *parent)
 
 void TtsSettingsDialog::preview() {
     // 试听直接用当前选中的输出设备，保存之前就能确认耳机里有没有声。
+    QString voiceName = voice_->currentText().trimmed();
+    QString style = styleEdit_->text();
+    if (voice_->currentData().toString() == QStringLiteral("@whale")) {
+        voiceName = QStringLiteral("Chloe");
+        style = QString::fromUtf8(kWhaleVoiceStyle);
+    }
     tts_->setOptions(true, baseUrl_->text(), apiKey_->text(),
-                     model_->currentText(), voice_->currentText(),
-                     styleEdit_->text(), output_->currentData().toString());
+                     model_->currentText(), voiceName, style,
+                     output_->currentData().toString());
     if (apiKey_->text().trimmed().isEmpty()) {
         note_->setStyleSheet(QStringLiteral("color:#d29922;"));
         note_->setText(QString::fromUtf8("先填 API Key 再试听。"));
@@ -199,6 +229,9 @@ void TtsSettingsDialog::save() {
     patch["base_url"] = baseUrl_->text().trimmed();
     patch["api_key"] = apiKey_->text().trimmed();
     patch["model"] = model_->currentText().trimmed();
+    if (voice_->currentData().toString() == QStringLiteral("@whale")) {
+        styleEdit_->setText(QString::fromUtf8(kWhaleVoiceStyle));
+    }
     if (voice_->currentText().trimmed().isEmpty()) {
         patch.remove("voice");
     } else {

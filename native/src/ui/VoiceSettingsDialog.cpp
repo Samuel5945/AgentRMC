@@ -363,15 +363,8 @@ void VoiceSettingsDialog::reloadThemes() {
     theme_->clear();
     const ThemeManager &themes = ThemeManager::instance();
     for (const ThemeInfo &info : themes.themes()) {
-        QIcon icon;
-        if (!info.preview.isEmpty()) {
-            const QImage art = ThemeManager::cachedImage(info.preview);
-            if (!art.isNull()) {
-                icon = QIcon(QPixmap::fromImage(art.scaled(
-                    44, 44, Qt::KeepAspectRatio, Qt::SmoothTransformation)));
-            }
-        }
-        theme_->addItem(icon, info.displayName, info.id);
+        // 不放 preview 缩略图：整图缩到 22px 只剩一坨深色，毫无辨识度。
+        theme_->addItem(info.displayName, info.id);
         const int index = theme_->count() - 1;
         if (!info.valid) {
             theme_->setItemText(

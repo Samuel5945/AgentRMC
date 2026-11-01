@@ -10,9 +10,11 @@
 class QTcpServer;
 class QTcpSocket;
 
-// 本机 Agent（ZCode 等）与桌宠的交互口：监听 127.0.0.1:45915——
-//   POST /notify  {"event":"stop|permission|...","title":...,"message":...}
-//                 → notify()：桌宠冒气泡（不出声），收起时走托盘
+// 本机 Agent（ZCode / Qoder 等）与桌宠的交互口：监听 127.0.0.1:45915——
+//   POST /notify  {"event":"stop|permission|...","title":...,"message":...,
+//                  "raise":"ZCode.exe"}
+//                 → notify()：桌宠冒气泡（不出声），收起时走托盘；
+//                   raise 给定时把该进程映像名的窗口拉到前台（谁发的就拉谁）
 //   POST /speak   {"message":"..."} → notify(kind="speak")：气泡 + TTS 朗读
 //   GET  /state   → 200 + 桌宠状态 JSON（pet_visible/listening/tts_ready/...）
 // 纯回环、只此一用；端口被占就放弃监听，不影响主功能。
@@ -30,8 +32,9 @@ public:
 
 signals:
     // kind：/notify 透传 event 字段；/speak 固定为 "speak"。
+    // raise：/notify 的可选进程映像名（"/speak" 恒为空，念话不抢前台）。
     void notify(const QString &kind, const QString &title,
-                const QString &message);
+                const QString &message, const QString &raise);
 
 private:
     void onConnected();

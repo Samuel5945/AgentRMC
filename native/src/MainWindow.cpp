@@ -72,7 +72,7 @@
 
 namespace {
 
-// 把 Agent（ZCode）主窗口拉到前台。按进程映像名枚举顶层可见窗口，
+// 把发通知的 Agent 主窗口拉到前台。按进程映像名枚举顶层可见窗口，
 // 直接调 Win32——hook 里 detached PowerShell 中转会被运行环境连带清掉
 // 从来没生效过，常驻的原生端自己做才可靠。
 // ALT 按放一下是绕 SetForegroundWindow 前台限制的通用手法。
@@ -107,8 +107,11 @@ BOOL CALLBACK findAgentWindow(HWND hwnd, LPARAM lparam) {
     return TRUE;
 }
 
-void raiseAgentWindow() {
-    FindAgentWindowCtx ctx{L"ZCode.exe", nullptr};
+void raiseAgentWindow(const QString &exeName) {
+    // 没给 raise 的（老手写 hook）仍按 ZCode 找，行为不变。
+    const std::wstring image =
+        exeName.isEmpty() ? std::wstring(L"ZCode.exe") : exeName.toStdWString();
+    FindAgentWindowCtx ctx{image.c_str(), nullptr};
     EnumWindows(findAgentWindow, reinterpret_cast<LPARAM>(&ctx));
     if (ctx.found == nullptr) {
         return;
@@ -366,16 +369,17 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
             });
             connect(bridge, &AgentBridge::notify, this,
                     [this](const QString &kind, const QString &title,
-                           const QString &message) {
+                           const QString &message, const QString &raise) {
                         appendEvent(QStringLiteral("status"), QString(),
                                     QString(),
-                                    QStringLiteral("ZCode · ") + message, 0);
+                                    title + QStringLiteral(" · ") + message, 0);
                         if (kind == QStringLiteral("stop")) {
-                            // 任务完成：念出来 + 把 ZCode 拉回前台；气泡停满 7s（和 permission 一致）。
+                            // 任务完成：念出来 + 把发通知的 Agent 拉回前台；
+                            // 气泡停满 7s（和 permission 一致）。
                             if (voicePet_ != nullptr) {
                                 voicePet_->speak(message, 7000);
                             }
-                            raiseAgentWindow();
+                            raiseAgentWindow(raise);
                             return;
                         }
                         if (kind == QStringLiteral("permission")) {
@@ -394,7 +398,7 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
                                     title, message,
                                     QSystemTrayIcon::Information, 6000);
                             }
-                            raiseAgentWindow();
+                            raiseAgentWindow(raise);
                             return;
                         }
                         if (kind == QStringLiteral("speak")) {

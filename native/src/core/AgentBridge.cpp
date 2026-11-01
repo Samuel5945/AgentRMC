@@ -118,6 +118,7 @@ void AgentBridge::onReadable(QTcpSocket *socket) {
         QJsonDocument::fromJson(body.left(contentLength)).object();
     QString kind;
     QString message;
+    QString raise;
     if (isSpeak) {
         kind = QStringLiteral("speak");
         message = obj.value(QStringLiteral("message")).toString();
@@ -134,13 +135,14 @@ void AgentBridge::onReadable(QTcpSocket *socket) {
         if (message.isEmpty()) {
             message = defaultFor(kind);
         }
+        raise = obj.value(QStringLiteral("raise")).toString().trimmed();
     }
     const QString title = obj.value(QStringLiteral("title")).toString()
                                   .isEmpty()
                               ? QStringLiteral("ZCode")
                               : obj.value(QStringLiteral("title")).toString();
     finish(socket, "204 No Content");
-    emit notify(kind, title, message);
+    emit notify(kind, title, message, raise);
 }
 
 void AgentBridge::finish(QTcpSocket *socket, const char *status,

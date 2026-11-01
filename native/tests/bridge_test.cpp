@@ -1,5 +1,5 @@
 // AgentBridge 自测：起监听 → 模拟 Agent 请求 → 断言 notify 信号与响应码。
-// 覆盖：/notify 全字段与默认文案、/speak 正常与缺参、/state、错路径 404。
+// 覆盖：/notify 全字段与默认文案、raise 透传、/speak 正常与缺参、/state、错路径 404。
 #include <QCoreApplication>
 #include <QHostAddress>
 #include <QTcpSocket>
@@ -16,6 +16,7 @@ struct Notice {
     QString kind;
     QString title;
     QString message;
+    QString raise;
 };
 
 Notice lastNotice;
@@ -66,11 +67,12 @@ int main(int argc, char **argv) {
     });
     QObject::connect(&bridge, &AgentBridge::notify,
                      [](const QString &kind, const QString &title,
-                        const QString &message) {
+                        const QString &message, const QString &raise) {
                          lastNotice.got = true;
                          lastNotice.kind = kind;
                          lastNotice.title = title;
                          lastNotice.message = message;
+                         lastNotice.raise = raise;
                      });
     QTimer::singleShot(15000, &app, [] {
         std::fprintf(stderr, "FAIL: 超时\n");
@@ -81,7 +83,8 @@ int main(int argc, char **argv) {
                                   const QByteArray &resp) {
         if (!resp.startsWith("HTTP/1.1 204") || !lastNotice.got ||
             lastNotice.kind != want.kind || lastNotice.title != want.title ||
-            lastNotice.message != want.message) {
+            lastNotice.message != want.message ||
+            lastNotice.raise != want.raise) {
             std::fprintf(stderr,
                          "FAIL want kind=%s title=%s message=%s; got "
                          "kind=%s title=%s message=%s resp=%s\n",
@@ -99,18 +102,20 @@ int main(int argc, char **argv) {
         }
     };
 
-    // 1. 全字段 stop：原样转发 + 回 204。
-    // 2. 只带 event：message 补默认文案。
-    // 3. /speak 带 message：kind=speak 转发。
+    // 1. 全字段 stop + raise（Qoder 这类非 ZCode 宿主靠 raise 指定窗口）：原样转发 + 回 204。
+    // 2. 只带 event：message 补默认文案，raise 为空。
+    // 3. /speak 带 message：kind=speak 转发，不带 raise。
     // 4. /speak 缺 message：400。
     // 5. GET /state：200 + 状态 JSON。
     // 6. 错路径：不崩，回 404。
     // 7. curl 式头序（Content-Length 后还有别的头）：回归——按行解析别再取错长度。
     request(app,
             withLength("POST /notify HTTP/1.1\r\n",
-                       R"({"event":"stop","title":"ZCode","message":"任务完成：AgentRMC"})"),
+                       R"({"event":"stop","title":"Qoder","message":"任务完成：AgentRMC","raise":"Qoder CN.exe"})"),
             [&](const QByteArray &resp) {
-                expectNotice(Notice{true, "stop", "ZCode", "任务完成：AgentRMC"}, resp);
+                expectNotice(Notice{true, "stop", "Qoder", "任务完成：AgentRMC",
+                                    "Qoder CN.exe"},
+                             resp);
             },
             [&] {
                 request(app,

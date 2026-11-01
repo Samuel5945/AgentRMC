@@ -1,0 +1,18 @@
+{
+  "name": "agentrmc-bridge",
+  "displayName": "AgentRMC 桌宠联动",
+  "version": "0.2.0",
+  "description": "AgentRMC 桌宠联动（Qoder）：权限确认/任务完成自动气泡提醒（hooks），MCP 工具汇报进度、让桌宠说话、查桌宠状态。",
+  "author": { "name": "AgentRMC" },
+  "homepage": "https://github.com/AgentRMC/Agentrmc",
+  "keywords": ["qoder-plugin", "agentrmc", "desktop-pet", "mcp", "hooks"],
+  "hooks": "./hooks-qoder/hooks.json",
+  "mcpServers": {
+    "agentrmc": {
+      "command": "node",
+      "args": ["${QODER_PLUGIN_ROOT}/mcp/server.js"],
+      "env": { "AGENTRMC_NOTIFY_HOST": "Qoder" }
+    }
+  },
+  "skills": "./skills"
+}

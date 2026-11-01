@@ -1,0 +1,42 @@
+{
+  "hooks": {
+    "PermissionRequest": [
+      {
+        "async": true,
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": [
+              "${QODER_PLUGIN_ROOT}/hooks/agentrmc-notify.js",
+              "permission",
+              "Qoder",
+              "Qoder CN.exe"
+            ],
+            "name": "agentrmc-notify-permission",
+            "timeout": 3
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "async": true,
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": [
+              "${QODER_PLUGIN_ROOT}/hooks/agentrmc-notify.js",
+              "stop",
+              "Qoder",
+              "Qoder CN.exe"
+            ],
+            "name": "agentrmc-notify-stop",
+            "timeout": 3
+          }
+        ]
+      }
+    ]
+  }
+}

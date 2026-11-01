@@ -12,6 +12,8 @@ const http = require("http");
 
 const PORT = Number(process.env.AGENTRMC_BRIDGE_PORT || 45915);
 const HOST = "127.0.0.1";
+// 气泡署名跟随宿主 Agent（与 hook 用同一个环境变量），别在 Qoder 里念成 ZCode。
+const AGENT = process.env.AGENTRMC_NOTIFY_HOST || "ZCode";
 
 function post(route, payload) {
   return new Promise((resolve, reject) => {
@@ -106,7 +108,7 @@ async function callTool(name, args) {
     if (!message) return { isError: true, text: "message 不能为空" };
     const res = await callBridge("/notify", {
       event: String(args?.event || "progress"),
-      title: "ZCode",
+      title: AGENT,
       message,
     });
     return { text: `已发送（HTTP ${res.status}）` };

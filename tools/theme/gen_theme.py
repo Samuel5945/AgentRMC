@@ -577,8 +577,8 @@ def main():
     ap.add_argument('--theme-id', default='xiaoai-whale')
     ap.add_argument('--themes-dir', default=None,
                     help='themes 根目录（默认 <out>/../themes）')
-    ap.add_argument('--display-name', default='小爱 · 鲸鱼娘')
-    ap.add_argument('--character-name', default='小爱')
+    ap.add_argument('--display-name', default='鲸鱼娘')
+    ap.add_argument('--character-name', default='鲸鱼娘')
     args = ap.parse_args()
     if args.size % 32:
         sys.exit('--size 必须是 32 的倍数')

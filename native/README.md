@@ -163,6 +163,7 @@ native\build\Release\AgentRMCTakeoverTest.exe
 native\build\Release\AgentRMCVoiceTest.exe
 native\build\Release\AgentRMCAudioTest.exe 2 rc_probe\mic_test.wav
 native\build\Release\AgentRMCAsrTest.exe native\models\sensevoice\test_wavs\zh.wav native\models\sensevoice sensevoice
+native\build\Release\AgentRMCBridgeTest.exe
 ```
 
 覆盖：预设写回、`.bak`、同键原生去重、extends 继承、custom 动作；KeyRouter 的
@@ -171,3 +172,10 @@ native\build\Release\AgentRMCAsrTest.exe native\models\sensevoice\test_wavs\zh.w
 钩子吞键判定；语音后端解析、WAV 头、SenseVoice/Qwen3 模型发现；真实麦克风采集
 （含 1 秒预热、400ms 预录、松手等最后一块）；以及 SenseVoice 端到端转写
 （第二次为热态延迟）。`AgentRMCAsrTest` 只在启用 sherpa 时生成。
+
+`AgentRMCBridgeTest` 覆盖 AgentBridge（本机 Agent 交互口，127.0.0.1:45915）：
+`/notify` 全字段转发与默认文案、`/speak` 正常与缺参 400、`/state` 状态应答、
+错路径 404，以及 curl 式头序（Content-Length 后还有别的头）的回归——头解析必须
+按行取值，不能 `split(':')` 取第二段（后面有别的头时 toInt 直接归零）。ZCode
+插件（hooks + MCP 三工具）在 `../plugins/agentrmc-bridge/`，接法见根 README 的
+「Agent 会话通知与桌宠交互」一节。

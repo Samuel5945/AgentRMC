@@ -126,6 +126,7 @@ Section "Uninstall"
   RMDir /r "$INSTDIR\models"
 keepModels:
   RMDir /r "$INSTDIR\themes"
+  RMDir /r "$INSTDIR\plugins"
   Delete "$INSTDIR\config.json"
   Delete "$INSTDIR\profiles.json"
   Delete "$INSTDIR\profiles.json.bak"

@@ -18,6 +18,7 @@ class QLabel;
 class QListWidget;
 class QPushButton;
 class QSystemTrayIcon;
+class AgentBridge;
 class InputEngine;
 class AppPage;
 class KeymapPage;

@@ -15,6 +15,8 @@ qt_add_executable(AgentRMCNative
     resources/app.rc
     src/MainWindow.cpp
     src/MainWindow.h
+    src/core/AgentBridge.cpp
+    src/core/AgentBridge.h
     src/core/Profiles.cpp
     src/core/Profiles.h
     src/core/Presets.cpp
@@ -205,6 +207,15 @@ add_executable(AgentRMCThemeTest
 target_include_directories(AgentRMCThemeTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(AgentRMCThemeTest PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets)
 target_compile_options(AgentRMCThemeTest PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
+
+add_executable(AgentRMCBridgeTest
+    tests/bridge_test.cpp
+    src/core/AgentBridge.cpp
+    src/core/AgentBridge.h
+)
+target_include_directories(AgentRMCBridgeTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(AgentRMCBridgeTest PRIVATE Qt6::Core Qt6::Network)
+target_compile_options(AgentRMCBridgeTest PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
 
 add_executable(AgentRMCAudioTest
     tests/m5_audio_cli.cpp

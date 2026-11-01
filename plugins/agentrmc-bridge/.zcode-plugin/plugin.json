@@ -1,0 +1,15 @@
+{
+  "name": "agentrmc-bridge",
+  "version": "0.1.0",
+  "description": "AgentRMC 桌宠联动：权限确认/任务完成自动气泡提醒（hooks），MCP 工具汇报进度、让桌宠说话、查桌宠状态。",
+  "author": { "name": "AgentRMC" },
+  "homepage": "https://github.com/AgentRMC/Agentrmc",
+  "hooks": "./hooks",
+  "mcpServers": {
+    "agentrmc": {
+      "command": "node",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/mcp/server.js"]
+    }
+  },
+  "skills": "./skills"
+}

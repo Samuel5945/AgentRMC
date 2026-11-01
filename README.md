@@ -432,6 +432,51 @@ AUMID（`explorer.exe shell:AppsFolder\…`）→ 默认浏览器走注册表 `h
 Python 线的 `commands.json` 是另一套东西（任意关键词 → `run` / `key` / `paste`），
 **原生版不读它**；启动应用这条能力已经内置，不需要指令表。
 
+## Agent 会话通知与桌宠交互（ZCode 联动，v0.2.0）
+
+程序在本机回环监听 `127.0.0.1:45915`（AgentBridge），三个口子：
+
+- `POST /notify`：JSON `{"event":"stop|permission|...","title":"...","message":"..."}`，
+  桌宠冒气泡（不出声，不打断在放的音频）；桌宠收起时改走托盘气泡；事件流里留一条
+  「ZCode · …」。
+- `POST /speak`：JSON `{"message":"..."}`，桌宠冒气泡并 TTS 朗读（桌宠收起也照念）。
+- `GET /state`：返回桌宠状态 JSON（`pet_visible / docked / listening / recording /
+  transcribing / chat_mode / tts_ready`）。
+
+端口被占用时只是放弃监听，不影响其它功能。
+
+### ZCode 插件（推荐给其他用户）
+
+`plugins/agentrmc-bridge/` 是打包好的 ZCode 插件（hooks + MCP + skill，全部零依赖
+node 脚本，安装包已带在程序目录 `plugins\` 下）：
+
+- **hooks 自动提醒**：ZCode 需要确认工具调用（PermissionRequest）、一轮回答结束
+  （Stop）时，桌宠自动冒气泡。AgentRMC 没开就静默跳过（实测 <100ms），不拖慢会话。
+- **MCP 主动交互**：三个工具——`pet_notify`（阶段进度气泡）、`pet_speak`（让桌宠
+  TTS 说一句话）、`pet_state`（查桌宠状态），随附 `agentrmc-pet` skill 约束使用
+  礼仪（一句话以内、不刷屏、完成提醒不重复发）。
+
+安装：ZCode → 插件市场 → 添加 → 选本仓库 `plugins/` 目录（或安装目录里的
+`plugins\`）→ 安装「AgentRMC 桌宠联动」。前提：node 在 PATH、AgentRMC ≥ v0.2.0。
+
+### 手工接入（不用插件时）
+
+hook 脚本在 `native/tools/zcode-hook/agentrmc-notify.js`，复制到固定位置（如
+`C:\Users\PC\.zcode\hooks\agentrmc-notify.js`），在 `~/.zcode/cli/config.json` 的
+`hooks` 里（`enabled: true`）加两个事件：
+
+```json
+"PermissionRequest": [{ "hooks": [{ "type": "command",
+    "command": "node \"C:/Users/PC/.zcode/hooks/agentrmc-notify.js\" permission", "timeout": 3 }] }],
+"Stop": [{ "hooks": [{ "type": "command",
+    "command": "node \"C:/Users/PC/.zcode/hooks/agentrmc-notify.js\" stop", "timeout": 3 }] }]
+```
+
+脚本从 hook 的 stdin JSON 里挑工具名 / 文件路径 / 工作目录拼文案。手工触发验证：
+`curl -X POST http://127.0.0.1:45915/notify -d "{\"event\":\"stop\"}"`
+（注意中文 Windows 终端可能把命令行里的中文转成 GBK 发出，验证气泡文案请用
+ASCII 或 node 脚本）。
+
 ## 场景 Profile
 
 按键行为按**前台窗口**自动切换。程序每次按键时读一次前台进程名和窗口标题（300ms 缓存），命中哪个 profile 就用哪套映射。

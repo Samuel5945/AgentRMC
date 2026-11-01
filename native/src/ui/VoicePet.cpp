@@ -21,6 +21,8 @@
 #include <QGuiApplication>
 #include <QHBoxLayout>
 #include <QHideEvent>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QLabel>
 #include <QMenu>
 #include <QMouseEvent>
@@ -431,6 +433,28 @@ void VoicePet::speakAs(const QString &text) {
     if (tts_ != nullptr && tts_->ready()) {
         tts_->speak(text, voice_->options().ttsChatVoice);
     }
+}
+
+void VoicePet::notify(const QString &text) {
+    if (text.isEmpty() || !isVisible()) {
+        return;
+    }
+    bubbleOnly(text, 6000);
+}
+
+QString VoicePet::stateJson() const {
+    const QJsonObject obj{
+        {QStringLiteral("pet_visible"), isVisible()},
+        {QStringLiteral("pet_enabled"), petEnabled()},
+        {QStringLiteral("docked"), dock_ != Dock::None},
+        {QStringLiteral("listening"), listening_},
+        {QStringLiteral("recording"), recording_},
+        {QStringLiteral("transcribing"), transcribing_},
+        {QStringLiteral("chat_mode"), chatMode_},
+        {QStringLiteral("tts_ready"), tts_ != nullptr && tts_->ready()},
+    };
+    return QString::fromUtf8(
+        QJsonDocument(obj).toJson(QJsonDocument::Compact));
 }
 
 void VoicePet::bubbleOnly(const QString &text, int durationMs) {

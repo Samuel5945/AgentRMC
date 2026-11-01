@@ -53,6 +53,12 @@ public:
     // 气泡反馈 + TTS 出声（接小米 MiMo TTS，key 用户自填；没 key 只有气泡）。
     void speak(const QString &text, int durationMs = 0);
 
+    // Agent 进度通知（ZCode 任务完成/等确认）：只冒气泡不出声，别打断在放的东西。
+    void notify(const QString &text);
+
+    // 桌宠状态快照（AgentBridge GET /state 的应答），给 Agent 决策用。
+    QString stateJson() const;
+
     // 桌宠对话闭环（ui.pet_chat 持久化）：开着时转写不再粘贴，改喂 LLM，
     // 回复用 TTS 念出来；收起桌宠自动退出对话。
     bool chatMode() const { return chatMode_; }

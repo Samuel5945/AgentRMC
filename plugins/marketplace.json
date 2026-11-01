@@ -1,0 +1,15 @@
+{
+  "name": "dev-agentrmc-local",
+  "plugins": [
+    {
+      "name": "agentrmc-bridge",
+      "source": "./agentrmc-bridge",
+      "version": "0.1.0",
+      "description": "AgentRMC pet bridge for ZCode: auto bubble alerts on permission/task completion via hooks, plus MCP tools to report progress, make the pet speak and query pet state.",
+      "displayName": "AgentRMC Bridge",
+      "displayName_i18n": { "zh-CN": "AgentRMC 桌宠联动" },
+      "description_i18n": { "zh-CN": "AgentRMC 桌宠联动：权限确认/任务完成自动气泡提醒（hooks），MCP 工具汇报进度、让桌宠说话、查桌宠状态。" },
+      "category": "productivity"
+    }
+  ]
+}

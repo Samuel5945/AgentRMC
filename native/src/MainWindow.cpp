@@ -9,6 +9,7 @@
 #include "ui/VoiceSettingsDialog.h"
 #include "ui/VoiceWindow.h"
 
+#include "core/AgentBridge.h"
 #include "core/AppLauncher.h"
 #include "core/InputEngine.h"
 #include "core/ModelImport.h"
@@ -304,6 +305,38 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
     }
     if (withTray) {
         buildTray();
+    }
+    if (withTray) {
+        // ZCode 等 Agent 的进度通知与交互：桌宠在就冒气泡，不在就托盘弹一条；
+        // speak 走气泡 + TTS（桌宠收起也照念）。截图模式不起（会跟正在跑的真实例抢端口）。
+        auto *bridge = new AgentBridge(this);
+        if (bridge->start()) {
+            bridge->setStateProvider([this] {
+                return voicePet_ != nullptr ? voicePet_->stateJson()
+                                            : QStringLiteral("{}");
+            });
+            connect(bridge, &AgentBridge::notify, this,
+                    [this](const QString &kind, const QString &title,
+                           const QString &message) {
+                        appendEvent(QStringLiteral("status"), QString(),
+                                    QString(),
+                                    QStringLiteral("ZCode · ") + message, 0);
+                        if (kind == QStringLiteral("speak")) {
+                            if (voicePet_ != nullptr) {
+                                voicePet_->speak(message);
+                            }
+                            return;
+                        }
+                        if (voicePet_ != nullptr && voicePet_->isVisible() &&
+                            voicePet_->petEnabled()) {
+                            voicePet_->notify(message);
+                        } else if (tray_ != nullptr) {
+                            tray_->showMessage(
+                                title, message, QSystemTrayIcon::Information,
+                                6000);
+                        }
+                    });
+        }
     }
 }
 

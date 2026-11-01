@@ -42,6 +42,8 @@ if not exist "%ROOT%\native\build\Release\profiles.json" copy /y "%ROOT%\profile
 
 rem Themes are loose folders next to the exe so users can drop in new ones.
 if exist "%ROOT%\themes" robocopy "%ROOT%\themes" "%ROOT%\native\build\Release\themes" /E /NFL /NDL /NJH /NJS >nul
+rem ZCode 联动插件（agentrmc-bridge）随包分发，装完 AgentRMC 就地可用。
+if exist "%ROOT%\plugins" robocopy "%ROOT%\plugins" "%ROOT%\native\build\Release\plugins" /E /NFL /NDL /NJH /NJS >nul
 rem robocopy exit codes 0-7 mean success (1 = files copied); 8+ are failures.
 rem Normalize so chained scripts don't treat a good copy as an error.
 if errorlevel 8 exit /b 1

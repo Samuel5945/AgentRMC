@@ -15,13 +15,6 @@
 #include <QPushButton>
 #include <QVBoxLayout>
 
-namespace {
-// 「鲸鱼娘」预设音色：选中下拉里的鲸鱼娘项 = 用这段描述合成（音色名仍走 Chloe）。
-constexpr const char *kWhaleVoiceStyle =
-    "软软糯糯的十几岁少女音，可爱治愈系，语气温柔甜美、带一点点慵懒，"
-    "语速稍慢、句尾轻轻上扬，像一只小鲸鱼在你耳边呢喃，吐字清晰但奶声奶气";
-}  // namespace
-
 TtsSettingsDialog::TtsSettingsDialog(ProfileStore *store, QWidget *parent)
     : QDialog(parent), store_(store) {
     // 复用语音设置对话框的整套深色样式。
@@ -100,12 +93,22 @@ TtsSettingsDialog::TtsSettingsDialog(ProfileStore *store, QWidget *parent)
     voice_ = new QComboBox;
     voice_->setEditable(true);
     voice_->addItem(QStringLiteral("Chloe（默认）"), QStringLiteral("Chloe"));
-    voice_->addItem(QStringLiteral("鲸鱼娘 · 萌系治愈少女音"),
-                    QStringLiteral("@whale"));
+    // 第二档跟随主题：当前主题带了音色描述（如鲸鱼娘）才出现这一项，
+    // 选中 = 清空自定义描述，主题音色（换主题自动跟着换）接管。
+    const Theme &activeTheme = ThemeManager::instance().current();
+    if (!activeTheme.voiceStyle.isEmpty()) {
+        voice_->addItem(QStringLiteral("跟随主题 · %1").arg(activeTheme.displayName),
+                        QStringLiteral("@theme"));
+    }
     const QString savedVoice = tts.value("voice").toString().trimmed();
-    if (savedVoice.isEmpty() ||
-        savedVoice.compare(QStringLiteral("Chloe"), Qt::CaseInsensitive) == 0) {
-        voice_->setCurrentIndex(0);
+    const QString savedStyle = tts.value("style").toString().trimmed();
+    if (savedVoice.isEmpty() || savedVoice.compare(QStringLiteral("Chloe"),
+                                                   Qt::CaseInsensitive) == 0) {
+        // 没写自定义描述且主题带音色 = 主题音色正在生效，选回「跟随主题」。
+        voice_->setCurrentIndex(
+            savedStyle.isEmpty() && !activeTheme.voiceStyle.isEmpty()
+                ? voice_->findData(QStringLiteral("@theme"))
+                : 0);
     } else {
         const int saved = voice_->findData(savedVoice);
         if (saved >= 0) {
@@ -114,14 +117,13 @@ TtsSettingsDialog::TtsSettingsDialog(ProfileStore *store, QWidget *parent)
             voice_->setCurrentText(savedVoice);  // 自定义音色名
         }
     }
-    // 选中鲸鱼娘：描述框当场填上那段萌系设定，可看可改，试听即时验证。
     connect(voice_, &QComboBox::currentIndexChanged, this, [this](int index) {
-        if (voice_->itemData(index).toString() == QStringLiteral("@whale")) {
-            styleEdit_->setText(QString::fromUtf8(kWhaleVoiceStyle));
+        if (voice_->itemData(index).toString() == QStringLiteral("@theme")) {
+            styleEdit_->clear();  // 空描述 = 交给主题音色
         }
     });
     voice_->setToolTip(QString::fromUtf8(
-        "Chloe = 平台默认音色；鲸鱼娘 = 萌系治愈少女音（音色描述里那段设定）；"
+        "Chloe = 平台默认音色；跟随主题 = 用当前主题自带的音色（换主题自动换）；"
         "也可以直接手输平台支持的任意音色名。换模型/平台后记得换配套音色。"));
     addRow(QString::fromUtf8("音色"), voice_);
 
@@ -204,9 +206,9 @@ void TtsSettingsDialog::preview() {
     // 试听直接用当前选中的输出设备，保存之前就能确认耳机里有没有声。
     QString voiceName = voice_->currentText().trimmed();
     QString style = styleEdit_->text();
-    if (voice_->currentData().toString() == QStringLiteral("@whale")) {
+    if (voice_->currentData().toString() == QStringLiteral("@theme")) {
         voiceName = QStringLiteral("Chloe");
-        style = QString::fromUtf8(kWhaleVoiceStyle);
+        style = ThemeManager::instance().current().voiceStyle;
     }
     tts_->setOptions(true, baseUrl_->text(), apiKey_->text(),
                      model_->currentText(), voiceName, style,
@@ -229,8 +231,8 @@ void TtsSettingsDialog::save() {
     patch["base_url"] = baseUrl_->text().trimmed();
     patch["api_key"] = apiKey_->text().trimmed();
     patch["model"] = model_->currentText().trimmed();
-    if (voice_->currentData().toString() == QStringLiteral("@whale")) {
-        styleEdit_->setText(QString::fromUtf8(kWhaleVoiceStyle));
+    if (voice_->currentData().toString() == QStringLiteral("@theme")) {
+        styleEdit_->clear();  // 跟随主题：不落自定义描述
     }
     if (voice_->currentText().trimmed().isEmpty()) {
         patch.remove("voice");

@@ -2,8 +2,8 @@
 
 - 文档版本：v1.2（P0 落地后的状态更新）
 - 日期：2026-11-02
-- 状态：P0 已提交；Native 0.3.2 UX 真正精简已出包装机；对外发布通道待执行
-- 适用版本：AgentRMC Native `0.3.2`（工作区，UX 重做）/ `agentrmc-bridge` `0.3.3`（工作区）
+- 状态：P0 已提交；Native 0.3.3（UX + 对话人设）已出包装机；对外发布通道待执行
+- 适用版本：AgentRMC Native `0.3.3`（工作区，UX + 对话人设）/ `agentrmc-bridge` `0.3.3`（工作区）
 - 覆盖范围：版本演进与发布状态、hooks 提醒、桌宠气泡 / TTS、窗口回跳、语音分流给宿主 Agent、WorkBuddy 双宿主识别
 - 不覆盖：遥控器按键映射、主题系统、ASR / TTS / LLM 模型本身（只在 §2.0 的时间线里点名，不展开需求）
 
@@ -40,6 +40,19 @@
   「语音怎么用」改为有/无遥控器都适用，补充云端 ASR、对话模式与 Agent 分流。
 - [x] **静默安装**：新增 `native/tools/install-silent.bat`，并在 `AGENTS.md` 记录
   Git Bash 直接传 `/S` 会被 MSYS 路径转换、必须走脚本或 `cmd //c` 的坑。
+
+### 0.3 对话人设修正（Native 0.3.3）
+
+- [x] **问题**：鲸鱼娘把 `ZCode` 当成未知词，回了一长串「ZCODE 是什么 / 你进行到哪一步 /
+  下一步要什么」的反问，还带 markdown 加粗和 emoji；语音朗读体验很差。
+- [x] **补本机语境**：所有人设（自定义 / 主题 / 默认）后追加固定事实——AgentRMC 是用户
+  开发的 Windows 桌宠项目；ZCode、WorkBuddy、WorkBuddy AI、Qoder 都是 AI 编程助手 /
+  本程序联动的宿主，不是编程语言；附带当前前台 Agent 名。
+- [x] **约束回复**：最多两句话 / 50 字，不列清单、不连续反问；用户纠正听写或名词时
+  直接一句确认并继续，最多问一个最短澄清问题。
+- [x] **输出清理**：气泡 / TTS 前去掉 markdown、emoji、列表标记，超长按句号截到 120 字，
+  避免「**ZCODE** 😊」被念出来。
+- [x] **主题人设同步**：`themes/xiaoai-whale/theme.json` 补充同样的风格约束与术语表。
 
 ---
 
@@ -80,7 +93,7 @@
 
 一句话概括现状：**功能已经走到 Native 0.3.2 + 插件 0.3.3，版本元数据（CMake / NSIS / exe）已对齐；对外仍只说到 0.2.0，最新 0.3.2 待提交、发布待执行。** 发布通道仍是四个版本号（见 §2.6），任何「我装的是哪版」的排障都会先撞在这上面。
 
-### 2.1 已交付能力（Native 0.3.2 + Plugin 0.3.3）
+### 2.1 已交付能力（Native 0.3.3 + Plugin 0.3.3）
 
 | 能力 | 现状 | 关键实现 | 状态 |
 |---|---|---|---|
@@ -211,14 +224,15 @@ Agent 宿主
 
 | 读数 | 值 | 说明 |
 |---|---|---|
-| `native/CMakeLists.txt` | `project(... VERSION 0.3.2)` | UX 精简版本 |
-| `native/build/Release/AgentRMCNative.exe` | FileVersion / ProductVersion `0.3.2` | `check-version.ps1` 通过 |
-| `D:\apps\AgentRMC\AgentRMCNative.exe` | FileVersion / ProductVersion `0.3.2` | 静默装机器 |
-| NSIS `DisplayVersion` | `0.3.2` | 与 exe / CMake 一致 |
-| `dist\AgentRMC-Setup.exe` | 20,010,218 B，11-02 11:58 | 含 0.3.3 插件 |
+| `native/CMakeLists.txt` | `project(... VERSION 0.3.3)` | UX + 对话人设版本 |
+| `native/build/Release/AgentRMCNative.exe` | FileVersion / ProductVersion `0.3.3` | `check-version.ps1` 通过 |
+| `D:\apps\AgentRMC\AgentRMCNative.exe` | FileVersion / ProductVersion `0.3.3` | 静默装机器 |
+| NSIS `DisplayVersion` | `0.3.3` | 与 exe / CMake 一致 |
+| `dist\AgentRMC-Setup.exe` | 20,013,752 B，11-02 13:32 | 含 0.3.3 插件 |
 | `dist\agentrmc-bridge-0.3.3.zip` | 0.3.3，22,729 B | 随包插件 |
 | 桌宠右键一级 | 5 项：开始/停止监听、说一句、语音面板、完整界面、隐藏桌宠 | UI Automation 实测 |
 | 语音面板 | 新增「交给」下拉与「朗读最近」按钮 | UI Automation 实测文本/按钮 |
+| 对话人设 | 所有人设追加本机语境与术语表；回复清理 markdown/emoji 并限长 | 代码路径 `VoicePet::chatPersona` / `cleanChatReply` |
 | `GET /state` | `pet_visible=1 chat_mode=1 listening=1 tts_ready=1` | 装机后验活 |
 | 静默安装命令 | `native\tools\install-silent.bat` | Git Bash 不再直接传 `/S` |
 
@@ -557,7 +571,8 @@ resolveHost(argv, scriptDir, env):
 | 0.1.0（2026-10-31） | 原生迁移线 M1–M5 + 分发流程 | GitHub release `v0.1.0`（公开）+ 网盘安装包与模型包 |
 | 0.2.0（2026-11-01） | 语音打开应用 / 语音主界面 / 桌宠 / TTS+LLM 对话闭环 / 主题系统 / ZCode 联动（AgentBridge + 插件） | **已对外发布**：官网 `agentrmc-update.json` 标 0.2.0 + 网盘包体已滚动更新到 0.2.0（作者确认）；GitHub 无 release、无 tag |
 | Native 0.3.0（已提交 + 已装机） | 语音分流、可点气泡、`AgentWindow`（含双 WorkBuddy 白名单）、stop 不抢前台、右键目标菜单；版本元数据已收敛到 CMake（FileVersion / ProductVersion = 0.3.0） | 提交 `03151c5`；`dist\AgentRMC-Setup.exe` 已静默装机并验活；**未发布** |
-| Native 0.3.2（UX 真正精简，已出包 + 已装机） | 桌宠右键只留 5 项；识别/对话/主题/目标/朗读迁到语音面板与完整界面；语音面板新增「交给」「朗读最近」 | `dist\AgentRMC-Setup.exe`（20,010,218 B，11-02 11:58）；FileVersion / NSIS `0.3.2`；本次提交 |
+| Native 0.3.2（UX 真正精简，已提交 `39670f7`） | 桌宠右键只留 5 项；识别/对话/主题/目标/朗读迁到语音面板与完整界面；语音面板新增「交给」「朗读最近」 | `dist\AgentRMC-Setup.exe`（20,010,218 B，11-02 11:58）；FileVersion / NSIS `0.3.2` |
+| Native 0.3.3（对话人设修正，已出包 + 已装机） | 所有人设追加本机语境与 ZCode/WorkBuddy 术语表；回复禁止清单/连续反问；落气泡前清理 markdown/emoji 并限长 | `dist\AgentRMC-Setup.exe`（20,013,752 B，11-02 13:32）；FileVersion / NSIS `0.3.3`；本次提交 |
 | Plugin 0.3.3（工作区 + 已出包） | FR-01 双 WorkBuddy 识别、FR-03 版本统一；stop 最终回复、`hooks-workbuddy` 沿用 0.3.2 | `dist\agentrmc-bridge-0.3.3.zip` + 随包 zip；两套 WorkBuddy 宿主缓存待各自市场升级 |
 
 ### 待排期
@@ -571,7 +586,7 @@ resolveHost(argv, scriptDir, env):
 
 发布检查清单：
 
-- [x] P0 已提交 `03151c5`；0.3.1 右键分组版已提交 `3bf3de4`；0.3.2 精简随本次提交；tag 仍待打。
+- [x] P0 已提交 `03151c5`；0.3.1 右键分组版已提交 `3bf3de4`；0.3.2 精简已提交 `39670f7`；0.3.3 对话人设随本次提交；tag 仍待打。
 - [x] `app.rc` / CMake / NSIS 三处版本一致，装机 exe FileVersion 实测对得上（`check-version.ps1` 已接入 `package.bat`）。
 - [x] `node test/host.test.js` 全绿，含双 WorkBuddy 矩阵（23/23）。
 - [x] native 相关测试全绿（App / Store / Theme / Bridge / Router / Voice / Takeover / Audio）。

@@ -46,8 +46,65 @@ constexpr int kCardWidth = 244;
 // 对话模式的默认人设：回复要被念出来，所以要求口语化、短。
 constexpr const char *kDefaultChatSystem =
     "你是 AgentRMC 的语音桌宠，一个待在屏幕边上的小助手。用户在用语音和你聊天："
-    "回复要口语化、简短（一般不超过两句话、50 字以内），不要用列表、markdown、"
-    "表情或颜文字，因为你的回复会被朗读出来。默认用中文回答。";
+    "回复要口语化、简短（最多两句话、50 字以内），不要用列表、markdown、加粗、"
+    "表情或颜文字，因为你的回复会被朗读出来。默认用中文回答。"
+    "用户纠正听写或名词时，直接用一句话确认并继续，不要反问一串问题；不确定时"
+    "最多问一个最短的澄清问题。";
+
+// LLM 有时会无视人设回 markdown / emoji / 清单；落气泡和 TTS 前统一清一遍，
+// 避免「**ZCODE** 😊」这类东西被念出来。
+QString cleanChatReply(const QString &text) {
+    QString out = text;
+    out.remove(QRegularExpression(QStringLiteral("```[\\s\\S]*?```")));
+    out.remove(QLatin1Char('`'));
+    out.remove(QStringLiteral("**"));
+    out.remove(QStringLiteral("__"));
+    out.remove(QRegularExpression(
+        QStringLiteral("(?m)^\\s{0,3}#{1,6}\\s*")));
+    out.remove(QRegularExpression(QStringLiteral("(?m)^\\s*[-*+]\\s+")));
+    out.remove(QRegularExpression(
+        QStringLiteral("(?m)^\\s*\\d+[.)]\\s+")));
+    out.replace(QLatin1Char('*'), QLatin1Char(' '));
+    out.replace(QLatin1Char('_'), QLatin1Char(' '));
+
+    QString kept;
+    kept.reserve(out.size());
+    for (int i = 0; i < out.size(); ++i) {
+        const QChar ch = out.at(i);
+        const uint u = ch.unicode();
+        if (ch.isHighSurrogate() && i + 1 < out.size()) {
+            const uint lo = out.at(i + 1).unicode();
+            const uint cp = 0x10000 + ((u - 0xD800) << 10) + (lo - 0xDC00);
+            if (cp >= 0x1F000 && cp <= 0x1FAFF) {  // emoji / pictographs
+                ++i;
+                continue;
+            }
+        }
+        // Dingbats / misc symbols / variation selectors：朗读没意义。
+        if ((u >= 0x2600 && u <= 0x27BF) || u == 0xFE0F || u == 0xFE0E) {
+            continue;
+        }
+        kept.append(ch);
+    }
+    kept.replace(QRegularExpression(QStringLiteral("[ \\t]+")),
+                 QStringLiteral(" "));
+    kept.replace(QRegularExpression(QStringLiteral("\\s*\\n\\s*")),
+                 QStringLiteral(" "));
+    kept = kept.trimmed();
+    if (kept.isEmpty()) {
+        return out.trimmed();
+    }
+    // 再长也别让 TTS 念一分钟：优先切在句号/问号/感叹号。
+    constexpr int kMaxChars = 120;
+    if (kept.size() > kMaxChars) {
+        const QString head = kept.left(kMaxChars);
+        const int cut = qMax(head.lastIndexOf(QChar(0x3002)),
+                             qMax(head.lastIndexOf(QChar(0xFF01)),
+                                  head.lastIndexOf(QChar(0xFF1F))));
+        kept = cut > 20 ? head.left(cut + 1) : head + QStringLiteral("…");
+    }
+    return kept;
+}
 
 }  // namespace
 
@@ -278,13 +335,14 @@ VoicePet::VoicePet(ProfileStore *store, VoiceController *voice, QWidget *parent)
     connect(llm_, &LlmClient::replied, this,
             [this](const QString &text, qint64) {
                 llmBusy_ = false;
+                const QString reply = cleanChatReply(text);
                 chatHistory_.append(
-                    QJsonObject{{"role", "assistant"}, {"content", text}});
+                    QJsonObject{{"role", "assistant"}, {"content", reply}});
                 while (chatHistory_.size() > 8) {
                     chatHistory_.removeFirst();
                 }
                 // 对话回复可单独选音色（tts.chat_voice），空 = 跟随语音反馈。
-                speakAs(text);
+                speakAs(reply);
             });
     connect(llm_, &LlmClient::failed, this,
             [this](const QString &error, qint64) {
@@ -1155,12 +1213,27 @@ void VoicePet::tick() {
 
 QString VoicePet::chatPersona() const {
     const VoiceOptions options = voice_->options();
-    if (!options.llmApiSystem.isEmpty()) {
-        return options.llmApiSystem;
+    QString persona = options.llmApiSystem;
+    if (persona.isEmpty()) {
+        // 名字跟主题走：主题带了人设就用主题的（换主题 = 换角色）。
+        persona = ThemeManager::instance().current().persona;
     }
-    // 名字跟主题走：主题带了人设就用主题的（换主题 = 换角色）。
-    const QString persona = ThemeManager::instance().current().persona;
-    return persona.isEmpty() ? QString::fromUtf8(kDefaultChatSystem) : persona;
+    if (persona.isEmpty()) {
+        persona = QString::fromUtf8(kDefaultChatSystem);
+    }
+    // 人设只定义性格，不负责产品事实。每次请求补一段本机语境，
+    // 免得模型把 ZCode / WorkBuddy 当成编程语言，或者反问用户「什么是 ZCODE」。
+    QString context = QString::fromUtf8(
+        "\n补充事实：AgentRMC 是用户开发的 Windows 桌面语音桌宠项目；"
+        "ZCode、WorkBuddy、WorkBuddy AI、Qoder 都是 AI 编程助手"
+        "（本程序联动的宿主），不是编程语言，也不是用户本人。"
+        "回答保持一到两句话，不列清单，不连续反问。");
+    const QString fg = AgentWindow::foregroundAgentExe();
+    if (!fg.isEmpty()) {
+        context += QString::fromUtf8(" 用户此刻前台是 %1。")
+                       .arg(AgentWindow::displayName(fg));
+    }
+    return persona + context;
 }
 
 QString VoicePet::spriteState() const {

@@ -351,6 +351,7 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
                         if (kind == QStringLiteral("stop")) {
                             // 任务完成：念出来 + 气泡停满 7s。**不自动抢前台**——
                             // 活儿干完就把焦点拽走很烦，气泡可点，点了再回去。
+                            // 是否前台不影响是否朗读：用户可能没看屏幕，语音是主通道。
                             if (voicePet_ != nullptr) {
                                 voicePet_->speak(message, 7000, raise);
                             }

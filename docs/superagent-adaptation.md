@@ -87,10 +87,14 @@ AgentRMC 已经有一个「Router 雏形」，但还没有领域模型和持久�
 
 ### 3.1 注意力优先：只在人必须行动或结果有用时说话
 
+> **设计约束（以产品方为准）**：语音是主提醒通道。`permission` / `question` / `stop`
+> 三类语音提醒**不得因为宿主窗口在前台而静音**；前台状态只用于决定是否自动 raise
+> 和气泡摆位。即使窗口在前台，用户也可能没看屏幕。
+
 原型的核心原则是「Take as little human attention as possible」。落到 AgentRMC：
 
 - `permission` / `question`：需要人立刻行动 → 气泡 + TTS + 自动 raise。
-- `stop`：结果有用才说；如果宿主窗口已经在前台，用户已经看到了，就只记录、不朗读。
+- `stop`：结果有用就说；**是否前台不决定是否朗读**——即使宿主窗口在前台，用户也可能没看屏幕。前台只影响要不要自动 raise / 气泡位置。
 - `progress`：默认静默，只进事件流 / 面板；除非用户主动订阅。
 - 同一 session 的重复事件去重；连续进度合并；支持安静时段。
 - 面板第一屏先回答「有没有需要我现在处理的」，而不是按时间倒序堆日志。
@@ -142,7 +146,7 @@ AgentRMC 已经有一个「Router 雏形」，但还没有领域模型和持久�
 
 ### 3.4 事件驱动 + 两级过滤
 
-- **Fast Path（确定性）**：事件来源、kind、是否前台、是否重复、安静时段、per-agent 白名单。零延迟、零模型成本。
+- **Fast Path（确定性）**：事件来源、kind、是否重复、安静时段、per-agent 白名单。前台状态只用于决定是否自动 raise / 气泡摆位，**不得用于静音语音提醒**。零延迟、零模型成本。
 - **Slow Path（可选）**：只有模糊事件才调 LLM，例如「这条 stop 结果值不值得念」「这条 progress 是否意味着卡住」。默认关闭，避免延迟和费用。
 - AgentRMC 现有的 `looksLikeTask` 已经是 Fast Path 的雏形；可以扩展到通知侧。
 
@@ -174,10 +178,10 @@ AgentRMC 已经有一个「Router 雏形」，但还没有领域模型和持久�
 
 - hook payload 补 `session_id`、`cwd`（有就带），`/notify` 用 `session_id + kind` 做去重键。
 - 同一 session 的重复通知 5 秒内只处理一次。
-- 宿主窗口已在前台时，`stop` 只记录不朗读；`permission` 仍然提醒。
+- 前台状态只影响是否自动 raise；`permission` / `question` / `stop` 的语音提醒照常。
 - `GET /state` 增加 `attention_count`。
 
-验收：连续触发两次相同 permission，只出现一次气泡；前台在 Agent 时不念 stop。
+验收：连续触发两次相同 permission，只出现一次气泡；前台在 Agent 时 stop 仍然朗读，只是不自动 raise。
 
 ### Phase 1：Work Item + 注意力队列（1–2 天）
 
@@ -232,7 +236,7 @@ AgentRMC 已经有一个「Router 雏形」，但还没有领域模型和持久�
 - `/work-items`、`/work-items/{id}/ack`。
 - 主窗「待我处理」列表。
 - 桌宠只对注意力项冒泡。
-- 测试：重复事件、重启恢复、双宿主分流、前台抑制。
+- 测试：重复事件、重启恢复、双宿主分流、前台只影响 raise 不静音。
 
 ---
 

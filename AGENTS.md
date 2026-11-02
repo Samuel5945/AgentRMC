@@ -42,28 +42,31 @@
 - Git Bash 里没有 cmake；用 VS 自带的
   `"C:\Program Files\Microsoft Visual Studio\18\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe"`。
 
-## 版本号：两条独立版本线
+## 版本号：Native 与插件同号同步升
 
 - **升版必须等用户明确说「升版」**（用户 2026-11-02 强调）：无论改了什么，都**不要**
   自己动 `plugins/agentrmc-bridge/VERSION`、`native/CMakeLists.txt` 的
   `project(... VERSION ...)`、`installer.nsi` 或各清单里的版本号。改完照常编译、跑测试、
   出包、静默装——**出包不要求升版**，同一个版本号原地重装即可（安装器按注册表原地升级）。
   版本号只在用户点头后改一次，改完再出一次包。
-- **Native 和插件分开编号**：桌面端 `native/` 与 `agentrmc-bridge` 各自演进；
-  `Native 0.3.9` 不代表插件也是 0.3.9。对外说明时必须分别写。
+- **插件跟随 Native 同号**（用户 2026-11-02 决定，取代原来的「两条独立版本线」）：
+  一次升版里 `native/CMakeLists.txt` 与 `plugins/agentrmc-bridge/VERSION` 写同一个号，
+  对外也只报一个版本号。别再出现「Native 0.3.9 / 插件 0.3.8」这种说法。
 - **不要每次内部改动都升版本**：功能改完先留在工作区，攒到一个可交付批次
   （要出包/要给别人装）再升。纯文档、注释、构建脚本调整不升。
-- **Native**：新增用户可见能力升 minor（如 0.3 → 0.4）；修 bug 升 patch；
-  内部重构/试验不升。
-- **插件**：只有 hook 事件、payload、宿主兼容性变化才升 patch；文档/测试调整不升。
-- 出包前仍跑 `native\tools\check-version.ps1`，保证 CMake / NSIS / exe 一致；
-  这只是“同一版本号内部一致”，不是要求 Native 与插件同号。
-- 当前批次冻结：Native `0.3.9`、插件 `0.3.8`；下一次对外发布再统一决定
-  是升 Native minor 还是只发 patch，不在每次改动后递增。
+- **升 minor 还是 patch**：新增用户可见能力升 minor（如 0.3 → 0.4）；修 bug 升 patch；
+  内部重构/试验不升。插件跟着同号，不再单独判断「插件该不该升」——但插件**确实改了**
+  才跟着升，纯 native 改动不必为了对齐而空升插件。
+- 出包前跑 `native\tools\check-version.ps1`（CMake / NSIS / exe 一致）和
+  `native\tools\sync-plugin-version.ps1 -Check`（五处清单 == VERSION）。
+- 当前批次：Native `0.3.9` / 插件 `0.3.9`。
 - **插件版本只有一个来源**：`plugins/agentrmc-bridge/VERSION`。构建时
   `native/tools/sync-plugin-version.ps1` 把它同步进 3 个 `plugin.json` 和
-  2 个 `marketplace.json`，`check-version.ps1` 出包前核对这五处；改插件版本
-  只改 VERSION 文件，别逐个改清单。
+  2 个 `marketplace.json`；改插件版本只改 VERSION 文件，别逐个改清单。
+- **别删旧版本号目录**：`~/.qoder(-cn)/plugins/cache/local/agentrmc-bridge/<ver>`
+  里的旧那一层，宿主**已经开着的会话**还在按它的路径调 hook（会话启动时路径已烧进
+  命令里）。删掉不会报错，只会让那个会话的提醒**静默消失**。Qoder 官方安装器自己会删，
+  手工挪走前更要想清楚；App「系统」页的「等新版上报」就是给这种情况留的读数。
 - **别删旧版本号目录**：`~/.qoder(-cn)/plugins/cache/local/agentrmc-bridge/<ver>`
   里的旧那一层，宿主**已经开着的会话**还在按它的路径调 hook（会话启动时路径已烧进
   命令里）。删掉不会报错，只会让那个会话的提醒**静默消失**。Qoder 官方安装器自己会删，

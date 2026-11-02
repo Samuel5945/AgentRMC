@@ -56,13 +56,19 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "%HERE%zip-plugin.ps1" ^
     -Out "%ROOT%\native\build\Release\plugins\agentrmc-bridge.zip" >nul
 if errorlevel 1 echo [!] plugin zip step failed (Qoder upload needs the zip; other hosts read the source dir)
 
+rem Qoder names its local plugins "@local" and its update button does not pull a
+rem new zip for those. Ship a clearly named copy so users can re-upload it.
+copy /y "%ROOT%\native\build\Release\plugins\agentrmc-bridge.zip" "%ROOT%\native\build\Release\plugins\agentrmc-bridge-qoder.zip" >nul
+
 rem Mirror the plugin zip into dist with the manifest version in the filename.
 rem FR-07: "which zip is current" must be answerable from the name alone.
 for /f "usebackq delims=" %%v in (`powershell -NoProfile -Command "(Get-Content -Raw -Encoding UTF8 '%ROOT%\plugins\agentrmc-bridge\.zcode-plugin\plugin.json' | ConvertFrom-Json).version"`) do set "PLUGVER=%%v"
 if defined PLUGVER (
     if not exist "%ROOT%\dist" mkdir "%ROOT%\dist"
     copy /y "%ROOT%\native\build\Release\plugins\agentrmc-bridge.zip" "%ROOT%\dist\agentrmc-bridge-%PLUGVER%.zip" >nul
+    copy /y "%ROOT%\native\build\Release\plugins\agentrmc-bridge-qoder.zip" "%ROOT%\dist\agentrmc-bridge-qoder-%PLUGVER%.zip" >nul
     echo Plugin zip -^> dist\agentrmc-bridge-%PLUGVER%.zip
+    echo Qoder zip  -^> dist\agentrmc-bridge-qoder-%PLUGVER%.zip
 )
 
 echo Done -^> native\build\Release\AgentRMCNative.exe

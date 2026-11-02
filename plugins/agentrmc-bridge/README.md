@@ -36,6 +36,21 @@
 | 拉前台       | 原生端缺省找 `ZCode.exe`             | 自检 → `WorkBuddy.exe` / `WorkBuddyAI.exe` | 自检 → `Qoder.exe`                   | 自检 → `Qoder CN.exe`                |
 | 宿主署名     | 缺省 ZCode                           | 自检 → `WorkBuddy` / `WorkBuddy AI`  | 自检 → 气泡念「Qoder」               | 自检 → 气泡念「Qoder CN」            |
 
+### Qoder 本地插件怎么更新
+
+Qoder 把从 zip 上传的插件记成 `agentrmc-bridge@local`（见
+`~/.qoder/plugins/installed_plugins_v2.json`）。本地插件没有 marketplace 版本可对比，
+插件页的「更新」按钮不会去拉新 zip——这是 Qoder 的行为，不是包没打。
+
+升级用安装目录里单独命名的 Qoder 包（构建时生成）：
+
+- `D:\apps\AgentRMC\plugins\agentrmc-bridge-qoder.zip`
+- 或仓库 `dist\agentrmc-bridge-qoder-<version>.zip`
+
+步骤：Qoder / Qoder CN 插件页 → 找到 AgentRMC 桌宠联动 → 移除旧版（或直接重新上传
+zip；只能安装不能覆盖时先卸载）→ 选上面的 zip → 重启 Qoder。国际版和 CN 是两个独立
+配置家，需要各自操作一次。
+
 ### 署名与拉前台靠自检，不写死
 
 0.2.0 把 Qoder 那份 hooks 的 `raise` 写死成 `Qoder CN.exe`，于是在国际版里桌宠会把**另一个 app**

@@ -239,7 +239,8 @@ QWidget *GuideDialog::buildChoicePage() {
              QString::fromUtf8("先蓝牙配对，按键控制电脑、按住语音键说话"),
              [this] { showStep(1); });
     makeCard(QString::fromUtf8("🎙  没有遥控器"),
-             QString::fromUtf8("键盘热键 / 麦克风按钮一键说话，语音就是主界面"),
+             QString::fromUtf8("全局热键 / 语音主界面 / 耳机播放键都能说话；"
+                               "也可随时再接遥控器"),
              [this] { showStep(kVoiceOnlyPage); });
     lay->addLayout(cards);
     lay->addStretch(1);
@@ -296,25 +297,133 @@ QWidget *GuideDialog::buildVoiceOnlyPage() {
     auto *page = new QWidget;
     auto *lay = new QVBoxLayout(page);
     lay->setContentsMargins(0, 0, 0, 0);
-    lay->setSpacing(14);
-    lay->addWidget(guide::heading(QString::fromUtf8("语音主界面 · 不需要遥控器")));
+    lay->setSpacing(10);
+    lay->addWidget(guide::heading(
+        QString::fromUtf8("没有遥控器 · 语音照样完整用")));
 
-    lay->addWidget(guide::row(
-        QString::fromUtf8("热键"),
-        QString::fromUtf8("全局键盘热键（默认 Ctrl+Alt+V）一键开始/结束说话，"
-                          "任何界面下都生效；被别的程序占用时在语音设置里换一个"),
+    auto *intro = new QLabel(QString::fromUtf8(
+        "遥控器只是可选的按键终端。没有它，用热键、语音主界面或耳机播放键都能说话；"
+        "以后接上遥控器也不影响这里的选择。"));
+    intro->setObjectName("secBody");
+    intro->setWordWrap(true);
+    lay->addWidget(intro);
+
+    auto *cols = new QHBoxLayout;
+    cols->setContentsMargins(0, 0, 0, 0);
+    cols->setSpacing(20);
+
+    auto *left = new QWidget;
+    auto *ll = new QVBoxLayout(left);
+    ll->setContentsMargins(0, 0, 0, 0);
+    ll->setSpacing(7);
+    ll->addWidget(guide::heading(QString::fromUtf8("1 · 怎么触发")));
+    ll->addWidget(guide::row(
+        QString::fromUtf8("Ctrl+Alt+V"),
+        QString::fromUtf8("全局热键（默认）：任何界面按一下开始、再按结束；"
+                          "被占用可在语音设置里换。"),
+        88));
+    ll->addWidget(guide::row(
+        QString::fromUtf8("大麦克风"),
+        QString::fromUtf8("语音主界面的大按钮：点开始、再点结束；"
+                          "停嘴 6 秒自动收尾。"),
+        88));
+    ll->addWidget(guide::row(
+        QString::fromUtf8("耳机"),
+        QString::fromUtf8("电脑没在放媒体时，播放/暂停 = 同一个语音开关。"),
+        88));
+    ll->addWidget(guide::row(
+        QString::fromUtf8("桌宠"),
+        QString::fromUtf8("单击桌宠 = 开始/结束说话；右键 →「说一句」。"),
+        88));
+    ll->addStretch(1);
+    cols->addWidget(left, 1);
+
+    auto *right = new QWidget;
+    auto *rl = new QVBoxLayout(right);
+    rl->setContentsMargins(0, 0, 0, 0);
+    rl->setSpacing(7);
+    rl->addWidget(guide::heading(QString::fromUtf8("2 · 话交给谁识别")));
+
+    auto makeRoute = [this](const QString &name, const QString &text,
+                            const QString &buttonText,
+                            const std::function<void()> &action) {
+        auto *line = new QWidget;
+        auto *row = new QHBoxLayout(line);
+        row->setContentsMargins(0, 0, 0, 0);
+        row->setSpacing(8);
+        auto *chip = new QLabel(name);
+        chip->setObjectName("kbd");
+        chip->setMinimumWidth(52);
+        chip->setAlignment(Qt::AlignCenter);
+        auto *body = new QLabel(text);
+        body->setObjectName("secBody");
+        body->setWordWrap(true);
+        row->addWidget(chip, 0, Qt::AlignTop);
+        row->addWidget(body, 1);
+        if (!buttonText.isEmpty()) {
+            auto *button = new QPushButton(buttonText);
+            button->setObjectName("ghostSmall");
+            button->setCursor(Qt::PointingHandCursor);
+            connect(button, &QPushButton::clicked, this, action);
+            row->addWidget(button, 0, Qt::AlignTop);
+        }
+        return line;
+    };
+    rl->addWidget(makeRoute(
+        QString::fromUtf8("转发"),
+        QString::fromUtf8("0 模型，推荐给 Qoder / WorkBuddy 用户：只把语音键"
+                          "转给前台 Agent，识别由它自己做。"),
+        QString::fromUtf8("用这个"),
+        [this] { emit useHotkeyRequested(); }));
+    rl->addWidget(makeRoute(
+        QString::fromUtf8("本地"),
+        QString::fromUtf8("SenseVoice 约 230MB / Qwen3-ASR 约 1GB；"
+                          "任何输入框都能出字，可离线。"),
+        QString(), nullptr));
+    rl->addWidget(makeRoute(
+        QString::fromUtf8("云端"),
+        QString::fromUtf8("不装模型；音频上传到你配置的 OpenAI 兼容 ASR 服务。"),
+        QString(), nullptr));
+
+    voiceOnlyStatus_ = new QLabel;
+    voiceOnlyStatus_->setObjectName("muted");
+    voiceOnlyStatus_->setWordWrap(true);
+    rl->addWidget(voiceOnlyStatus_);
+
+    auto *settings = new QPushButton(QString::fromUtf8("语音设置…"));
+    settings->setObjectName("ghostSmall");
+    settings->setCursor(Qt::PointingHandCursor);
+    connect(settings, &QPushButton::clicked, this,
+            [this] { emit openVoiceSettingsRequested(); });
+    auto *settingsRow = new QHBoxLayout;
+    settingsRow->addWidget(settings);
+    settingsRow->addStretch(1);
+    rl->addLayout(settingsRow);
+    rl->addStretch(1);
+    cols->addWidget(right, 1);
+
+    lay->addLayout(cols);
+
+    auto *enhance = new QWidget;
+    auto *el = new QVBoxLayout(enhance);
+    el->setContentsMargins(0, 0, 0, 0);
+    el->setSpacing(7);
+    el->addWidget(guide::heading(QString::fromUtf8("3 · 按需加一点")));
+    el->addWidget(guide::row(
+        QString::fromUtf8("对话"),
+        QString::fromUtf8("右键桌宠 → 对话模式：闲聊走自带 LLM，"
+                          "干活的话交给前台 Agent。"),
         68));
-    lay->addWidget(guide::row(
-        QString::fromUtf8("麦克风"),
-        QString::fromUtf8("语音主界面的大按钮点击开始、再点结束；说完停嘴几秒自动收尾。"
-                          "没遥控器也能完整用语音，遥控器以后接上随时能用"),
+    el->addWidget(guide::row(
+        QString::fromUtf8("语音反馈"),
+        QString::fromUtf8("填 TTS key 后，回复和提醒会念出来；没 key 只有气泡。"),
         68));
-    lay->addWidget(guide::row(
-        QString::fromUtf8("转写"),
-        QString::fromUtf8("结果自动复制/粘贴，说「打开 xx」还能直接启动应用；"
-                          "想本地识别先在语音设置里导入模型包"),
+    el->addWidget(guide::row(
+        QString::fromUtf8("提醒"),
+        QString::fromUtf8("装 agentrmc-bridge 插件：等授权、等选方案、任务完成时"
+                          "桌宠气泡 + 语音。"),
         68));
-    lay->addStretch(1);
+    lay->addWidget(enhance);
 
     auto *enterRow = new QHBoxLayout;
     auto *enter = new QPushButton(QString::fromUtf8("进入语音主界面"));
@@ -459,6 +568,20 @@ void GuideDialog::setBackend(const QString &backend) {
         localMark_->setText(hotkey ? QString()
                                    : QString::fromUtf8("✓ 当前使用"));
     }
+    if (voiceOnlyStatus_ != nullptr) {
+        QString label = backend;
+        if (backend == QStringLiteral("hotkey")) {
+            label = QString::fromUtf8("转发热键 · 0 模型");
+        } else if (backend == QStringLiteral("sensevoice")) {
+            label = QStringLiteral("本地 SenseVoice");
+        } else if (backend == QStringLiteral("qwen3")) {
+            label = QStringLiteral("本地 Qwen3-ASR");
+        } else if (backend == QStringLiteral("api")) {
+            label = QString::fromUtf8("云端 ASR");
+        }
+        voiceOnlyStatus_->setText(
+            QString::fromUtf8("当前识别方式：%1").arg(label));
+    }
 }
 
 void GuideDialog::updateStepUi() {
@@ -467,7 +590,7 @@ void GuideDialog::updateStepUi() {
     if (index == 0) {
         stepLabel_->setText(QString::fromUtf8("先选一条路线"));
     } else if (index == kVoiceOnlyPage) {
-        stepLabel_->setText(QString::fromUtf8("语音路线"));
+        stepLabel_->setText(QString::fromUtf8("没有遥控器 · 语音路线"));
     } else {
         stepLabel_->setText(QString::fromUtf8("第 %1 / %2 步")
                                 .arg(index)

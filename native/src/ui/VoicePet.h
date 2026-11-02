@@ -81,6 +81,8 @@ signals:
     void chatReplied(const QString &text);
     // 用户点了气泡：把这条提醒对应的宿主窗口拉回前台。
     void bubbleActivated(const QString &raiseExe);
+    // 右键「使用引导…」：主窗负责把引导窗叫出来。
+    void guideRequested();
     void voiceFeedbackError(const QString &error);
 
 protected:

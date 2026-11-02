@@ -285,6 +285,8 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
     // 点气泡回跳：提醒不再靠自动抢前台，用户点了才把宿主窗口拉回来。
     connect(voicePet_, &VoicePet::bubbleActivated, this,
             [](const QString &exe) { AgentWindow::raise(exe); });
+    // 桌宠右键「使用引导…」：和主窗按钮走同一个引导窗。
+    connect(voicePet_, &VoicePet::guideRequested, this, &MainWindow::showGuide);
     connect(voicePet_, &VoicePet::voiceFeedbackError, this,
             [this](const QString &error) {
                 appendEvent(QStringLiteral("error"), QString(), QString(),
@@ -696,7 +698,26 @@ QWidget *MainWindow::buildGuidePage() {
         addSectionQ(name, text);
     };
 
-    addSection(QString::fromUtf8("第一次使用：配对遥控器"),
+    auto *intro = new QLabel(QString::fromUtf8(
+        "遥控器是可选的：有遥控器就按下面配对；没有也能用语音——先看「没有遥控器」"
+        "这一段。桌宠右键菜单里也能完成同样的操作。"));
+    intro->setObjectName("secBody");
+    intro->setWordWrap(true);
+    cl->addWidget(intro);
+
+    addSection(QString::fromUtf8("没有遥控器也能用"),
+               {{"触发", "Ctrl+Alt+V 全局热键 / 语音主界面大麦克风 / "
+                         "耳机播放键 / 单击桌宠"},
+                {"识别", "转发热键（0 模型，交给 Qoder / WorkBuddy）或本地模型"
+                         "（任何输入框都能出字）"},
+                {"对话", "右键桌宠 → 对话模式：闲聊走 LLM，"
+                         "干活的话交给前台 Agent"},
+                {"提醒", "装 agentrmc-bridge 插件：等授权、等选方案、任务完成时"
+                         "桌宠气泡 + 语音"},
+                {"入口", "主界面左栏「语音主界面」/ 托盘「语音面板」/ 桌宠右键"},
+                {"模型", "把模型 zip 拖进窗口，或「语音面板 → 模型设置 → "
+                         "导入模型包…」"}});
+    addSection(QString::fromUtf8("有遥控器：第一次配对"),
                {{"长按 3 秒", "同时按住「返回」+「主页」，直到遥控器指示灯快速闪烁"},
                 {"蓝牙设置", "点遥控器卡片右侧的「蓝牙设置」，在列表里连接遥控器"},
                 {"看状态", "按一下任意键，卡片上对应键位亮起就说明连上了"},
@@ -719,14 +740,23 @@ QWidget *MainWindow::buildGuidePage() {
                 {"接管原生键", "映射页右下角打开后，当前场景中映射键的原生事件被吞；"
                                "实体键盘同名键也会按遥控器映射处理，"
                                "双击键的单击会有一段判定延迟"}});
-    addSection(QString::fromUtf8("语音怎么用"),
-               {{"默认", "遥控器语音键转发给当前应用自己的语音快捷键"
-                         "（Qoder Ctrl+Shift+V / WorkBuddy Ctrl+D），不用装模型"},
-                {"装本地模型", "把模型包（.zip）拖进窗口，或点「模型设置 → 导入模型包…」；"
-                               "装好后在「识别方式」里切到本地才会用上"},
-                {"什么时候用本地", "本地转写是通用输入：任何软件的输入框里都能直接出字；"
-                                   "应用没有语音快捷键、或想离线识别时用它。SenseVoice 约 230MB"},
-                {"耳机", "电脑上没有媒体在播放时，耳机播放/暂停 = 同一个语音开关"}});
+    addSection(QString::fromUtf8("语音怎么用（有/无遥控器都适用）"),
+               {{"触发", "无遥控器：Ctrl+Alt+V / 语音主界面大麦克风 / "
+                         "耳机播放键 / 单击桌宠；有遥控器：按住语音键"},
+                {"转发", "默认，0 模型：把语音键转给当前应用自己的快捷键"
+                         "（Qoder Ctrl+Shift+V / WorkBuddy Ctrl+D）"},
+                {"本地", "SenseVoice ~230MB / Qwen3-ASR ~1GB：任何输入框都能出字，"
+                         "可离线；模型 zip 拖进窗口或「模型设置」导入"},
+                {"云端", "不装模型；音频上传到你配置的 OpenAI 兼容 ASR 服务"},
+                {"对话", "右键桌宠 → 对话模式：闲聊走 LLM，"
+                         "干活的话交给前台 Agent"},
+                {"耳机", "电脑没在放媒体时，播放/暂停 = 同一个语音开关"}});
+    addSection(QString::fromUtf8("桌宠右键菜单"),
+               {{"一级", "开始/停止监听、说一句/结束说话"},
+                {"语音与 Agent", "识别方式、对话模式、对话设置、交给哪个 Agent、"
+                                 "朗读最近一句、语音反馈"},
+                {"外观与窗口", "主题、显示主界面、语音面板、贴边隐藏、隐藏桌宠"},
+                {"帮助", "使用引导…"}});
     addSection(QString::fromUtf8("打开应用"),
                {{"怎么说", "按住语音键说「打开剪映」「打开 Qoder」「打开浏览器」，"
                           "松手后直接启动，不会再往输入框里贴这几个字"},

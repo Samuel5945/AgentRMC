@@ -63,6 +63,7 @@ private:
     QLabel *keyStatus_ = nullptr;
     QLabel *hotkeyMark_ = nullptr;
     QLabel *localMark_ = nullptr;
+    QLabel *voiceOnlyStatus_ = nullptr;
     QLabel *dropHint_ = nullptr;
     int keyCount_ = 0;
     QPushButton *prev_ = nullptr;

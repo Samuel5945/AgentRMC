@@ -5,6 +5,9 @@
 #endif
 #include <windows.h>
 
+#include <QPair>
+#include <QVector>
+
 #include <string>
 
 namespace {
@@ -63,6 +66,27 @@ QStringList knownExes() {
             QStringLiteral("WorkBuddy.exe"), QStringLiteral("CodeBuddy.exe"),
             QStringLiteral("ZCode.exe"), QStringLiteral("Qoder.exe"),
             QStringLiteral("Qoder CN.exe")};
+}
+
+QString displayName(const QString &exe) {
+    static const QVector<QPair<QString, QString>> kNames = {
+        {QStringLiteral("WorkBuddyAI.exe"), QStringLiteral("WorkBuddy AI")},
+        {QStringLiteral("WorkBuddy.exe"), QStringLiteral("WorkBuddy")},
+        {QStringLiteral("CodeBuddy.exe"), QStringLiteral("CodeBuddy")},
+        {QStringLiteral("ZCode.exe"), QStringLiteral("ZCode")},
+        {QStringLiteral("Qoder.exe"), QStringLiteral("Qoder")},
+        {QStringLiteral("Qoder CN.exe"), QStringLiteral("Qoder CN")},
+    };
+    for (const auto &entry : kNames) {
+        if (entry.first.compare(exe, Qt::CaseInsensitive) == 0) {
+            return entry.second;
+        }
+    }
+    QString name = exe;
+    if (name.endsWith(QStringLiteral(".exe"), Qt::CaseInsensitive)) {
+        name.chop(4);
+    }
+    return name;
 }
 
 QString detectAgentExe(const QString &preferred) {

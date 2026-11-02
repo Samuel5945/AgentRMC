@@ -2,8 +2,8 @@
 
 - 文档版本：v1.2（P0 落地后的状态更新）
 - 日期：2026-11-02
-- 状态：FR-01 / FR-02 / FR-03 / FR-07（版本元数据部分）已落地、已出包装机；提交与对外发布通道待执行
-- 适用版本：AgentRMC Native `0.3.0`（工作区 + 已出包装机）/ `agentrmc-bridge` `0.3.3`（工作区）
+- 状态：P0 已提交；Native 0.3.1 UX 重做已出包装机；对外发布通道待执行
+- 适用版本：AgentRMC Native `0.3.1`（工作区，UX 重做）/ `agentrmc-bridge` `0.3.3`（工作区）
 - 覆盖范围：版本演进与发布状态、hooks 提醒、桌宠气泡 / TTS、窗口回跳、语音分流给宿主 Agent、WorkBuddy 双宿主识别
 - 不覆盖：遥控器按键映射、主题系统、ASR / TTS / LLM 模型本身（只在 §2.0 的时间线里点名，不展开需求）
 
@@ -22,6 +22,22 @@
 - [x] 测试：`node test/host.test.js` **23/23 PASS**（含双 WorkBuddy 纯函数与真脚本 e2e）；native 8 个测试全绿。
 - [x] 出包 / 装机：`dist\AgentRMC-Setup.exe`（20,009,113 B）+ `dist\agentrmc-bridge-0.3.3.zip`；静默安装到 `D:\apps\AgentRMC`，`/state` 验活，exe FileVersion / 注册表 DisplayVersion 均为 `0.3.0`。
 - [ ] 提交 / tag / GitHub release / 更新 JSON / 网盘包体：待执行（对外通道，需单独确认）。
+
+### 0.2 本轮 UX 重做（Native 0.3.1）
+
+- [x] **桌宠右键菜单**：一级从 13 行压到 6 行——开始/停止监听、说一句/结束说话、
+  「语音与 Agent ▸」（识别方式、对话模式、对话设置、交给哪个 Agent、朗读最近一句、
+  语音反馈）、「外观与窗口 ▸」（主题、主界面、语音面板、贴边、隐藏）、「使用引导…」。
+- [x] **目标菜单可读**：新增 `AgentWindow::displayName()`，菜单显示 `WorkBuddy` /
+  `WorkBuddy AI` / `Qoder CN` 等产品名而不是裸 exe；钉住的目标未运行时显示
+  「（未运行）」而不是无提示。
+- [x] **「没有遥控器」引导页重做**：从 3 行扩成「怎么触发 / 话交给谁识别 / 按需加一点」
+  三段，覆盖全局热键、语音主界面、耳机、桌宠、转发/本地/云端、对话模式、TTS、
+  Agent 提醒，并显示当前识别方式、提供「语音设置…」入口。
+- [x] **使用引导页**：新增「没有遥控器也能用」「桌宠右键菜单」两节；「语音怎么用」
+  改为有/无遥控器都适用，补充云端 ASR、对话模式与 Agent 分流。
+- [x] **静默安装**：新增 `native/tools/install-silent.bat`，并在 `AGENTS.md` 记录
+  Git Bash 直接传 `/S` 会被 MSYS 路径转换、必须走脚本或 `cmd //c` 的坑。
 
 ---
 
@@ -188,6 +204,19 @@ Agent 宿主
 | `node test/host.test.js` | 23/23 PASS | 含双 WorkBuddy 矩阵 |
 | 两套 WorkBuddy 宿主缓存 | 旧版 0.3.2 / AI 0.3.1 | 尚未在各自插件市场更新到 0.3.3 |
 | GitHub releases / 更新 JSON / 网盘 | 仍为 0.1.0 / 0.2.0 / 0.2.0 | 对外通道未动 |
+
+### 2.8 UX 重做后的读数（2026-11-02 11:50）
+
+| 读数 | 值 | 说明 |
+|---|---|---|
+| `native/CMakeLists.txt` | `project(... VERSION 0.3.1)` | UX 重做版本 |
+| `native/build/Release/AgentRMCNative.exe` | FileVersion / ProductVersion `0.3.1` | `check-version.ps1` 通过 |
+| `D:\apps\AgentRMC\AgentRMCNative.exe` | FileVersion / ProductVersion `0.3.1` | 静默装机器 |
+| NSIS `DisplayVersion` | `0.3.1` | 与 exe / CMake 一致 |
+| `dist\AgentRMC-Setup.exe` | 20,012,592 B，11-02 11:47 | 含 0.3.3 插件 |
+| `dist\agentrmc-bridge-0.3.3.zip` | 0.3.3，22,729 B | 随包插件 |
+| `GET /state` | `pet_visible=1 chat_mode=1 listening=1 tts_ready=1` | 装机后验活 |
+| 静默安装命令 | `native\tools\install-silent.bat` | Git Bash 不再直接传 `/S` |
 
 ---
 
@@ -523,21 +552,22 @@ resolveHost(argv, scriptDir, env):
 |---|---|---|
 | 0.1.0（2026-10-31） | 原生迁移线 M1–M5 + 分发流程 | GitHub release `v0.1.0`（公开）+ 网盘安装包与模型包 |
 | 0.2.0（2026-11-01） | 语音打开应用 / 语音主界面 / 桌宠 / TTS+LLM 对话闭环 / 主题系统 / ZCode 联动（AgentBridge + 插件） | **已对外发布**：官网 `agentrmc-update.json` 标 0.2.0 + 网盘包体已滚动更新到 0.2.0（作者确认）；GitHub 无 release、无 tag |
-| Native 0.3.0（工作区 + 已装机） | 语音分流、可点气泡、`AgentWindow`（含双 WorkBuddy 白名单）、stop 不抢前台、右键目标菜单；版本元数据已收敛到 CMake（FileVersion / ProductVersion = 0.3.0） | `dist\AgentRMC-Setup.exe`（20,009,113 B，11-02 11:37）已静默装机并验活；**未提交、未发布** |
+| Native 0.3.0（已提交 + 已装机） | 语音分流、可点气泡、`AgentWindow`（含双 WorkBuddy 白名单）、stop 不抢前台、右键目标菜单；版本元数据已收敛到 CMake（FileVersion / ProductVersion = 0.3.0） | 提交 `03151c5`；`dist\AgentRMC-Setup.exe` 已静默装机并验活；**未发布** |
+| Native 0.3.1（UX 重做，已出包 + 已装机） | 桌宠右键菜单分组、目标菜单产品名、无遥控器引导重做、使用引导页补章节、静默安装脚本 | `dist\AgentRMC-Setup.exe`（20,012,592 B，11-02 11:47）；FileVersion / NSIS `0.3.1`；**待提交、未发布** |
 | Plugin 0.3.3（工作区 + 已出包） | FR-01 双 WorkBuddy 识别、FR-03 版本统一；stop 最终回复、`hooks-workbuddy` 沿用 0.3.2 | `dist\agentrmc-bridge-0.3.3.zip` + 随包 zip；两套 WorkBuddy 宿主缓存待各自市场升级 |
 
 ### 待排期
 
 | 版本 | 内容 | 交付物 |
 |---|---|---|
-| 提交 / 发布 | FR-07 的提交、tag、GitHub release、更新 JSON、网盘包体 | 需单独确认对外动作 |
+| 提交 / 发布 | UX 重做的提交；tag、GitHub release、更新 JSON、网盘包体 | 对外动作需单独确认 |
 | Plugin 0.3.3 宿主升级 | 旧版 `~/.workbuddy` 与 AI `~/.workbuddy-ai` 各自升级到 0.3.3 | 宿主插件市场操作 |
-| Native 0.3.1 | FR-04 兜底顺序与菜单命名、FR-05 语音启动别名、FR-06 在线判定分层 | 新安装包 + GitHub release |
+| Native 后续 | FR-05 语音启动别名、FR-06 在线判定分层；FR-04 的兜底顺序部分 | 新安装包 + GitHub release |
 | 补发 | 0.2.0 / 0.3.0 的 GitHub release（或记录「跳过 0.2.0，对外从 0.3.0 起算」） | release + 附件随创建命令上传 |
 
 发布检查清单：
 
-- [ ] 当前工作区（含 `AgentWindow.*`、本 PRD）攒成提交并打 tag。
+- [x] P0 已提交 `03151c5`；本次 UX 重做随下一笔提交；tag 仍待打。
 - [x] `app.rc` / CMake / NSIS 三处版本一致，装机 exe FileVersion 实测对得上（`check-version.ps1` 已接入 `package.bat`）。
 - [x] `node test/host.test.js` 全绿，含双 WorkBuddy 矩阵（23/23）。
 - [x] native 相关测试全绿（App / Store / Theme / Bridge / Router / Voice / Takeover / Audio）。

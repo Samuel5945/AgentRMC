@@ -11,6 +11,10 @@ namespace AgentWindow {
 // 常见宿主的进程映像名，按优先级排；detectAgentExe 逐个试。
 QStringList knownExes();
 
+// 进程映像名 → 产品显示名（WorkBuddyAI.exe → WorkBuddy AI）。
+// 未知名字去掉 .exe 原样返回，给菜单/气泡用，避免把裸 exe 名甩给用户。
+QString displayName(const QString &exe);
+
 // 找到就返回该进程映像名，都不在返回空串。preferred 非空时优先试它。
 QString detectAgentExe(const QString &preferred = QString());
 

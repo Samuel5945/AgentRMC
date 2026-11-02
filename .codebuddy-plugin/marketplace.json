@@ -1,0 +1,19 @@
+{
+  "name": "agentrmc-marketplace",
+  "description": "AgentRMC 插件市场（GitHub / SSH 源用，清单在仓库根）",
+  "owner": {
+    "name": "AgentRMC"
+  },
+  "plugins": [
+    {
+      "name": "agentrmc-bridge",
+      "source": "./plugins/agentrmc-bridge",
+      "version": "0.2.0",
+      "description": "AgentRMC 桌宠联动：权限确认/任务完成自动气泡提醒（hooks），MCP 工具汇报进度、让桌宠说话、查桌宠状态。",
+      "displayName": "AgentRMC Bridge",
+      "displayName_i18n": { "zh-CN": "AgentRMC 桌宠联动" },
+      "description_i18n": { "zh-CN": "AgentRMC 桌宠联动：权限确认/任务完成自动气泡提醒（hooks），MCP 工具汇报进度、让桌宠说话、查桌宠状态。" },
+      "category": "productivity"
+    }
+  ]
+}

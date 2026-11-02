@@ -30,7 +30,10 @@ const agent =
   (process.env.WORKBUDDY_APP_VERSION || process.env.CLIENT_INFO_PRODUCT_NAME === 'WorkBuddy'
     ? 'WorkBuddy'
     : 'ZCode');
-const raise = process.argv[4] || '';
+// 拉前台的进程映像名：argv 传的优先（Qoder 那份 hooks.json 显式给 Qoder CN.exe）；
+// WorkBuddy 那份 hooks.json 与 ZCode 共用（根 hooks 目录会被 WorkBuddy 自动加载，
+// 再声明一份会重复触发），所以按宿主兜底进程名，否则原生端只会去找 ZCode.exe。
+const raise = process.argv[4] || (agent === 'WorkBuddy' ? 'WorkBuddyAI.exe' : '');
 
 let raw = '';
 process.stdin.setEncoding('utf8');

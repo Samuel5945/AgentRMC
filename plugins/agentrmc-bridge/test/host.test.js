@@ -321,6 +321,32 @@ check('hooks-qoder 注册了 PreToolUse + matcher=AskUserQuestion', () => {
   assert.strictEqual(group.hooks[0].timeout, 3);
 });
 
+check('hooks 注册 UserPromptSubmit: 新一轮对话清旧验收', () => {
+  const root = JSON.parse(
+    fs.readFileSync(path.join(PLUGIN_ROOT, 'hooks', 'hooks.json'), 'utf8'),
+  );
+  assert.match(root.hooks.UserPromptSubmit[0].hooks[0].command, /turn-start/);
+  const qoder = JSON.parse(
+    fs.readFileSync(path.join(PLUGIN_ROOT, 'hooks-qoder', 'hooks.json'), 'utf8'),
+  );
+  assert.deepStrictEqual(qoder.hooks.UserPromptSubmit[0].hooks[0].args, [
+    '${QODER_PLUGIN_ROOT}/hooks/agentrmc-notify.js',
+    'turn-start',
+  ]);
+});
+
+check('turn-start DRY_RUN: 带 session 且不出声', () => {
+  const r = dryRun(
+    installInto('.workbuddy'),
+    'turn-start',
+    JSON.stringify({ session_id: 's1', cwd: 'D:/repo' }),
+  );
+  assert.strictEqual(r.payload.event, 'turn-start');
+  assert.strictEqual(r.payload.session_id, 's1');
+  assert.strictEqual(r.payload.title, 'WorkBuddy');
+  assert.strictEqual(r.payload.message, '');
+});
+
 check('hooks-workbuddy 注册了 PreToolUse + matcher=AskUserQuestion（清单指向该文件）', () => {
   const h = JSON.parse(fs.readFileSync(path.join(PLUGIN_ROOT, 'hooks-workbuddy', 'hooks.json'), 'utf8'));
   const group = h.hooks.PreToolUse[0];

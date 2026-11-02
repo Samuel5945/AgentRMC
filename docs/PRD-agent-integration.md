@@ -2,8 +2,8 @@
 
 - 文档版本：v1.2（P0 落地后的状态更新）
 - 日期：2026-11-02
-- 状态：P0 已提交；Native 0.3.7（离线 spool + 健康快照）已出包装机；对外发布通道待执行
-- 适用版本：AgentRMC Native `0.3.7`（离线 spool + 健康快照）/ `agentrmc-bridge` `0.3.5`（离线 spool）
+- 状态：P0 已提交；Native 0.3.8（同 session 旧验收自动归档）已出包装机；对外发布通道待执行
+- 适用版本：AgentRMC Native `0.3.8`（同 session 旧验收自动归档）/ `agentrmc-bridge` `0.3.6`（UserPromptSubmit）
 - 覆盖范围：版本演进与发布状态、hooks 提醒、桌宠气泡 / TTS、窗口回跳、语音分流给宿主 Agent、WorkBuddy 双宿主识别
 - 不覆盖：遥控器按键映射、主题系统、ASR / TTS / LLM 模型本身（只在 §2.0 的时间线里点名，不展开需求）
 
@@ -114,6 +114,17 @@
 - [x] **UI 系统行**：「待我处理」页显示「桥接正常 · N 个 Worker · 最近事件 HH:mm」，
   有离线待补/桥接异常时橙色提示。
 - [x] **测试**：插件新增「AgentRMC 未开写 spool」用例，25/25。
+
+### 0.9 同 session 旧验收自动归档（Native 0.3.8 / Plugin 0.3.6）
+
+- [x] **新对话即归档**：注册 `UserPromptSubmit` hook（ZCode / WorkBuddy 用根 hooks，
+  Qoder 用 hooks-qoder），发 `turn-start`；原生端把同 session 的旧 `review` 直接
+  标记 done，不出声。
+- [x] **兜底**：同一 session 来了新的 permission / question / progress / stop 时，
+  旧 review 也自动归档；重复 stop 仍只保留一张 review。
+- [x] **边界**：只按 `session_id` 归档；没有 session 的老宿主不清，避免误伤。
+- [x] **测试**：WorkItem 新增「新活动归档旧 review」「重复 stop 不重复建卡」
+  「turn-start 归档 review」；插件新增 UserPromptSubmit/turn-start 用例，27/27。
 
 ---
 
@@ -351,6 +362,19 @@ Agent 宿主
 | `GET /health` | `bridge=true / spool_pending=0 / work_items / workers` | 实测 |
 | UI 系统行 | `系统：桥接正常 · 4 个 Worker · 最近事件 14:27` | UI Automation 实测 |
 | 插件测试 | 25/25 PASS（新增 spool 用例） | `AgentRMC未开写spool` |
+
+### 2.13 同 session 旧验收自动归档读数（2026-11-02 14:36）
+
+| 读数 | 值 | 说明 |
+|---|---|---|
+| `native/CMakeLists.txt` | `project(... VERSION 0.3.8)` | 自动归档版本 |
+| `D:\apps\AgentRMC\AgentRMCNative.exe` | FileVersion / ProductVersion `0.3.8` | 静默装机器 |
+| NSIS `DisplayVersion` | `0.3.8` | 与 exe / CMake 一致 |
+| `dist\AgentRMC-Setup.exe` | 20,062,688 B，11-02 14:36 | 含 0.3.6 插件 |
+| `dist\agentrmc-bridge-0.3.6.zip` | 0.3.6，24,125 B | 含 UserPromptSubmit |
+| 实测 | stop review → turn-start → done | `sess-auto`，attention 8→7 |
+| 插件测试 | 27/27 PASS | 新增 UserPromptSubmit/turn-start |
+| WorkItem 测试 | 17 项断言 | 旧 review 归档、重复 stop 不重复建卡 |
 
 ---
 
@@ -698,7 +722,8 @@ resolveHost(argv, scriptDir, env):
 | Native 0.3.5（tool-call 防泄漏，已出包 + 已装机） | 人设禁止工具调用；注入真实待办摘要；`ChatText` 检测 tool-call 并替换为待办兜底；`AgentRMCChatTextTest` | `dist\AgentRMC-Setup.exe`（20,048,558 B，11-02 14:10）；FileVersion / NSIS `0.3.5` |
 | Native 0.3.6（Worker + 生命周期，已出包 + 已装机） | `GET /workers`；语音派活建 working 单、permission 合并 needs-me、stop 合并 review；progress 更新 working；Worker 状态/过滤 | `dist\AgentRMC-Setup.exe`（20,052,815 B，11-02 14:18）；FileVersion / NSIS `0.3.6` |
 | Native 0.3.7（离线 spool + health，已出包 + 已装机） | hook 离线写 spool；启动/5 秒补投；`GET /health`；UI 系统健康行 | `dist\AgentRMC-Setup.exe`（20,062,826 B，11-02 14:27）；FileVersion / NSIS `0.3.7` |
-| Plugin 0.3.5（已出包） | 离线 spool；`AGENTRMC_PORT` / `AGENTRMC_SPOOL_DIR` 可注入 | `dist\agentrmc-bridge-0.3.5.zip`；宿主缓存待自动更新 |
+| Native 0.3.8（同 session 旧验收自动归档，已出包 + 已装机） | `UserPromptSubmit` → `turn-start`；同 session 旧 review 自动 done；permission/progress/stop 兜底归档；重复 stop 不重复建卡 | `dist\AgentRMC-Setup.exe`（20,062,688 B，11-02 14:36）；FileVersion / NSIS `0.3.8` |
+| Plugin 0.3.6（已出包） | 根 hooks / Qoder hooks 注册 `UserPromptSubmit`；插件 27/27 | `dist\agentrmc-bridge-0.3.6.zip`；宿主缓存待自动更新 |
 | Plugin 0.3.3（工作区 + 已出包） | FR-01 双 WorkBuddy 识别、FR-03 版本统一；stop 最终回复、`hooks-workbuddy` 沿用 0.3.2 | `dist\agentrmc-bridge-0.3.3.zip` + 随包 zip；两套 WorkBuddy 宿主缓存均已 0.3.3 |
 | Plugin 0.3.4（已出包） | hook payload 透传 `session_id` / `project` / `event_id`，给 Work Item 去重和分组 | `dist\agentrmc-bridge-0.3.4.zip`（23,014 B）；宿主缓存待自动更新 |
 
@@ -721,7 +746,7 @@ resolveHost(argv, scriptDir, env):
 - [x] 静默安装 + 启动 + `curl /state` 验活。
 - [x] 双开 WorkBuddy / WorkBuddy AI 手工验收：permission 双向前台、stop 气泡点击已实测；question 走 DRY_RUN payload 验证。
 - [x] README / 插件 README / 市场描述同步双宿主说明。
-- [x] `dist` 无陈旧版本号的插件 zip（当前仅 `agentrmc-bridge-0.3.5.zip`）。
+- [x] `dist` 无陈旧版本号的插件 zip（当前仅 `agentrmc-bridge-0.3.6.zip`）。
 - [ ] `agentrmc-update.json` 线上 `version` == 本次发布版本，`notes` 含 0.3.x 内容；用 ≤0.2.0 的实例点「检查更新」能收到提示，点进去的包 = 同版本。
 - [ ] 网盘包体与发布版本对得上（体积 / 文件时间做账），或明确记录「本次不走网盘」。
 
@@ -741,7 +766,7 @@ resolveHost(argv, scriptDir, env):
 | 对话文本 | `AgentRMCChatTextTest`：XML/JSON tool-call 检测、正常对话不误判、markdown/emoji 清理 |
 | Native | `knownExes()` 包含两个 WorkBuddy；`AgentWindow` 目标选择顺序（可注入窗口枚举）——待 P1 |
 | 版本一致性 | `check-version.ps1`：CMake / NSIS / exe FileVersion / ProductVersion 四处相等（已实现并接入 package.bat） |
-| 回归 | `host.test.js` 25/25 PASS；native 10 个测试全绿 |
+| 回归 | `host.test.js` 27/27 PASS；native 10 个测试全绿 |
 
 ### 12.2 手工矩阵
 

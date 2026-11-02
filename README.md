@@ -34,7 +34,7 @@ WorkBuddy · Qt 6 · C++ · Windows
 实测机型为极米「快乐星球 O3」13 键 BLE 遥控器（VID `0x000D` / PID `0x3838`）；
 同款 HID 遥控器改 `config.json` 的 `device_mark` 即可复用。
 
-当前实现是 **C++/Qt 6 原生版**（`native/`，v0.3.7；按键映射不接 LLM，动作直接交给 Qoder / WorkBuddy 服务端；只有桌宠对话模式会调用你在「对话设置」里自配的 LLM）。
+当前实现是 **C++/Qt 6 原生版**（`native/`，v0.3.8；按键映射不接 LLM，动作直接交给 Qoder / WorkBuddy 服务端；只有桌宠对话模式会调用你在「对话设置」里自配的 LLM）。
 Python 版留在 `legacy-python` 分支，两版读写同一套 `config.json` / `profiles.json`。
 
 ![AgentRMC · 经典主题与鲸鱼娘主题](assets/readme-showcase.gif)
@@ -506,7 +506,9 @@ Python 线的 `commands.json` 是另一套东西（任意关键词 → `run` / `
 
 主界面第一个页签是「待我处理」：按「等你处理 → 待验收 → 进行中」排序，支持按 Worker
 过滤，显示 Worker 状态和系统健康行（桥接 / 最近事件 / 离线待补），双击回到对应 Agent，
-「标为已处理」归档；Work Item 落在用户数据目录，重启不丢。
+「标为已处理」归档；Work Item 落在用户数据目录，重启不丢。同一 session 开新对话
+（`UserPromptSubmit`）时，旧「待验收」会自动归档；没有这个 hook 的宿主，下一条
+permission / progress / stop 也会兜底归档。
 端口被占用时只是放弃监听，不影响其它功能。
 
 ### ZCode 插件（推荐给其他用户）

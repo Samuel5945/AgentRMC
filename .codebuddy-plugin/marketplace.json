@@ -8,7 +8,7 @@
     {
       "name": "agentrmc-bridge",
       "source": "./plugins/agentrmc-bridge",
-      "version": "0.3.5",
+      "version": "0.3.6",
       "description": "AgentRMC 桌宠联动：等授权、等选方案时桌宠自动气泡加语音提醒并把 Agent 窗口带回前台；任务完成的提醒点一下气泡也能回去。支持 WorkBuddy / WorkBuddy AI 双宿主各自安装，还能让桌宠汇报进度、说一句话、查状态。",
       "displayName": "AgentRMC Bridge",
       "displayName_i18n": {

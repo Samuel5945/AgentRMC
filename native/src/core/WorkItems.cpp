@@ -131,6 +131,12 @@ WorkItem WorkItemStore::upsert(const QString &source, const QString &agentExe,
     const QDateTime now = QDateTime::currentDateTimeUtc();
     const QString stage = stageForKind(kind);
 
+    // 同一 session 的新活动（permission/progress/…）说明上一轮已经翻篇，
+    // 旧 review 直接归档；stop 还要保留本轮新 review，所以放到后面处理。
+    if (kind != QStringLiteral("stop") && !sessionId.isEmpty()) {
+        resolveReviews(sessionId);
+    }
+
     // 生命周期合并：同一 session（或同一 Agent 的近期 working 项）上来了
     // permission/question/stop，就更新原工单，而不是再长一张卡片。
     if (kind == QStringLiteral("permission") ||
@@ -177,18 +183,15 @@ WorkItem WorkItemStore::upsert(const QString &source, const QString &agentExe,
                 target->attentionSince = now;
             }
             if (kind == QStringLiteral("stop") && !sessionId.isEmpty()) {
-                resolveSession(sessionId, target->id);
+                resolveSession(sessionId, target->id, true);
             }
             save();
             return *target;
         }
     }
 
-    // 没有可合并的工单：stop 仍然要把同 session 其它 needs-me 收掉。
-    if (kind == QStringLiteral("stop") && !sessionId.isEmpty()) {
-        resolveSession(sessionId);
-    }
-
+    // 没有可合并的工单：先算 dedupe key；如果是重复 stop，上面的 dedupe
+    // 会直接更新旧 review，不会走到这里把它归档掉。
     QString key;
     if (!eventId.isEmpty()) {
         key = sessionId + QLatin1Char(':') + kind + QLatin1Char(':') + eventId;
@@ -219,6 +222,11 @@ WorkItem WorkItemStore::upsert(const QString &source, const QString &agentExe,
         item.stage = stage;
         save();
         return item;
+    }
+
+    // 新一轮 stop：旧 review 和本 session 其它 needs-me 都已经翻篇。
+    if (kind == QStringLiteral("stop") && !sessionId.isEmpty()) {
+        resolveSession(sessionId, QString(), true);
     }
 
     WorkItem item;
@@ -279,6 +287,32 @@ bool WorkItemStore::ack(const QString &id) {
 }
 
 bool WorkItemStore::resolveSession(const QString &sessionId,
+                                   const QString &keepId,
+                                   bool includeReview) {
+    if (sessionId.isEmpty()) {
+        return false;
+    }
+    bool changed = false;
+    const QDateTime now = QDateTime::currentDateTimeUtc();
+    for (WorkItem &item : items_) {
+        const bool attention =
+            item.stage == QStringLiteral("needs-me") ||
+            (includeReview && item.stage == QStringLiteral("review"));
+        if (!item.done && item.id != keepId && item.sessionId == sessionId &&
+            attention) {
+            item.done = true;
+            item.stage = QStringLiteral("done");
+            item.updatedAt = now;
+            changed = true;
+        }
+    }
+    if (changed) {
+        save();
+    }
+    return changed;
+}
+
+bool WorkItemStore::resolveReviews(const QString &sessionId,
                                    const QString &keepId) {
     if (sessionId.isEmpty()) {
         return false;
@@ -287,7 +321,7 @@ bool WorkItemStore::resolveSession(const QString &sessionId,
     const QDateTime now = QDateTime::currentDateTimeUtc();
     for (WorkItem &item : items_) {
         if (!item.done && item.id != keepId && item.sessionId == sessionId &&
-            item.stage == QStringLiteral("needs-me")) {
+            item.stage == QStringLiteral("review")) {
             item.done = true;
             item.stage = QStringLiteral("done");
             item.updatedAt = now;

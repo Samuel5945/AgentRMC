@@ -150,6 +150,10 @@ process.stdin.on('end', () => {
     } else {
       message = `等你确认${tool ? ' ' + tool : ''}${short ? '：' + short : ''}`;
     }
+  } else if (event === 'turn-start') {
+    // 新一轮对话开始：原生端把同 session 的旧 review 自动归档，不出声。
+    outEvent = 'turn-start';
+    message = '';
   } else {
     message = String(hook.message || '有新消息');
   }

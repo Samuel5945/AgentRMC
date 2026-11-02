@@ -49,6 +49,9 @@ public:
 
     bool ack(const QString &id);
     bool resolveSession(const QString &sessionId,
+                        const QString &keepId = QString(),
+                        bool includeReview = false);
+    bool resolveReviews(const QString &sessionId,
                         const QString &keepId = QString());
     bool clearFinished();
 

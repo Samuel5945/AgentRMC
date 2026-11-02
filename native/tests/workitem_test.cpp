@@ -120,6 +120,30 @@ int main(int argc, char *argv[]) {
           pstop.id == p1.id && pstop.stage == "review" &&
               progress.attentionCount() == 1);
 
+    WorkItemStore reviews(dir.path() + "/reviews.json");
+    const WorkItem oldReview = reviews.upsert(
+        "hook", "WorkBuddyAI.exe", "s11", "D:/repo", "stop", "WorkBuddy AI",
+        "old review", "WorkBuddyAI.exe", "");
+    const WorkItem next = reviews.upsert(
+        "hook", "WorkBuddyAI.exe", "s11", "D:/repo", "progress",
+        "WorkBuddy AI", "new turn", "WorkBuddyAI.exe", "");
+    check("new activity archives the session's old review",
+          oldReview.stage == "review" && next.stage == "working" &&
+              reviews.attentionCount() == 0);
+
+    const WorkItem dupStop1 = reviews.upsert(
+        "hook", "WorkBuddyAI.exe", "s12", "D:/repo", "stop", "WorkBuddy AI",
+        "done once", "WorkBuddyAI.exe", "");
+    const WorkItem dupStop2 = reviews.upsert(
+        "hook", "WorkBuddyAI.exe", "s12", "D:/repo", "stop", "WorkBuddy AI",
+        "done once", "WorkBuddyAI.exe", "");
+    check("duplicate stop keeps one review item",
+          dupStop1.id == dupStop2.id && dupStop2.stage == "review" &&
+              reviews.items().size() == 3);
+
+    check("turn-start archives the session's review",
+          reviews.resolveReviews("s12") && reviews.attentionCount() == 0);
+
     std::printf(failures == 0 ? "\nALL PASS\n" : "\n%d FAILED\n", failures);
     return failures == 0 ? 0 : 1;
 }

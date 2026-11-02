@@ -197,6 +197,7 @@ AgentRMC 已经有一个「Router 雏形」，但还没有领域模型和持久�
 
 > 已落地（Native 0.3.6）：`GET /workers`、语音派活建 working 单、permission 合并
 > needs-me、stop 合并 review、progress 更新 working、Worker 状态行与过滤。
+> 0.3.8 起同一 session 的 `UserPromptSubmit` 会把旧 review 自动归档。
 > 安静时段 / per-event 开关仍待排期；语音提醒保持「前台不静音」。
 
 - 监控宿主进程/窗口/最近事件，维护 Worker 列表：`alive / foreground / last_seen / current_work_item`。

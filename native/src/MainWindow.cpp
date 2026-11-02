@@ -1198,6 +1198,16 @@ void MainWindow::handleNotify(const QString &kind, const QString &title,
                               const QString &project, const QString &eventId,
                               bool replay) {
     lastEventAt_ = QDateTime::currentDateTimeUtc();
+    if (kind == QStringLiteral("turn-start")) {
+        // 同一 session 已经开始新对话：上一轮的 review 视为已看到，直接归档。
+        if (workItems_ != nullptr && !sessionId.isEmpty() &&
+            workItems_->resolveReviews(sessionId)) {
+            refreshWorkItems();
+            appendEvent(QStringLiteral("status"), QString(), QString(),
+                        QString::fromUtf8("新对话开始，旧验收已归档"), 0);
+        }
+        return;
+    }
     if (workItems_ != nullptr &&
         (kind == QStringLiteral("permission") ||
          kind == QStringLiteral("question") ||

@@ -1,5 +1,16 @@
 {
   "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/agentrmc-notify.js\" turn-start",
+            "timeout": 3
+          }
+        ]
+      }
+    ],
     "PermissionRequest": [
       {
         "hooks": [

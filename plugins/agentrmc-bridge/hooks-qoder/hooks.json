@@ -1,5 +1,22 @@
 {
   "hooks": {
+    "UserPromptSubmit": [
+      {
+        "async": true,
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": [
+              "${QODER_PLUGIN_ROOT}/hooks/agentrmc-notify.js",
+              "turn-start"
+            ],
+            "name": "agentrmc-notify-turn-start",
+            "timeout": 3
+          }
+        ]
+      }
+    ],
     "PermissionRequest": [
       {
         "async": true,

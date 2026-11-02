@@ -7,7 +7,7 @@
 //   pet_state   查桌宠状态（可见/监听/录音/转写/对话模式/TTS 就绪）
 //   pet_work_update 主动汇报阶段    → 更新「待我处理」列表里的工单
 //                   （progress 正在干 / blocked 卡住等人 / ready 做完等验收；
-//                    只落工单，不冒气泡也不念话）
+//                    progress 只落工单，blocked / ready 会冒气泡 + 语音提醒）
 // 等授权、等选方案、任务完成的提醒由本插件的 hook 自动完成，不要用 pet_notify 重复发。
 "use strict";
 
@@ -123,8 +123,9 @@ const TOOLS = [
     description:
       "把当前任务的阶段汇报给 AgentRMC 的「待我处理」列表：" +
       "progress（正在干）、blocked（卡住了，等人）、ready（做完了，等验收）。" +
-      "只更新工单，不冒气泡也不念话——要喊人请用 pet_speak / pet_notify。" +
-      "阶段真的变了才报，别每跑一条命令都报一次。",
+      "progress 只更新工单不出声；blocked 和 ready 会冒气泡并用语音提醒用户" +
+      "（要人动手的事必须喊到），所以别拿它们当进度条刷——阶段真的变了才报。" +
+      "想额外说一句话请用 pet_speak。",
     inputSchema: {
       type: "object",
       properties: {

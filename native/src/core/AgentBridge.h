@@ -26,7 +26,8 @@ class QTcpSocket;
 //                  "title":"WorkBuddy AI","raise":"WorkBuddyAI.exe",
 //                  "session_id":"...","project":"..."}
 //                 → 宿主 Agent 主动汇报阶段（MCP 工具 pet_work_update）。
-//                   只落工单，不冒气泡、不念话——要喊人请走 /notify 或 /speak。
+//                   progress 只落工单；blocked / ready 走提醒通道（气泡 + 语音，
+//                   要人动手的事必须喊到），同一件事 hook 的 stop 不会再念一遍。
 //   GET  /workers → 当前在跑的 Worker 列表（alive / foreground / 待办计数）
 //   GET  /health  → 桥接 / 待补投 / Worker / 最近事件健康快照
 // 纯回环、只此一用；端口被占就放弃监听，不影响主功能。

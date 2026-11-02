@@ -590,10 +590,16 @@ Agent 宿主
 | `question`（映射为 permission） | 是 | 7s | 是 | 前置 | 同上 |
 | `stop` | 是 | 7s | 否 | 前置 | 仅 TTS |
 | `speak` | 是 | 默认时长 | 否 | 无 | 仅 TTS |
+| `pet_work_update` → `progress` | 否 | 无 | 否 | 无 | 只落工单 |
+| `pet_work_update` → `blocked` | 是 | 7s | 是 | 前置 | 同 `permission`（2 分钟节流） |
+| `pet_work_update` → `ready` | 是 | 7s | 否 | 前置 | 同 `stop`；随后的 hook `stop` 不再重念 |
 | 其它 `notify` | 否 | 6s | 否 | 有 raise 则可点 | 托盘 |
 
 > **前台不静音**：前台状态只影响「是否自动前置」，不影响「是否出声」。即使宿主窗口
 > 就在前台，用户也可能没看屏幕，`permission` / `question` / `stop` 的语音照常播放。
+>
+> **要人动手就必须喊到**：凡是需要用户手动操作的事件（等授权、等选方案、卡住等人、
+> 做完等验收）一律出声；只有纯状态更新（`progress`）才允许静默。
 
 文案规范：
 

@@ -84,8 +84,13 @@ private:
                       const QString &eventId, const QString &pluginVersion,
                       const QString &speech, bool replay);
     // POST /work-items/update 的处理：宿主 Agent 用 MCP 工具 pet_work_update
-    // 主动汇报 progress / blocked / ready。只落工单，不冒气泡也不念话。
+    // 主动汇报 progress / blocked / ready。progress 只落工单；blocked / ready
+    // 是要人动手的，走和 hook 同一条提醒通道（气泡 + 语音）。
     QJsonObject reportWorkItem(const QJsonObject &payload);
+    // 只喊人、不写工单：事件流一行 + 记宿主 + 气泡/语音/抢前台。
+    void announceWork(const QString &kind, const QString &title,
+                      const QString &message, const QString &spoken,
+                      const QString &raise, const QString &sessionId);
     // 联动插件版本对账：{"bundled":内置版,"hosts":[每家 name/installed/loaded/
     // enabled/running/state]}。loaded 是 hook 报上来的「此刻真在跑的那版」，
     // 注册表只能说盘上装成哪版。需要动手的成因写进 problems，别压成一个词。
@@ -126,6 +131,11 @@ private:
 
     std::unique_ptr<ProfileStore> store_;
     std::unique_ptr<WorkItemStore> workItems_;
+    // pet_work_update 的播报节流：Agent 可能连着报几次 blocked，别喊成一串。
+    // key = session_id（没有就用宿主名）；值 = 上次真的喊出去的时间。
+    QHash<QString, QDateTime> attentionAnnounced_;
+    // Agent 已经替 hook 报过 ready 并念过了：紧接着到的 stop 不再念第二遍。
+    QHash<QString, QDateTime> readyAnnounced_;
     InputEngine *engine_ = nullptr;
     KeymapPage *keymapPage_ = nullptr;
     AppPage *appPage_ = nullptr;

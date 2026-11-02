@@ -18,17 +18,17 @@ description: 与 AgentRMC 桌宠交互：汇报任务阶段进度、让桌宠出
 - **pet_state**：查桌宠状态（可见/贴边收纳/监听/录音/转写/对话模式/TTS 就绪）。
   拿不准桌宠在不在、TTS 能不能出声时先查一眼再决定用哪个工具。
 - **pet_work_update**：把任务阶段写进「待我处理」列表——`progress`（正在干）/
-  `blocked`（卡住，等人）/ `ready`（做完，等验收）。**只更新工单，不冒气泡也不
-  念话**；这是「用户回头能看见」的状态，不是打扰。阶段真的变了才报（开工、
-  卡住、做完各一次），别每跑一条命令都报。
+  `blocked`（卡住，等人）/ `ready`（做完，等验收）。`progress` 只更新工单不出声；
+  `blocked` / `ready` 会冒气泡并语音提醒用户（要人动手的事必须喊到），所以阶段
+  真的变了才报，别每跑一条命令都报一次。
 
 ## 礼仪
 
 - 一句话以内；长内容用户来不及看，也念不完。
 - 一次任务最多几条提示，别连续调用刷屏；进度更新用 pet_notify（要人当场看见）
-  或 pet_work_update（只留状态），收尾才用 pet_speak。
+  或 pet_work_update（把状态留在列表里），收尾才用 pet_speak。
 - 等工具授权（PermissionRequest）、等选方案（AskUserQuestion）和任务完成（Stop）的
   提醒都由本插件的 hook 自动发：桌宠念一句「<宿主> 等你确认…／等你选方案／已完成…」
   并把宿主窗口拉到前台。三者都不要再用 pet_notify / pet_speak 重复发。
-- 明确卡在用户身上（缺凭据、要拍板）时，用 `pet_work_update stage=blocked`
-  留状态，再配一条 pet_notify 说明卡在哪——两件事别用同一句话说两遍。
+- 明确卡在用户身上（缺凭据、要拍板）时，用 `pet_work_update stage=blocked` 就够——
+  它自己会冒泡 + 语音；再补一条 pet_notify 就是同一件事说两遍。

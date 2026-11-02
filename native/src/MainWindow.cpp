@@ -1807,11 +1807,14 @@ QJsonObject MainWindow::reportWorkItem(const QJsonObject &payload) {
                             ? QString::fromUtf8("卡住了，等你")
                             : QString::fromUtf8("做完了，等你验收");
     }
-    const WorkItem item = workItems_->report(
-        agentExe, payload.value(QStringLiteral("raise")).toString().trimmed(),
-        payload.value(QStringLiteral("session_id")).toString().trimmed(),
-        payload.value(QStringLiteral("project")).toString().trimmed(), stage,
-        title, message);
+    const QString raise =
+        payload.value(QStringLiteral("raise")).toString().trimmed();
+    const QString sessionId =
+        payload.value(QStringLiteral("session_id")).toString().trimmed();
+    const QString project =
+        payload.value(QStringLiteral("project")).toString().trimmed();
+    const WorkItem item = workItems_->report(agentExe, raise, sessionId, project,
+                                             stage, title, message);
     if (item.id.isEmpty()) {
         return QJsonObject{{QStringLiteral("ok"), false},
                            {QStringLiteral("error"),
@@ -1819,6 +1822,25 @@ QJsonObject MainWindow::reportWorkItem(const QJsonObject &payload) {
     }
     lastEventAt_ = QDateTime::currentDateTimeUtc();
     refreshWorkItems();
+
+    // 语音是主提醒通道（PRD：前台不静音、要人动手的必须喊到）。
+    // progress 只是状态，不出声；blocked / ready 走和 hook 完全同一条路——
+    // 气泡 + TTS，permission/question 还会顺手把宿主拉回前台。
+    const QString kind = WorkItemStore::kindForReport(stage);
+    const QString key = sessionId.isEmpty() ? title : sessionId;
+    const QDateTime now = QDateTime::currentDateTimeUtc();
+    if (kind == QStringLiteral("question")) {
+        // 连报几次 blocked 别喊成一串：同一个会话 2 分钟内只喊一次。
+        const QDateTime last = attentionAnnounced_.value(key);
+        if (!last.isValid() || last.secsTo(now) > 120) {
+            announceWork(kind, title, message, message, raise, sessionId);
+            attentionAnnounced_.insert(key, now);
+        }
+    } else if (kind == QStringLiteral("stop")) {
+        // 先念再记账：紧接着到的 hook stop 会看到这笔账，不再念第二遍。
+        announceWork(kind, title, message, message, raise, sessionId);
+        readyAnnounced_.insert(key, now);
+    }
     return QJsonObject{{QStringLiteral("ok"), true},
                        {QStringLiteral("id"), item.id},
                        {QStringLiteral("stage"), item.stage},
@@ -1865,8 +1887,17 @@ void MainWindow::handleNotify(const QString &kind, const QString &title,
         // 离线补投只落工单，不补喊/抢前台，避免启动时一次念一串旧提醒。
         return;
     }
+    announceWork(kind, title, message, spoken, raise, sessionId);
+}
+
+// 只负责「喊人」：事件流一行、记宿主、气泡 + 语音 + 要不要抢前台。
+// 不碰工单——handleNotify 和 pet_work_update 都已经各自写过工单了，
+// 再 upsert 一次会在 review 状态下多长出一张卡片（review 不在合并窗口里）。
+void MainWindow::announceWork(const QString &kind, const QString &title,
+                              const QString &message, const QString &spoken,
+                              const QString &raise, const QString &sessionId) {
     appendEvent(QStringLiteral("status"), QString(), QString(),
-                speech.isEmpty() || speech == message
+                spoken.isEmpty() || spoken == message
                     ? title + QStringLiteral(" · ") + message
                     : title + QStringLiteral(" · ") + message +
                           QStringLiteral("（念：") + spoken + QStringLiteral("）"),
@@ -1878,6 +1909,14 @@ void MainWindow::handleNotify(const QString &kind, const QString &title,
         store_->setUiString(QStringLiteral("agent_exe"), raise);
     }
     if (kind == QStringLiteral("stop")) {
+        // Agent 已经用 pet_work_update 报过 ready 并念过了：同一件事别念两遍。
+        // 取走即作废，下一轮真的 stop 仍然照念。
+        const QString readyKey = sessionId.isEmpty() ? title : sessionId;
+        const QDateTime readyAt = readyAnnounced_.take(readyKey);
+        if (readyAt.isValid() &&
+            readyAt.secsTo(QDateTime::currentDateTimeUtc()) <= 90) {
+            return;
+        }
         // 任务完成：念出来 + 气泡停满 7s。**不自动抢前台**——
         // 活儿干完就把焦点拽走很烦，气泡可点，点了再回去。
         // 是否前台不影响是否朗读：用户可能没看屏幕，语音是主通道。
@@ -1886,7 +1925,8 @@ void MainWindow::handleNotify(const QString &kind, const QString &title,
         }
         return;
     }
-    if (kind == QStringLiteral("permission")) {
+    if (kind == QStringLiteral("permission") ||
+        kind == QStringLiteral("question")) {
         // 等确认要把人喊回来：气泡停久一点 + 语音，桌宠收起也照念；
         // 收起又没 TTS 时退回托盘，别让提醒凭空消失。
         if (voicePet_ != nullptr) {

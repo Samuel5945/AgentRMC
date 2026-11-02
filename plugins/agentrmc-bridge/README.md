@@ -11,14 +11,16 @@
   不拖慢会话。
 - **主动交互（MCP）**：四个工具——`pet_notify`（阶段进度气泡）、`pet_speak`
   （让桌宠 TTS 说一句话）、`pet_state`（查桌宠状态）、`pet_work_update`
-  （主动汇报 `progress` / `blocked` / `ready`，把「待我处理」里的工单往前推），
+  （主动汇报 `progress` / `blocked` / `ready`，把「待我处理」里的工单往前推；
+  `blocked` / `ready` 是要人动手的，会冒泡 + 语音，`progress` 只落工单），
   配 `agentrmc-pet` skill 教模型何时用、怎么不刷屏。
 - **传输**：全部走 AgentRMC 本机回环口 `127.0.0.1:45915`（AgentBridge），
   无密钥、无外部依赖（hooks 与 MCP server 都是零依赖 node 脚本）。
 - **待我处理**：hook payload 有 `session_id` / `cwd` / `tool_use_id` 时随 `/notify`
   一起带给原生端（字段名 `session_id` / `project` / `event_id`），原生端落成
   Work Item；`GET /work-items` 查询，`POST /work-items/ack` 标记已处理，
-  `POST /work-items/update` 由 `pet_work_update` 调用（只落工单，不冒气泡也不念话）。
+  `POST /work-items/update` 由 `pet_work_update` 调用（`blocked` / `ready` 顺带走
+  提醒通道：气泡 + 语音；`progress` 只落工单）。
   桌面「待我处理」页按等处理 / 待验收 / 进行中排序，重启不丢。`UserPromptSubmit`
   会在新对话开始时自动归档同 session 的旧「待验收」。
 - **离线不丢**：AgentRMC 没开、连接失败或 5xx 时，hook 把 payload 追加到

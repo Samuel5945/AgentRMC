@@ -214,7 +214,10 @@ AgentRMC 已经有一个「Router 雏形」，但还没有领域模型和持久�
 > Native 0.3.9 起 Watchdog 每 5 秒重试桥接并自动恢复，独立「系统」页展示健康与 Worker。
 > `pet_work_update` 已落地：MCP 工具 → `POST /work-items/update` → `WorkItemStore::report`，
 > stage `progress/blocked/ready` 映射到既有 kind（progress/question/stop），复用同一套
-> 去重与「同 session 生命周期合并」；只落工单，不冒气泡也不念话。
+> 去重与「同 session 生命周期合并」。**提醒照产品约束走**：`progress` 只是状态不出声，
+> `blocked` / `ready` 是要人动手的，走 hook 同一条通道（气泡 + 语音，permission/question
+> 还会把宿主拉回前台）；同一件事只喊一次——blocked 2 分钟内节流，ready 之后紧接着到的
+> hook stop 不再重念。
 > 剩余：更细的安静策略。
 
 - Outbox 落盘、重试、顺序；AgentRMC 未启动时事件暂存，启动后补播。

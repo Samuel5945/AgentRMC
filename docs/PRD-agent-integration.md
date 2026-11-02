@@ -17,7 +17,7 @@
 
 - [x] **FR-01**：`lib/host.js` 按插件安装路径区分 `.workbuddy`（→ `WorkBuddy.exe`）与 `.workbuddy-ai`（→ `WorkBuddyAI.exe`）；路径判不出才按产品名兜底 AI，并标记 `workbuddy-unknown-variant`。路径判据先匹配 `.workbuddy-ai`，避免子串误判。
 - [x] **FR-02**：旧版与 AI 的 `raise` 目标互不串台；找不到目标窗口时静默，不拉起兄弟产品。原生端 `raise` 仍按进程映像名精确匹配。
-- [x] **FR-03**：三个 `plugin.json` 与三个 `marketplace.json` 统一到 `0.3.3`；随包 zip 实测 0.3.3、含 `hooks-workbuddy/hooks.json`。两套 WorkBuddy 宿主缓存仍需各自在插件市场升级。
+- [x] **FR-03**：三个 `plugin.json` 与三个 `marketplace.json` 统一到 `0.3.3`；随包 zip 实测 0.3.3、含 `hooks-workbuddy/hooks.json`。两套 WorkBuddy 宿主缓存均已自动更新到 0.3.3。
 - [x] **FR-07（版本元数据）**：`native/CMakeLists.txt` 成为版本唯一入口；`app.rc.in`、`version.nsi.in` 由 CMake 生成；旧的手写 `native/resources/app.rc` 已删除；`check-version.ps1` 在出包前校验 CMake / NSIS / exe FileVersion / ProductVersion 四处一致。实测 `0.3.0`。
 - [x] 测试：`node test/host.test.js` **23/23 PASS**（含双 WorkBuddy 纯函数与真脚本 e2e）；native 8 个测试全绿。
 - [x] 出包 / 装机：`dist\AgentRMC-Setup.exe`（20,009,113 B）+ `dist\agentrmc-bridge-0.3.3.zip`；静默安装到 `D:\apps\AgentRMC`，`/state` 验活，exe FileVersion / 注册表 DisplayVersion 均为 `0.3.0`。
@@ -52,7 +52,18 @@
   直接一句确认并继续，最多问一个最短澄清问题。
 - [x] **输出清理**：气泡 / TTS 前去掉 markdown、emoji、列表标记，超长按句号截到 120 字，
   避免「**ZCODE** 😊」被念出来。
-- [x] **主题人设同步**：`themes/xiaoai-whale/theme.json` 补充同样的风格约束与术语表。
+### 0.4 WorkBuddy 收尾（2026-11-02）
+
+- [x] **两套缓存已到 0.3.3**：`~/.workbuddy` 与 `~/.workbuddy-ai` 的 `installed_plugins.json`
+  都指向 `0.3.3`；两套缓存内 `lib/host.js` 均含新路径判据，`hooks-workbuddy` 在位。
+- [x] **DRY_RUN 双宿主矩阵**：`.workbuddy` → `WorkBuddy` + `WorkBuddy.exe`；
+  `.workbuddy-ai` → `WorkBuddy AI` + `WorkBuddyAI.exe`；permission / question / stop
+  三条事件全部正确。
+- [x] **双开 raise 实测**：先让 WorkBuddy AI 在前台，发 `raise=WorkBuddy.exe` 后前台切到
+  旧版 `WorkBuddy`；再发 `raise=WorkBuddyAI.exe` 后切回 `WorkBuddy AI`。
+- [x] **stop 气泡点击实测**：stop 通知冒泡后点击气泡，前台从 `WorkBuddy AI` 切到
+  `WorkBuddy`，没有拉起兄弟产品。
+- [ ] 宿主完全退出后点击气泡（静默失败、不误拉）尚未单独验收。
 
 ---
 
@@ -99,7 +110,7 @@
 |---|---|---|---|
 | 本机通知桥 | `127.0.0.1:45915` 提供 `POST /notify`、`POST /speak`、`GET /state`，纯回环、无鉴权 | `native/src/core/AgentBridge.*` | 已实现 |
 | 等工具授权提醒 | hooks 发 `permission`：气泡 + TTS + 自动把宿主窗口拉回前台 | `plugins/agentrmc-bridge/hooks/agentrmc-notify.js`、`MainWindow.cpp` | 已实现 |
-| 等选方案提醒 | Qoder / WorkBuddy 走 `PreToolUse` + `matcher:"AskUserQuestion"`，payload 复用 `permission` | `hooks-qoder/`、`hooks-workbuddy/` | 已实现（HEAD `137e3ca` 起；两套 WorkBuddy 缓存里的副本版本仍不一致，见 FR-03） |
+| 等选方案提醒 | Qoder / WorkBuddy 走 `PreToolUse` + `matcher:"AskUserQuestion"`，payload 复用 `permission` | `hooks-qoder/`、`hooks-workbuddy/` | 已实现（HEAD `137e3ca` 起；两套 WorkBuddy 缓存均已 0.3.3） |
 | 任务完成提醒 | 读 transcript 最后一条 assistant 文本，压成一句话念出；拿不到退回「已完成任务，等你回来验收」 | `hooks/agentrmc-notify.js` | 已实现 |
 | 完成提醒不抢前台 | `stop` 只气泡 + 语音，不调 `SetForegroundWindow` | `MainWindow.cpp` | 已实现 |
 | 气泡点击回跳 | 气泡带 `raise` 目标时可点；点了收起气泡并拉起对应进程窗口 | `VoicePet::bubbleOnly` / `PetBubble` / `AgentWindow::raise` | 已实现 |
@@ -120,11 +131,11 @@
 | 安装目录 | `D:\apps\tencentapp\WorkBuddy\` | `D:\apps\AIAPPS\WorkBuddyAI\` |
 | 插件缓存根 | `C:\Users\PC\.workbuddy\plugins\cache\` | `C:\Users\PC\.workbuddy-ai\plugins\cache\` |
 | 应用数据 | `C:\Users\PC\AppData\Roaming\WorkBuddy\` | `C:\Users\PC\AppData\Roaming\WorkBuddy AI\` |
-| 本机当前插件版本 | `agentrmc-bridge` 0.3.2 | `agentrmc-bridge` 0.3.1 |
-| 进程状态（检查时） | 未运行 | 运行中（9 个 Electron / sidecar 进程） |
-| 主窗口状态（检查时） | — | 进程在跑，但无可见主窗口（可能收在托盘） |
+| 本机当前插件版本 | `agentrmc-bridge` 0.3.3 | `agentrmc-bridge` 0.3.3 |
+| 进程状态（检查时） | 运行中（7 个进程） | 运行中（6 个进程） |
+| 主窗口状态（检查时） | 有可见主窗口（最小化） | 有可见主窗口（最小化） |
 | 插件宿主判定 | 两者都会命中 `WORKBUDDY_APP_VERSION` / `CLIENT_INFO_PRODUCT_NAME=WorkBuddy` | 同左 |
-| 当前插件 `raise` 兜底 | 错误地写死 `WorkBuddyAI.exe` | `WorkBuddyAI.exe`（碰巧正确） |
+| 当前插件 `raise` 兜底 | 0.3.3 起按安装路径判：`.workbuddy` → `WorkBuddy.exe` | `.workbuddy-ai` → `WorkBuddyAI.exe` |
 
 ### 2.3 当前链路
 
@@ -217,7 +228,7 @@ Agent 宿主
 | `dist\AgentRMC-Setup.exe` | 20,009,113 B，11-02 11:37 | 含 0.3.3 插件 |
 | `GET /state` | `pet_visible=1 chat_mode=1 listening=1 tts_ready=1` | 装机后验活 |
 | `node test/host.test.js` | 23/23 PASS | 含双 WorkBuddy 矩阵 |
-| 两套 WorkBuddy 宿主缓存 | 旧版 0.3.2 / AI 0.3.1 | 尚未在各自插件市场更新到 0.3.3 |
+| 两套 WorkBuddy 宿主缓存 | 均为 0.3.3 | 已自动更新；`installed_plugins.json` 均指向 0.3.3 |
 | GitHub releases / 更新 JSON / 网盘 | 仍为 0.1.0 / 0.2.0 / 0.2.0 | 对外通道未动 |
 
 ### 2.8 UX 重做后的读数（2026-11-02 11:50）
@@ -322,8 +333,10 @@ Agent 宿主
 
 验收标准：
 
-- [ ] 双开 WorkBuddy / WorkBuddy AI，分别触发 permission，各自拉起自己的窗口。（payload 已由 e2e 覆盖；旧版启动后的手工双开待验）
-- [ ] 从旧版触发 stop，气泡点击后拉起旧版，不拉起 AI。（同上）
+- [x] 双开 WorkBuddy / WorkBuddy AI，分别触发 permission，各自拉起自己的窗口。
+  （实测：`raise=WorkBuddy.exe` → 前台 WorkBuddy；`raise=WorkBuddyAI.exe` → 前台 WorkBuddy AI）
+- [x] 从旧版触发 stop，气泡点击后拉起旧版，不拉起 AI。
+  （实测：stop 气泡点击后前台从 WorkBuddy AI 切到 WorkBuddy）
 - [ ] 宿主完全退出后点击气泡，无错误弹窗、无其它 app 被拉起。
 
 #### FR-03 插件版本一致性与升级
@@ -335,7 +348,7 @@ Agent 宿主
 
 验收标准：
 
-- [ ] 两个缓存目录最终版本号一致。（当前旧版 0.3.2 / AI 0.3.1，待各自市场升级到 0.3.3）
+- [x] 两个缓存目录最终版本号一致。（均为 0.3.3）
 - [x] `hooks-workbuddy/hooks.json` 在两个宿主都能被加载（或明确记录不支持）。
 - [x] `node test/host.test.js` 全绿（23/23）。
 
@@ -573,7 +586,7 @@ resolveHost(argv, scriptDir, env):
 | Native 0.3.0（已提交 + 已装机） | 语音分流、可点气泡、`AgentWindow`（含双 WorkBuddy 白名单）、stop 不抢前台、右键目标菜单；版本元数据已收敛到 CMake（FileVersion / ProductVersion = 0.3.0） | 提交 `03151c5`；`dist\AgentRMC-Setup.exe` 已静默装机并验活；**未发布** |
 | Native 0.3.2（UX 真正精简，已提交 `39670f7`） | 桌宠右键只留 5 项；识别/对话/主题/目标/朗读迁到语音面板与完整界面；语音面板新增「交给」「朗读最近」 | `dist\AgentRMC-Setup.exe`（20,010,218 B，11-02 11:58）；FileVersion / NSIS `0.3.2` |
 | Native 0.3.3（对话人设修正，已出包 + 已装机） | 所有人设追加本机语境与 ZCode/WorkBuddy 术语表；回复禁止清单/连续反问；落气泡前清理 markdown/emoji 并限长 | `dist\AgentRMC-Setup.exe`（20,013,752 B，11-02 13:32）；FileVersion / NSIS `0.3.3`；本次提交 |
-| Plugin 0.3.3（工作区 + 已出包） | FR-01 双 WorkBuddy 识别、FR-03 版本统一；stop 最终回复、`hooks-workbuddy` 沿用 0.3.2 | `dist\agentrmc-bridge-0.3.3.zip` + 随包 zip；两套 WorkBuddy 宿主缓存待各自市场升级 |
+| Plugin 0.3.3（工作区 + 已出包） | FR-01 双 WorkBuddy 识别、FR-03 版本统一；stop 最终回复、`hooks-workbuddy` 沿用 0.3.2 | `dist\agentrmc-bridge-0.3.3.zip` + 随包 zip；两套 WorkBuddy 宿主缓存均已 0.3.3 |
 
 ### 待排期
 
@@ -592,7 +605,7 @@ resolveHost(argv, scriptDir, env):
 - [x] native 相关测试全绿（App / Store / Theme / Bridge / Router / Voice / Takeover / Audio）。
 - [x] `native\tools\package.bat` 出包。
 - [x] 静默安装 + 启动 + `curl /state` 验活。
-- [ ] 双开 WorkBuddy / WorkBuddy AI 手工验收 permission / question / stop 三条链路。
+- [x] 双开 WorkBuddy / WorkBuddy AI 手工验收：permission 双向前台、stop 气泡点击已实测；question 走 DRY_RUN payload 验证。
 - [x] README / 插件 README / 市场描述同步双宿主说明。
 - [x] `dist` 无陈旧版本号的插件 zip（当前仅 `agentrmc-bridge-0.3.3.zip`）。
 - [ ] `agentrmc-update.json` 线上 `version` == 本次发布版本，`notes` 含 0.3.x 内容；用 ≤0.2.0 的实例点「检查更新」能收到提示，点进去的包 = 同版本。

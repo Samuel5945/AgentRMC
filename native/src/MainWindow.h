@@ -2,7 +2,9 @@
 
 #include <QByteArray>
 #include <QDateTime>
+#include <QHash>
 #include <QJsonArray>
+#include <QJsonObject>
 #include <QMainWindow>
 #include <QSet>
 
@@ -79,7 +81,15 @@ private:
     void handleNotify(const QString &kind, const QString &title,
                       const QString &message, const QString &raise,
                       const QString &sessionId, const QString &project,
-                      const QString &eventId, bool replay);
+                      const QString &eventId, const QString &pluginVersion,
+                      const QString &speech, bool replay);
+    // 联动插件版本对账：{"bundled":内置版,"hosts":[每家 name/installed/loaded/
+    // enabled/running/state]}。loaded 是 hook 报上来的「此刻真在跑的那版」，
+    // 注册表只能说盘上装成哪版。需要动手的成因写进 problems，别压成一个词。
+    QJsonObject pluginHealth(QStringList *problems) const;
+    void upgradePlugins();
+    // 5 秒一拍：发现某家的已装版本在运行期间变过，就挂「等新版上报」标记。
+    void trackPluginTransitions();
     void buildTray();
     void checkUpdates(bool manual);
     void onUpdateChecked(const UpdateInfo &info, bool manual);
@@ -105,6 +115,7 @@ private:
     void refreshRemoteCard();
     void applyRemoteMode(const QString &badge, const QSet<int> &keys, bool on);
     void openVoiceSettings();
+    void openThemeDialog();
     void onVoiceState(const QString &state, const QString &detail);
     void onVoiceTranscribed(const QString &text, int costMs);
     void setVoiceStatus(const QString &detail, const QString &color,
@@ -118,8 +129,12 @@ private:
     QTabWidget *tabs_ = nullptr;
     QListWidget *workList_ = nullptr;
     QLabel *workCount_ = nullptr;
+    QLabel *chipNeeds_ = nullptr;
+    QLabel *chipReview_ = nullptr;
+    QLabel *chipWorking_ = nullptr;
+    QWidget *workEmptyBox_ = nullptr;
     QLabel *workEmpty_ = nullptr;
-    QLabel *workWorkers_ = nullptr;
+    QLabel *workHint_ = nullptr;
     QComboBox *workFilter_ = nullptr;
     QLabel *workHealth_ = nullptr;
     QPushButton *workRaise_ = nullptr;
@@ -130,6 +145,8 @@ private:
     QLabel *sysLast_ = nullptr;
     QLabel *sysProblems_ = nullptr;
     QTableWidget *sysWorkers_ = nullptr;
+    QLabel *sysPlugin_ = nullptr;
+    QPushButton *pluginUpgrade_ = nullptr;
     QLabel *statusDot_ = nullptr;
     QLabel *statusText_ = nullptr;
     QPushButton *listenButton_ = nullptr;
@@ -142,6 +159,17 @@ private:
     QLabel *voiceState_ = nullptr;
     QLabel *voiceFoot_ = nullptr;
     QPushButton *voiceTest_ = nullptr;
+    // 宿主署名 → 它最近一次报上来的插件版本，也就是此刻真在跑的那一版。
+    // 注册表只能说盘上装成哪版：宿主不重启，盘上是新版、内存里还是旧代码。
+    QHash<QString, QString> pluginLoaded_;
+    // 宿主署名 → 最近一次收到它 hook 的时刻。宿主开着却一条都没报过，和「报了旧版」
+    // 是两种坏法：官方安装器会删掉上一版缓存目录，已开着的会话里 hook 路径直接失效，
+    // 提醒是静默断掉而不是念出旧版本号，只有这个时间戳能把它分出来。
+    QHash<QString, QDateTime> pluginLastReport_;
+    // 注册表版本在运行期间换过、但这家还没用新版报过 hook → 挂起标记。
+    // 收到任何一条 hook/MCP 上报就清掉，不靠超时猜。
+    QHash<QString, bool> pluginAwaitingReport_;
+    QHash<QString, QString> pluginSeenInstalled_;
     QString lastTranscript_;
     RemotePanel *remotePanel_ = nullptr;
     Toast *toast_ = nullptr;

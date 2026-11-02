@@ -43,5 +43,13 @@
 - **插件**：只有 hook 事件、payload、宿主兼容性变化才升 patch；文档/测试调整不升。
 - 出包前仍跑 `native\tools\check-version.ps1`，保证 CMake / NSIS / exe 一致；
   这只是“同一版本号内部一致”，不是要求 Native 与插件同号。
-- 当前批次冻结：Native `0.3.9`、插件 `0.3.6`；下一次对外发布再统一决定
+- 当前批次冻结：Native `0.3.9`、插件 `0.3.8`；下一次对外发布再统一决定
   是升 Native minor 还是只发 patch，不在每次改动后递增。
+- **插件版本只有一个来源**：`plugins/agentrmc-bridge/VERSION`。构建时
+  `native/tools/sync-plugin-version.ps1` 把它同步进 3 个 `plugin.json` 和
+  2 个 `marketplace.json`，`check-version.ps1` 出包前核对这五处；改插件版本
+  只改 VERSION 文件，别逐个改清单。
+- **别删旧版本号目录**：`~/.qoder(-cn)/plugins/cache/local/agentrmc-bridge/<ver>`
+  里的旧那一层，宿主**已经开着的会话**还在按它的路径调 hook（会话启动时路径已烧进
+  命令里）。删掉不会报错，只会让那个会话的提醒**静默消失**。Qoder 官方安装器自己会删，
+  手工挪走前更要想清楚；App「系统」页的「等新版上报」就是给这种情况留的读数。

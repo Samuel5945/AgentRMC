@@ -27,6 +27,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { resolveHost } = require('../lib/host');
+const readVersion = require('../lib/version');
 
 const PORT = Number(process.env.AGENTRMC_PORT || 45915);
 // AgentRMC 没开时不能把提醒丢掉：先落盘，原生端启动/定时扫描时补投。
@@ -35,6 +36,9 @@ const SPOOL_DIR = process.env.AGENTRMC_SPOOL_DIR ||
 const SPOOL_FILE = path.join(SPOOL_DIR, 'pending-events.jsonl');
 const DRY_RUN = process.env.AGENTRMC_DRY_RUN === '1';
 const event = process.argv[2] || 'message';
+// 已加载的插件版本，随 payload 上报：装完不重启宿主还是旧代码，
+// 原生端要靠这个数把「盘上已升级」和「进程还在跑旧版」分开。
+const PLUGIN_VERSION = readVersion();
 const host = resolveHost({
   scriptDir: __dirname,
   argv: process.argv.slice(2),
@@ -123,6 +127,10 @@ process.stdin.on('end', () => {
   const input = hook.tool_input || hook.toolInput || {};
 
   let message = '';
+  // speech 只给语音用：念出来要短、要带宿主名。工具名和文件路径留在气泡里看，
+  // 念出来是噪音（「等你确认 Bash 冒号 D 冒号 反斜杠…」没人听得懂）。
+  // 不给 speech 时原生端退回念 message。
+  let speech = '';
   // 发给原生端的事件类型：原生端只对 stop / permission 出语音并把窗口拉回前台
   // （MainWindow.cpp 的 notify 分支），其它 kind 只冒气泡。所以 question 复用
   // permission 通道，别在原生端加新类型。
@@ -131,7 +139,7 @@ process.stdin.on('end', () => {
     // 优先念 Agent 的最终回复（transcript 最后一条 assistant），
     // 拿不到才退回通用文案——宿主不给 transcript 也照样能用。
     const said = lastAssistantText(hook);
-    message = said ? `${agent}：${said}` : `${agent} 已完成任务，等你回来验收`;
+    message = said ? `${agent}：${said}` : `${agent} 做完了，等你回来看`;
   } else if (event === 'question') {
     // 「等你选方案」：实测 Qoder 把 AskUserQuestion 当**普通工具**走 PreToolUse
     // （hook.started 只有 source=runtime 的 SDK 记录，PermissionRequest 根本没发），
@@ -141,14 +149,17 @@ process.stdin.on('end', () => {
     if (tool !== 'AskUserQuestion') process.exit(0);
     outEvent = 'permission';
     message = '等你选方案';
+    speech = `${agent} 在等你选方案`;
   } else if (event === 'permission') {
     const detail = String(input.file_path || input.path || input.command || input.url || '');
     const short = detail.length > 60 ? detail.slice(0, 57) + '…' : detail;
     if (tool === 'AskUserQuestion') {
       // 少数宿主会把方案选择当成授权请求；念中文比念工具名顺。
       message = '等你选方案';
+      speech = `${agent} 在等你选方案`;
     } else {
       message = `等你确认${tool ? ' ' + tool : ''}${short ? '：' + short : ''}`;
+      speech = `${agent} 在等你点确认`;
     }
   } else if (event === 'turn-start') {
     // 新一轮对话开始：原生端把同 session 的旧 review 自动归档，不出声。
@@ -173,10 +184,12 @@ process.stdin.on('end', () => {
   const eventId = String(hook.tool_use_id || hook.toolUseId || '').trim();
 
   const payloadObj = { event: outEvent, title: agent, message };
+  if (speech) payloadObj.speech = speech;
   if (raise) payloadObj.raise = raise;
   if (sessionId) payloadObj.session_id = sessionId;
   if (project) payloadObj.project = project;
   if (eventId) payloadObj.event_id = eventId;
+  if (PLUGIN_VERSION) payloadObj.plugin_version = PLUGIN_VERSION;
   const payload = JSON.stringify(payloadObj);
   if (DRY_RUN) {
     // 测试用：把判据一起吐出来，好断言「哪个宿主 → 拉哪个窗」。

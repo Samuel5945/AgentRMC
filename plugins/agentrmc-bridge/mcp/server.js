@@ -10,6 +10,7 @@
 
 const http = require("http");
 const { resolveHost } = require("../lib/host");
+const readVersion = require("../lib/version");
 
 const PORT = Number(process.env.AGENTRMC_BRIDGE_PORT || 45915);
 const HOST = "127.0.0.1";
@@ -21,10 +22,17 @@ const HOST_INFO = resolveHost({
   env: process.env,
 });
 const AGENT = HOST_INFO.agent;
+// 握手里的版本就是这份已加载的代码是哪一版（原先手写的 0.1.0 从来没跟着包走过）。
+const PLUGIN_VERSION = readVersion() || "unknown";
 
 function post(route, payload) {
   return new Promise((resolve, reject) => {
-    const body = JSON.stringify(payload);
+    // 每个 POST 都带上自己这一版：原生端据此知道现在答话的 MCP 是哪版
+    // （宿主不重启，进程里还是旧 server，光看盘上目录判断不了）。
+    const body = JSON.stringify(
+      PLUGIN_VERSION
+        ? Object.assign({}, payload, { plugin_version: PLUGIN_VERSION })
+        : payload);
     const req = http.request(
       { host: HOST, port: PORT, path: route, method: "POST", timeout: 2000,
         headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(body) } },
@@ -146,7 +154,7 @@ async function handle(req) {
       result = {
         protocolVersion: params?.protocolVersion || "2024-11-05",
         capabilities: { tools: {} },
-        serverInfo: { name: "agentrmc-mcp", version: "0.1.0" },
+        serverInfo: { name: "agentrmc-mcp", version: PLUGIN_VERSION },
       };
       break;
     case "tools/list":

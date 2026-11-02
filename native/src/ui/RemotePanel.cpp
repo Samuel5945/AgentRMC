@@ -161,7 +161,7 @@ void RemotePanel::paintEvent(QPaintEvent *event) {
     painter.drawRoundedRect(QRectF(cx - 8, 218, 16, 50), 8, 8);
 
     QFont rowFont = font();
-    rowFont.setPixelSize(9);
+    rowFont.setPixelSize(10);
     painter.setFont(rowFont);
     const QFontMetrics metrics(rowFont);
     double rowY = 10;

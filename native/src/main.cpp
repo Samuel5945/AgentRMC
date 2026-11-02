@@ -19,6 +19,7 @@
 #include "core/TtsClient.h"
 #include "core/VoiceController.h"
 #include "ui/GuideDialog.h"
+#include "ui/ThemeDialog.h"
 #include "ui/TtsSettingsDialog.h"
 #include "ui/VoicePet.h"
 #include "ui/VoiceSettingsDialog.h"
@@ -34,6 +35,7 @@ int main(int argc, char *argv[]) {
     QString shot;
     QString pin;
     QString settingsShot;
+    QString themeShot;
     QString guideShot;
     QString petShot;
     QString ttsTest;
@@ -52,6 +54,8 @@ int main(int argc, char *argv[]) {
             pin = args.at(i + 1);
         } else if (args.at(i) == "--shot-settings") {
             settingsShot = args.at(i + 1);
+        } else if (args.at(i) == "--shot-theme") {
+            themeShot = args.at(i + 1);
         } else if (args.at(i) == "--shot-guide") {
             guideShot = args.at(i + 1);
         } else if (args.at(i) == "--shot-pet") {
@@ -79,9 +83,10 @@ int main(int argc, char *argv[]) {
     const bool trayStart = app.arguments().contains(QStringLiteral("--tray"));
     const QString ipcName = QStringLiteral("AgentRMC.Native.Wake");
     const bool shotMode = !shot.isEmpty() || !settingsShot.isEmpty() ||
-                          !guideShot.isEmpty() || !petShot.isEmpty() ||
-                          !ttsTest.isEmpty() || !ttsShot.isEmpty() ||
-                          !asrTest.isEmpty() || !llmTest.isEmpty();
+                          !themeShot.isEmpty() || !guideShot.isEmpty() ||
+                          !petShot.isEmpty() || !ttsTest.isEmpty() ||
+                          !ttsShot.isEmpty() || !asrTest.isEmpty() ||
+                          !llmTest.isEmpty();
     if (!shotMode) {
         if (HWND existing = FindWindowW(nullptr, L"AgentRMC Native")) {
             if (!trayStart) {
@@ -105,6 +110,24 @@ int main(int argc, char *argv[]) {
             const bool ok = dialog.grab().save(settingsShot);
             qInfo().noquote() << "[shot]" << (ok ? "saved" : "failed")
                               << settingsShot;
+            QCoreApplication::quit();
+        });
+        return app.exec();
+    }
+
+    if (!themeShot.isEmpty()) {
+        ProfileStore store(QCoreApplication::applicationDirPath() +
+                           "/profiles.json");
+        store.load();
+        store.loadConfig(QCoreApplication::applicationDirPath() + "/config.json");
+        ThemeManager::instance().init(&store);
+        ThemeDialog dialog(&store);
+        dialog.setAttribute(Qt::WA_DontShowOnScreen);
+        dialog.show();
+        QTimer::singleShot(350, &dialog, [&dialog, themeShot] {
+            const bool ok = dialog.grab().save(themeShot);
+            qInfo().noquote() << "[shot]" << (ok ? "saved" : "failed")
+                              << themeShot;
             QCoreApplication::quit();
         });
         return app.exec();
@@ -325,7 +348,8 @@ int main(int argc, char *argv[]) {
 
     MainWindow win(shot.isEmpty(), pin, shot.isEmpty());
     // 页签截图要看到整页内容，离屏时把窗口拉高。
-    win.resize(1000, shotTab >= 0 ? 1400 : 640);
+    // 主窗默认给足高度：左栏语音 + 遥控器两张卡片、右侧待办列表都要站得下。
+    win.resize(1060, shotTab >= 0 ? 1400 : 720);
 
     if (!shotMode) {
         // 托盘常驻：窗口隐藏/关闭不该让进程退出。

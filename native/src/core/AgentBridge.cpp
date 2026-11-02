@@ -173,6 +173,7 @@ void AgentBridge::onReadable(QTcpSocket *socket) {
     QString sessionId;
     QString project;
     QString eventId;
+    QString pluginVersion;
     if (isSpeak) {
         kind = QStringLiteral("speak");
         message = obj.value(QStringLiteral("message")).toString();
@@ -199,8 +200,14 @@ void AgentBridge::onReadable(QTcpSocket *socket) {
                                   .isEmpty()
                               ? QStringLiteral("ZCode")
                               : obj.value(QStringLiteral("title")).toString();
+    // hook 和 MCP 都可以带自己那份插件版本（/speak 走 MCP，同样要能报出自己是谁）。
+    pluginVersion =
+        obj.value(QStringLiteral("plugin_version")).toString().trimmed();
+    // 语音专用短文案，可选；缺省时原生端退回念 message。
+    const QString speech = obj.value(QStringLiteral("speech")).toString().trimmed();
     finish(socket, "204 No Content");
-    emit notify(kind, title, message, raise, sessionId, project, eventId);
+    emit notify(kind, title, message, raise, sessionId, project, eventId,
+                pluginVersion, speech);
 }
 
 void AgentBridge::finish(QTcpSocket *socket, const char *status,

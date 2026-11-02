@@ -3,6 +3,7 @@
 #include "core/Profiles.h"
 
 #include <QApplication>
+#include <QColor>
 #include <QDateTime>
 #include <QDir>
 #include <QDirIterator>
@@ -12,6 +13,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QProcess>
+#include <QRegularExpression>
 
 #include <algorithm>
 
@@ -71,6 +73,14 @@ QString sanitizeDirName(QString name) {
         name.remove(0, 1);
     }
     return name;
+}
+
+QString rgbaString(const QColor &color, int alpha) {
+    return QStringLiteral("rgba(%1, %2, %3, %4)")
+        .arg(color.red())
+        .arg(color.green())
+        .arg(color.blue())
+        .arg(qBound(0, alpha, 255));
 }
 
 }  // namespace
@@ -332,8 +342,97 @@ void ThemeManager::applyQss() {
     const QString qss = tpl.open(QIODevice::ReadOnly | QIODevice::Text)
                             ? QString::fromUtf8(tpl.readAll())
                             : QString();
+    // 用户拖过「卡片不透明度」就覆盖主题给的两个卡片色，其余 token 原样保留。
+    QHash<QString, QString> palette = current_.palette;
+    if (cardAlpha_ >= 0) {
+        for (const char *key : {"card.bg", "card.bg2"}) {
+            const QString token = QString::fromLatin1(key);
+            const QColor color = parsePaletteColor(palette.value(token));
+            if (color.isValid()) {
+                palette.insert(token, rgbaString(color, cardAlpha_));
+            }
+        }
+    }
     qApp->setStyleSheet(
-        renderQss(qss, current_.palette, current_.mainBackground));
+        renderQss(qss, palette, current_.mainBackground));
+}
+
+QColor ThemeManager::parsePaletteColor(const QString &value) {
+    const QString text = value.trimmed();
+    if (text.isEmpty()) {
+        return {};
+    }
+    if (text.startsWith(QLatin1String("rgb"), Qt::CaseInsensitive)) {
+        const QString inner =
+            text.section(QLatin1Char('('), 1).section(QLatin1Char(')'), 0, 0);
+        const QStringList parts =
+            inner.split(QLatin1Char(','), Qt::SkipEmptyParts);
+        if (parts.size() >= 3) {
+            QColor color(parts.at(0).trimmed().toInt(),
+                         parts.at(1).trimmed().toInt(),
+                         parts.at(2).trimmed().toInt());
+            if (parts.size() >= 4) {
+                color.setAlpha(qBound(0, parts.at(3).trimmed().toInt(), 255));
+            }
+            if (color.isValid()) {
+                return color;
+            }
+        }
+        return {};
+    }
+    const QColor color(text);
+    return color.isValid() ? color : QColor();
+}
+
+int ThemeManager::cardAlpha() const {
+    if (cardAlpha_ >= 0) {
+        return cardAlpha_;
+    }
+    const QColor color =
+        parsePaletteColor(current_.palette.value(QStringLiteral("card.bg")));
+    return color.isValid() ? color.alpha() : 255;
+}
+
+qreal ThemeManager::backdropDim() const {
+    if (backdropDim_ >= 0) {
+        return backdropDim_;
+    }
+    // 主窗信息密度高：主题写的 dim 只当「想更暗」的加成，保底 0.38。
+    return qBound<qreal>(0.38, current_.dim, 0.9);
+}
+
+bool ThemeManager::hasAppearanceOverride() const {
+    return cardAlpha_ >= 0 || backdropDim_ >= 0;
+}
+
+void ThemeManager::setCardAlpha(int alpha) {
+    cardAlpha_ = qBound(0, alpha, 255);
+    if (store_ != nullptr) {
+        store_->setUiString(QStringLiteral("card_alpha"),
+                            QString::number(cardAlpha_));
+    }
+    applyQss();
+    emit themeChanged(current_);
+}
+
+void ThemeManager::setBackdropDim(qreal dim) {
+    backdropDim_ = qBound<qreal>(0.0, dim, 1.0);
+    if (store_ != nullptr) {
+        store_->setUiString(QStringLiteral("backdrop_dim"),
+                            QString::number(qRound(backdropDim_ * 100)));
+    }
+    emit themeChanged(current_);
+}
+
+void ThemeManager::resetAppearance() {
+    cardAlpha_ = -1;
+    backdropDim_ = -1.0;
+    if (store_ != nullptr) {
+        store_->setUiString(QStringLiteral("card_alpha"), QString());
+        store_->setUiString(QStringLiteral("backdrop_dim"), QString());
+    }
+    applyQss();
+    emit themeChanged(current_);
 }
 
 void ThemeManager::init(ProfileStore *store) {
@@ -344,6 +443,16 @@ void ThemeManager::init(ProfileStore *store) {
                                             QStringLiteral("classic"))
                           : QStringLiteral("classic");
     current_ = loadTheme(id);
+    if (store_ != nullptr) {
+        const QString alpha = store_->uiString(QStringLiteral("card_alpha"));
+        if (!alpha.isEmpty()) {
+            cardAlpha_ = qBound(0, alpha.toInt(), 255);
+        }
+        const QString dim = store_->uiString(QStringLiteral("backdrop_dim"));
+        if (!dim.isEmpty()) {
+            backdropDim_ = qBound<qreal>(0.0, dim.toDouble() / 100.0, 1.0);
+        }
+    }
     applyQss();
 }
 

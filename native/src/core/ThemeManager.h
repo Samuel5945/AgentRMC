@@ -65,8 +65,22 @@ public:
     QList<ThemeInfo> themes() const { return infos_; }
     const Theme &current() const { return current_; }
     QString currentId() const { return current_.id; }
+    // 按 id 取解析结果（主题面板画色卡用）；不存在回落 classic。
+    Theme themeById(const QString &id) const { return loadTheme(id); }
 
     static QString themesRoot();
+
+    // —— 外观覆盖：用户在「主题」面板里拖的滑块，持久化在 ui.card_alpha /
+    // ui.backdrop_dim；没设过就跟随主题自己的值。——
+    int cardAlpha() const;             // 卡片不透明度 0-255
+    qreal backdropDim() const;         // 背景压暗 0-1（含主窗可读性下限）
+    bool hasAppearanceOverride() const;
+    void setCardAlpha(int alpha);      // 落盘 + 重刷 QSS + 广播
+    void setBackdropDim(qreal dim);    // 落盘 + 广播（主窗自己重绘背景）
+    void resetAppearance();            // 回到主题默认
+
+    // "rgba(8, 12, 20, 55)" / "#121722" / 命名色 → QColor；解析不了返回无效色。
+    static QColor parsePaletteColor(const QString &value);
 
 public slots:
     // 持久化 ui.theme + 立即应用 + 广播 themeChanged。
@@ -104,4 +118,7 @@ private:
     ProfileStore *store_ = nullptr;
     QList<ThemeInfo> infos_;
     Theme current_;
+    // -1 = 跟随主题。用户拖过滑块才有值。
+    int cardAlpha_ = -1;
+    qreal backdropDim_ = -1.0;
 };

@@ -43,6 +43,10 @@ if not exist "%ROOT%\native\build\Release\profiles.json" copy /y "%ROOT%\profile
 rem Themes are loose folders next to the exe so users can drop in new ones.
 if exist "%ROOT%\themes" robocopy "%ROOT%\themes" "%ROOT%\native\build\Release\themes" /E /NFL /NDL /NJH /NJS >nul
 rem ZCode 联动插件（agentrmc-bridge）随包分发，装完 AgentRMC 就地可用。
+rem Version single source is plugins\agentrmc-bridge\VERSION; sync the five
+rem manifests into it before the copy so the zip can't carry a stale version.
+powershell -NoProfile -ExecutionPolicy Bypass -File "%HERE%sync-plugin-version.ps1" >nul
+if errorlevel 1 exit /b 1
 if exist "%ROOT%\plugins" robocopy "%ROOT%\plugins" "%ROOT%\native\build\Release\plugins" /E /NFL /NDL /NJH /NJS >nul
 rem robocopy exit codes 0-7 mean success (1 = files copied); 8+ are failures.
 rem Normalize so chained scripts don't treat a good copy as an error.
@@ -62,7 +66,7 @@ copy /y "%ROOT%\native\build\Release\plugins\agentrmc-bridge.zip" "%ROOT%\native
 
 rem Mirror the plugin zip into dist with the manifest version in the filename.
 rem FR-07: "which zip is current" must be answerable from the name alone.
-for /f "usebackq delims=" %%v in (`powershell -NoProfile -Command "(Get-Content -Raw -Encoding UTF8 '%ROOT%\plugins\agentrmc-bridge\.zcode-plugin\plugin.json' | ConvertFrom-Json).version"`) do set "PLUGVER=%%v"
+for /f "usebackq delims=" %%v in (`powershell -NoProfile -Command "(Get-Content -Raw -Encoding UTF8 '%ROOT%\plugins\agentrmc-bridge\VERSION').Trim()"`) do set "PLUGVER=%%v"
 if defined PLUGVER (
     if not exist "%ROOT%\dist" mkdir "%ROOT%\dist"
     copy /y "%ROOT%\native\build\Release\plugins\agentrmc-bridge.zip" "%ROOT%\dist\agentrmc-bridge-%PLUGVER%.zip" >nul

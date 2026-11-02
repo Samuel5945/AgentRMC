@@ -12,8 +12,9 @@ class QTcpSocket;
 
 // 本机 Agent（ZCode / Qoder 等）与桌宠的交互口：监听 127.0.0.1:45915——
 //   POST /notify  {"event":"stop|permission|...","title":...,"message":...,
-//                  "raise":"ZCode.exe","session_id":"...","project":"...",
-//                  "event_id":"..."}
+//                  "speech":"Qoder 等你确认","raise":"ZCode.exe",
+//                  "session_id":"...","project":"...","event_id":"...",
+//                  "plugin_version":"0.3.7"}
 //                 → notify()：桌宠冒气泡（不出声），收起时走托盘；
 //                   raise 给定时把该进程映像名的窗口拉到前台（谁发的就拉谁）
 //   POST /speak   {"message":"..."} → notify(kind="speak")：气泡 + TTS 朗读
@@ -48,10 +49,16 @@ signals:
     // kind：/notify 透传 event 字段；/speak 固定为 "speak"。
     // raise：/notify 的可选进程映像名（"/speak" 恒为空，念话不抢前台）。
     // sessionId / project / eventId：可选，给 Work Item 去重和分组用。
+    // pluginVersion：发这条通知的 agentrmc-bridge 是哪一版（hook 自己读包里的
+    //   VERSION）。空 = 宿主没带（旧插件）。它是唯一能证明「哪一版代码真的在跑」
+    //   的读数——注册表只说明盘上装成哪版，宿主不重启还是旧代码。
+    // speech：只给语音念的短文案（带宿主名，不含工具名/路径）。空就退回念 message。
+    //   气泡和工单仍用 message——「等你确认 Bash：D:\…」看着有用，念出来是噪音。
     void notify(const QString &kind, const QString &title,
                 const QString &message, const QString &raise,
                 const QString &sessionId, const QString &project,
-                const QString &eventId);
+                const QString &eventId, const QString &pluginVersion,
+                const QString &speech);
 
 private:
     void onConnected();

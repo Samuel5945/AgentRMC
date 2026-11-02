@@ -151,13 +151,26 @@ function installInto(configHomeDirName) {
   return path.join(dest, 'hooks', 'agentrmc-notify.js');
 }
 
+// 这套 e2e 靠「脚本装在哪个配置家」判宿主，所以子进程的环境里不能留着宿主家族
+// 的变量：在 Qoder / WorkBuddy 会话里跑测试时，resolveHost 的判据 3（环境变量）
+// 会抢在路径判据之前命中，WorkBuddy 用例会绿变红。清掉之后同一份测试在任何
+// 宿主里跑结果一致。
+function hostFreeEnv(extra) {
+  const env = Object.assign({}, process.env, extra);
+  for (const key of Object.keys(env)) {
+    if (/^(QODER_|QODERCN_|CLAUDE_|WORKBUDDY|CODEBUDDY)/.test(key)) delete env[key];
+  }
+  return env;
+}
+
 function dryRun(scriptPath, event, stdinJson) {
+  const env = hostFreeEnv({ AGENTRMC_DRY_RUN: '1' });
   const out = execFileSync(
     process.execPath,
     [scriptPath, event],
     {
       input: stdinJson,
-      env: Object.create(Object.assign({}, process.env, { AGENTRMC_DRY_RUN: '1' })),
+      env,
       encoding: 'utf8',
       timeout: 8000,
     },
@@ -173,8 +186,17 @@ check('e2e-intl: 复制到 .qoder 里跑真脚本 -> title/raise 是国际版', 
   assert.strictEqual(r.payload.title, 'Qoder');
   assert.strictEqual(r.payload.raise, 'Qoder.exe');
   assert.strictEqual(r.payload.event, 'stop');
-  assert.match(r.payload.message, /Qoder 已完成任务/);
+  assert.match(r.payload.message, /Qoder 做完了/);
   assert.strictEqual(r.source, 'qoder-intl');
+});
+
+check('e2e: payload 带 plugin_version，且就是包里那份 VERSION', () => {
+  const expected = fs.readFileSync(path.join(PLUGIN_ROOT, 'VERSION'), 'utf8').trim();
+  assert.match(expected, /^\d+\.\d+\.\d+$/, `VERSION 不是三段号: ${expected}`);
+  for (const home of ['.qoder', '.qoder-cn', '.workbuddy']) {
+    const r = dryRun(installInto(home), 'stop', JSON.stringify({ session_id: 'v' }));
+    assert.strictEqual(r.payload.plugin_version, expected, `${home} 没带上版本`);
+  }
 });
 
 check('e2e-cn: 复制到 .qoder-cn 里跑真脚本 -> 同一个包念出 Qoder CN', () => {
@@ -190,7 +212,7 @@ check('e2e-workbuddy-classic: 复制到 .workbuddy 里跑真脚本 -> 旧版标�
   assert.strictEqual(r.source, 'workbuddy-classic');
   assert.strictEqual(r.payload.title, 'WorkBuddy');
   assert.strictEqual(r.payload.raise, 'WorkBuddy.exe');
-  assert.match(r.payload.message, /^WorkBuddy 已完成任务/);
+  assert.match(r.payload.message, /^WorkBuddy 做完了/);
   assert.doesNotMatch(JSON.stringify(r.payload), /WorkBuddyAI\.exe/);
 });
 
@@ -224,7 +246,7 @@ check('AgentRMC 未开时写 spool: 连接失败不丢通知', () => {
       tool_input: { command: 'ls' },
       session_id: 's-spool',
     }),
-    env: Object.assign({}, process.env, {
+    env: hostFreeEnv({
       AGENTRMC_PORT: '1',
       AGENTRMC_SPOOL_DIR: spoolDir,
     }),
@@ -262,6 +284,23 @@ check('question→permission: 选方案提醒按 permission 发出，宿主各�
   assert.strictEqual(cn.payload.raise, 'Qoder CN.exe');
 });
 
+// 语音和气泡要念/显示两回事：「等你确认 Bash：D:\path」看着有用，念出来是噪音；
+// 而语音少了宿主名就分不清是谁在等。speech 只给语音，缺省才退回念 message。
+check('speech 与 message 分开: 语音短文案带宿主名，气泡留工具名和路径', () => {
+  const r = dryRun(installInto('.qoder'), 'permission', JSON.stringify({
+    tool_name: 'Bash',
+    tool_input: { command: 'ls D:/tmp' },
+  }));
+  assert.strictEqual(r.payload.message, '等你确认 Bash：ls D:/tmp');
+  assert.strictEqual(r.payload.speech, 'Qoder 在等你点确认');
+  const q = dryRun(installInto('.qoder-cn'), 'question',
+    JSON.stringify({ tool_name: 'AskUserQuestion' }));
+  assert.strictEqual(q.payload.speech, 'Qoder CN 在等你选方案');
+  const stop = dryRun(installInto('.qoder'), 'stop', JSON.stringify({}));
+  assert.strictEqual(stop.payload.speech, undefined,
+    'stop 的 message 本来就带宿主名，不该再塞一份');
+});
+
 check('question 防刷屏: matcher 没生效时非 AskUserQuestion 一律静默不发', () => {
   const s = installInto('.qoder');
   assert.strictEqual(dryRun(s, 'question', JSON.stringify({ tool_name: 'Bash', tool_input: { command: 'ls' } })), null);
@@ -274,7 +313,7 @@ check('question 防刷屏: matcher 没生效时非 AskUserQuestion 一律静默�
 check('question 仍走 stop/permission 之外的静默边界: 未知事件名不误伤', () => {
   const r = dryRun(installInto('.qoder'), 'stop', JSON.stringify({ tool_name: 'AskUserQuestion' }));
   assert.strictEqual(r.payload.event, 'stop');
-  assert.match(r.payload.message, /已完成任务/);
+  assert.match(r.payload.message, /做完了/);
 });
 
 check('stop 念出最终回复: transcript 最后一条 assistant 压成一句', () => {
@@ -309,7 +348,7 @@ check('stop 兜底: transcript 不存在时仍发通用文案', () => {
     'stop',
     JSON.stringify({ transcript_path: path.join(os.tmpdir(), 'agentrmc-none.jsonl') }),
   );
-  assert.match(r.payload.message, /已完成任务/);
+  assert.match(r.payload.message, /做完了/);
 });
 
 check('hooks-qoder 注册了 PreToolUse + matcher=AskUserQuestion', () => {

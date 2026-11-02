@@ -40,16 +40,42 @@
 
 Qoder 把从 zip 上传的插件记成 `agentrmc-bridge@local`（见
 `~/.qoder/plugins/installed_plugins_v2.json`）。本地插件没有 marketplace 版本可对比，
-插件页的「更新」按钮不会去拉新 zip——这是 Qoder 的行为，不是包没打。
+插件页的「更新」按钮不会去拉新 zip——这是 Qoder 的行为，不是包没打。而且国际版和
+Qoder CN 是两个独立配置家，装一家另一家不会自动有。
 
-升级用安装目录里单独命名的 Qoder 包（构建时生成）：
+版本号只有一个来源：包根的 `VERSION`。构建时 `native/tools/sync-plugin-version.ps1`
+把它同步进 3 个 `plugin.json` 和 2 个 `marketplace.json`，出包前
+`check-version.ps1` 会核对这五处（Native 自己那条版本线独立，不要求同号）。
 
-- `D:\apps\AgentRMC\plugins\agentrmc-bridge-qoder.zip`
-- 或仓库 `dist\agentrmc-bridge-qoder-<version>.zip`
+**App 里升级（推荐）**：AgentRMC「系统」页的「联动插件」一行会列出内置版本、各家已装
+版本和「进程里真在跑的版本」，落后就点「升级联动插件」——它把 exe 旁的 zip 解进
+`<配置家>/plugins/cache/local/agentrmc-bridge/<version>`，再把注册表那一条指过去
+（改写前把原件备份到 `%APPDATA%\LIG\AgentRMCNative\plugin-backups\`）。只升级已装过的
+宿主，没装过的不替它造条目。改完仍要重启对应的 app 才加载新代码。
 
-步骤：Qoder / Qoder CN 插件页 → 找到 AgentRMC 桌宠联动 → 移除旧版（或直接重新上传
-zip；只能安装不能覆盖时先卸载）→ 选上面的 zip → 重启 Qoder。国际版和 CN 是两个独立
-配置家，需要各自操作一次。
+**让 Agent 装**：「使用引导 → 接入 AI Agent」的「复制安装话术」已经把 zip 绝对路径和
+内置版本写进去了，那句话要求 Agent 用宿主自己的安装器 `install_extension`
+（`source=local`、`kind=plugin`、`filePath=<zip>`）来装，两个 app 各一次。
+
+**手工**：插件页 → 找到 AgentRMC 桌宠联动 → 重新上传
+`安装目录\plugins\agentrmc-bridge.zip`（或 `dist\agentrmc-bridge-qoder-<version>.zip`）
+→ 重启该 app。
+
+`loaded` 这个读数为什么必要：hook 的 payload 带 `plugin_version`（读自包里那份
+`VERSION`），原生端按宿主记下最近一次上报值。注册表只能说盘上装成哪版——盘上 0.3.7、
+进程里还跑 0.3.6 这种「装完没重启」的状态，只有这个数能区分开。
+
+#### 升级完旧会话为什么一条提醒都没有
+
+宿主在**会话开始时**把 `${QODER_PLUGIN_ROOT}` 解析成带版本号的缓存目录，并把它烧进
+hook 命令行里。官方安装器装新版时会**删掉上一版目录**，于是那个还开着的会话每次触发
+hook 都是 `node <已经不存在的文件>`——静默失败，不冒气泡也不报错，看起来像「桌宠不提醒了」。
+
+- 判据：App「系统」页那一家挂着「等新版上报」，收到任意一条 hook 就自己清掉；
+- 恢复：新开会话，或重启该宿主；
+- 临时救旧会话：把新版包复制成它期望的那个旧版本号目录
+  （`cp -r cache/local/agentrmc-bridge/0.3.7 .../0.3.6` 这类），路径一存在提醒就回来；
+- AgentRMC 自己的「升级联动插件」**不删旧目录**，走这条路不会把活会话打断。
 
 ### 署名与拉前台靠自检，不写死
 

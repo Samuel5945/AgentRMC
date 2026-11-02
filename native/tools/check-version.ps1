@@ -29,4 +29,15 @@ if ($cmakeVer -ne $nsiVer -or $cmakeVer -ne $exeVer -or $cmakeVer -ne $prodVer) 
   Write-Error "version mismatch: CMake / NSIS / exe must all be $cmakeVer"
   exit 1
 }
+
+# The plugin has its own version line (plugins/agentrmc-bridge/VERSION) and its
+# own release channel (the zip the hosts install). It is deliberately not required
+# to match Native; it IS required to match the five manifests, otherwise the
+# installed plugin page and the zip filename disagree about what version is what.
+& (Join-Path $PSScriptRoot 'sync-plugin-version.ps1') -Check
+if ($LASTEXITCODE -ne 0) {
+  Write-Error "plugin manifests disagree with plugins/agentrmc-bridge/VERSION"
+  exit 1
+}
+
 Write-Output 'VERSION OK'

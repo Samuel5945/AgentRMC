@@ -51,6 +51,8 @@ qt_add_executable(AgentRMCNative
     src/core/ModelImport.h
     src/core/Updater.cpp
     src/core/Updater.h
+    src/core/PluginUpgrade.cpp
+    src/core/PluginUpgrade.h
     src/core/AudioRecorder.cpp
     src/core/AudioRecorder.h
     src/core/AudioOut.cpp
@@ -89,6 +91,8 @@ qt_add_executable(AgentRMCNative
     src/ui/Toast.h
     src/ui/TtsSettingsDialog.cpp
     src/ui/TtsSettingsDialog.h
+    src/ui/ThemeDialog.cpp
+    src/ui/ThemeDialog.h
     src/ui/GuideDialog.cpp
     src/ui/GuideDialog.h
     src/ui/VoiceSettingsDialog.cpp
@@ -229,6 +233,17 @@ add_executable(AgentRMCBridgeTest
 target_include_directories(AgentRMCBridgeTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(AgentRMCBridgeTest PRIVATE Qt6::Core Qt6::Network)
 target_compile_options(AgentRMCBridgeTest PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
+
+add_executable(AgentRMCPluginTest
+    tests/plugin_upgrade_test.cpp
+    src/core/PluginUpgrade.cpp
+    src/core/PluginUpgrade.h
+    src/core/Updater.cpp
+    src/core/Updater.h
+)
+target_include_directories(AgentRMCPluginTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(AgentRMCPluginTest PRIVATE Qt6::Core)
+target_compile_options(AgentRMCPluginTest PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
 
 add_executable(AgentRMCWorkItemTest
     tests/workitem_test.cpp

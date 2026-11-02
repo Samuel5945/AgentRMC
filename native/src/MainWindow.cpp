@@ -4,12 +4,14 @@
 #include "ui/GuideDialog.h"
 #include "ui/KeymapPage.h"
 #include "ui/RemotePanel.h"
+#include "ui/ThemeDialog.h"
 #include "ui/Toast.h"
 #include "ui/VoicePet.h"
 #include "ui/VoiceSettingsDialog.h"
 #include "ui/VoiceWindow.h"
 
 #include "core/AgentBridge.h"
+#include "core/PluginUpgrade.h"
 #include "core/AgentWindow.h"
 #include "core/AppLauncher.h"
 #include "core/InputEngine.h"
@@ -62,7 +64,10 @@
 #include <QPainter>
 #include <QPushButton>
 #include <QScrollArea>
+#include <QShortcut>
 #include <QStandardPaths>
+#include <QStyleOptionViewItem>
+#include <QStyledItemDelegate>
 #include <QSystemTrayIcon>
 #include <QTabWidget>
 #include <QTableWidget>
@@ -83,15 +88,24 @@ namespace {
 
 // 「使用引导」里的一句话安装话术：插件源和 zip 随安装包落在 exe 旁的 plugins\ 下，
 // 用户不用认路径——复制这一句发给正在干活的 Agent，它自己装好并启用。
+// 让 Agent 走宿主自己的安装器（install_extension）而不是手改注册表：本地包的版本号
+// 只在文件名和清单里，装错了没人看得出来。
 QString agentBridgeInstallSentence() {
     const QString root = QDir::toNativeSeparators(
         QCoreApplication::applicationDirPath() + QStringLiteral("/plugins"));
+    const QString zip = root + QStringLiteral("\\agentrmc-bridge.zip");
+    const QString version = pluginupgrade::bundledVersion(
+        QCoreApplication::applicationDirPath() +
+        QStringLiteral("/plugins/agentrmc-bridge"));
     return QString::fromUtf8(
-               "帮我装本机的 AgentRMC 桌宠联动插件 agentrmc-bridge，装好并启用。"
-               "Qoder：走「扩展 → 插件 → 添加插件 → 上传插件」，选 %1；"
+               "帮我装或升级本机的 AgentRMC 桌宠联动插件 agentrmc-bridge（内置版本 %3），装好并启用。"
+               "Qoder / Qoder CN：用你手上的 Qoder 设置安装器装本地包 —— install_extension，"
+               "参数 source=local、kind=plugin、filePath=%1；"
+               "国际版和 Qoder CN 是两个独立 app，各装一次，装完重启那个 app 才真加载。"
+               "没有安装器时才手工：侧边栏 扩展 → 插件 → 添加插件 → 上传插件，选同一个 zip。"
                "ZCode / WorkBuddy：在应用市场添加目录 %2（内含 marketplace.json）。"
-               "之后在我等确认或任务结束时用桌宠提醒我。")
-        .arg(root + QStringLiteral("\\agentrmc-bridge.zip"), root);
+               "装完把两边各自的版本报给我。之后在我等确认或任务结束时用桌宠提醒我。")
+        .arg(zip, root, version.isEmpty() ? QStringLiteral("未知") : version);
 }
 
 class TitleBar final : public QWidget {
@@ -113,6 +127,137 @@ protected:
 
 // 全局语音热键（无遥控器触发用）的注册 ID。
 constexpr UINT kVoiceHotkeyId = 0xB00B;
+
+// 主界面底色：主题带背景图就铺满整窗再压一层暗色遮罩。
+// 以前只有语音面板做了遮罩，主窗直接把 11px 灰字压在花纹上，正文基本读不了。
+// 这里给一个下限——主窗是信息密集界面，主题作者写的 dim 只当「想更暗」的加成。
+class BackdropRoot final : public QWidget {
+public:
+    using QWidget::QWidget;
+
+protected:
+    void paintEvent(QPaintEvent *) override {
+        const Theme &theme = ThemeManager::instance().current();
+        if (theme.mainBackground.isEmpty()) {
+            return;  // classic：QSS 的纯色底就够
+        }
+        const QImage art = ThemeManager::cachedImage(theme.mainBackground);
+        if (art.isNull()) {
+            return;
+        }
+        QPainter painter(this);
+        const QImage scaled = art.scaled(size(), Qt::KeepAspectRatioByExpanding,
+                                         Qt::SmoothTransformation);
+        painter.drawImage(QPoint((width() - scaled.width()) / 2,
+                                 (height() - scaled.height()) / 2),
+                          scaled);
+        const qreal dim = ThemeManager::instance().backdropDim();
+        painter.fillRect(rect(), QColor(11, 14, 20, int(255 * dim)));
+    }
+};
+
+// 待办行：状态色条 + 一行「Agent · 阶段 —— 时间」+ 一行消息。
+// 原来整行一个颜色、状态用方括号塞在正文里，扫十行找不出哪条在等自己。
+class WorkItemDelegate final : public QStyledItemDelegate {
+public:
+    explicit WorkItemDelegate(QObject *parent = nullptr)
+        : QStyledItemDelegate(parent) {}
+
+    QSize sizeHint(const QStyleOptionViewItem &, const QModelIndex &) const override {
+        return QSize(0, 56);
+    }
+
+    void paint(QPainter *painter, const QStyleOptionViewItem &option,
+               const QModelIndex &index) const override {
+        painter->save();
+        painter->setRenderHint(QPainter::Antialiasing, true);
+        painter->setClipRect(option.rect);
+
+        const QRectF row = QRectF(option.rect).adjusted(2, 2, -2, -2);
+        const bool selected = option.state & QStyle::State_Selected;
+        const bool hovered = option.state & QStyle::State_MouseOver;
+        if (selected || hovered) {
+            painter->setPen(selected ? QPen(QColor(79, 140, 255, 150), 1.0)
+                                     : QPen(Qt::NoPen));
+            painter->setBrush(selected ? QColor(79, 140, 255, 44)
+                                       : QColor(255, 255, 255, 10));
+            painter->drawRoundedRect(row, 10, 10);
+        }
+
+        const QColor stage = index.data(Qt::UserRole + 2).value<QColor>();
+        painter->setPen(Qt::NoPen);
+        painter->setBrush(stage);
+        painter->drawRoundedRect(
+            QRectF(row.left() + 9, row.top() + 12, 3, row.height() - 24), 1.5,
+            1.5);
+
+        const qreal textLeft = row.left() + 21;
+        const qreal textRight = row.right() - 12;
+
+        const QString agent = index.data(Qt::UserRole + 4).toString();
+        const QString stageText = index.data(Qt::UserRole + 3).toString();
+        const QString when = index.data(Qt::UserRole + 5).toString();
+        const QString message = index.data(Qt::DisplayRole).toString();
+
+        QFont nameFont = painter->font();
+        nameFont.setPixelSize(12);
+        nameFont.setWeight(QFont::DemiBold);
+        QFont metaFont = painter->font();
+        metaFont.setPixelSize(10);
+        const QFontMetrics nameMetrics(nameFont);
+        const QFontMetrics metaMetrics(metaFont);
+
+        const qreal timeWidth = metaMetrics.horizontalAdvance(when) + 12;
+        const QRectF line1(textLeft, row.top() + 9,
+                           textRight - textLeft - timeWidth, 16);
+
+        painter->setFont(metaFont);
+        painter->setPen(QColor(0x7c, 0x87, 0x98));
+        painter->drawText(line1, Qt::AlignRight | Qt::AlignVCenter, when);
+
+        const qreal stageWidth = metaMetrics.horizontalAdvance(stageText);
+        const qreal nameRoom =
+            qMax<qreal>(40, line1.width() - stageWidth - 14);
+        painter->setFont(nameFont);
+        painter->setPen(QColor(0xe6, 0xed, 0xf3));
+        const QString shownAgent =
+            nameMetrics.elidedText(agent, Qt::ElideRight, int(nameRoom));
+        painter->drawText(line1, Qt::AlignLeft | Qt::AlignVCenter, shownAgent);
+        const qreal agentWidth = nameMetrics.horizontalAdvance(shownAgent);
+
+        painter->setFont(metaFont);
+        painter->setPen(stage);
+        painter->drawText(QRectF(line1.left() + agentWidth + 7, line1.top(),
+                                 stageWidth + 4, line1.height()),
+                          Qt::AlignLeft | Qt::AlignVCenter, stageText);
+
+        QFont bodyFont = painter->font();
+        bodyFont.setPixelSize(11);
+        painter->setFont(bodyFont);
+        painter->setPen(QColor(0xa9, 0xb6, 0xc6));
+        const QRectF line2(textLeft, row.top() + 29,
+                           textRight - textLeft, 16);
+        painter->drawText(
+            line2, Qt::AlignLeft | Qt::AlignVCenter,
+            QFontMetrics(bodyFont).elidedText(message.simplified(),
+                                              Qt::ElideRight,
+                                              int(line2.width())));
+        painter->restore();
+    }
+};
+
+// 统计小胶囊：等你 / 待验收 / 进行中。
+QLabel *makeChip(const QString &label, const QString &color,
+                 const QString &border, const QString &fill) {
+    auto *chip = new QLabel(label);
+    chip->setStyleSheet(
+        QStringLiteral("QLabel { color: %1; background: %2; border: 1px solid %3;"
+                       " border-radius: 9px; padding: 1px 8px; font-size: 10.5px;"
+                       " font-weight: 600; }")
+            .arg(color, fill, border));
+    chip->hide();
+    return chip;
+}
 
 }  // namespace
 
@@ -203,13 +348,17 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
     dropHint_->hide();
     qApp->installEventFilter(this);
     setWindowFlags(Qt::Window | Qt::FramelessWindowHint);
-    setMinimumSize(880, 560);
+    // 再窄左栏就挤不下了：语音卡 + 遥控器卡是固定高度，列表也需要宽度放时间列。
+    setMinimumSize(940, 620);
 
-    auto *root = new QWidget;
+    auto *root = new BackdropRoot;
     root->setObjectName("root");
     // 主题背景图走 QSS background-image；plain QWidget 显式声明按样式表绘制。
     root->setAttribute(Qt::WA_StyledBackground, true);
     setCentralWidget(root);
+    // 换主题时 QSS 会重刷，但背景是我们自己画的，得手动重绘一次。
+    connect(&ThemeManager::instance(), &ThemeManager::themeChanged, root,
+            [root](const Theme &) { root->update(); });
 
     auto *outer = new QVBoxLayout(root);
     outer->setContentsMargins(0, 0, 0, 0);
@@ -226,8 +375,10 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
     auto *leftLay = new QVBoxLayout(left);
     leftLay->setContentsMargins(0, 0, 0, 0);
     leftLay->setSpacing(12);
-    leftLay->addWidget(buildRemoteCard(), 1);
+    // 语音在上面：主操作「开始监听」和识别方式是一打开就要用的；
+    // 遥控器是可选的次要设备，放到下面并吃掉剩余高度。
     leftLay->addWidget(buildVoiceCard(), 0);
+    leftLay->addWidget(buildRemoteCard(), 1);
     grid->addWidget(left);
 
     tabs_ = new QTabWidget;
@@ -284,7 +435,12 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
                     : 0);
         }
     });
-    tabs_->setCurrentIndex(tabs_->indexOf(keymapPage_));
+    // 打开先看待办：有人等你确认才是需要你回来处理的事；没有待办时才落到按键映射。
+    const bool hasAttention = workItems_ != nullptr &&
+                              workItems_->attentionCount() > 0;
+    tabs_->setCurrentIndex(hasAttention || keymapPage_ == nullptr
+                               ? 0
+                               : tabs_->indexOf(keymapPage_));
     refreshWorkItems();
     grid->addWidget(tabs_, 1);
 
@@ -423,9 +579,12 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
                 [this](const QString &kind, const QString &title,
                        const QString &message, const QString &raise,
                        const QString &sessionId, const QString &project,
-                       const QString &eventId) {
+                       const QString &eventId,
+                       const QString &pluginVersion,
+                       const QString &speech) {
                     handleNotify(kind, title, message, raise, sessionId,
-                                 project, eventId, false);
+                                 project, eventId, pluginVersion, speech,
+                                 false);
                 });
         if (!bridge->start()) {
             appendEvent(QStringLiteral("error"), QString(), QString(),
@@ -462,26 +621,50 @@ QWidget *MainWindow::buildHeader() {
     lay->addWidget(brand);
     lay->addStretch(1);
 
+    // 监听状态做成一颗胶囊：整窗最该一眼看到的状态，不该是裸灰字。
+    auto *pill = new QWidget;
+    pill->setObjectName("statusPill");
+    pill->setAttribute(Qt::WA_StyledBackground, true);
+    auto *pillLay = new QHBoxLayout(pill);
+    pillLay->setContentsMargins(9, 3, 11, 3);
+    pillLay->setSpacing(6);
     statusDot_ = new QLabel;
     statusDot_->setStyleSheet(
         QStringLiteral("background: #4a5568; border-radius: 3px;"));
     statusDot_->setFixedSize(6, 6);
     statusText_ = new QLabel(QString::fromUtf8("未监听"));
-    statusText_->setObjectName("muted");
-    lay->addWidget(statusDot_, 0, Qt::AlignVCenter);
-    lay->addWidget(statusText_);
-    lay->addSpacing(6);
+    statusText_->setObjectName("statusText");
+    pillLay->addWidget(statusDot_, 0, Qt::AlignVCenter);
+    pillLay->addWidget(statusText_);
+    lay->addWidget(pill, 0, Qt::AlignVCenter);
+    lay->addSpacing(4);
 
     updateButton_ = new QPushButton(QString::fromUtf8("检查更新"));
     updateButton_->setObjectName("ghostText");
     updateButton_->setCursor(Qt::PointingHandCursor);
+    updateButton_->setToolTip(QString::fromUtf8("检查是否有新版本"));
     connect(updateButton_, &QPushButton::clicked, this,
             [this] { checkUpdates(true); });
     lay->addWidget(updateButton_);
 
-    auto *guideButton = new QPushButton(QString::fromUtf8("使用引导"));
+    // 换肤 + 调卡片透明度 / 背景压暗。以前只在「语音设置」里有个下拉，
+    // 用户找不到，也调不了「字看不清」这件事。
+    auto *themeButton = new QPushButton(QString::fromUtf8("主题"));
+    themeButton->setObjectName("ghostText");
+    themeButton->setCursor(Qt::PointingHandCursor);
+    themeButton->setToolTip(
+        QString::fromUtf8("切换主题、调卡片不透明度与背景压暗"));
+    connect(themeButton, &QPushButton::clicked, this,
+            &MainWindow::openThemeDialog);
+    lay->addWidget(themeButton);
+
+    // 分步图文引导（配对遥控器 / 选识别方式 / 接入 Agent）。
+    // 「使用引导」那一页是纯文字速查表，两个入口靠名字区分开。
+    auto *guideButton = new QPushButton(QString::fromUtf8("新手引导"));
     guideButton->setObjectName("ghost");
     guideButton->setCursor(Qt::PointingHandCursor);
+    guideButton->setToolTip(
+        QString::fromUtf8("分步引导：没有遥控器怎么用、怎么配对、怎么接入 Agent"));
     connect(guideButton, &QPushButton::clicked, this, &MainWindow::showGuide);
     lay->addWidget(guideButton);
 
@@ -508,6 +691,8 @@ QWidget *MainWindow::buildRemoteCard() {
     auto *card = new QFrame;
     card->setObjectName("card");
     card->setFixedWidth(286);
+    // 遥控器是可选设备：卡片别跟着窗口一起长高，否则中间一大片空。
+    card->setMaximumHeight(392);
 
     auto *lay = new QVBoxLayout(card);
     lay->setContentsMargins(16, 13, 16, 13);
@@ -556,18 +741,18 @@ QWidget *MainWindow::buildRemoteCard() {
 QWidget *MainWindow::buildVoiceCard() {
     auto *card = new QFrame;
     card->setObjectName("card");
-    card->setFixedHeight(250);
 
     auto *lay = new QVBoxLayout(card);
     lay->setContentsMargins(16, 13, 16, 13);
-    lay->setSpacing(7);
+    lay->setSpacing(8);
 
+    // 标题行右侧直接放识别方式：少一行、少一个「选什么」的疑问。
     auto *head = new QHBoxLayout;
+    head->setSpacing(8);
     auto *title = new QLabel(QString::fromUtf8("语音"));
     title->setObjectName("cardTitle");
     head->addWidget(title);
     head->addStretch(1);
-    lay->addLayout(head);
 
     voiceBackend_ = new QComboBox;
     voiceBackend_->addItem(QString::fromUtf8("转发热键 · 0 模型"), "hotkey");
@@ -575,6 +760,8 @@ QWidget *MainWindow::buildVoiceCard() {
     voiceBackend_->addItem(QString::fromUtf8("本地 Qwen3-ASR"), "qwen3");
     voiceBackend_->addItem(QString::fromUtf8("云端 ASR（需联网）"), "api");
     voiceBackend_->setCursor(Qt::PointingHandCursor);
+    voiceBackend_->setToolTip(
+        QString::fromUtf8("语音怎么识别：转发当前应用的快捷键，或本地 / 云端模型"));
     const int backendIndex = voiceBackend_->findData(
         voiceBackendKey(voice_->options().backend));
     voiceBackend_->setCurrentIndex(backendIndex >= 0 ? backendIndex : 0);
@@ -598,7 +785,8 @@ QWidget *MainWindow::buildVoiceCard() {
                                 voiceBackend_->itemText(index),
                             0);
             });
-    lay->addWidget(voiceBackend_);
+    head->addWidget(voiceBackend_, 0);
+    lay->addLayout(head);
 
     voiceState_ = new QLabel;
     voiceState_->setObjectName("voiceBox");
@@ -667,7 +855,7 @@ QWidget *MainWindow::buildLogPage() {
 
     auto *head = new QHBoxLayout;
     logCount_ = new QLabel(QString::fromUtf8("0 条"));
-    logCount_->setObjectName("muted");
+    logCount_->setObjectName("workCount");
     auto *clear = new QPushButton(QString::fromUtf8("清空"));
     clear->setObjectName("ghostText");
     clear->setCursor(Qt::PointingHandCursor);
@@ -677,10 +865,25 @@ QWidget *MainWindow::buildLogPage() {
     head->addWidget(clear);
     cl->addLayout(head);
 
-    logEmpty_ = new QLabel(QString::fromUtf8("等待按键…"));
-    logEmpty_->setObjectName("muted");
+    // 空状态给一句「这里会有什么」，比一个居中的「等待按键…」有用。
+    auto *emptyBox = new QWidget;
+    auto *emptyLay = new QVBoxLayout(emptyBox);
+    emptyLay->setContentsMargins(0, 0, 0, 0);
+    emptyLay->setSpacing(6);
+    emptyLay->addStretch(1);
+    logEmpty_ = new QLabel(QString::fromUtf8("还没有事件"));
+    logEmpty_->setObjectName("emptyTitle");
     logEmpty_->setAlignment(Qt::AlignCenter);
-    cl->addWidget(logEmpty_, 1);
+    emptyLay->addWidget(logEmpty_);
+    auto *emptyHint = new QLabel(QString::fromUtf8(
+        "遥控器按键、语音转写、Agent 通知都会按时间记在这里，\n"
+        "排查「按了没反应」时先看这一页。"));
+    emptyHint->setObjectName("emptyHint");
+    emptyHint->setAlignment(Qt::AlignCenter);
+    emptyHint->setWordWrap(true);
+    emptyLay->addWidget(emptyHint);
+    emptyLay->addStretch(1);
+    cl->addWidget(emptyBox, 1);
 
     logList_ = new QListWidget;
     logList_->setObjectName("logList");
@@ -689,6 +892,8 @@ QWidget *MainWindow::buildLogPage() {
     logList_->setFocusPolicy(Qt::NoFocus);
     logList_->setWordWrap(true);
     logList_->setSpacing(2);
+    logList_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    logList_->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
     logList_->hide();
     cl->addWidget(logList_, 1);
     lay->addWidget(card);
@@ -704,69 +909,72 @@ QWidget *MainWindow::buildWorkPage() {
     auto *card = new QFrame;
     card->setObjectName("card");
     auto *cl = new QVBoxLayout(card);
-    cl->setContentsMargins(14, 11, 12, 12);
-    cl->setSpacing(10);
+    cl->setContentsMargins(16, 13, 14, 12);
+    cl->setSpacing(9);
 
+    // 一行说清「有多少、卡在哪」：总数 + 三个分类胶囊 + Worker 过滤 + 清理。
     auto *head = new QHBoxLayout;
-    workCount_ = new QLabel(QString::fromUtf8("没有待处理"));
-    workCount_->setObjectName("muted");
+    head->setSpacing(8);
+    workCount_ = new QLabel(QString::fromUtf8("没有待办"));
+    workCount_->setObjectName("workCount");
+    head->addWidget(workCount_);
+
+    chipNeeds_ = makeChip(QString(), QStringLiteral("#f0883e"),
+                          QStringLiteral("rgba(240,136,62,95)"),
+                          QStringLiteral("rgba(240,136,62,26)"));
+    chipReview_ = makeChip(QString(), QStringLiteral("#3fb950"),
+                           QStringLiteral("rgba(63,185,80,95)"),
+                           QStringLiteral("rgba(63,185,80,24)"));
+    chipWorking_ = makeChip(QString(), QStringLiteral("#58a6ff"),
+                            QStringLiteral("rgba(88,166,255,95)"),
+                            QStringLiteral("rgba(88,166,255,24)"));
+    head->addWidget(chipNeeds_);
+    head->addWidget(chipReview_);
+    head->addWidget(chipWorking_);
+    head->addStretch(1);
+
+    workFilter_ = new QComboBox;
+    workFilter_->setMinimumWidth(132);
+    workFilter_->setToolTip(QString::fromUtf8("只看某个 Agent 的待办"));
+    connect(workFilter_, &QComboBox::currentIndexChanged, this,
+            [this](int) { refreshWorkItems(); });
+    head->addWidget(workFilter_);
+
     auto *clear = new QPushButton(QString::fromUtf8("清空已完成"));
     clear->setObjectName("ghostText");
     clear->setCursor(Qt::PointingHandCursor);
+    clear->setToolTip(QString::fromUtf8("把已经处理完的记录从列表里删掉"));
     connect(clear, &QPushButton::clicked, this, [this] {
         if (workItems_ != nullptr) {
             workItems_->clearFinished();
         }
         refreshWorkItems();
     });
-    head->addWidget(workCount_);
-    head->addStretch(1);
     head->addWidget(clear);
     cl->addLayout(head);
 
-    workWorkers_ = new QLabel;
-    workWorkers_->setObjectName("muted");
-    workWorkers_->setWordWrap(true);
-    cl->addWidget(workWorkers_);
-
-    auto *filterRow = new QHBoxLayout;
-    auto *filterLabel = new QLabel(QString::fromUtf8("Worker"));
-    filterLabel->setObjectName("muted");
-    workFilter_ = new QComboBox;
-    workFilter_->setMinimumWidth(150);
-    connect(workFilter_, &QComboBox::currentIndexChanged, this,
-            [this](int) { refreshWorkItems(); });
-    filterRow->addWidget(filterLabel);
-    filterRow->addWidget(workFilter_, 1);
-    cl->addLayout(filterRow);
-
+    // 系统健康压成一行：桥接 / Worker / 最近事件，异常才变色。
     workHealth_ = new QLabel;
-    workHealth_->setObjectName("muted");
-    workHealth_->setWordWrap(true);
+    workHealth_->setObjectName("workHealth");
+    workHealth_->setTextFormat(Qt::RichText);
     cl->addWidget(workHealth_);
 
-    workEmpty_ = new QLabel(QString::fromUtf8("没有需要你处理的事"));
-    workEmpty_->setObjectName("muted");
-    workEmpty_->setAlignment(Qt::AlignCenter);
-    cl->addWidget(workEmpty_, 1);
-
     workList_ = new QListWidget;
-    workList_->setObjectName("logList");  // 复用事件流列表的样式
+    workList_->setObjectName("workList");
     workList_->setFrameShape(QFrame::NoFrame);
-    workList_->setWordWrap(true);
-    workList_->setSpacing(4);
+    workList_->setWordWrap(false);
+    workList_->setSpacing(2);
+    workList_->setMouseTracking(true);
+    workList_->setUniformItemSizes(true);
+    workList_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    workList_->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
+    workList_->setItemDelegate(new WorkItemDelegate(workList_));
     workList_->setSelectionMode(QAbstractItemView::SingleSelection);
     workList_->hide();
     connect(workList_, &QListWidget::itemDoubleClicked, this,
             [this](QListWidgetItem *item) {
                 if (item != nullptr) {
                     raiseWorkItem(item->data(Qt::UserRole).toString());
-                }
-            });
-    connect(workList_, &QListWidget::itemClicked, this,
-            [this](QListWidgetItem *item) {
-                if (item != nullptr) {
-                    workList_->setCurrentItem(item);
                 }
             });
     connect(workList_, &QListWidget::itemSelectionChanged, this, [this] {
@@ -777,27 +985,85 @@ QWidget *MainWindow::buildWorkPage() {
         if (workDone_ != nullptr) {
             workDone_->setEnabled(has);
         }
+        if (workHint_ != nullptr) {
+            workHint_->setText(
+                has ? QString::fromUtf8("Enter 回到 Agent · Delete 标为已处理")
+                    : QString::fromUtf8(
+                          "选中一条待办后可操作 · 双击直接回到对应 Agent"));
+        }
     });
     cl->addWidget(workList_, 1);
 
+    // 空状态：说清楚这里会出现什么，并给出下一步入口，而不是一句「没有」。
+    workEmptyBox_ = new QWidget;
+    auto *emptyLay = new QVBoxLayout(workEmptyBox_);
+    emptyLay->setContentsMargins(0, 0, 0, 0);
+    emptyLay->setSpacing(6);
+    emptyLay->addStretch(1);
+    workEmpty_ = new QLabel(QString::fromUtf8("没有需要你处理的事"));
+    workEmpty_->setObjectName("emptyTitle");
+    workEmpty_->setAlignment(Qt::AlignCenter);
+    emptyLay->addWidget(workEmpty_);
+    auto *emptyHint = new QLabel(QString::fromUtf8(
+        "Agent 等你确认、或任务做完时，这里会自动出现一条。\n"
+        "先给 Qoder / ZCode / WorkBuddy 装上 agentrmc-bridge 插件。"));
+    emptyHint->setObjectName("emptyHint");
+    emptyHint->setAlignment(Qt::AlignCenter);
+    emptyHint->setWordWrap(true);
+    emptyLay->addWidget(emptyHint);
+    auto *emptyRow = new QHBoxLayout;
+    auto *emptyBtn = new QPushButton(QString::fromUtf8("看怎么接入 Agent"));
+    emptyBtn->setObjectName("ghostSmall");
+    emptyBtn->setCursor(Qt::PointingHandCursor);
+    connect(emptyBtn, &QPushButton::clicked, this, [this] {
+        if (tabs_ != nullptr) {
+            for (int i = 0; i < tabs_->count(); ++i) {
+                if (tabs_->tabText(i).startsWith(QString::fromUtf8("使用引导"))) {
+                    tabs_->setCurrentIndex(i);
+                    return;
+                }
+            }
+        }
+    });
+    emptyRow->addStretch(1);
+    emptyRow->addWidget(emptyBtn);
+    emptyRow->addStretch(1);
+    emptyLay->addLayout(emptyRow);
+    emptyLay->addStretch(1);
+    cl->addWidget(workEmptyBox_, 1);
+
     auto *actions = new QHBoxLayout;
     actions->setSpacing(8);
+    workHint_ = new QLabel(
+        QString::fromUtf8("选中一条待办后可操作 · 双击直接回到对应 Agent"));
+    workHint_->setObjectName("workHint");
+    actions->addWidget(workHint_, 1);
     workRaise_ = new QPushButton(QString::fromUtf8("回到 Agent"));
     workRaise_->setObjectName("ghostSmall");
     workRaise_->setCursor(Qt::PointingHandCursor);
+    workRaise_->setToolTip(QString::fromUtf8("把发这条待办的 Agent 窗口切到前台"));
     workRaise_->setEnabled(false);
     connect(workRaise_, &QPushButton::clicked, this,
             &MainWindow::raiseSelectedWork);
     workDone_ = new QPushButton(QString::fromUtf8("标为已处理"));
-    workDone_->setObjectName("ghostSmall");
+    workDone_->setObjectName("primarySmall");
     workDone_->setCursor(Qt::PointingHandCursor);
+    workDone_->setToolTip(QString::fromUtf8("处理完了，从待办里移走（Delete）"));
     workDone_->setEnabled(false);
     connect(workDone_, &QPushButton::clicked, this,
             &MainWindow::ackSelectedWork);
     actions->addWidget(workRaise_);
     actions->addWidget(workDone_);
-    actions->addStretch(1);
     cl->addLayout(actions);
+
+    // 键盘也能干活：Enter 回去，Delete 结掉。
+    auto *enterKey = new QShortcut(QKeySequence(Qt::Key_Return), workList_);
+    enterKey->setContext(Qt::WidgetWithChildrenShortcut);
+    connect(enterKey, &QShortcut::activated, this,
+            &MainWindow::raiseSelectedWork);
+    auto *delKey = new QShortcut(QKeySequence::Delete, workList_);
+    delKey->setContext(Qt::WidgetWithChildrenShortcut);
+    connect(delKey, &QShortcut::activated, this, &MainWindow::ackSelectedWork);
 
     lay->addWidget(card);
     refreshWorkItems();
@@ -813,25 +1079,10 @@ void MainWindow::refreshWorkItems() {
     workList_->clear();
 
     QStringList aliveWorkers;
-    QStringList aliveNames;
-    const QString foreground = AgentWindow::foregroundAgentExe();
     for (const QString &exe : AgentWindow::knownExes()) {
-        if (!AgentWindow::alive(exe)) {
-            continue;
+        if (AgentWindow::alive(exe)) {
+            aliveWorkers.append(exe);
         }
-        aliveWorkers.append(exe);
-        QString name = AgentWindow::displayName(exe);
-        if (foreground.compare(exe, Qt::CaseInsensitive) == 0) {
-            name += QString::fromUtf8("（前台）");
-        }
-        aliveNames.append(name);
-    }
-    if (workWorkers_ != nullptr) {
-        workWorkers_->setText(
-            aliveNames.isEmpty()
-                ? QString::fromUtf8("Worker：没有在跑的 Agent")
-                : QString::fromUtf8("Worker：%1")
-                      .arg(aliveNames.join(QString::fromUtf8(" · "))));
     }
 
     const QString filterExe =
@@ -873,6 +1124,7 @@ void MainWindow::refreshWorkItems() {
 
     int needs = 0;
     int review = 0;
+    int working = 0;
     int open = 0;
     for (const WorkItem &item : items) {
         if (item.done) {
@@ -901,38 +1153,41 @@ void MainWindow::refreshWorkItems() {
         } else if (item.stage == QStringLiteral("working")) {
             stage = QString::fromUtf8("进行中");
             color = QColor("#58a6ff");
+            ++working;
         }
 
         QString agent = item.title;
         if (agent.isEmpty()) {
             agent = AgentWindow::displayName(item.agentExe);
         }
-        QString project;
-        if (!item.project.isEmpty()) {
-            const QString base = QFileInfo(item.project).fileName();
-            project = QString::fromUtf8(" · ") +
-                      (base.isEmpty() ? item.project : base);
-        }
         const QDateTime when = item.updatedAt.isValid() ? item.updatedAt
                                                         : item.createdAt;
-        const QString text =
-            QString::fromUtf8("[%1] %2%3\n%4 · %5")
-                .arg(stage, agent, project, item.message,
+
+        // 行内不再拼「[待验收] Xxx」这种字符串：阶段色、Agent、时间各占各的位置，
+        // 由 WorkItemDelegate 分栏画，扫一眼就能分出「谁在等我」。
+        auto *row = new QListWidgetItem(workList_);
+        row->setData(Qt::DisplayRole, item.message);
+        row->setData(Qt::UserRole, item.id);
+        row->setData(Qt::UserRole + 1, item.raiseExe);
+        row->setData(Qt::UserRole + 2, color);
+        row->setData(Qt::UserRole + 3, stage);
+        row->setData(Qt::UserRole + 4, agent);
+        row->setData(Qt::UserRole + 5,
                      when.isValid()
                          ? when.toLocalTime().toString(QStringLiteral("HH:mm"))
                          : QString());
-        auto *row = new QListWidgetItem(text, workList_);
-        row->setData(Qt::UserRole, item.id);
-        row->setData(Qt::UserRole + 1, item.raiseExe);
-        row->setForeground(color);
+        row->setSizeHint(QSize(0, 56));
         row->setToolTip(
-            QString::fromUtf8("%1\n%2\n%3")
-                .arg(item.message,
-                     item.project.isEmpty() ? QStringLiteral("（无项目路径）")
-                                            : item.project,
-                     item.sessionId.isEmpty()
-                         ? QStringLiteral("（无 session）")
-                         : QString::fromUtf8("session：%1").arg(item.sessionId)));
+            QString::fromUtf8("%1 · %2  %3\n%4\n%5")
+                .arg(stage, agent,
+                     when.isValid()
+                         ? when.toLocalTime().toString(
+                               QStringLiteral("MM-dd HH:mm"))
+                         : QString(),
+                     item.message,
+                     item.project.isEmpty()
+                         ? QStringLiteral("（无项目路径）")
+                         : QString::fromUtf8("项目：%1").arg(item.project)));
         if (item.id == selected) {
             workList_->setCurrentItem(row);
         }
@@ -940,23 +1195,37 @@ void MainWindow::refreshWorkItems() {
 
     if (open == 0) {
         workList_->hide();
-        workEmpty_->show();
+        if (workEmptyBox_ != nullptr) {
+            workEmptyBox_->show();
+        }
         const bool filtered = !filterExe.isEmpty();
         workEmpty_->setText(
-            filtered ? QString::fromUtf8("这个 Worker 没有待处理")
+            filtered ? QString::fromUtf8("这个 Worker 没有待办")
                      : QString::fromUtf8("没有需要你处理的事"));
         workCount_->setText(
-            filtered ? QString::fromUtf8("这个 Worker 没有待处理")
-                     : QString::fromUtf8("没有待处理"));
+            filtered ? QString::fromUtf8("这个 Worker 没有待办")
+                     : QString::fromUtf8("没有待办"));
     } else {
-        workEmpty_->hide();
+        if (workEmptyBox_ != nullptr) {
+            workEmptyBox_->hide();
+        }
         workList_->show();
-        workCount_->setText(
-            QString::fromUtf8("%1 件待处理 · 等你 %2 / 待验收 %3")
-                .arg(open)
-                .arg(needs)
-                .arg(review));
+        workCount_->setText(QString::fromUtf8("%1 件待办").arg(open));
     }
+
+    // 分类胶囊只显示非 0 的那几类，0 值不占版面。
+    const auto setChip = [](QLabel *chip, int count, const char *format) {
+        if (chip == nullptr) {
+            return;
+        }
+        chip->setVisible(count > 0);
+        if (count > 0) {
+            chip->setText(QString::fromUtf8(format).arg(count));
+        }
+    };
+    setChip(chipNeeds_, needs, "等你 %1");
+    setChip(chipReview_, review, "待验收 %1");
+    setChip(chipWorking_, working, "进行中 %1");
 
     if (tabs_ != nullptr && tabs_->count() > 0) {
         const int attention = workItems_->attentionCount();
@@ -971,6 +1240,12 @@ void MainWindow::refreshWorkItems() {
     }
     if (workDone_ != nullptr) {
         workDone_->setEnabled(has);
+    }
+    if (workHint_ != nullptr) {
+        workHint_->setText(
+            has ? QString::fromUtf8("Enter 回到 Agent · Delete 标为已处理")
+                : QString::fromUtf8(
+                      "选中一条待办后可操作 · 双击直接回到对应 Agent"));
     }
     refreshHealth();
 }
@@ -1051,6 +1326,152 @@ QString MainWindow::workersJson() const {
             .toJson(QJsonDocument::Compact));
 }
 
+namespace {
+
+// 联动插件随安装包落在 exe 旁边：源目录用来读内置版本，zip 用来升级各家宿主。
+QString pluginSourceDir() {
+    return QCoreApplication::applicationDirPath() +
+           QStringLiteral("/plugins/agentrmc-bridge");
+}
+
+QString pluginZipPath() {
+    return QCoreApplication::applicationDirPath() +
+           QStringLiteral("/plugins/agentrmc-bridge.zip");
+}
+
+}  // namespace
+
+QJsonObject MainWindow::pluginHealth(QStringList *problems) const {
+    QJsonArray rows;
+    const QString bundled = pluginupgrade::bundledVersion(pluginSourceDir());
+    const QList<pluginupgrade::Host> hosts =
+        pluginupgrade::scanHomes(QDir::homePath());
+    for (const pluginupgrade::Host &host : hosts) {
+        QString state;
+        if (!host.problem.isEmpty()) {
+            state = QString::fromUtf8("读不出");
+            if (problems != nullptr) {
+                problems->append(QString::fromUtf8("%1 插件状态读不出：%2")
+                                     .arg(host.name, host.problem));
+            }
+        } else if (!host.installed) {
+            // 没装过是一种状态，不是故障：首次安装走「使用引导」那句话，
+            // 不该每 5 秒在问题行里刷一条。
+            state = QString::fromUtf8("未装");
+        } else if (bundled.isEmpty()) {
+            state = QString::fromUtf8("安装包没带版本");
+            if (problems != nullptr) {
+                problems->append(QString::fromUtf8("安装包里没有 plugins/agentrmc-bridge/VERSION"));
+            }
+        } else if (versionIsNewer(bundled, host.version)) {
+            state = QString::fromUtf8("落后");
+            if (problems != nullptr) {
+                problems->append(QString::fromUtf8("%1 插件 %2 → 内置 %3")
+                                     .arg(host.name, host.version, bundled));
+            }
+        } else {
+            state = QString::fromUtf8("已装齐");
+        }
+        // 盘上装齐了但进程还在跑旧版，是「升级完没重启」，和「没升级」两回事。
+        const QString loaded = pluginLoaded_.value(host.name);
+        const bool staleProcess =
+            state == QString::fromUtf8("已装齐") && !loaded.isEmpty() &&
+            loaded != bundled;
+        if (staleProcess && problems != nullptr) {
+            problems->append(QString::fromUtf8("%1 盘上 %2，进程里还是 %3，重启宿主才生效")
+                                 .arg(host.name, bundled, loaded));
+        }
+        // 升级后一条 hook 都没收到：已开着的会话把命令指向上一版目录，而那个目录
+        // 常被安装器删掉，于是提醒静默断掉——不报旧版本号，是什么都不报。
+        const bool awaiting = pluginAwaitingReport_.contains(host.name);
+        if (awaiting && problems != nullptr) {
+            problems->append(
+                QString::fromUtf8("%1 升级后还没收到 hook：开着的会话仍指向旧版本目录，"
+                                  "新开会话或重启宿主才恢复提醒").arg(host.name));
+        }
+        const QDateTime lastReport = pluginLastReport_.value(host.name);
+        rows.append(QJsonObject{
+            {QStringLiteral("name"), host.name},
+            {QStringLiteral("installed"), host.version},
+            {QStringLiteral("loaded"), loaded},
+            {QStringLiteral("enabled"), host.enabled},
+            {QStringLiteral("running"), AgentWindow::alive(host.exe)},
+            {QStringLiteral("state"), state},
+            {QStringLiteral("last_report"),
+             lastReport.isValid()
+                 ? lastReport.toUTC().toString(Qt::ISODateWithMs)
+                 : QString()},
+            {QStringLiteral("awaiting_report"), awaiting},
+        });
+    }
+    return QJsonObject{
+        {QStringLiteral("bundled"), bundled},
+        {QStringLiteral("hosts"), rows},
+    };
+}
+
+void MainWindow::upgradePlugins() {
+    const QString bundled = pluginupgrade::bundledVersion(pluginSourceDir());
+    const QString zip = pluginZipPath();
+    const QString backupDir =
+        QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) +
+        QStringLiteral("/plugin-backups");
+    QStringList lines;
+    int upgraded = 0;
+    for (const pluginupgrade::Host &host :
+         pluginupgrade::scanHomes(QDir::homePath())) {
+        if (!host.problem.isEmpty()) {
+            lines << QString::fromUtf8("%1 读不出：%2").arg(host.name, host.problem);
+            continue;
+        }
+        if (!host.installed) {
+            lines << QString::fromUtf8("%1 没装过，先在宿主里装一次").arg(host.name);
+            continue;
+        }
+        if (!versionIsNewer(bundled, host.version)) {
+            lines << QString::fromUtf8("%1 已 %2").arg(host.name, host.version);
+            continue;
+        }
+        const pluginupgrade::Result result =
+            pluginupgrade::upgrade(host, zip, bundled, backupDir);
+        if (result.ok) {
+            ++upgraded;
+            lines << QString::fromUtf8("%1 %2→%3%4")
+                         .arg(host.name, result.from, result.to,
+                              AgentWindow::alive(host.exe)
+                                  ? QString::fromUtf8("（重启该宿主才加载）")
+                                  : QString());
+        } else {
+            lines << QString::fromUtf8("%1 没成：%2").arg(host.name, result.detail);
+        }
+    }
+    const QString detail = lines.join(QString::fromUtf8(" · "));
+    appendEvent(upgraded > 0 ? QStringLiteral("status") : QStringLiteral("error"),
+                QString(), QString(),
+                QString::fromUtf8("联动插件升级：%1").arg(detail), 0);
+    if (toast_ != nullptr) {
+        toast_->showText(detail, 4200);
+    }
+    refreshSystemPage();
+}
+
+void MainWindow::trackPluginTransitions() {
+    for (const pluginupgrade::Host &host :
+         pluginupgrade::scanHomes(QDir::homePath())) {
+        if (!host.installed) {
+            continue;
+        }
+        const QString seen = pluginSeenInstalled_.value(host.name);
+        if (!seen.isEmpty() && seen != host.version &&
+            AgentWindow::alive(host.exe)) {
+            // 版本是在运行期间换的，而这家宿主还开着：它已经起来的会话里 hook 命令
+            // 仍指向上一版目录。那一版目录要是被安装器删了，提醒就静默没了。
+            pluginAwaitingReport_.insert(host.name, true);
+        }
+        pluginSeenInstalled_.insert(host.name, host.version);
+    }
+}
+
 QString MainWindow::healthJson() const {
     const int spool = spoolPendingCount();
     QJsonArray problems;
@@ -1060,6 +1481,11 @@ QString MainWindow::healthJson() const {
     if (spool > 0) {
         problems.append(QString::fromUtf8("离线待补 %1 条").arg(spool));
     }
+    QStringList pluginProblems;
+    const QJsonObject plugin = pluginHealth(&pluginProblems);
+    for (const QString &problem : pluginProblems) {
+        problems.append(problem);
+    }
     QJsonObject root{
         {QStringLiteral("version"), QCoreApplication::applicationVersion()},
         {QStringLiteral("bridge"), bridge_ != nullptr && bridge_->isRunning()},
@@ -1067,6 +1493,7 @@ QString MainWindow::healthJson() const {
          static_cast<double>(
              startedAt_.secsTo(QDateTime::currentDateTimeUtc()))},
         {QStringLiteral("spool_pending"), spool},
+        {QStringLiteral("plugin"), plugin},
         {QStringLiteral("last_event_at"),
          lastEventAt_.isValid()
              ? lastEventAt_.toUTC().toString(Qt::ISODateWithMs)
@@ -1106,19 +1533,20 @@ void MainWindow::refreshHealth() {
         lastEventAt_.isValid()
             ? lastEventAt_.toLocalTime().toString(QStringLiteral("HH:mm"))
             : QStringLiteral("—");
-    QString text = QString::fromUtf8("系统：%1 · %2 个 Worker · 最近事件 %3")
-                       .arg(bridgeOk ? QString::fromUtf8("桥接正常")
-                                     : QString::fromUtf8("桥接异常"))
-                       .arg(workers)
-                       .arg(last);
-    if (!problems.isEmpty()) {
-        text += QString::fromUtf8(" · ") +
-                problems.join(QString::fromUtf8(" · "));
-    }
-    workHealth_->setText(text);
-    workHealth_->setStyleSheet(
-        problems.isEmpty() ? QStringLiteral("color:#8b949e;")
-                           : QStringLiteral("color:#f0883e;"));
+    // 一行富文本：正常时只有一个绿点 + 灰字；有问题就直接列问题，不重复报「异常」。
+    const QString dot = problems.isEmpty() ? QStringLiteral("#3fb950")
+                                           : QStringLiteral("#f0883e");
+    const QString body =
+        problems.isEmpty()
+            ? QString::fromUtf8("桥接正常 · %1 个 Worker · 最近 %2")
+                  .arg(workers)
+                  .arg(last)
+            : QString::fromUtf8("%1 · %2 个 Worker")
+                  .arg(problems.join(QString::fromUtf8(" · ")))
+                  .arg(workers);
+    workHealth_->setText(
+        QStringLiteral("<span style=\"color:%1;\">●</span>&nbsp;%2")
+            .arg(dot, body));
     refreshSystemPage();
 }
 
@@ -1144,7 +1572,46 @@ void MainWindow::refreshSystemPage() {
     const int spool = spoolPendingCount();
     sysSpool_->setText(QString::fromUtf8("离线待补：%1 条").arg(spool));
 
-    QStringList problems;
+    QStringList pluginProblems;
+    const QJsonObject plugin = pluginHealth(&pluginProblems);
+    if (sysPlugin_ != nullptr) {
+        QString text = QString::fromUtf8("联动插件：内置 %1")
+                           .arg(plugin.value(QStringLiteral("bundled"))
+                                        .toString()
+                                        .isEmpty()
+                                    ? QString::fromUtf8("读不到")
+                                    : plugin.value(QStringLiteral("bundled")).toString());
+        const QJsonArray rows = plugin.value(QStringLiteral("hosts")).toArray();
+        if (rows.isEmpty()) {
+            text += QString::fromUtf8(" · 本机没有 Qoder 配置家");
+        }
+        for (const QJsonValue &value : rows) {
+            const QJsonObject row = value.toObject();
+            text += QString::fromUtf8(" · %1 %2（%3%4）")
+                        .arg(row.value(QStringLiteral("name")).toString(),
+                             row.value(QStringLiteral("installed"))
+                                 .toString()
+                                 .isEmpty()
+                             ? QString::fromUtf8("未装")
+                             : row.value(QStringLiteral("installed")).toString(),
+                             row.value(QStringLiteral("state")).toString(),
+                             row.value(QStringLiteral("enabled")).toBool()
+                                 ? QString()
+                                 : QString::fromUtf8("·未启用"));
+            // 盘上已装齐但进程还跑旧版：只有 hook 报上来的 loaded 能看出来。
+            const QString loaded = row.value(QStringLiteral("loaded")).toString();
+            if (!loaded.isEmpty() &&
+                loaded != row.value(QStringLiteral("installed")).toString()) {
+                text += QString::fromUtf8("·进程 %1").arg(loaded);
+            }
+            if (row.value(QStringLiteral("awaiting_report")).toBool()) {
+                text += QString::fromUtf8("·等新版上报");
+            }
+        }
+        sysPlugin_->setText(text);
+    }
+
+    QStringList problems = pluginProblems;
     if (!bridgeOk) {
         problems.append(QString::fromUtf8("桥接未启动（端口可能被占用）"));
     }
@@ -1207,6 +1674,7 @@ void MainWindow::watchdogTick() {
         }
     }
     importSpool();
+    trackPluginTransitions();
     refreshHealth();
 }
 
@@ -1268,6 +1736,8 @@ int MainWindow::importSpool() {
                          obj.value(QStringLiteral("session_id")).toString(),
                          obj.value(QStringLiteral("project")).toString(),
                          obj.value(QStringLiteral("event_id")).toString(),
+                         obj.value(QStringLiteral("plugin_version")).toString(),
+                         obj.value(QStringLiteral("speech")).toString(),
                          true);
             ++imported;
         }
@@ -1285,8 +1755,20 @@ void MainWindow::handleNotify(const QString &kind, const QString &title,
                               const QString &message, const QString &raise,
                               const QString &sessionId,
                               const QString &project, const QString &eventId,
-                              bool replay) {
+                              const QString &pluginVersion,
+                              const QString &speech, bool replay) {
     lastEventAt_ = QDateTime::currentDateTimeUtc();
+    // 念的和显示的不是一句：speech 是插件给的短语音文案（带宿主名、不含工具名和
+    // 路径），没带就退回念 message。气泡和工单始终用 message。
+    const QString spoken = speech.isEmpty() ? message : speech;
+    // 记「谁在跑哪一版」要在判事件类型之前：turn-start 每轮都发，是最常到的读数。
+    if (!title.isEmpty()) {
+        pluginLastReport_.insert(title, QDateTime::currentDateTimeUtc());
+        pluginAwaitingReport_.remove(title);  // 收到上报就说明这条路径还活着
+    }
+    if (!pluginVersion.isEmpty() && !title.isEmpty()) {
+        pluginLoaded_.insert(title, pluginVersion);
+    }
     if (kind == QStringLiteral("turn-start")) {
         // 同一 session 已经开始新对话：上一轮的 review 视为已看到，直接归档。
         if (workItems_ != nullptr && !sessionId.isEmpty() &&
@@ -1310,7 +1792,11 @@ void MainWindow::handleNotify(const QString &kind, const QString &title,
         return;
     }
     appendEvent(QStringLiteral("status"), QString(), QString(),
-                title + QStringLiteral(" · ") + message, 0);
+                speech.isEmpty() || speech == message
+                    ? title + QStringLiteral(" · ") + message
+                    : title + QStringLiteral(" · ") + message +
+                          QStringLiteral("（念：") + spoken + QStringLiteral("）"),
+                0);
     // 记住发通知的宿主，桌宠分流时要靠它判断「Agent 在不在」，
     // 冷启动也能直接用上次的值，不用重新猜。只在变了才写盘。
     if (!raise.isEmpty() &&
@@ -1322,7 +1808,7 @@ void MainWindow::handleNotify(const QString &kind, const QString &title,
         // 活儿干完就把焦点拽走很烦，气泡可点，点了再回去。
         // 是否前台不影响是否朗读：用户可能没看屏幕，语音是主通道。
         if (voicePet_ != nullptr) {
-            voicePet_->speak(message, 7000, raise);
+            voicePet_->speak(spoken, 7000, raise);
         }
         return;
     }
@@ -1330,7 +1816,7 @@ void MainWindow::handleNotify(const QString &kind, const QString &title,
         // 等确认要把人喊回来：气泡停久一点 + 语音，桌宠收起也照念；
         // 收起又没 TTS 时退回托盘，别让提醒凭空消失。
         if (voicePet_ != nullptr) {
-            voicePet_->speak(message, 7000, raise);
+            voicePet_->speak(spoken, 7000, raise);
             if (!voicePet_->isVisible() && !voicePet_->ttsReady() &&
                 tray_ != nullptr) {
                 tray_->showMessage(title, message,
@@ -1421,6 +1907,10 @@ QWidget *MainWindow::buildSystemPage() {
     sysSpool_ = new QLabel;
     sysSpool_->setObjectName("muted");
     cl->addWidget(sysSpool_);
+    sysPlugin_ = new QLabel;
+    sysPlugin_->setObjectName("muted");
+    sysPlugin_->setWordWrap(true);
+    cl->addWidget(sysPlugin_);
     sysProblems_ = new QLabel;
     sysProblems_->setObjectName("muted");
     sysProblems_->setWordWrap(true);
@@ -1455,7 +1945,13 @@ QWidget *MainWindow::buildSystemPage() {
             QDesktopServices::openUrl(QUrl::fromLocalFile(dir));
         }
     });
+    pluginUpgrade_ = new QPushButton(QString::fromUtf8("升级联动插件"));
+    pluginUpgrade_->setObjectName("ghostSmall");
+    pluginUpgrade_->setCursor(Qt::PointingHandCursor);
+    connect(pluginUpgrade_, &QPushButton::clicked, this,
+            &MainWindow::upgradePlugins);
     actions->addWidget(refresh);
+    actions->addWidget(pluginUpgrade_);
     actions->addWidget(openDir);
     actions->addStretch(1);
     cl->addLayout(actions);
@@ -1593,7 +2089,13 @@ QWidget *MainWindow::buildGuidePage() {
                 {QString::fromUtf8("自己动手"),
                  QString::fromUtf8("Qoder：侧边栏 扩展 → 插件 → 添加插件 → 上传插件，选安装目录 "
                                    "plugins 里的 agentrmc-bridge.zip；ZCode / WorkBuddy："
-                                   "在应用市场添加同一个 plugins 目录")}});
+                                   "在应用市场添加同一个 plugins 目录")},
+                {QString::fromUtf8("怎么升级"),
+                 QString::fromUtf8("Qoder 把上传的包记成本地插件，插件页那个「更新」按钮不拉新包，"
+                                   "而且 Qoder 和 Qoder CN 是两个独立 app、各装各的。"
+                                   "升级去「系统」页看「联动插件」那一行：落后的话点"
+                                   "「升级联动插件」，两家一起指到内置版本；改完要重启对应的 "
+                                   "app 才真加载新代码（那行里的「进程」就是此刻真在跑的版本）")}});
     addSection(QString::fromUtf8("已知限制"),
                {{"电源 / 音量", "这两个键走红外，电脑收不到，无法映射"},
                 {"未开接管", "遥控器按键仍会原生送达前台，映射动作和原生动作可能同时生效"},
@@ -1871,6 +2373,10 @@ void MainWindow::updateListenUi() {
     if (statusText_ != nullptr) {
         statusText_->setText(running ? QStringLiteral("监听中")
                                      : QStringLiteral("未监听"));
+        statusText_->setStyleSheet(
+            running ? QStringLiteral("color:#3fb950; font-size:11px;"
+                                     " font-weight:600;")
+                    : QStringLiteral("color:#8b949e; font-size:11px;"));
     }
     if (listenButton_ != nullptr) {
         listenButton_->setText(running ? QStringLiteral("停止监听")
@@ -2082,6 +2588,17 @@ void MainWindow::applyRemoteMode(const QString &badge, const QSet<int> &keys,
     }
 }
 
+void MainWindow::openThemeDialog() {
+    ThemeDialog dialog(store_.get(), this);
+    const QSize size = dialog.sizeHint();
+    if (auto *screen = QGuiApplication::screenAt(QCursor::pos())) {
+        const QRect area = screen->availableGeometry();
+        dialog.move(area.x() + (area.width() - size.width()) / 2,
+                    area.y() + (area.height() - size.height()) / 2);
+    }
+    dialog.exec();
+}
+
 void MainWindow::openVoiceSettings() {
     auto *dialog = new VoiceSettingsDialog(store_.get(), this);
     connect(dialog, &VoiceSettingsDialog::saved, this, [this] {
@@ -2273,7 +2790,10 @@ void MainWindow::appendEvent(const QString &kind, const QString &name,
     item->setForeground(color);
     logList_->addItem(item);
     logList_->scrollToBottom();
-    logEmpty_->hide();
+    // 空状态是一整块（标题 + 说明），藏在 logEmpty_ 的父控件上。
+    if (QWidget *emptyBox = logEmpty_->parentWidget()) {
+        emptyBox->hide();
+    }
     logList_->show();
     logCount_->setText(QStringLiteral("%1 条").arg(logList_->count()));
 }
@@ -2284,7 +2804,9 @@ void MainWindow::clearLog() {
     }
     logList_->clear();
     logList_->hide();
-    logEmpty_->show();
+    if (QWidget *emptyBox = logEmpty_->parentWidget()) {
+        emptyBox->show();
+    }
     logCount_->setText(QStringLiteral("0 条"));
 }
 

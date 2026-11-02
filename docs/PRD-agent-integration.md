@@ -1,10 +1,10 @@
 # AgentRMC · Agent 联动与语音交给 Agent PRD
 
-- 文档版本：v1.2（P0 落地后的状态更新）
+- 文档版本：v1.3（0.3.9 全链同步：DSH 接入 / 插件同号 / 更新 JSON 已达标）
 - 日期：2026-11-02
-- 状态：P0 已提交；Native 0.3.9（Watchdog + 系统页）已出包装机；对外发布通道待执行
-- 适用版本：AgentRMC Native `0.3.9`（Watchdog + 系统页）/ `agentrmc-bridge` `0.3.6`（UserPromptSubmit）
-- 覆盖范围：版本演进与发布状态、hooks 提醒、桌宠气泡 / TTS、窗口回跳、语音分流给宿主 Agent、WorkBuddy 双宿主识别
+- 状态：P0 已提交；Native / 插件 0.3.9（Watchdog + 系统页 + DSH 接入）已出包装机；官网更新 JSON 线上已 0.3.9；GitHub release / tag 待执行；网盘对账与 v0.2.0 补发暂缓（用户 11-02 决定）
+- 适用版本：AgentRMC Native `0.3.9` / `agentrmc-bridge` `0.3.9`（同号同步）+ `plugins/deepseek-harness`（DSH bundle）+ `plugins/opensquilla-bridge`（外部桥）
+- 覆盖范围：版本演进与发布状态、hooks 提醒、桌宠气泡 / TTS、窗口回跳、语音分流给宿主 Agent、WorkBuddy 双宿主识别、DeepSeek Harness / OpenSquilla 接入
 - 不覆盖：遥控器按键映射、主题系统、ASR / TTS / LLM 模型本身（只在 §2.0 的时间线里点名，不展开需求）
 
 ---
@@ -136,6 +136,40 @@
   `%APPDATA%\LIG\AgentRMCNative`。
 - [x] **面板三问**：待我处理（工作）+ 系统（健康）+ 事件流（历史）已成形。
 
+### 0.11 DSH 接入 + 一键接入弹窗 + 插件同号（2026-11-02 晚，版本仍 0.3.9）
+
+- [x] **版本规则改判**：插件升到 `0.3.9` 与 Native **同号同步**（用户决定，取代「两条独立
+  版本线」）。`plugins/agentrmc-bridge/VERSION` 是唯一来源，`sync-plugin-version.ps1`
+  同步进 3 个 `plugin.json`、2 个 `marketplace.json` 与 DSH `package.json`；随包出
+  `agentrmc-bridge-0.3.9.zip` / `agentrmc-bridge-qoder-0.3.9.zip`。
+- [x] **随 0.3.9 的插件内容**：`pet_work_update` 工具（blocked / ready 必须出声、
+  progress 只落工单不出声、不重复建单）、「等你选方案」迟到去重（WorkBuddy 的
+  `PreToolUse` hook 在用户答完后才派发，原生端对 180 秒内已喊过的同一「等你选方案」
+  去重）、插件 skill 加「提问前先 `pet_work_update blocked` 喊一声」规则。
+- [x] **DeepSeek Harness 版联动插件**：`plugins/deepseek-harness`（Cordis Host 插件，
+  零依赖、**不打 zip**，安装走 `plugin_manager` 的 `install_bundle` 指目录）。等授权 /
+  等选方案改挂**持久会话事件** `approval` / `asked` 与 `tool/call`——Web UI 的应答者
+  本身是那两个瀑布的监听器，作答后不再 `next()`，排在后面的监听器永远轮不到
+  （实测点完选方案一声没响，PreToolUse 路线在 DSH 上天然失灵）。
+  `pet_notify` / `pet_speak` / `pet_state` / `pet_work_update` 注册成原生工具，
+  不再起 MCP 子进程。
+- [x] **OpenSquilla 外部桥**：`plugins/opensquilla-bridge`（技能目录里的
+  `opensquilla-pet-bridge.mjs` 直发同一个 `/notify`）；`lib/host.js` 补 OpenSquilla
+  识别（`AGENTRMC_NOTIFY_HOST=OpenSquilla` / `~/.opensquilla` / `~/.agents/skills`
+  路径），不占插件版本、不参与升级。
+- [x] **编制内 Worker**：`knownExes()` / `displayName()` 加入 `DeepSeek Harness.exe`
+  与 `OpenSquilla.exe`，待办不再「进了列表没人认领」。
+- [x] **系统页对账 DSH**：读 `~/.dsh/profiles/*/package.json` 的 link 依赖拿盘上版本，
+  通知里的 `plugin_version` 拿进程版本；「升级联动插件」不代升级 DSH bundle。
+- [x] **「接入 Agent」弹窗（AgentBridgeDialog）**：逐家显示插件装没装 + 进程里真实
+  跑的版本 + 插件目录 + 一键复制话术（话术集中在 `pluginupgrade::installSentence`，
+  带测试防 `QString::arg` 占位符错位）；Qoder / Qoder CN / ZCode 可一键升级。
+  系统页与新手引导的「联动插件」都进它。
+- [x] **新手引导**：底部动作行改为 联动插件 / 语音设置 / 进入语音主界面 / 进入完整
+  界面，默认落点改成完整界面；GuideDialog 改最小宽度跟随内容，选路线卡片可换行。
+- [x] **实测读数**（§2.15）：五家宿主 + DSH `installed=0.3.9`；官网
+  `agentrmc-update.json` 线上 `version=0.3.9`；插件测试 32/32、DSH 测试 19/19。
+
 ---
 
 ## 1. 背景与问题
@@ -172,8 +206,9 @@
 | **0.2.0** | 2026-10-31 22:26 → 11-01 | 语音打开应用与自定义应用、无遥控器语音主界面 + 全局热键、语音桌宠、TTS 语音反馈 + 云端 ASR + LLM 对话闭环、主题系统（鲸鱼娘形象 / 背景 / 音色跟随）、ZCode 联动（AgentBridge `:45915` + `agentrmc-bridge` 插件 hooks + MCP 三工具） | **已完整对外发布**：官网 `agentrmc-update.json` 线上实测 `version: "0.2.0"`，网盘包体已滚动更新到 0.2.0（作者 11-02 确认；链接沿用原夸克 / 百度分享页，不换 URL）；GitHub **无 release、无 tag** | 用户确认 + `curl https://ligdesign.win/agentrmc-update.json`；提交 `941d4f4`→`ca329a2`；`README.md:400,425,478` |
 | **插件 0.2.0 → 0.3.0 → 0.3.1 → 0.3.2** | 11-02 一天 | 0.2.0 适配 Qoder（独立清单 + hooks，`raise` 写死 `Qoder CN.exe`）→ 0.3.0 `lib/host.js` 自检取代写死 → `/notify` 加可选 `raise` 字段、拉前台改由原生端做 → 0.3.1 接入 WorkBuddy（`.codebuddy-plugin` 清单 + 市场源）→ 0.3.2 补 `hooks-workbuddy`、stop 念最终回复、文案去项目名 | 0.3.1 已提交（HEAD `137e3ca`）；**0.3.2 只在工作区**；本机两套 WorkBuddy 缓存分别是 0.3.2 / 0.3.1；`dist\agentrmc-bridge-0.3.1.zip` 是 09:48 的旧手动产物 | 三个清单 `version`（HEAD `0.3.1` / 工作区 `0.3.2`）；随包 zip 实测内含 0.3.2 |
 | **0.3.0（当前）** | 11-02 10:52 出包 | `AgentWindow`（宿主窗口探测 / `alive` / `raise`，含双 WorkBuddy 白名单）、`VoicePet` 语音分流（干活→宿主，闲聊→LLM）、气泡可点回跳、stop 不抢前台、右键「交给哪个 Agent」 | **已出包 + 已静默装机 + 进程活着**（`/state` 实测 `pet_visible=1 chat_mode=1 tts_ready=1`）；**代码未提交，官网 JSON 与 GitHub 都还没有 0.3.0** | `git status`（`AgentWindow.*` untracked、17 个文件 modified）；exe 时间戳 11-02 10:52 |
+| **0.3.3 → 0.3.9** | 11-02 全天 | 对话人设修正、Work Item / 注意力队列、tool-call 防泄漏、Worker 注册表 + 生命周期、离线 spool + `/health`、turn-start 自动归档、Watchdog + 系统页、`pet_work_update`、「等你选方案」迟到去重、插件与 Native **同号 0.3.9**、DSH 版联动插件 + OpenSquilla 外部桥 + 「接入 Agent」一键弹窗 | 全部已提交（HEAD `b7305d1`）；Native / 插件 0.3.9 出包 + 静默装机；官网更新 JSON 线上已 `0.3.9`；五家宿主 + DSH installed 均 0.3.9；**GitHub 仍无 release、无 tag** | §0.5–§0.11；`git log`；`curl agentrmc-update.json`；`GET /health` |
 
-一句话概括现状：**功能已经走到 Native 0.3.2 + 插件 0.3.3，版本元数据（CMake / NSIS / exe）已对齐；对外仍只说到 0.2.0，最新 0.3.2 待提交、发布待执行。** 发布通道仍是四个版本号（见 §2.6），任何「我装的是哪版」的排障都会先撞在这上面。
+一句话概括现状（v1.3 复核）：**Native 与插件已同号到 0.3.9 且全部提交；官网更新 JSON 线上已 0.3.9；对外剩余缺口只有 GitHub release / tag（仍停在 v0.1.0，仓库无 tag），网盘对账按用户决定暂缓。** 版本口径从「四个版本号并存」收敛为一个待办动作点（见 §2.6）。
 
 ### 2.1 已交付能力（Native 0.3.3 + Plugin 0.3.3）
 
@@ -203,7 +238,7 @@
 | 安装目录 | `D:\apps\tencentapp\WorkBuddy\` | `D:\apps\AIAPPS\WorkBuddyAI\` |
 | 插件缓存根 | `C:\Users\PC\.workbuddy\plugins\cache\` | `C:\Users\PC\.workbuddy-ai\plugins\cache\` |
 | 应用数据 | `C:\Users\PC\AppData\Roaming\WorkBuddy\` | `C:\Users\PC\AppData\Roaming\WorkBuddy AI\` |
-| 本机当前插件版本 | `agentrmc-bridge` 0.3.3 | `agentrmc-bridge` 0.3.3 |
+| 本机当前插件版本 | `agentrmc-bridge` 0.3.9 | `agentrmc-bridge` 0.3.9 |
 | 进程状态（检查时） | 运行中（7 个进程） | 运行中（6 个进程） |
 | 主窗口状态（检查时） | 有可见主窗口（最小化） | 有可见主窗口（最小化） |
 | 插件宿主判定 | 两者都会命中 `WORKBUDDY_APP_VERSION` / `CLIENT_INFO_PRODUCT_NAME=WorkBuddy` | 同左 |
@@ -276,12 +311,12 @@ Agent 宿主
 
 | 通道 | 谁读它 | 当前声称的版本 | 与真实代码的关系 |
 |---|---|---|---|
-| 官网 `agentrmc-update.json` | 应用内「检查更新」（`MainWindow.cpp:1538-1541`，可用 `update_url` 覆盖） | **0.2.0**（2026-11-01） | 落后一个 minor：0.3.0 的语音分流 / 气泡回跳 / 双 WorkBuddy 白名单都没进说明 |
-| GitHub releases | 官网 / README 引的仓库页脚 | **v0.1.0** | 落后两个 minor，且无 tag |
-| 网盘（夸克 / 百度） | 更新弹窗与官网下载按钮给的链接 | **0.2.0**（作者 11-02 确认包体已滚动更新） | 与更新 JSON 一致，是实际生效的分发渠道。注意分享页 URL 不随版本变化——「链接一样」不代表没换包，也只能从包体（体积 / 文件时间）核对，外部看不出来 |
-| 本机 `D:\apps\AgentRMC` | 开发者自己 | 0.3.2 构建 + FileVersion 0.3.2 | 本机元数据已对齐；0.3.2 UX 提交待做 |
+| 官网 `agentrmc-update.json` | 应用内「检查更新」（可用 `update_url` 覆盖） | **0.3.9**（2026-11-02，curl 实测） | ✅ 已对齐：`notes` 中英双份，含 0.3.9 全部内容 |
+| GitHub releases | 官网 / README 引的仓库页脚 | **v0.1.0**（2026-10-31），仓库无 tag | ❌ 唯一剩余缺口：待补 `v0.3.9` release + tag |
+| 网盘（夸克 / 百度） | 更新弹窗与官网下载按钮给的链接 | 未知（分享页 URL 不随版本变化，外部看不出包体版本） | **对账暂缓**（用户 11-02 决定）；恢复发布时仍按「文件名 + 体积 + 上传时间」做账 |
+| 本机 `D:\apps\AgentRMC` | 开发者自己 | 0.3.9 构建 + FileVersion 0.3.9 | ✅ 已对齐 |
 
-结论：**0.2.0 这一档对外是对齐的（更新 JSON + 网盘包体一致），不一致的是 0.3.x 完全没进对外通道，GitHub 还单独落后一个 minor；本机 exe 属性已在本轮对齐到 0.3.0，剩余差异在代码库 HEAD 与对外三通道。** FR-07 要收敛的是这条链——CMake → NSIS → exe 属性 → 更新 JSON → 网盘包 → GitHub release，六个点要么一次改齐，要么明确记录哪些通道不动（网盘不换 URL，只能靠换包体 + 体积对账）。
+结论（v1.3）：**更新 JSON 与本机装机已对齐 0.3.9；对外只剩 GitHub release / tag 一个动作点；网盘对账按用户决定暂缓，恢复时按「文件名 + 体积 + 上传时间」做账即可。** FR-07 的收敛链（CMake → NSIS → exe 属性 → 更新 JSON → 网盘包 → GitHub release）只剩最后一环。
 
 ### 2.7 本轮落地后的读数（2026-11-02 11:35）
 
@@ -399,6 +434,21 @@ Agent 宿主
 | 系统页字段 | 桥接 / 运行时长 / 最近事件 / 离线待补 / Worker 表 / 问题 | UI Automation 实测 |
 | 插件测试 | 27/27 PASS | 不变 |
 
+### 2.15 DSH 接入 + 插件同号读数（2026-11-02 20:30 复核）
+
+| 读数 | 值 | 说明 |
+|---|---|---|
+| `native/CMakeLists.txt` / `plugins/agentrmc-bridge/VERSION` | 均 `0.3.9` | 同号同步 |
+| `D:\apps\AgentRMC\AgentRMCNative.exe` | FileVersion / ProductVersion `0.3.9` | 静默装机 |
+| `dist\AgentRMC-Setup.exe` | 20,135,684 B，11-02 19:33 | 含 DSH 插件、外部桥与一键接入弹窗 |
+| `GET /health` → `plugin.hosts` | Qoder / Qoder CN / ZCode / WorkBuddy / WorkBuddy AI 均 `installed=0.3.9` | 五家宿主全齐，无「待升级」 |
+| `GET /health` → `plugin.bundles` | DSH desktop `installed=0.3.9`（web 未装）；OpenSquilla 走外部桥、不占版本 | 系统页对账 |
+| 官网 `agentrmc-update.json`（线上） | `version: "0.3.9"`，`releaseDate: 2026-11-02` | curl 实测，notes 中英双份 |
+| GitHub releases / tag | 仍仅 `v0.1.0`，仓库无本地 tag | 待补（见 §11 待排期） |
+| 插件测试 | `node test/host.test.js` **32/32 PASS** | 含 OpenSquilla / turn-start / spool |
+| DSH 插件测试 | `node plugins\deepseek-harness\test\plugin.test.js` **19/19 PASS** | 改 DSH 必跑（AGENTS.md 约定） |
+| 仓库未跟踪项 | `_video_agentrmc_039/`（宣传视频工程）、`analysis`（BGM 分析 JSON） | 非源码；前者应进 `.git/info/exclude` |
+
 ---
 
 ## 3. 用户与场景
@@ -496,13 +546,13 @@ Agent 宿主
 - 两套 WorkBuddy 配置家各自安装、各自升级；安装包 / 市场描述中明确「两个 WorkBuddy 需要分别安装」。
 - 0.3.3 发布后，旧版 `~/.workbuddy` 与 AI `~/.workbuddy-ai` 都应能通过各自插件市场升级到同一版本。
 - 安装器随包的 `plugins/agentrmc-bridge.zip` 包含 `hooks-workbuddy/hooks.json`。
-- 版本号规则：插件补丁 +1（0.3.3），Native 无代码改动则保持 0.3.0；若同时改 Native，再升 Native 0.3.1。
+- 版本号规则（2026-11-02 改判，取代原「插件补丁 +1、Native 独立走」的规则）：**插件与 Native 同号同步升**；`plugins/agentrmc-bridge/VERSION` 是唯一来源，各清单由 `sync-plugin-version.ps1` 同步生成；**升版必须等用户明确说「升版」**，出包不要求升版。
 
 验收标准：
 
-- [x] 两个缓存目录最终版本号一致。（均为 0.3.3）
+- [x] 两个缓存目录最终版本号一致。（均为 0.3.9，五家宿主 + DSH 全齐，见 §2.15）
 - [x] `hooks-workbuddy/hooks.json` 在两个宿主都能被加载（或明确记录不支持）。
-- [x] `node test/host.test.js` 全绿（23/23）。
+- [x] `node test/host.test.js` 全绿（32/32）。
 
 #### FR-07 版本声明与发布一致性（新增 P0）
 
@@ -517,10 +567,10 @@ Agent 宿主
 
 验收标准：
 
-- [x] 装机 exe 的 FileVersion 与程序内版本一致（实测读数写进发布记录：`0.3.0`）。
-- [ ] `git log --oneline` 出现 0.3.0 / 插件 0.3.3 的实现提交，`git status` 无 untracked 源码。
-- [ ] GitHub releases 有 v0.2.0、v0.3.0（或明确记录「0.2.0 跳过发布，直接以 0.3.0 为对外版本」的决策）。
-- [x] `dist` 内不存在与当前清单版本不符的插件 zip（旧 0.3.1 zip 已删除，现有 0.3.3）。
+- [x] 装机 exe 的 FileVersion 与程序内版本一致（实测读数写进发布记录：`0.3.9`）。
+- [x] `git log --oneline` 出现 0.3.0 → 0.3.9 的实现提交（HEAD `b7305d1`）；`git status` 无 untracked 源码（仅 `_video_agentrmc_039/` 与 `analysis` 两个非源码产物）。
+- [ ] GitHub release + tag 补 `v0.3.9`（v0.2.0 补发暂缓，用户 11-02 决定；附件必须随创建命令一起上传）。
+- [x] `dist` 内不存在与当前清单版本不符的插件 zip（旧 0.3.1 zip 已删；0.3.6–0.3.8 旧 zip 随本轮发布收尾移入 `dist\archive\`）。
 
 ### 5.2 P1（应该，随下一 Native 版本）
 
@@ -536,7 +586,7 @@ Agent 宿主
 验收标准（只列未达标部分）：
 
 - [ ] 兜底不再固定选中 AI：两个都在跑且无前台 / 无记忆时，按最近使用或明确提示用户选。
-- [ ] 菜单中两个 WorkBuddy 都显示为独立选项，且是产品名（`WorkBuddy` / `WorkBuddy AI`）而非裸 `WorkBuddy.exe` / `WorkBuddyAI.exe`。
+- [x] 菜单中两个 WorkBuddy 都显示为独立选项，且是产品名（`WorkBuddy` / `WorkBuddy AI`）而非裸 exe——已由语音面板「交给」下拉的 `AgentWindow::displayName()` 落地（§0.2）。
 
 #### FR-05 语音启动别名
 
@@ -661,11 +711,14 @@ Agent 宿主
 | Qoder CN | `Qoder CN.exe` | `~/.qoder-cn/` | `hooks-qoder/hooks.json` | `PreToolUse` + `AskUserQuestion` | `Qoder CN.exe` |
 | WorkBuddy | `WorkBuddy.exe` | `~/.workbuddy/` | 根 hooks + `hooks-workbuddy/` | `PreToolUse` + `AskUserQuestion` | `WorkBuddy.exe`（0.3.3 修正） |
 | WorkBuddy AI | `WorkBuddyAI.exe` | `~/.workbuddy-ai/` | 根 hooks + `hooks-workbuddy/` | `PreToolUse` + `AskUserQuestion` | `WorkBuddyAI.exe` |
+| DeepSeek Harness | `DeepSeek Harness.exe` | `~/.dsh/profiles/*`（Cordis bundle，`install_bundle` 指目录） | `plugins/deepseek-harness` | 持久会话事件 `approval` / `asked` / `tool/call`（**不走 PreToolUse**，Web UI 应答后不再 `next()`） | `DeepSeek Harness.exe` |
+| OpenSquilla | `OpenSquilla.exe` | 不装插件包：外部桥 `plugins/opensquilla-bridge` 直发 `/notify` | 无 | 不适用 | `OpenSquilla.exe` |
 
 约束：
 
 - 所有宿主共用同一个原生端和同一套 `/notify` 协议，不为单个宿主加特例字段。
 - 未知宿主按 ZCode 缺省处理；不得退化成 Qoder 或 WorkBuddy。
+- DSH bundle 不打 zip、不参与「升级联动插件」代升级（系统页只做对账展示）；OpenSquilla 无插件版本，靠外部桥自身更新。
 
 ---
 
@@ -725,19 +778,22 @@ Agent 宿主
 | `AGENTRMC_DRY_RUN=1` | 只输出 payload，不发送 |
 | `QODER_*` | Qoder 变体判定（既有） |
 
-### 10.3 宿主判据（0.3.3 目标实现）
+### 10.3 宿主判据（0.3.9 实现）
 
 ```text
 resolveHost(argv, scriptDir, env):
   1. argv 同时给宿主名 + 进程名 → 直接用
-  2. scriptDir 路径：
+  2. scriptDir 路径（先匹配 .workbuddy-ai 再匹配 .workbuddy，避免子串误判）：
        /.workbuddy-ai/ → WorkBuddy AI + WorkBuddyAI.exe
        /.workbuddy/    → WorkBuddy    + WorkBuddy.exe
        /.qoder-cn/     → Qoder CN
        /.qoder/        → Qoder
-  3. 环境变量（Qoder 路径 / 产品 ID；WorkBuddy 产品名）
+       ~/.opensquilla 或 ~/.agents/skills（配 AGENTRMC_NOTIFY_HOST=OpenSquilla）→ OpenSquilla
+  3. 环境变量（Qoder 路径 / 产品 ID；WorkBuddy 产品名；AGENTRMC_NOTIFY_HOST=OpenSquilla）
   4. 缺省 ZCode
   5. 标记 source，便于 DRY_RUN 与问题排查
+
+  DeepSeek Harness 不走 host.js：Cordis 插件挂在会话事件上，宿主身份由 bundle 自报。
 ```
 
 ---
@@ -763,29 +819,31 @@ resolveHost(argv, scriptDir, env):
 | Plugin 0.3.4（已出包） | hook payload 透传 `session_id` / `project` / `event_id`，给 Work Item 去重和分组 | `dist\agentrmc-bridge-0.3.4.zip`（23,014 B）；宿主缓存待自动更新 |
 | Plugin 0.3.5（已出包） | 离线 spool；`AGENTRMC_PORT` / `AGENTRMC_SPOOL_DIR` 可注入 | `dist\agentrmc-bridge-0.3.5.zip` |
 | Plugin 0.3.6（已出包） | 根 hooks / Qoder hooks 注册 `UserPromptSubmit`；新对话自动归档旧 review | `dist\agentrmc-bridge-0.3.6.zip`（24,182 B）；两套 WorkBuddy 缓存已更新到 0.3.6 |
+| Plugin 0.3.9（同号同步，已出包） | 版本规则改为与 Native 同号；`pet_work_update`（blocked/ready 出声、progress 静默）、「等你选方案」迟到去重、skill「提问前先喊」 | `dist\agentrmc-bridge-0.3.9.zip` + qoder 变体（29,989 B）；五家宿主 installed 均 0.3.9 |
+| Native 0.3.9 追加（DSH 接入，版本不变） | `plugins/deepseek-harness`（approval/asked 持久事件 + pet_* 原生工具）、`plugins/opensquilla-bridge`、`knownExes`/`displayName` 加 DSH 与 OpenSquilla、系统页对账 DSH bundle、「接入 Agent」一键弹窗、引导重排 | 提交 `dadc017`（README 重定位 `b7305d1`）；`dist\AgentRMC-Setup.exe`（20,135,684 B，11-02 19:33）；DSH 测试 19/19 |
 
 ### 待排期
 
 | 版本 | 内容 | 交付物 |
 |---|---|---|
-| 提交 / 发布 | Work Item 改动提交；tag、GitHub release、更新 JSON、网盘包体 | 对外动作需单独确认 |
-| Plugin 0.3.6 剩余宿主升级 | ZCode / Qoder 缓存升级到 0.3.6（WorkBuddy 两套已更新） | 宿主插件市场 / 自动更新 |
-| Native 后续 | FR-05 语音启动别名、FR-06 在线判定分层；FR-04 的兜底顺序部分 | 新安装包 + GitHub release |
-| 补发 | 0.2.0 / 0.3.0 的 GitHub release（或记录「跳过 0.2.0，对外从 0.3.0 起算」） | release + 附件随创建命令上传 |
+| GitHub release / tag | 补 `v0.3.9`：tag + release + Setup / 插件 zip 附件（随创建命令一起传，先建后补会 422） | 已排入本轮；对外仓库 Samuel5945/AgentRMC |
+| 网盘包体对账 | **暂缓**（用户 11-02 决定）；恢复发布时按「文件名 + 体积 + 上传时间」做账 | — |
+| v0.2.0 补发 | **暂缓**（用户 11-02 决定），GitHub 从 0.3.9 起算 | — |
+| Native 后续 | FR-04 兜底顺序（最近使用优先）、FR-05 语音启动别名、FR-06 在线判定分层 | 攒批出包；升版等用户明确说「升版」 |
 
 发布检查清单：
 
-- [x] P0 已提交 `03151c5`；0.3.1 右键分组版已提交 `3bf3de4`；0.3.2 精简已提交 `39670f7`；0.3.3 对话人设随本次提交；tag 仍待打。
+- [x] P0 已提交 `03151c5`；0.3.1 右键分组版已提交 `3bf3de4`；0.3.2 精简已提交 `39670f7`；0.3.3–0.3.9 已全部提交（HEAD `b7305d1`）；tag 仍待打。
 - [x] `app.rc` / CMake / NSIS 三处版本一致，装机 exe FileVersion 实测对得上（`check-version.ps1` 已接入 `package.bat`）。
-- [x] `node test/host.test.js` 全绿，含双 WorkBuddy 矩阵（23/23）。
-- [x] native 相关测试全绿（App / Store / Theme / Bridge / Router / Voice / Takeover / Audio）。
+- [x] `node test/host.test.js` 全绿，含双 WorkBuddy 矩阵与 OpenSquilla（32/32）；DSH 测试 19/19。
+- [x] native 相关测试全绿（App / Store / Theme / Bridge / Router / Voice / Takeover / Audio / Plugin / WorkItem / ChatText，共 11 个目标）。
 - [x] `native\tools\package.bat` 出包。
 - [x] 静默安装 + 启动 + `curl /state` 验活。
 - [x] 双开 WorkBuddy / WorkBuddy AI 手工验收：permission 双向前台、stop 气泡点击已实测；question 走 DRY_RUN payload 验证。
 - [x] README / 插件 README / 市场描述同步双宿主说明。
-- [x] `dist` 无陈旧版本号的插件 zip（当前仅 `agentrmc-bridge-0.3.6.zip`）。
-- [ ] `agentrmc-update.json` 线上 `version` == 本次发布版本，`notes` 含 0.3.x 内容；用 ≤0.2.0 的实例点「检查更新」能收到提示，点进去的包 = 同版本。
-- [ ] 网盘包体与发布版本对得上（体积 / 文件时间做账），或明确记录「本次不走网盘」。
+- [x] `dist` 无陈旧版本号的插件 zip（0.3.6–0.3.8 旧 zip 随本轮发布收尾移入 `dist\archive\`，仅留 0.3.9）。
+- [x] `agentrmc-update.json` 线上 `version` == 本次发布版本（实测 `0.3.9`，`notes` 含 0.3.9 内容、中英双份）。
+- [ ] 网盘包体与发布版本对得上（体积 / 文件时间做账）——**暂缓**，用户 11-02 决定，恢复发布时再补做账记录。
 
 ---
 
@@ -803,7 +861,7 @@ resolveHost(argv, scriptDir, env):
 | 对话文本 | `AgentRMCChatTextTest`：XML/JSON tool-call 检测、正常对话不误判、markdown/emoji 清理 |
 | Native | `knownExes()` 包含两个 WorkBuddy；`AgentWindow` 目标选择顺序（可注入窗口枚举）——待 P1 |
 | 版本一致性 | `check-version.ps1`：CMake / NSIS / exe FileVersion / ProductVersion 四处相等（已实现并接入 package.bat） |
-| 回归 | `host.test.js` 27/27 PASS；native 10 个测试全绿 |
+| 回归 | `host.test.js` 32/32 PASS；DSH `plugin.test.js` 19/19；native 11 个测试目标全绿 |
 
 ### 12.2 手工矩阵
 
@@ -850,8 +908,8 @@ resolveHost(argv, scriptDir, env):
 7. **任务判定**：是否引入 LLM 二次判定（会增加延迟），还是保持本地规则 + 用户模式开关？
 8. **插件 node 依赖**：是否改用宿主内置 node，还是继续要求 PATH？
 9. **发布主渠道**：对外以官网 JSON + 网盘为准，还是补 GitHub release？两者都留的话，谁是「最新版」的唯一口径？
-10. **0.2.0 要不要补 GitHub release**：GitHub 只有 v0.1.0。补发要重传附件（release 一旦创建即不可变，先建后补会 422，删了重建会永久烧掉 tag 名），还是可以接受「GitHub 从 0.3.0 起算」？
-11. **网盘换包怎么验收**（0.2.0 已确认换过，链接不变这条已解决）：分享页 URL 不随版本变，外部只能从包体判断。0.3.x 发布时是否把「文件名 + 体积 + 上传时间」写进发布记录当对账凭据？还是接受「换没换只能靠自觉」？
+10. **0.2.0 要不要补 GitHub release**：GitHub 只有 v0.1.0。补发要重传附件（release 一旦创建即不可变，先建后补会 422，删了重建会永久烧掉 tag 名），还是可以接受「GitHub 从 0.3.0 起算」？**→ 已决策（2026-11-02）：暂缓，GitHub 从 0.3.9 起算。**
+11. **网盘换包怎么验收**（0.2.0 已确认换过，链接不变这条已解决）：分享页 URL 不随版本变，外部只能从包体判断。0.3.x 发布时是否把「文件名 + 体积 + 上传时间」写进发布记录当对账凭据？**→ 已决策（2026-11-02）：对账暂缓；恢复发布时按三件套做账。**
 12. **旧版用户升级路径**：0.1/0.2 用户升到 0.3 时，`config.json` / `profiles.json` 承诺全兼容，还是需要迁移提示？
 
 ---
@@ -950,3 +1008,5 @@ curl --noproxy 127.0.0.1 http://127.0.0.1:45915/state
 | 派活 | 把用户口述的任务文本粘贴进宿主输入框并回车 |
 | 双 WorkBuddy | 同一台机器同时安装 `WorkBuddy` 与 `WorkBuddy AI` |
 | transcript | 宿主保存的会话记录 JSONL，stop 时用于提取最终回复 |
+| DSH bundle | DeepSeek Harness 的 Cordis Host 插件（`plugins/deepseek-harness`），不打 zip，用 `plugin_manager` 的 `install_bundle` 指目录安装 |
+| 外部桥 | 不装插件包的宿主接入方式：桥脚本（如 OpenSquilla 的 `opensquilla-pet-bridge.mjs`）直发同一个 `/notify` |

@@ -133,6 +133,8 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
     QDir().mkpath(workDir);
     workItems_ = std::make_unique<WorkItemStore>(workDir + "/work-items.json");
     workItems_->load();
+    spoolPath_ = workDir + "/pending-events.jsonl";
+    startedAt_ = QDateTime::currentDateTimeUtc();
     // 主题在窗口构建前应用：渲染 QSS + 载入 ui.theme 指向的主题。
     ThemeManager::instance().init(store_.get());
     // ui.custom_apps 里的自定义应用灌进启动目录（应用页/语音「打开 xx」共用）。
@@ -397,11 +399,13 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
         // ZCode 等 Agent 的进度通知与交互：桌宠在就冒气泡，不在就托盘弹一条；
         // speak 走气泡 + TTS（桌宠收起也照念）。截图模式不起（会跟正在跑的真实例抢端口）。
         auto *bridge = new AgentBridge(this);
+        bridge_ = bridge;
         if (bridge->start()) {
             bridge->setStateProvider([this] {
                 return voicePet_ != nullptr ? voicePet_->stateJson()
                                             : QStringLiteral("{}");
             });
+            bridge->setHealthProvider([this] { return healthJson(); });
             bridge->setWorkItemsProvider([this] {
                 return workItems_ != nullptr ? workItems_->toJson()
                                              : QStringLiteral("{}");
@@ -419,74 +423,22 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
                            const QString &message, const QString &raise,
                            const QString &sessionId, const QString &project,
                            const QString &eventId) {
-                        // 先落工单：即使桌宠/界面没在看，待办也不会丢。
-                        if (workItems_ != nullptr &&
-                            (kind == QStringLiteral("permission") ||
-                             kind == QStringLiteral("question") ||
-                             kind == QStringLiteral("progress") ||
-                             kind == QStringLiteral("stop"))) {
-                            workItems_->upsert(QStringLiteral("hook"), raise,
-                                               sessionId, project, kind, title,
-                                               message, raise, eventId);
-                            refreshWorkItems();
-                        }
-                        appendEvent(QStringLiteral("status"), QString(),
-                                    QString(),
-                                    title + QStringLiteral(" · ") + message, 0);
-                        // 记住发通知的宿主，桌宠分流时要靠它判断「Agent 在不在」，
-                        // 冷启动也能直接用上次的值，不用重新猜。只在变了才写盘。
-                        if (!raise.isEmpty() &&
-                            store_->uiString(QStringLiteral("agent_exe")) !=
-                                raise) {
-                            store_->setUiString(QStringLiteral("agent_exe"),
-                                                raise);
-                        }
-                        if (kind == QStringLiteral("stop")) {
-                            // 任务完成：念出来 + 气泡停满 7s。**不自动抢前台**——
-                            // 活儿干完就把焦点拽走很烦，气泡可点，点了再回去。
-                            // 是否前台不影响是否朗读：用户可能没看屏幕，语音是主通道。
-                            if (voicePet_ != nullptr) {
-                                voicePet_->speak(message, 7000, raise);
-                            }
-                            return;
-                        }
-                        if (kind == QStringLiteral("permission")) {
-                            // 等确认要把人喊回来：气泡停久一点 + 语音，桌宠收起也照念；
-                            // 收起又没 TTS 时退回托盘，别让提醒凭空消失。
-                            if (voicePet_ != nullptr) {
-                                voicePet_->speak(message, 7000, raise);
-                                if (!voicePet_->isVisible() &&
-                                    !voicePet_->ttsReady() && tray_ != nullptr) {
-                                    tray_->showMessage(
-                                        title, message,
-                                        QSystemTrayIcon::Information, 6000);
-                                }
-                            } else if (tray_ != nullptr) {
-                                tray_->showMessage(
-                                    title, message,
-                                    QSystemTrayIcon::Information, 6000);
-                            }
-                            AgentWindow::raise(raise);
-                            return;
-                        }
-                        if (kind == QStringLiteral("speak")) {
-                            // MCP 主动让桌宠说话：只念，不抢前台。
-                            if (voicePet_ != nullptr) {
-                                voicePet_->speak(message);
-                            }
-                            return;
-                        }
-                        if (voicePet_ != nullptr && voicePet_->isVisible() &&
-                            voicePet_->petEnabled()) {
-                            voicePet_->notify(message, raise);
-                        } else if (tray_ != nullptr) {
-                            tray_->showMessage(
-                                title, message, QSystemTrayIcon::Information,
-                                6000);
-                        }
+                        handleNotify(kind, title, message, raise, sessionId,
+                                     project, eventId, false);
                     });
         }
     }
+    // 离线 spool 补投 + 健康行；5 秒一拍，启动时先补一次。
+    healthTimer_ = new QTimer(this);
+    connect(healthTimer_, &QTimer::timeout, this, [this] {
+        importSpool();
+        refreshHealth();
+    });
+    healthTimer_->start(5000);
+    QTimer::singleShot(0, this, [this] {
+        importSpool();
+        refreshHealth();
+    });
 }
 
 QWidget *MainWindow::buildHeader() {
@@ -788,6 +740,11 @@ QWidget *MainWindow::buildWorkPage() {
     filterRow->addWidget(workFilter_, 1);
     cl->addLayout(filterRow);
 
+    workHealth_ = new QLabel;
+    workHealth_->setObjectName("muted");
+    workHealth_->setWordWrap(true);
+    cl->addWidget(workHealth_);
+
     workEmpty_ = new QLabel(QString::fromUtf8("没有需要你处理的事"));
     workEmpty_->setObjectName("muted");
     workEmpty_->setAlignment(Qt::AlignCenter);
@@ -1015,6 +972,7 @@ void MainWindow::refreshWorkItems() {
     if (workDone_ != nullptr) {
         workDone_->setEnabled(has);
     }
+    refreshHealth();
 }
 
 QString MainWindow::selectedWorkId() const {
@@ -1031,7 +989,7 @@ QString MainWindow::selectedWorkId() const {
                : selected.first()->data(Qt::UserRole).toString();
 }
 
-QString MainWindow::workersJson() const {
+QJsonArray MainWindow::workersArray() const {
     QJsonArray workers;
     const QString foreground = AgentWindow::foregroundAgentExe();
     for (const QString &exe : AgentWindow::knownExes()) {
@@ -1084,9 +1042,221 @@ QString MainWindow::workersJson() const {
                  : QString()},
         });
     }
+    return workers;
+}
+
+QString MainWindow::workersJson() const {
     return QString::fromUtf8(
-        QJsonDocument(QJsonObject{{QStringLiteral("workers"), workers}})
+        QJsonDocument(QJsonObject{{QStringLiteral("workers"), workersArray()}})
             .toJson(QJsonDocument::Compact));
+}
+
+QString MainWindow::healthJson() const {
+    const int spool = spoolPendingCount();
+    QJsonArray problems;
+    if (bridge_ == nullptr || !bridge_->isRunning()) {
+        problems.append(QString::fromUtf8("桥接未启动"));
+    }
+    if (spool > 0) {
+        problems.append(QString::fromUtf8("离线待补 %1 条").arg(spool));
+    }
+    QJsonObject root{
+        {QStringLiteral("version"), QCoreApplication::applicationVersion()},
+        {QStringLiteral("bridge"), bridge_ != nullptr && bridge_->isRunning()},
+        {QStringLiteral("uptime_seconds"),
+         static_cast<double>(
+             startedAt_.secsTo(QDateTime::currentDateTimeUtc()))},
+        {QStringLiteral("spool_pending"), spool},
+        {QStringLiteral("last_event_at"),
+         lastEventAt_.isValid()
+             ? lastEventAt_.toUTC().toString(Qt::ISODateWithMs)
+             : QString()},
+        {QStringLiteral("work_items"),
+         QJsonObject{{QStringLiteral("attention"),
+                      workItems_ != nullptr ? workItems_->attentionCount() : 0},
+                     {QStringLiteral("open"),
+                      workItems_ != nullptr ? workItems_->openCount() : 0}}},
+        {QStringLiteral("workers"), workersArray()},
+        {QStringLiteral("problems"), problems},
+    };
+    return QString::fromUtf8(
+        QJsonDocument(root).toJson(QJsonDocument::Compact));
+}
+
+void MainWindow::refreshHealth() {
+    if (workHealth_ == nullptr) {
+        return;
+    }
+    int workers = 0;
+    for (const QString &exe : AgentWindow::knownExes()) {
+        if (AgentWindow::alive(exe)) {
+            ++workers;
+        }
+    }
+    const bool bridgeOk = bridge_ != nullptr && bridge_->isRunning();
+    const int spool = spoolPendingCount();
+    QStringList problems;
+    if (!bridgeOk) {
+        problems.append(QString::fromUtf8("桥接未启动"));
+    }
+    if (spool > 0) {
+        problems.append(QString::fromUtf8("离线待补 %1 条").arg(spool));
+    }
+    const QString last =
+        lastEventAt_.isValid()
+            ? lastEventAt_.toLocalTime().toString(QStringLiteral("HH:mm"))
+            : QStringLiteral("—");
+    QString text = QString::fromUtf8("系统：%1 · %2 个 Worker · 最近事件 %3")
+                       .arg(bridgeOk ? QString::fromUtf8("桥接正常")
+                                     : QString::fromUtf8("桥接异常"))
+                       .arg(workers)
+                       .arg(last);
+    if (!problems.isEmpty()) {
+        text += QString::fromUtf8(" · ") +
+                problems.join(QString::fromUtf8(" · "));
+    }
+    workHealth_->setText(text);
+    workHealth_->setStyleSheet(
+        problems.isEmpty() ? QStringLiteral("color:#8b949e;")
+                           : QStringLiteral("color:#f0883e;"));
+}
+
+int MainWindow::spoolPendingCount() const {
+    const auto lines = [](const QString &path) {
+        QFile file(path);
+        if (!file.open(QIODevice::ReadOnly)) {
+            return 0;
+        }
+        int count = 0;
+        while (!file.atEnd()) {
+            if (!file.readLine().trimmed().isEmpty()) {
+                ++count;
+            }
+        }
+        return count;
+    };
+    return lines(spoolPath_) + lines(spoolPath_ + QStringLiteral(".processing"));
+}
+
+int MainWindow::importSpool() {
+    if (spoolPath_.isEmpty()) {
+        return 0;
+    }
+    int imported = 0;
+    const QString processing = spoolPath_ + QStringLiteral(".processing");
+    for (const QString &path : {spoolPath_, processing}) {
+        QFile file(path);
+        if (!file.exists()) {
+            continue;
+        }
+        QString readPath = path;
+        if (path == spoolPath_) {
+            QFile::remove(processing);
+            if (!file.rename(processing)) {
+                continue;
+            }
+            readPath = processing;
+        }
+        QFile input(readPath);
+        if (!input.open(QIODevice::ReadOnly)) {
+            continue;
+        }
+        while (!input.atEnd()) {
+            const QByteArray line = input.readLine().trimmed();
+            if (line.isEmpty()) {
+                continue;
+            }
+            QJsonParseError error{};
+            const QJsonDocument doc = QJsonDocument::fromJson(line, &error);
+            if (error.error != QJsonParseError::NoError || !doc.isObject()) {
+                continue;
+            }
+            const QJsonObject obj = doc.object();
+            handleNotify(obj.value(QStringLiteral("event")).toString(),
+                         obj.value(QStringLiteral("title")).toString(),
+                         obj.value(QStringLiteral("message")).toString(),
+                         obj.value(QStringLiteral("raise")).toString(),
+                         obj.value(QStringLiteral("session_id")).toString(),
+                         obj.value(QStringLiteral("project")).toString(),
+                         obj.value(QStringLiteral("event_id")).toString(),
+                         true);
+            ++imported;
+        }
+        input.close();
+        QFile::remove(readPath);
+    }
+    if (imported > 0) {
+        appendEvent(QStringLiteral("status"), QString(), QString(),
+                    QString::fromUtf8("补投离线通知 %1 条").arg(imported), 0);
+    }
+    return imported;
+}
+
+void MainWindow::handleNotify(const QString &kind, const QString &title,
+                              const QString &message, const QString &raise,
+                              const QString &sessionId,
+                              const QString &project, const QString &eventId,
+                              bool replay) {
+    lastEventAt_ = QDateTime::currentDateTimeUtc();
+    if (workItems_ != nullptr &&
+        (kind == QStringLiteral("permission") ||
+         kind == QStringLiteral("question") ||
+         kind == QStringLiteral("progress") || kind == QStringLiteral("stop"))) {
+        workItems_->upsert(QStringLiteral("hook"), raise, sessionId, project,
+                           kind, title, message, raise, eventId);
+        refreshWorkItems();
+    }
+    if (replay) {
+        // 离线补投只落工单，不补喊/抢前台，避免启动时一次念一串旧提醒。
+        return;
+    }
+    appendEvent(QStringLiteral("status"), QString(), QString(),
+                title + QStringLiteral(" · ") + message, 0);
+    // 记住发通知的宿主，桌宠分流时要靠它判断「Agent 在不在」，
+    // 冷启动也能直接用上次的值，不用重新猜。只在变了才写盘。
+    if (!raise.isEmpty() &&
+        store_->uiString(QStringLiteral("agent_exe")) != raise) {
+        store_->setUiString(QStringLiteral("agent_exe"), raise);
+    }
+    if (kind == QStringLiteral("stop")) {
+        // 任务完成：念出来 + 气泡停满 7s。**不自动抢前台**——
+        // 活儿干完就把焦点拽走很烦，气泡可点，点了再回去。
+        // 是否前台不影响是否朗读：用户可能没看屏幕，语音是主通道。
+        if (voicePet_ != nullptr) {
+            voicePet_->speak(message, 7000, raise);
+        }
+        return;
+    }
+    if (kind == QStringLiteral("permission")) {
+        // 等确认要把人喊回来：气泡停久一点 + 语音，桌宠收起也照念；
+        // 收起又没 TTS 时退回托盘，别让提醒凭空消失。
+        if (voicePet_ != nullptr) {
+            voicePet_->speak(message, 7000, raise);
+            if (!voicePet_->isVisible() && !voicePet_->ttsReady() &&
+                tray_ != nullptr) {
+                tray_->showMessage(title, message,
+                                   QSystemTrayIcon::Information, 6000);
+            }
+        } else if (tray_ != nullptr) {
+            tray_->showMessage(title, message,
+                               QSystemTrayIcon::Information, 6000);
+        }
+        AgentWindow::raise(raise);
+        return;
+    }
+    if (kind == QStringLiteral("speak")) {
+        // MCP 主动让桌宠说话：只念，不抢前台。
+        if (voicePet_ != nullptr) {
+            voicePet_->speak(message);
+        }
+        return;
+    }
+    if (voicePet_ != nullptr && voicePet_->isVisible() &&
+        voicePet_->petEnabled()) {
+        voicePet_->notify(message, raise);
+    } else if (tray_ != nullptr) {
+        tray_->showMessage(title, message, QSystemTrayIcon::Information, 6000);
+    }
 }
 
 void MainWindow::raiseWorkItem(const QString &id) {

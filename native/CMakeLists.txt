@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.24)
 
-project(AgentRMCNative VERSION 0.3.6 LANGUAGES CXX)
+project(AgentRMCNative VERSION 0.3.7 LANGUAGES CXX)
 
 # 版本唯一入口就是上面的 PROJECT_VERSION：app.rc 与 NSIS 的版本号都由这里生成，
 # 不再手写第二、第三处。改了版本只需重新 configure（build.bat 每次都会）。

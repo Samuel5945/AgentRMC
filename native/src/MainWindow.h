@@ -1,6 +1,8 @@
 #pragma once
 
 #include <QByteArray>
+#include <QDateTime>
+#include <QJsonArray>
 #include <QMainWindow>
 #include <QSet>
 
@@ -20,6 +22,7 @@ class QListWidget;
 class QPushButton;
 class QSystemTrayIcon;
 class QTabWidget;
+class QTimer;
 class AgentBridge;
 class InputEngine;
 class AppPage;
@@ -63,7 +66,16 @@ private:
     void ackSelectedWork();
     void raiseWorkItem(const QString &id);
     QString selectedWorkId() const;
+    QJsonArray workersArray() const;
     QString workersJson() const;
+    QString healthJson() const;
+    void refreshHealth();
+    int spoolPendingCount() const;
+    int importSpool();
+    void handleNotify(const QString &kind, const QString &title,
+                      const QString &message, const QString &raise,
+                      const QString &sessionId, const QString &project,
+                      const QString &eventId, bool replay);
     void buildTray();
     void checkUpdates(bool manual);
     void onUpdateChecked(const UpdateInfo &info, bool manual);
@@ -105,6 +117,7 @@ private:
     QLabel *workEmpty_ = nullptr;
     QLabel *workWorkers_ = nullptr;
     QComboBox *workFilter_ = nullptr;
+    QLabel *workHealth_ = nullptr;
     QPushButton *workRaise_ = nullptr;
     QPushButton *workDone_ = nullptr;
     QLabel *statusDot_ = nullptr;
@@ -126,6 +139,11 @@ private:
     QLabel *remoteDot_ = nullptr;
     QLabel *remoteState_ = nullptr;
     QSystemTrayIcon *tray_ = nullptr;
+    AgentBridge *bridge_ = nullptr;
+    QTimer *healthTimer_ = nullptr;
+    QString spoolPath_;
+    QDateTime startedAt_;
+    QDateTime lastEventAt_;
     GuideDialog *guide_ = nullptr;
     VoiceWindow *voiceWindow_ = nullptr;
     VoicePet *voicePet_ = nullptr;

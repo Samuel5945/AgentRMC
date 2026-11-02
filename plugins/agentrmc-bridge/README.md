@@ -18,6 +18,9 @@
   一起带给原生端（字段名 `session_id` / `project` / `event_id`），原生端落成
   Work Item；`GET /work-items` 查询，`POST /work-items/ack` 标记已处理。桌面
   「待我处理」页按等处理 / 待验收 / 进行中排序，重启不丢。
+- **离线不丢**：AgentRMC 没开、连接失败或 5xx 时，hook 把 payload 追加到
+  `%APPDATA%\LIG\AgentRMCNative\pending-events.jsonl`；原生端启动/每 5 秒补投，
+  补投只落工单，不补喊。
 
 ## 宿主差异
 

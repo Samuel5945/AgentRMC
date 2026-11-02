@@ -21,6 +21,7 @@ class QTcpSocket;
 //   GET  /work-items → 注意力队列 JSON（attention_count / items）
 //   POST /work-items/ack {"id":"..."} → 标记一条待办已处理
 //   GET  /workers → 当前在跑的 Worker 列表（alive / foreground / 待办计数）
+//   GET  /health  → 桥接 / 待补投 / Worker / 最近事件健康快照
 // 纯回环、只此一用；端口被占就放弃监听，不影响主功能。
 class AgentBridge final : public QObject {
     Q_OBJECT
@@ -31,6 +32,7 @@ public:
     explicit AgentBridge(QObject *parent = nullptr);
     // 起监听；失败（端口被占等）返回 false。
     bool start(quint16 port = kPort);
+    bool isRunning() const { return server_ != nullptr; }
     // GET /state 的应答来源（主窗接到 VoicePet::stateJson 上）；缺省回 "{}"。
     void setStateProvider(std::function<QString()> provider);
     // GET /work-items 的应答来源；缺省回空队列。
@@ -39,6 +41,8 @@ public:
     void setWorkItemAckHandler(std::function<bool(const QString &)> handler);
     // GET /workers 的应答来源。
     void setWorkersProvider(std::function<QString()> provider);
+    // GET /health 的应答来源。
+    void setHealthProvider(std::function<QString()> provider);
 
 signals:
     // kind：/notify 透传 event 字段；/speak 固定为 "speak"。
@@ -64,4 +68,5 @@ private:
     std::function<QString()> workItemsProvider_;
     std::function<bool(const QString &)> workItemAckHandler_;
     std::function<QString()> workersProvider_;
+    std::function<QString()> healthProvider_;
 };

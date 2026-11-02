@@ -4,7 +4,7 @@
     {
       "name": "agentrmc-bridge",
       "source": "./agentrmc-bridge",
-      "version": "0.3.4",
+      "version": "0.3.5",
       "description": "AgentRMC pet bridge for ZCode / WorkBuddy / Qoder: auto bubble and voice alerts when the agent waits for approval, waits for a choice, or finishes a task, plus MCP tools to report progress, make the pet speak and query pet state. WorkBuddy and WorkBuddy AI are separate installs; install the plugin in each.",
       "displayName": "AgentRMC Bridge",
       "displayName_i18n": {

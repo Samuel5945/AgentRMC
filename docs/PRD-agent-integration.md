@@ -2,8 +2,8 @@
 
 - 文档版本：v1.2（P0 落地后的状态更新）
 - 日期：2026-11-02
-- 状态：P0 已提交；Native 0.3.6（Worker 注册表 + 任务生命周期）已出包装机；对外发布通道待执行
-- 适用版本：AgentRMC Native `0.3.6`（Worker 注册表 + 任务生命周期）/ `agentrmc-bridge` `0.3.4`（payload 带 session/project）
+- 状态：P0 已提交；Native 0.3.7（离线 spool + 健康快照）已出包装机；对外发布通道待执行
+- 适用版本：AgentRMC Native `0.3.7`（离线 spool + 健康快照）/ `agentrmc-bridge` `0.3.5`（离线 spool）
 - 覆盖范围：版本演进与发布状态、hooks 提醒、桌宠气泡 / TTS、窗口回跳、语音分流给宿主 Agent、WorkBuddy 双宿主识别
 - 不覆盖：遥控器按键映射、主题系统、ASR / TTS / LLM 模型本身（只在 §2.0 的时间线里点名，不展开需求）
 
@@ -102,6 +102,18 @@
 - [x] **UI**：「待我处理」页显示 Worker 状态行（含前台标记）+ Worker 过滤下拉。
 - [x] **测试**：`AgentRMCWorkItemTest` 新增 voice → permission → stop、progress → stop、
   同 session 合并等 14 项断言。
+
+### 0.8 离线 spool + 健康快照（Native 0.3.7 / Plugin 0.3.5）
+
+- [x] **离线不丢**：hook 连接失败 / 超时 / 5xx 时把 payload 追加到
+  `%APPDATA%\LIG\AgentRMCNative\pending-events.jsonl`。
+- [x] **补投**：原生启动时和每 5 秒扫描 spool（先 rename 成 `.processing`，避免和
+  hook 追加竞争），只落 Work Item，不补喊/不抢前台；事件流显示「补投 N 条」。
+- [x] **健康快照**：`GET /health` 返回 `bridge / uptime_seconds / spool_pending /
+  last_event_at / work_items / workers / problems`。
+- [x] **UI 系统行**：「待我处理」页显示「桥接正常 · N 个 Worker · 最近事件 HH:mm」，
+  有离线待补/桥接异常时橙色提示。
+- [x] **测试**：插件新增「AgentRMC 未开写 spool」用例，25/25。
 
 ---
 
@@ -326,6 +338,19 @@ Agent 宿主
 | 生命周期实测 | progress → permission → stop 同一 id | `5b4cc6fd…` 从 working → needs-me → review |
 | 「待我处理」页 | `4 件待处理 · 等你 1 / 待验收 3` + Worker 状态行 | UI Automation 实测 |
 | Native 测试 | 10 个测试全绿；WorkItem 14 项断言 | 含 voice/progress 合并 |
+
+### 2.12 离线 spool + 健康快照读数（2026-11-02 14:27）
+
+| 读数 | 值 | 说明 |
+|---|---|---|
+| `native/CMakeLists.txt` | `project(... VERSION 0.3.7)` | 离线 spool + health |
+| `D:\apps\AgentRMC\AgentRMCNative.exe` | FileVersion / ProductVersion `0.3.7` | 静默装机器 |
+| NSIS `DisplayVersion` | `0.3.7` | 与 exe / CMake 一致 |
+| `dist\AgentRMC-Setup.exe` | 20,062,826 B，11-02 14:27 | 含 0.3.5 插件 |
+| 离线 spool 实测 | hook 无监听 → 198 B JSONL → 启动后 `spool_pending=0` | `sess-spool` 工单补投成功 |
+| `GET /health` | `bridge=true / spool_pending=0 / work_items / workers` | 实测 |
+| UI 系统行 | `系统：桥接正常 · 4 个 Worker · 最近事件 14:27` | UI Automation 实测 |
+| 插件测试 | 25/25 PASS（新增 spool 用例） | `AgentRMC未开写spool` |
 
 ---
 
@@ -672,6 +697,8 @@ resolveHost(argv, scriptDir, env):
 | Native 0.3.4（Work Item + 注意力队列，已出包 + 已装机） | `WorkItemStore` JSON 持久化、去重、stop 结束 needs-me；`GET /work-items` / `POST /work-items/ack`；主窗「待我处理」页签 | `dist\AgentRMC-Setup.exe`（20,041,532 B，11-02 14:00）；FileVersion / NSIS `0.3.4` |
 | Native 0.3.5（tool-call 防泄漏，已出包 + 已装机） | 人设禁止工具调用；注入真实待办摘要；`ChatText` 检测 tool-call 并替换为待办兜底；`AgentRMCChatTextTest` | `dist\AgentRMC-Setup.exe`（20,048,558 B，11-02 14:10）；FileVersion / NSIS `0.3.5` |
 | Native 0.3.6（Worker + 生命周期，已出包 + 已装机） | `GET /workers`；语音派活建 working 单、permission 合并 needs-me、stop 合并 review；progress 更新 working；Worker 状态/过滤 | `dist\AgentRMC-Setup.exe`（20,052,815 B，11-02 14:18）；FileVersion / NSIS `0.3.6` |
+| Native 0.3.7（离线 spool + health，已出包 + 已装机） | hook 离线写 spool；启动/5 秒补投；`GET /health`；UI 系统健康行 | `dist\AgentRMC-Setup.exe`（20,062,826 B，11-02 14:27）；FileVersion / NSIS `0.3.7` |
+| Plugin 0.3.5（已出包） | 离线 spool；`AGENTRMC_PORT` / `AGENTRMC_SPOOL_DIR` 可注入 | `dist\agentrmc-bridge-0.3.5.zip`；宿主缓存待自动更新 |
 | Plugin 0.3.3（工作区 + 已出包） | FR-01 双 WorkBuddy 识别、FR-03 版本统一；stop 最终回复、`hooks-workbuddy` 沿用 0.3.2 | `dist\agentrmc-bridge-0.3.3.zip` + 随包 zip；两套 WorkBuddy 宿主缓存均已 0.3.3 |
 | Plugin 0.3.4（已出包） | hook payload 透传 `session_id` / `project` / `event_id`，给 Work Item 去重和分组 | `dist\agentrmc-bridge-0.3.4.zip`（23,014 B）；宿主缓存待自动更新 |
 
@@ -694,7 +721,7 @@ resolveHost(argv, scriptDir, env):
 - [x] 静默安装 + 启动 + `curl /state` 验活。
 - [x] 双开 WorkBuddy / WorkBuddy AI 手工验收：permission 双向前台、stop 气泡点击已实测；question 走 DRY_RUN payload 验证。
 - [x] README / 插件 README / 市场描述同步双宿主说明。
-- [x] `dist` 无陈旧版本号的插件 zip（当前仅 `agentrmc-bridge-0.3.4.zip`）。
+- [x] `dist` 无陈旧版本号的插件 zip（当前仅 `agentrmc-bridge-0.3.5.zip`）。
 - [ ] `agentrmc-update.json` 线上 `version` == 本次发布版本，`notes` 含 0.3.x 内容；用 ≤0.2.0 的实例点「检查更新」能收到提示，点进去的包 = 同版本。
 - [ ] 网盘包体与发布版本对得上（体积 / 文件时间做账），或明确记录「本次不走网盘」。
 
@@ -708,13 +735,13 @@ resolveHost(argv, scriptDir, env):
 |---|---|
 | `lib/host.js` 纯函数 | `.workbuddy` → 旧版；`.workbuddy-ai` → AI；自定义路径 + env；argv 覆盖；未知宿主（已实现） |
 | 既有断言改写 | `host.test.js:68-76` 已改为「`.workbuddy` → `WorkBuddy.exe` / `.workbuddy-ai` → `WorkBuddyAI.exe` / 判不出 → `workbuddy-unknown-variant`」 |
-| hook DRY_RUN | 双 WorkBuddy 各自的 payload `title` / `raise`；stop transcript 读取；question 防刷屏；session/project/event_id 透传（已覆盖） |
+| hook DRY_RUN | 双 WorkBuddy 各自的 payload `title` / `raise`；stop transcript 读取；question 防刷屏；session/project/event_id 透传；离线 spool（已覆盖） |
 | Work Item | `AgentRMCWorkItemTest`：建单、同 event id 去重、不同 tool id 新建、stop 结束 needs-me、ack、重载、清空、无 event id 8 秒去重；voice → permission → stop 同卡、progress 更新 working |
 | Worker | `GET /workers` 实测：alive / foreground / open_items / needs_me / review / working |
 | 对话文本 | `AgentRMCChatTextTest`：XML/JSON tool-call 检测、正常对话不误判、markdown/emoji 清理 |
 | Native | `knownExes()` 包含两个 WorkBuddy；`AgentWindow` 目标选择顺序（可注入窗口枚举）——待 P1 |
 | 版本一致性 | `check-version.ps1`：CMake / NSIS / exe FileVersion / ProductVersion 四处相等（已实现并接入 package.bat） |
-| 回归 | `host.test.js` 24/24 PASS；native 10 个测试全绿 |
+| 回归 | `host.test.js` 25/25 PASS；native 10 个测试全绿 |
 
 ### 12.2 手工矩阵
 

@@ -215,6 +215,33 @@ check('payload 透传 session/project/event_id: 给 Work Item 去重和分组', 
   assert.strictEqual(r.payload.event_id, 'tool-1');
 });
 
+check('AgentRMC 未开时写 spool: 连接失败不丢通知', () => {
+  const spoolDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentrmc-spool-'));
+  const script = installInto('.workbuddy-ai');
+  execFileSync(process.execPath, [script, 'permission'], {
+    input: JSON.stringify({
+      tool_name: 'Bash',
+      tool_input: { command: 'ls' },
+      session_id: 's-spool',
+    }),
+    env: Object.assign({}, process.env, {
+      AGENTRMC_PORT: '1',
+      AGENTRMC_SPOOL_DIR: spoolDir,
+    }),
+    encoding: 'utf8',
+    timeout: 8000,
+  });
+  const lines = fs
+    .readFileSync(path.join(spoolDir, 'pending-events.jsonl'), 'utf8')
+    .trim()
+    .split(/\r?\n/);
+  const payload = JSON.parse(lines[0]);
+  assert.strictEqual(payload.event, 'permission');
+  assert.strictEqual(payload.raise, 'WorkBuddyAI.exe');
+  assert.strictEqual(payload.session_id, 's-spool');
+  fs.rmSync(spoolDir, { recursive: true, force: true });
+});
+
 check('e2e-permission 文案: AskUserQuestion 走 PermissionRequest 时也念「等你选方案」', () => {
   const r = dryRun(installInto('.qoder'), 'permission', JSON.stringify({ tool_name: 'AskUserQuestion' }));
   assert.strictEqual(r.payload.message, '等你选方案');

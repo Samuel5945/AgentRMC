@@ -24,9 +24,15 @@
 
 const http = require('http');
 const fs = require('fs');
+const os = require('os');
+const path = require('path');
 const { resolveHost } = require('../lib/host');
 
-const PORT = 45915;
+const PORT = Number(process.env.AGENTRMC_PORT || 45915);
+// AgentRMC 没开时不能把提醒丢掉：先落盘，原生端启动/定时扫描时补投。
+const SPOOL_DIR = process.env.AGENTRMC_SPOOL_DIR ||
+  path.join(process.env.APPDATA || os.tmpdir(), 'LIG', 'AgentRMCNative');
+const SPOOL_FILE = path.join(SPOOL_DIR, 'pending-events.jsonl');
 const DRY_RUN = process.env.AGENTRMC_DRY_RUN === '1';
 const event = process.argv[2] || 'message';
 const host = resolveHost({
@@ -173,7 +179,16 @@ process.stdin.on('end', () => {
     console.log(JSON.stringify({ dry_run: true, source: host.source, payload: payloadObj }));
     process.exit(0);
   }
-  const req = http.request(
+function spool(payload) {
+  try {
+    fs.mkdirSync(SPOOL_DIR, { recursive: true });
+    fs.appendFileSync(SPOOL_FILE, payload + '\n');
+  } catch {
+    // 落盘也失败就彻底放弃：通知不能挡会话。
+  }
+}
+
+const req = http.request(
     {
       host: '127.0.0.1',
       port: PORT,
@@ -184,11 +199,20 @@ process.stdin.on('end', () => {
     },
     (res) => {
       res.resume();
-      res.on('end', () => process.exit(0));
+      res.on('end', () => {
+        if (res.statusCode >= 500) spool(payload);
+        process.exit(0);
+      });
     },
   );
-  req.on('timeout', () => req.destroy());
-  req.on('error', () => process.exit(0)); // AgentRMC 没开就算了
+  req.on('timeout', () => {
+    spool(payload);
+    req.destroy();
+  });
+  req.on('error', () => {
+    spool(payload);
+    process.exit(0);
+  }); // AgentRMC 没开：落到 spool，等下次补投
   req.end(payload);
   // 兜底：任何情况 2.5 秒内必退，hook 阻塞会拖住会话。
   setTimeout(() => process.exit(0), 2500);

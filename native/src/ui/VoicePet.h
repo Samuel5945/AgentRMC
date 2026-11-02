@@ -5,6 +5,8 @@
 #include <QString>
 #include <QWidget>
 
+#include <functional>
+
 class QContextMenuEvent;
 class QEvent;
 class QHideEvent;
@@ -60,6 +62,9 @@ public:
 
     // Agent 普通进度通知：只冒气泡不出声，别打断在放的东西（等确认走 speak）。
     void notify(const QString &text, const QString &raiseExe = QString());
+
+    // 对话人设里注入当前待办摘要；主窗提供，避免模型编造工具调用去「查任务」。
+    void setWorkSummaryProvider(std::function<QString()> provider);
 
     // 收起当前气泡（点击拉回窗口后调用）。
     void hideBubble();
@@ -139,6 +144,7 @@ private:
     QLabel *bubble_ = nullptr;
     TtsClient *tts_ = nullptr;
     LlmClient *llm_ = nullptr;
+    std::function<QString()> workSummaryProvider_;
     PetSprite *sprite_ = nullptr;  // 主题没精灵时为空帧，画圆球回落
     QString lastText_;  // 最近一次转写，右键菜单「朗读最近一句」用
     QString pendingRaise_;  // 当前气泡点了要拉回的宿主进程名，空 = 气泡不可点

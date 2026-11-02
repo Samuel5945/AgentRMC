@@ -1,6 +1,7 @@
 #include "ui/VoicePet.h"
 
 #include "core/AgentWindow.h"
+#include "core/ChatText.h"
 #include "core/LlmClient.h"
 #include "core/Profiles.h"
 #include "core/ThemeManager.h"
@@ -49,62 +50,9 @@ constexpr const char *kDefaultChatSystem =
     "回复要口语化、简短（最多两句话、50 字以内），不要用列表、markdown、加粗、"
     "表情或颜文字，因为你的回复会被朗读出来。默认用中文回答。"
     "用户纠正听写或名词时，直接用一句话确认并继续，不要反问一串问题；不确定时"
-    "最多问一个最短的澄清问题。";
-
-// LLM 有时会无视人设回 markdown / emoji / 清单；落气泡和 TTS 前统一清一遍，
-// 避免「**ZCODE** 😊」这类东西被念出来。
-QString cleanChatReply(const QString &text) {
-    QString out = text;
-    out.remove(QRegularExpression(QStringLiteral("```[\\s\\S]*?```")));
-    out.remove(QLatin1Char('`'));
-    out.remove(QStringLiteral("**"));
-    out.remove(QStringLiteral("__"));
-    out.remove(QRegularExpression(
-        QStringLiteral("(?m)^\\s{0,3}#{1,6}\\s*")));
-    out.remove(QRegularExpression(QStringLiteral("(?m)^\\s*[-*+]\\s+")));
-    out.remove(QRegularExpression(
-        QStringLiteral("(?m)^\\s*\\d+[.)]\\s+")));
-    out.replace(QLatin1Char('*'), QLatin1Char(' '));
-    out.replace(QLatin1Char('_'), QLatin1Char(' '));
-
-    QString kept;
-    kept.reserve(out.size());
-    for (int i = 0; i < out.size(); ++i) {
-        const QChar ch = out.at(i);
-        const uint u = ch.unicode();
-        if (ch.isHighSurrogate() && i + 1 < out.size()) {
-            const uint lo = out.at(i + 1).unicode();
-            const uint cp = 0x10000 + ((u - 0xD800) << 10) + (lo - 0xDC00);
-            if (cp >= 0x1F000 && cp <= 0x1FAFF) {  // emoji / pictographs
-                ++i;
-                continue;
-            }
-        }
-        // Dingbats / misc symbols / variation selectors：朗读没意义。
-        if ((u >= 0x2600 && u <= 0x27BF) || u == 0xFE0F || u == 0xFE0E) {
-            continue;
-        }
-        kept.append(ch);
-    }
-    kept.replace(QRegularExpression(QStringLiteral("[ \\t]+")),
-                 QStringLiteral(" "));
-    kept.replace(QRegularExpression(QStringLiteral("\\s*\\n\\s*")),
-                 QStringLiteral(" "));
-    kept = kept.trimmed();
-    if (kept.isEmpty()) {
-        return out.trimmed();
-    }
-    // 再长也别让 TTS 念一分钟：优先切在句号/问号/感叹号。
-    constexpr int kMaxChars = 120;
-    if (kept.size() > kMaxChars) {
-        const QString head = kept.left(kMaxChars);
-        const int cut = qMax(head.lastIndexOf(QChar(0x3002)),
-                             qMax(head.lastIndexOf(QChar(0xFF01)),
-                                  head.lastIndexOf(QChar(0xFF1F))));
-        kept = cut > 20 ? head.left(cut + 1) : head + QStringLiteral("…");
-    }
-    return kept;
-}
+    "最多问一个最短的澄清问题。"
+    "你没有工具或函数调用能力，不要输出 tool call、<function>、mcp 函数名或 JSON "
+    "tool_calls；用户问任务状态时，直接使用系统提供的「当前待办」摘要回答。";
 
 }  // namespace
 
@@ -335,7 +283,19 @@ VoicePet::VoicePet(ProfileStore *store, VoiceController *voice, QWidget *parent)
     connect(llm_, &LlmClient::replied, this,
             [this](const QString &text, qint64) {
                 llmBusy_ = false;
-                const QString reply = cleanChatReply(text);
+                QString reply = ChatText::cleanReply(text);
+                if (ChatText::looksLikeToolCall(text)) {
+                    // 没有工具权限，别把调用协议念出来；直接用真实待办兜底。
+                    QString summary = workSummaryProvider_
+                                          ? workSummaryProvider_()
+                                          : QString();
+                    if (summary.isEmpty()) {
+                        summary = QString::fromUtf8(
+                            "没有需要用户处理的待办");
+                    }
+                    reply = QString::fromUtf8("我不能调用工具。当前待办：%1。")
+                                .arg(summary);
+                }
                 chatHistory_.append(
                     QJsonObject{{"role", "assistant"}, {"content", reply}});
                 while (chatHistory_.size() > 8) {
@@ -517,6 +477,10 @@ void VoicePet::notify(const QString &text, const QString &raiseExe) {
         return;
     }
     bubbleOnly(text, 6000, raiseExe);
+}
+
+void VoicePet::setWorkSummaryProvider(std::function<QString()> provider) {
+    workSummaryProvider_ = std::move(provider);
 }
 
 void VoicePet::hideBubble() {
@@ -1227,7 +1191,15 @@ QString VoicePet::chatPersona() const {
         "\n补充事实：AgentRMC 是用户开发的 Windows 桌面语音桌宠项目；"
         "ZCode、WorkBuddy、WorkBuddy AI、Qoder 都是 AI 编程助手"
         "（本程序联动的宿主），不是编程语言，也不是用户本人。"
+        "你没有工具或函数调用能力，不要输出 <tool call>、mcp 函数名或 JSON "
+        "tool_calls；任务状态只依据下面提供的当前待办。"
         "回答保持一到两句话，不列清单，不连续反问。");
+    if (workSummaryProvider_) {
+        const QString tasks = workSummaryProvider_();
+        if (!tasks.isEmpty()) {
+            context += QString::fromUtf8("\n当前待办：%1。").arg(tasks);
+        }
+    }
     const QString fg = AgentWindow::foregroundAgentExe();
     if (!fg.isEmpty()) {
         context += QString::fromUtf8(" 用户此刻前台是 %1。")

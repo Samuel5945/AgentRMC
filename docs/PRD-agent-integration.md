@@ -2,8 +2,8 @@
 
 - 文档版本：v1.2（P0 落地后的状态更新）
 - 日期：2026-11-02
-- 状态：P0 已提交；Native 0.3.4 Work Item + 注意力队列已出包装机；对外发布通道待执行
-- 适用版本：AgentRMC Native `0.3.4`（Work Item + 注意力队列）/ `agentrmc-bridge` `0.3.4`（payload 带 session/project）
+- 状态：P0 已提交；Native 0.3.5（Work Item + tool-call 防泄漏）已出包装机；对外发布通道待执行
+- 适用版本：AgentRMC Native `0.3.5`（Work Item + tool-call 防泄漏）/ `agentrmc-bridge` `0.3.4`（payload 带 session/project）
 - 覆盖范围：版本演进与发布状态、hooks 提醒、桌宠气泡 / TTS、窗口回跳、语音分流给宿主 Agent、WorkBuddy 双宿主识别
 - 不覆盖：遥控器按键映射、主题系统、ASR / TTS / LLM 模型本身（只在 §2.0 的时间线里点名，不展开需求）
 
@@ -79,6 +79,18 @@
   宿主测试 24/24。
 - [x] **实测**：permission 建单、重复投递不重复、stop 转待验收并结束 needs-me、
   重启保留、UI 选中/ack/清空全部通过。
+
+### 0.6 对话 tool-call 泄漏修复（Native 0.3.5）
+
+- [x] **问题**：模型把工具调用协议当正文吐出来，例如
+  `好的，我来检查一下当前的任务状态。<tool call><function=mcpTodoListgetTodoList>…`。
+- [x] **人设约束**：明确告知模型「没有工具/函数调用能力」，不要输出 `<tool call>`、
+  `mcp` 函数名或 JSON `tool_calls`。
+- [x] **真实待办**：人设每次请求注入「当前待办：N 件等你处理、M 件待验收；最近一条…」，
+  用户问任务状态时直接据此回答。
+- [x] **泄漏兜底**：新增 `ChatText::looksLikeToolCall`；检测到 tool-call 时整条回复替换为
+  「我不能调用工具。当前待办：…」，不念协议文本、不写进对话历史。
+- [x] **测试**：`AgentRMCChatTextTest` 覆盖 XML/JSON tool-call、正常对话、markdown/emoji 清理。
 
 ---
 
@@ -278,6 +290,18 @@ Agent 宿主
 | 「待我处理」页签 | 现在是第一个页签，带注意力计数 | UI Automation 实测 |
 | 插件宿主测试 | 24/24 PASS | 含 session/project/event_id 透传 |
 | Native 测试 | 9 个测试全绿（新增 `AgentRMCWorkItemTest`） | 含 WorkItem 持久化/去重 |
+
+### 2.10 tool-call 防泄漏修复后的读数（2026-11-02 14:10）
+
+| 读数 | 值 | 说明 |
+|---|---|---|
+| `native/CMakeLists.txt` | `project(... VERSION 0.3.5)` | tool-call 防泄漏版本 |
+| `D:\apps\AgentRMC\AgentRMCNative.exe` | FileVersion / ProductVersion `0.3.5` | 静默装机器 |
+| NSIS `DisplayVersion` | `0.3.5` | 与 exe / CMake 一致 |
+| `dist\AgentRMC-Setup.exe` | 20,048,558 B，11-02 14:10 | 含 0.3.4 插件 |
+| `AgentRMCChatTextTest` | 5/5 PASS | XML/JSON tool-call、正常对话、markdown/emoji |
+| Native 测试 | 10 个测试全绿 | 新增 ChatText 测试 |
+| 对话兜底 | 检测到 tool-call 时替换为真实待办摘要 | 不念协议文本 |
 
 ---
 
@@ -622,6 +646,7 @@ resolveHost(argv, scriptDir, env):
 | Native 0.3.2（UX 真正精简，已提交 `39670f7`） | 桌宠右键只留 5 项；识别/对话/主题/目标/朗读迁到语音面板与完整界面；语音面板新增「交给」「朗读最近」 | `dist\AgentRMC-Setup.exe`（20,010,218 B，11-02 11:58）；FileVersion / NSIS `0.3.2` |
 | Native 0.3.3（对话人设修正，已出包 + 已装机） | 所有人设追加本机语境与 ZCode/WorkBuddy 术语表；回复禁止清单/连续反问；落气泡前清理 markdown/emoji 并限长 | `dist\AgentRMC-Setup.exe`（20,013,752 B，11-02 13:32）；FileVersion / NSIS `0.3.3`；本次提交 |
 | Native 0.3.4（Work Item + 注意力队列，已出包 + 已装机） | `WorkItemStore` JSON 持久化、去重、stop 结束 needs-me；`GET /work-items` / `POST /work-items/ack`；主窗「待我处理」页签 | `dist\AgentRMC-Setup.exe`（20,041,532 B，11-02 14:00）；FileVersion / NSIS `0.3.4` |
+| Native 0.3.5（tool-call 防泄漏，已出包 + 已装机） | 人设禁止工具调用；注入真实待办摘要；`ChatText` 检测 tool-call 并替换为待办兜底；`AgentRMCChatTextTest` | `dist\AgentRMC-Setup.exe`（20,048,558 B，11-02 14:10）；FileVersion / NSIS `0.3.5` |
 | Plugin 0.3.3（工作区 + 已出包） | FR-01 双 WorkBuddy 识别、FR-03 版本统一；stop 最终回复、`hooks-workbuddy` 沿用 0.3.2 | `dist\agentrmc-bridge-0.3.3.zip` + 随包 zip；两套 WorkBuddy 宿主缓存均已 0.3.3 |
 | Plugin 0.3.4（已出包） | hook payload 透传 `session_id` / `project` / `event_id`，给 Work Item 去重和分组 | `dist\agentrmc-bridge-0.3.4.zip`（23,014 B）；宿主缓存待自动更新 |
 
@@ -660,9 +685,10 @@ resolveHost(argv, scriptDir, env):
 | 既有断言改写 | `host.test.js:68-76` 已改为「`.workbuddy` → `WorkBuddy.exe` / `.workbuddy-ai` → `WorkBuddyAI.exe` / 判不出 → `workbuddy-unknown-variant`」 |
 | hook DRY_RUN | 双 WorkBuddy 各自的 payload `title` / `raise`；stop transcript 读取；question 防刷屏；session/project/event_id 透传（已覆盖） |
 | Work Item | `AgentRMCWorkItemTest`：建单、同 event id 去重、不同 tool id 新建、stop 结束 needs-me、ack、重载、清空、无 event id 8 秒去重 |
+| 对话文本 | `AgentRMCChatTextTest`：XML/JSON tool-call 检测、正常对话不误判、markdown/emoji 清理 |
 | Native | `knownExes()` 包含两个 WorkBuddy；`AgentWindow` 目标选择顺序（可注入窗口枚举）——待 P1 |
 | 版本一致性 | `check-version.ps1`：CMake / NSIS / exe FileVersion / ProductVersion 四处相等（已实现并接入 package.bat） |
-| 回归 | `host.test.js` 24/24 PASS；native 9 个测试全绿 |
+| 回归 | `host.test.js` 24/24 PASS；native 10 个测试全绿 |
 
 ### 12.2 手工矩阵
 

@@ -288,6 +288,42 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
     toast_ = new Toast(this);
     // 语音桌宠：主窗/语音面板关掉之后留在屏幕上的小球，跟着监听状态变色。
     voicePet_ = new VoicePet(store_.get(), voice_);
+    // 对话里问「任务状态」时直接给模型真实待办，别让它编造工具调用。
+    voicePet_->setWorkSummaryProvider([this] {
+        if (workItems_ == nullptr) {
+            return QString();
+        }
+        int needs = 0;
+        int review = 0;
+        QString latest;
+        for (const WorkItem &item : workItems_->items()) {
+            if (item.done) {
+                continue;
+            }
+            if (item.stage == QStringLiteral("needs-me")) {
+                ++needs;
+                if (latest.isEmpty()) {
+                    latest = item.message;
+                }
+            } else if (item.stage == QStringLiteral("review")) {
+                ++review;
+                if (latest.isEmpty()) {
+                    latest = item.message;
+                }
+            }
+        }
+        if (needs == 0 && review == 0) {
+            return QString::fromUtf8("没有需要用户处理的待办");
+        }
+        QString summary =
+            QString::fromUtf8("%1 件等你处理、%2 件待验收")
+                .arg(needs)
+                .arg(review);
+        if (!latest.isEmpty()) {
+            summary += QString::fromUtf8("；最近一条：%1").arg(latest);
+        }
+        return summary;
+    });
     connect(voicePet_, &VoicePet::fullUiRequested, this, &MainWindow::wake);
     connect(voicePet_, &VoicePet::panelRequested, this,
             &MainWindow::showVoicePanel);

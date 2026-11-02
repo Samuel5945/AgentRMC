@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.24)
 
-project(AgentRMCNative VERSION 0.3.4 LANGUAGES CXX)
+project(AgentRMCNative VERSION 0.3.5 LANGUAGES CXX)
 
 # 版本唯一入口就是上面的 PROJECT_VERSION：app.rc 与 NSIS 的版本号都由这里生成，
 # 不再手写第二、第三处。改了版本只需重新 configure（build.bat 每次都会）。
@@ -24,6 +24,8 @@ qt_add_executable(AgentRMCNative
     src/MainWindow.h
     src/core/AgentBridge.cpp
     src/core/AgentBridge.h
+    src/core/ChatText.cpp
+    src/core/ChatText.h
     src/core/WorkItems.cpp
     src/core/WorkItems.h
     src/core/AgentWindow.cpp
@@ -236,6 +238,15 @@ add_executable(AgentRMCWorkItemTest
 target_include_directories(AgentRMCWorkItemTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(AgentRMCWorkItemTest PRIVATE Qt6::Core)
 target_compile_options(AgentRMCWorkItemTest PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
+
+add_executable(AgentRMCChatTextTest
+    tests/chat_text_test.cpp
+    src/core/ChatText.cpp
+    src/core/ChatText.h
+)
+target_include_directories(AgentRMCChatTextTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(AgentRMCChatTextTest PRIVATE Qt6::Core)
+target_compile_options(AgentRMCChatTextTest PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
 
 add_executable(AgentRMCAudioTest
     tests/m5_audio_cli.cpp

@@ -1927,6 +1927,23 @@ void MainWindow::announceWork(const QString &kind, const QString &title,
     }
     if (kind == QStringLiteral("permission") ||
         kind == QStringLiteral("question")) {
+        // 宿主对 AskUserQuestion 的 hook 是**用户答完之后**才派发的（WorkBuddy
+        // 实测：问题 17:24 弹出，通知 17:27 才到），所以「等你选方案」这条常常
+        // 迟到。Agent 若已经用 pet_work_update(blocked) 提前喊过，这里就不再喊
+        // 第二声——工单上面已经更新过了，喊重复只会让人以为又出了新问题。
+        const QString askKey = sessionId.isEmpty() ? title : sessionId;
+        const QDateTime announced = attentionAnnounced_.value(askKey);
+        const bool lateQuestion =
+            message.startsWith(QString::fromUtf8("等你选方案")) &&
+            announced.isValid() &&
+            announced.secsTo(QDateTime::currentDateTimeUtc()) <= 180;
+        if (lateQuestion) {
+            return;
+        }
+        if (message.startsWith(QString::fromUtf8("等你选方案"))) {
+            attentionAnnounced_.insert(askKey,
+                                       QDateTime::currentDateTimeUtc());
+        }
         // 等确认要把人喊回来：气泡停久一点 + 语音，桌宠收起也照念；
         // 收起又没 TTS 时退回托盘，别让提醒凭空消失。
         if (voicePet_ != nullptr) {

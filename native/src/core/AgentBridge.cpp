@@ -46,6 +46,15 @@ void AgentBridge::setStateProvider(std::function<QString()> provider) {
     stateProvider_ = std::move(provider);
 }
 
+void AgentBridge::setWorkItemsProvider(std::function<QString()> provider) {
+    workItemsProvider_ = std::move(provider);
+}
+
+void AgentBridge::setWorkItemAckHandler(
+    std::function<bool(const QString &)> handler) {
+    workItemAckHandler_ = std::move(handler);
+}
+
 void AgentBridge::onConnected() {
     while (server_->hasPendingConnections()) {
         auto *socket = server_->nextPendingConnection();
@@ -87,9 +96,18 @@ void AgentBridge::onReadable(QTcpSocket *socket) {
         finish(socket, "200 OK", state.toUtf8(), "application/json");
         return;
     }
+    if (requestLine.startsWith("GET /work-items ")) {
+        const QString items = workItemsProvider_
+                                  ? workItemsProvider_()
+                                  : QStringLiteral(
+                                        "{\"attention_count\":0,\"items\":[]}");
+        finish(socket, "200 OK", items.toUtf8(), "application/json");
+        return;
+    }
     const bool isNotify = requestLine.startsWith("POST /notify ");
     const bool isSpeak = requestLine.startsWith("POST /speak ");
-    if (!isNotify && !isSpeak) {
+    const bool isAck = requestLine.startsWith("POST /work-items/ack ");
+    if (!isNotify && !isSpeak && !isAck) {
         finish(socket, "404 Not Found");
         return;
     }
@@ -116,9 +134,22 @@ void AgentBridge::onReadable(QTcpSocket *socket) {
 
     const QJsonObject obj =
         QJsonDocument::fromJson(body.left(contentLength)).object();
+    if (isAck) {
+        const QString id = obj.value(QStringLiteral("id")).toString().trimmed();
+        if (id.isEmpty()) {
+            finish(socket, "400 Bad Request");
+            return;
+        }
+        const bool ok = workItemAckHandler_ && workItemAckHandler_(id);
+        finish(socket, ok ? "204 No Content" : "404 Not Found");
+        return;
+    }
     QString kind;
     QString message;
     QString raise;
+    QString sessionId;
+    QString project;
+    QString eventId;
     if (isSpeak) {
         kind = QStringLiteral("speak");
         message = obj.value(QStringLiteral("message")).toString();
@@ -136,13 +167,17 @@ void AgentBridge::onReadable(QTcpSocket *socket) {
             message = defaultFor(kind);
         }
         raise = obj.value(QStringLiteral("raise")).toString().trimmed();
+        sessionId =
+            obj.value(QStringLiteral("session_id")).toString().trimmed();
+        project = obj.value(QStringLiteral("project")).toString().trimmed();
+        eventId = obj.value(QStringLiteral("event_id")).toString().trimmed();
     }
     const QString title = obj.value(QStringLiteral("title")).toString()
                                   .isEmpty()
                               ? QStringLiteral("ZCode")
                               : obj.value(QStringLiteral("title")).toString();
     finish(socket, "204 No Content");
-    emit notify(kind, title, message, raise);
+    emit notify(kind, title, message, raise, sessionId, project, eventId);
 }
 
 void AgentBridge::finish(QTcpSocket *socket, const char *status,

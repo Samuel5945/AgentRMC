@@ -34,6 +34,7 @@
 #include <QDragEnterEvent>
 #include <QDropEvent>
 #include <QFile>
+#include <QFileInfo>
 #include <QMimeData>
 #include <QSettings>
 #include <QDateTime>
@@ -59,6 +60,7 @@
 #include <QPainter>
 #include <QPushButton>
 #include <QScrollArea>
+#include <QStandardPaths>
 #include <QSystemTrayIcon>
 #include <QTabWidget>
 #include <QTableWidget>
@@ -72,6 +74,8 @@
 #include <windows.h>
 #include <QVector>
 #include <QWindow>
+
+#include <algorithm>
 
 namespace {
 
@@ -117,6 +121,16 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
         QCoreApplication::applicationDirPath() + "/profiles.json");
     store_->load();
     store_->loadConfig(QCoreApplication::applicationDirPath() + "/config.json");
+    // Work Item 落在用户数据目录，不跟安装目录走：升级安装不会覆盖，
+    // 也不会被 installer 打进包里。
+    QString workDir =
+        QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+    if (workDir.isEmpty()) {
+        workDir = QCoreApplication::applicationDirPath();
+    }
+    QDir().mkpath(workDir);
+    workItems_ = std::make_unique<WorkItemStore>(workDir + "/work-items.json");
+    workItems_->load();
     // 主题在窗口构建前应用：渲染 QSS + 载入 ui.theme 指向的主题。
     ThemeManager::instance().init(store_.get());
     // ui.custom_apps 里的自定义应用灌进启动目录（应用页/语音「打开 xx」共用）。
@@ -212,9 +226,10 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
     leftLay->addWidget(buildVoiceCard(), 0);
     grid->addWidget(left);
 
-    auto *tabs = new QTabWidget;
-    tabs->setDocumentMode(false);
-    tabs->addTab(buildLogPage(), QString::fromUtf8("事件流"));
+    tabs_ = new QTabWidget;
+    tabs_->setDocumentMode(false);
+    tabs_->addTab(buildWorkPage(), QString::fromUtf8("待我处理"));
+    tabs_->addTab(buildLogPage(), QString::fromUtf8("事件流"));
     keymapPage_ = new KeymapPage(store_.get(), this);
     connect(keymapPage_, &KeymapPage::mappingsChanged, this,
             &MainWindow::refreshRemoteCard);
@@ -231,7 +246,7 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
                     remotePanel_->setLinkedVk(on ? vk : keymapPage_->selectedVk());
                 }
             });
-    tabs->addTab(keymapPage_, QString::fromUtf8("按键映射"));
+    tabs_->addTab(keymapPage_, QString::fromUtf8("按键映射"));
     appPage_ = new AppPage(store_.get());
     connect(appPage_, &AppPage::launched, this,
             [this](const QString &name, bool ok, const QString &error) {
@@ -252,17 +267,21 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
                     }
                 }
             });
-    tabs->addTab(appPage_, QString::fromUtf8("应用"));
-    tabs->addTab(buildGuidePage(), QString::fromUtf8("使用引导"));
-    connect(tabs, &QTabWidget::currentChanged, this, [this](int index) {
+    tabs_->addTab(appPage_, QString::fromUtf8("应用"));
+    tabs_->addTab(buildGuidePage(), QString::fromUtf8("使用引导"));
+    connect(tabs_, &QTabWidget::currentChanged, this, [this](int index) {
         if (remotePanel_ != nullptr) {
+            const int keymapIndex =
+                keymapPage_ != nullptr ? tabs_->indexOf(keymapPage_) : -1;
             remotePanel_->setLinkedVk(
-                index == 1 && keymapPage_ != nullptr ? keymapPage_->selectedVk()
-                                                     : 0);
+                index == keymapIndex && keymapPage_ != nullptr
+                    ? keymapPage_->selectedVk()
+                    : 0);
         }
     });
-    tabs->setCurrentIndex(1);
-    grid->addWidget(tabs, 1);
+    tabs_->setCurrentIndex(tabs_->indexOf(keymapPage_));
+    refreshWorkItems();
+    grid->addWidget(tabs_, 1);
 
     outer->addWidget(body, 1);
 
@@ -334,9 +353,32 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
                 return voicePet_ != nullptr ? voicePet_->stateJson()
                                             : QStringLiteral("{}");
             });
+            bridge->setWorkItemsProvider([this] {
+                return workItems_ != nullptr ? workItems_->toJson()
+                                             : QStringLiteral("{}");
+            });
+            bridge->setWorkItemAckHandler([this](const QString &id) {
+                if (workItems_ == nullptr || !workItems_->ack(id)) {
+                    return false;
+                }
+                refreshWorkItems();
+                return true;
+            });
             connect(bridge, &AgentBridge::notify, this,
                     [this](const QString &kind, const QString &title,
-                           const QString &message, const QString &raise) {
+                           const QString &message, const QString &raise,
+                           const QString &sessionId, const QString &project,
+                           const QString &eventId) {
+                        // 先落工单：即使桌宠/界面没在看，待办也不会丢。
+                        if (workItems_ != nullptr &&
+                            (kind == QStringLiteral("permission") ||
+                             kind == QStringLiteral("question") ||
+                             kind == QStringLiteral("stop"))) {
+                            workItems_->upsert(QStringLiteral("hook"), raise,
+                                               sessionId, project, kind, title,
+                                               message, raise, eventId);
+                            refreshWorkItems();
+                        }
                         appendEvent(QStringLiteral("status"), QString(),
                                     QString(),
                                     title + QStringLiteral(" · ") + message, 0);
@@ -648,6 +690,263 @@ QWidget *MainWindow::buildLogPage() {
     cl->addWidget(logList_, 1);
     lay->addWidget(card);
     return page;
+}
+
+QWidget *MainWindow::buildWorkPage() {
+    auto *page = new QWidget;
+    auto *lay = new QVBoxLayout(page);
+    lay->setContentsMargins(0, 0, 0, 0);
+    lay->setSpacing(0);
+
+    auto *card = new QFrame;
+    card->setObjectName("card");
+    auto *cl = new QVBoxLayout(card);
+    cl->setContentsMargins(14, 11, 12, 12);
+    cl->setSpacing(10);
+
+    auto *head = new QHBoxLayout;
+    workCount_ = new QLabel(QString::fromUtf8("没有待处理"));
+    workCount_->setObjectName("muted");
+    auto *clear = new QPushButton(QString::fromUtf8("清空已完成"));
+    clear->setObjectName("ghostText");
+    clear->setCursor(Qt::PointingHandCursor);
+    connect(clear, &QPushButton::clicked, this, [this] {
+        if (workItems_ != nullptr) {
+            workItems_->clearFinished();
+        }
+        refreshWorkItems();
+    });
+    head->addWidget(workCount_);
+    head->addStretch(1);
+    head->addWidget(clear);
+    cl->addLayout(head);
+
+    workEmpty_ = new QLabel(QString::fromUtf8("没有需要你处理的事"));
+    workEmpty_->setObjectName("muted");
+    workEmpty_->setAlignment(Qt::AlignCenter);
+    cl->addWidget(workEmpty_, 1);
+
+    workList_ = new QListWidget;
+    workList_->setObjectName("logList");  // 复用事件流列表的样式
+    workList_->setFrameShape(QFrame::NoFrame);
+    workList_->setWordWrap(true);
+    workList_->setSpacing(4);
+    workList_->setSelectionMode(QAbstractItemView::SingleSelection);
+    workList_->hide();
+    connect(workList_, &QListWidget::itemDoubleClicked, this,
+            [this](QListWidgetItem *item) {
+                if (item != nullptr) {
+                    raiseWorkItem(item->data(Qt::UserRole).toString());
+                }
+            });
+    connect(workList_, &QListWidget::itemClicked, this,
+            [this](QListWidgetItem *item) {
+                if (item != nullptr) {
+                    workList_->setCurrentItem(item);
+                }
+            });
+    connect(workList_, &QListWidget::itemSelectionChanged, this, [this] {
+        const bool has = !selectedWorkId().isEmpty();
+        if (workRaise_ != nullptr) {
+            workRaise_->setEnabled(has);
+        }
+        if (workDone_ != nullptr) {
+            workDone_->setEnabled(has);
+        }
+    });
+    cl->addWidget(workList_, 1);
+
+    auto *actions = new QHBoxLayout;
+    actions->setSpacing(8);
+    workRaise_ = new QPushButton(QString::fromUtf8("回到 Agent"));
+    workRaise_->setObjectName("ghostSmall");
+    workRaise_->setCursor(Qt::PointingHandCursor);
+    workRaise_->setEnabled(false);
+    connect(workRaise_, &QPushButton::clicked, this,
+            &MainWindow::raiseSelectedWork);
+    workDone_ = new QPushButton(QString::fromUtf8("标为已处理"));
+    workDone_->setObjectName("ghostSmall");
+    workDone_->setCursor(Qt::PointingHandCursor);
+    workDone_->setEnabled(false);
+    connect(workDone_, &QPushButton::clicked, this,
+            &MainWindow::ackSelectedWork);
+    actions->addWidget(workRaise_);
+    actions->addWidget(workDone_);
+    actions->addStretch(1);
+    cl->addLayout(actions);
+
+    lay->addWidget(card);
+    refreshWorkItems();
+    return page;
+}
+
+void MainWindow::refreshWorkItems() {
+    if (workList_ == nullptr || workItems_ == nullptr) {
+        return;
+    }
+    const QSignalBlocker block(workList_);
+    const QString selected = selectedWorkId();
+    workList_->clear();
+
+    QVector<WorkItem> items = workItems_->items();
+    std::sort(items.begin(), items.end(),
+              [](const WorkItem &a, const WorkItem &b) {
+                  const auto rank = [](const QString &stage) {
+                      if (stage == QStringLiteral("needs-me")) {
+                          return 0;
+                      }
+                      if (stage == QStringLiteral("review")) {
+                          return 1;
+                      }
+                      if (stage == QStringLiteral("working")) {
+                          return 2;
+                      }
+                      return 3;
+                  };
+                  const int ra = rank(a.stage);
+                  const int rb = rank(b.stage);
+                  if (ra != rb) {
+                      return ra < rb;
+                  }
+                  return a.updatedAt > b.updatedAt;
+              });
+
+    int needs = 0;
+    int review = 0;
+    int open = 0;
+    for (const WorkItem &item : items) {
+        if (item.done) {
+            continue;
+        }
+        ++open;
+        QString stage = QString::fromUtf8("待办");
+        QColor color("#8b949e");
+        if (item.stage == QStringLiteral("needs-me")) {
+            stage = QString::fromUtf8("等你处理");
+            color = QColor("#f0883e");
+            ++needs;
+        } else if (item.stage == QStringLiteral("review")) {
+            stage = QString::fromUtf8("待验收");
+            color = QColor("#3fb950");
+            ++review;
+        } else if (item.stage == QStringLiteral("working")) {
+            stage = QString::fromUtf8("进行中");
+            color = QColor("#58a6ff");
+        }
+
+        QString agent = item.title;
+        if (agent.isEmpty()) {
+            agent = AgentWindow::displayName(item.agentExe);
+        }
+        QString project;
+        if (!item.project.isEmpty()) {
+            const QString base = QFileInfo(item.project).fileName();
+            project = QString::fromUtf8(" · ") +
+                      (base.isEmpty() ? item.project : base);
+        }
+        const QDateTime when = item.updatedAt.isValid() ? item.updatedAt
+                                                        : item.createdAt;
+        const QString text =
+            QString::fromUtf8("[%1] %2%3\n%4 · %5")
+                .arg(stage, agent, project, item.message,
+                     when.isValid()
+                         ? when.toLocalTime().toString(QStringLiteral("HH:mm"))
+                         : QString());
+        auto *row = new QListWidgetItem(text, workList_);
+        row->setData(Qt::UserRole, item.id);
+        row->setData(Qt::UserRole + 1, item.raiseExe);
+        row->setForeground(color);
+        row->setToolTip(
+            QString::fromUtf8("%1\n%2\n%3")
+                .arg(item.message,
+                     item.project.isEmpty() ? QStringLiteral("（无项目路径）")
+                                            : item.project,
+                     item.sessionId.isEmpty()
+                         ? QStringLiteral("（无 session）")
+                         : QString::fromUtf8("session：%1").arg(item.sessionId)));
+        if (item.id == selected) {
+            workList_->setCurrentItem(row);
+        }
+    }
+
+    if (open == 0) {
+        workList_->hide();
+        workEmpty_->show();
+        workEmpty_->setText(QString::fromUtf8("没有需要你处理的事"));
+        workCount_->setText(QString::fromUtf8("没有待处理"));
+    } else {
+        workEmpty_->hide();
+        workList_->show();
+        workCount_->setText(
+            QString::fromUtf8("%1 件待处理 · 等你 %2 / 待验收 %3")
+                .arg(open)
+                .arg(needs)
+                .arg(review));
+    }
+
+    if (tabs_ != nullptr && tabs_->count() > 0) {
+        const int attention = workItems_->attentionCount();
+        tabs_->setTabText(
+            0, attention > 0
+                   ? QString::fromUtf8("待我处理 (%1)").arg(attention)
+                   : QString::fromUtf8("待我处理"));
+    }
+    const bool has = !selectedWorkId().isEmpty();
+    if (workRaise_ != nullptr) {
+        workRaise_->setEnabled(has);
+    }
+    if (workDone_ != nullptr) {
+        workDone_->setEnabled(has);
+    }
+}
+
+QString MainWindow::selectedWorkId() const {
+    if (workList_ == nullptr) {
+        return QString();
+    }
+    if (const QListWidgetItem *item = workList_->currentItem()) {
+        return item->data(Qt::UserRole).toString();
+    }
+    // 辅助技术（UIA）可能只设置 selected 而不设 current：退回第一项选中。
+    const QList<QListWidgetItem *> selected = workList_->selectedItems();
+    return selected.isEmpty()
+               ? QString()
+               : selected.first()->data(Qt::UserRole).toString();
+}
+
+void MainWindow::raiseWorkItem(const QString &id) {
+    if (workItems_ == nullptr || id.isEmpty()) {
+        return;
+    }
+    for (const WorkItem &item : workItems_->items()) {
+        if (item.id != id) {
+            continue;
+        }
+        if (!item.raiseExe.isEmpty()) {
+            AgentWindow::raise(item.raiseExe);
+        } else if (!item.agentExe.isEmpty()) {
+            AgentWindow::raise(item.agentExe);
+        } else {
+            AgentWindow::raise(QString());  // 缺省找 ZCode
+        }
+        return;
+    }
+}
+
+void MainWindow::raiseSelectedWork() {
+    raiseWorkItem(selectedWorkId());
+}
+
+void MainWindow::ackSelectedWork() {
+    const QString id = selectedWorkId();
+    if (id.isEmpty() || workItems_ == nullptr) {
+        return;
+    }
+    if (workItems_->ack(id)) {
+        refreshWorkItems();
+        appendEvent(QStringLiteral("status"), QString(), QString(),
+                    QString::fromUtf8("待办已标记完成"), 0);
+    }
 }
 
 QWidget *MainWindow::buildGuidePage() {

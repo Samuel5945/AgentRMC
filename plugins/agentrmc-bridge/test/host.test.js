@@ -204,6 +204,17 @@ check('e2e-workbuddy-ai: 复制到 .workbuddy-ai 里跑真脚本 -> AI 标题 + 
   assert.doesNotMatch(JSON.stringify(r.payload), /"WorkBuddy\.exe"/);
 });
 
+check('payload 透传 session/project/event_id: 给 Work Item 去重和分组', () => {
+  const r = dryRun(
+    installInto('.workbuddy-ai'),
+    'stop',
+    JSON.stringify({ session_id: 's1', cwd: 'D:/repo', tool_use_id: 'tool-1' }),
+  );
+  assert.strictEqual(r.payload.session_id, 's1');
+  assert.strictEqual(r.payload.project, 'D:/repo');
+  assert.strictEqual(r.payload.event_id, 'tool-1');
+});
+
 check('e2e-permission 文案: AskUserQuestion 走 PermissionRequest 时也念「等你选方案」', () => {
   const r = dryRun(installInto('.qoder'), 'permission', JSON.stringify({ tool_name: 'AskUserQuestion' }));
   assert.strictEqual(r.payload.message, '等你选方案');

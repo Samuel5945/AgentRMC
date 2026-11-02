@@ -7,6 +7,7 @@
 #include <memory>
 
 #include "core/Profiles.h"
+#include "core/WorkItems.h"
 
 class QCloseEvent;
 class QAction;
@@ -18,6 +19,7 @@ class QLabel;
 class QListWidget;
 class QPushButton;
 class QSystemTrayIcon;
+class QTabWidget;
 class AgentBridge;
 class InputEngine;
 class AppPage;
@@ -53,8 +55,14 @@ private:
     QWidget *buildHeader();
     QWidget *buildRemoteCard();
     QWidget *buildVoiceCard();
+    QWidget *buildWorkPage();
     QWidget *buildLogPage();
     QWidget *buildGuidePage();
+    void refreshWorkItems();
+    void raiseSelectedWork();
+    void ackSelectedWork();
+    void raiseWorkItem(const QString &id);
+    QString selectedWorkId() const;
     void buildTray();
     void checkUpdates(bool manual);
     void onUpdateChecked(const UpdateInfo &info, bool manual);
@@ -86,9 +94,16 @@ private:
                         bool showTranscript);
 
     std::unique_ptr<ProfileStore> store_;
+    std::unique_ptr<WorkItemStore> workItems_;
     InputEngine *engine_ = nullptr;
     KeymapPage *keymapPage_ = nullptr;
     AppPage *appPage_ = nullptr;
+    QTabWidget *tabs_ = nullptr;
+    QListWidget *workList_ = nullptr;
+    QLabel *workCount_ = nullptr;
+    QLabel *workEmpty_ = nullptr;
+    QPushButton *workRaise_ = nullptr;
+    QPushButton *workDone_ = nullptr;
     QLabel *statusDot_ = nullptr;
     QLabel *statusText_ = nullptr;
     QPushButton *listenButton_ = nullptr;

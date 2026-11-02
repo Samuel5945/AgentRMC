@@ -34,7 +34,7 @@ WorkBuddy · Qt 6 · C++ · Windows
 实测机型为极米「快乐星球 O3」13 键 BLE 遥控器（VID `0x000D` / PID `0x3838`）；
 同款 HID 遥控器改 `config.json` 的 `device_mark` 即可复用。
 
-当前实现是 **C++/Qt 6 原生版**（`native/`，v0.3.3；按键映射不接 LLM，动作直接交给 Qoder / WorkBuddy 服务端；只有桌宠对话模式会调用你在「对话设置」里自配的 LLM）。
+当前实现是 **C++/Qt 6 原生版**（`native/`，v0.3.4；按键映射不接 LLM，动作直接交给 Qoder / WorkBuddy 服务端；只有桌宠对话模式会调用你在「对话设置」里自配的 LLM）。
 Python 版留在 `legacy-python` 分支，两版读写同一套 `config.json` / `profiles.json`。
 
 ![AgentRMC · 经典主题与鲸鱼娘主题](assets/readme-showcase.gif)
@@ -486,16 +486,22 @@ Python 线的 `commands.json` 是另一套东西（任意关键词 → `run` / `
 > DeepSeek Super-agent 架构的借鉴与分阶段优化方案，见
 > [docs/superagent-adaptation.md](docs/superagent-adaptation.md)。
 
-程序在本机回环监听 `127.0.0.1:45915`（AgentBridge），三个口子：
+程序在本机回环监听 `127.0.0.1:45915`（AgentBridge），五个口子：
 
-- `POST /notify`：JSON `{"event":"stop|permission|...","title":"...","message":"..."}`，
+- `POST /notify`：JSON `{"event":"stop|permission|...","title":"...","message":"...",
+  "raise":"WorkBuddyAI.exe","session_id":"...","project":"...","event_id":"..."}`，
   桌宠冒气泡（不出声，不打断在放的音频）；桌宠收起时改走托盘气泡；事件流里留一条
-  「ZCode · …」。
+  「ZCode · …」。`permission` / `question` / `stop` 会额外落成一条 Work Item。
 - `POST /speak`：JSON `{"message":"..."}`，桌宠冒气泡并 TTS 朗读（桌宠收起也照念）。
 - `GET /state`：返回桌宠状态 JSON（`pet_visible / docked / listening / recording /
   transcribing / chat_mode / tts_ready`）。
+- `GET /work-items`：返回注意力队列 JSON（`attention_count / open_count / items`），
+  每条带 `stage / agent_exe / session_id / project / message / raise`。
+- `POST /work-items/ack`：JSON `{"id":"..."}`，把一条待办标记为已处理。
 
-端口被占用时只是放弃监听，不影响其它功能。
+主界面第一个页签是「待我处理」：按「等你处理 → 待验收 → 进行中」排序，双击回到对应
+Agent，「标为已处理」归档；Work Item 落在用户数据目录，重启不丢。端口被占用时只是
+放弃监听，不影响其它功能。
 
 ### ZCode 插件（推荐给其他用户）
 
@@ -511,7 +517,7 @@ node 脚本，安装包已带在程序目录 `plugins\` 下）：
   礼仪（一句话以内、不刷屏、完成提醒不重复发）。
 
 安装：ZCode → 插件市场 → 添加 → 选本仓库 `plugins/` 目录（或安装目录里的
-`plugins\`）→ 安装「AgentRMC 桌宠联动」。前提：node 在 PATH、AgentRMC ≥ v0.2.0。
+`plugins\`）→ 安装「AgentRMC 桌宠联动」。前提：node 在 PATH、AgentRMC ≥ v0.3.4。
 
 ### 手工接入（不用插件时）
 

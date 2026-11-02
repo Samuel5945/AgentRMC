@@ -14,6 +14,10 @@
   教模型何时用、怎么不刷屏。
 - **传输**：全部走 AgentRMC 本机回环口 `127.0.0.1:45915`（AgentBridge），
   无密钥、无外部依赖（hooks 与 MCP server 都是零依赖 node 脚本）。
+- **待我处理**：hook payload 有 `session_id` / `cwd` / `tool_use_id` 时随 `/notify`
+  一起带给原生端（字段名 `session_id` / `project` / `event_id`），原生端落成
+  Work Item；`GET /work-items` 查询，`POST /work-items/ack` 标记已处理。桌面
+  「待我处理」页按等处理 / 待验收 / 进行中排序，重启不丢。
 
 ## 宿主差异
 

@@ -1,7 +1,7 @@
 # AgentRMC × DeepSeek Super-agent 优化方案
 
 - 日期：2026-11-02
-- 状态：方案（未实施）
+- 状态：Phase 0 + Phase 1 已落地（Native 0.3.4 / Plugin 0.3.4）；Phase 2+ 待排期
 - 参考：
   - 文章《Exploring Super-agent Design: Towards a More Autonomous Agent System》
     <https://mp.weixin.qq.com/s/zoS7GlReWPhfCjENGxXCdg>
@@ -174,21 +174,21 @@ AgentRMC 已经有一个「Router 雏形」，但还没有领域模型和持久�
 
 ## 5. 分阶段落地
 
-### Phase 0：先止血（0.5 天）
+### Phase 0：先止血（0.5 天，已落地）
 
-- hook payload 补 `session_id`、`cwd`（有就带），`/notify` 用 `session_id + kind` 做去重键。
-- 同一 session 的重复通知 5 秒内只处理一次。
+- hook payload 补 `session_id`、`cwd`（有就带），`/notify` 用 `session_id + kind + event_id` 做去重键。
+- 同一 session 的重复通知 8 秒内只处理一次（无 event id 时）；有 event id 时严格按它去重。
 - 前台状态只影响是否自动 raise；`permission` / `question` / `stop` 的语音提醒照常。
-- `GET /state` 增加 `attention_count`。
+- `GET /state` 增加 `attention_count`（实现为 `/work-items` 的字段，`/state` 保持兼容）。
 
 验收：连续触发两次相同 permission，只出现一次气泡；前台在 Agent 时 stop 仍然朗读，只是不自动 raise。
 
-### Phase 1：Work Item + 注意力队列（1–2 天）
+### Phase 1：Work Item + 注意力队列（1–2 天，已落地）
 
-- 新增本地 Work Item 存储（JSONL + 启动时重建索引）。
-- `/notify` 落 Work Item；`GET /work-items`；`POST /work-items/{id}/ack`。
-- 主窗新增「待我处理」区块/页签：按 `needs-me > review > blocked > working` 排序；每条显示 Agent、项目、阶段、最后一句、操作（raise / 验收 / 忽略）。
-- 桌宠只对 `needs-me` 和 `review` 冒泡；`working` 静默。
+- 新增 `WorkItemStore`：JSON 持久化到用户数据目录，最多 200 条，7 天清理已完成。
+- `/notify` 落 Work Item；`GET /work-items`；`POST /work-items/ack`。
+- 主窗新增「待我处理」首个页签：按 `needs-me > review > working` 排序；每条显示 Agent、项目、阶段、最后一句；双击回到 Agent，可标为已处理。
+- 桌宠仍按原设计出声（不以窗口前台为静音条件）；Work Item 只是把事件变得可追踪。
 - 重启 AgentRMC 后 Work Item 仍在。
 
 验收：两个宿主各跑一个任务，面板能区分；重启后列表不丢；点条目能拉起正确窗口。
@@ -219,24 +219,24 @@ AgentRMC 已经有一个「Router 雏形」，但还没有领域模型和持久�
 
 ---
 
-## 6. 建议先做哪一刀
+## 6. 已落地的第一刀
 
-**Phase 0 + Phase 1：Work Item + 注意力队列。**
+**Phase 0 + Phase 1 已实现（Native 0.3.4 / Plugin 0.3.4）**：`WorkItemStore`、`/work-items`、`/work-items/ack`、主窗「待我处理」页签、插件 payload 透传。详见 [PRD §0.5](PRD-agent-integration.md#05-work-item--注意力队列native-034--plugin-034)。
 
-理由：
+下一步是 **Phase 2：Worker 注册表 + 任务生命周期**，再把 Phase 3 的持久投递和 Watchdog 补上。理由：
 
 1. 直接实现文章最核心的「注意力优先」和「Ticket/Attention」，不是抄架构名词。
 2. 复用现有 `AgentBridge /notify`、`AgentWindow`、桌宠气泡和主窗事件流，不需要新依赖。
 3. 让当前「即发即忘」的通知变成可追踪、可恢复、可验收的工单，是后续 Worker 注册表、Watchdog、面板的地基。
 4. 用户能立刻感知：少被打扰、知道哪件事在等自己、点一下回到正确窗口。
 
-最小交付物：
+最小交付物（已完成）：
 
-- `WorkItem` 数据结构 + JSONL 存储 + 去重。
-- `/work-items`、`/work-items/{id}/ack`。
+- `WorkItem` 数据结构 + JSON 存储 + 去重。
+- `/work-items`、`/work-items/ack`。
 - 主窗「待我处理」列表。
-- 桌宠只对注意力项冒泡。
-- 测试：重复事件、重启恢复、双宿主分流、前台只影响 raise 不静音。
+- 桌宠语音行为保持原设计（前台不静音）。
+- 测试：`AgentRMCWorkItemTest` + 插件 24/24。
 
 ---
 

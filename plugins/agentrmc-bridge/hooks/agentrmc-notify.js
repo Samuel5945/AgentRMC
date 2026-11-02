@@ -148,8 +148,25 @@ process.stdin.on('end', () => {
     message = String(hook.message || '有新消息');
   }
 
+  const sessionId = String(
+    hook.session_id || hook.sessionId || '',
+  ).trim();
+  const project = String(
+    hook.cwd ||
+      hook.workspace ||
+      hook.project_dir ||
+      hook.projectDir ||
+      process.env.CLAUDE_PROJECT_DIR ||
+      process.env.CODEBUDDY_PROJECT_DIR ||
+      '',
+  ).trim();
+  const eventId = String(hook.tool_use_id || hook.toolUseId || '').trim();
+
   const payloadObj = { event: outEvent, title: agent, message };
   if (raise) payloadObj.raise = raise;
+  if (sessionId) payloadObj.session_id = sessionId;
+  if (project) payloadObj.project = project;
+  if (eventId) payloadObj.event_id = eventId;
   const payload = JSON.stringify(payloadObj);
   if (DRY_RUN) {
     // 测试用：把判据一起吐出来，好断言「哪个宿主 → 拉哪个窗」。

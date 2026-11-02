@@ -31,3 +31,17 @@
   必须跑 AgentRMCAppTest。
 - Git Bash 里没有 cmake；用 VS 自带的
   `"C:\Program Files\Microsoft Visual Studio\18\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe"`。
+
+## 版本号：两条独立版本线
+
+- **Native 和插件分开编号**：桌面端 `native/` 与 `agentrmc-bridge` 各自演进；
+  `Native 0.3.9` 不代表插件也是 0.3.9。对外说明时必须分别写。
+- **不要每次内部改动都升版本**：功能改完先留在工作区，攒到一个可交付批次
+  （要出包/要给别人装）再升。纯文档、注释、构建脚本调整不升。
+- **Native**：新增用户可见能力升 minor（如 0.3 → 0.4）；修 bug 升 patch；
+  内部重构/试验不升。
+- **插件**：只有 hook 事件、payload、宿主兼容性变化才升 patch；文档/测试调整不升。
+- 出包前仍跑 `native\tools\check-version.ps1`，保证 CMake / NSIS / exe 一致；
+  这只是“同一版本号内部一致”，不是要求 Native 与插件同号。
+- 当前批次冻结：Native `0.3.9`、插件 `0.3.6`；下一次对外发布再统一决定
+  是升 Native minor 还是只发 patch，不在每次改动后递增。

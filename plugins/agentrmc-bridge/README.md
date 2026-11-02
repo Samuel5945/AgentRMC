@@ -34,6 +34,10 @@ Qoder 同时导出 `${QODER_PLUGIN_ROOT}` 和 `${CLAUDE_PLUGIN_ROOT}`，也认 m
 
 ## 安装
 
+对外的交付形态：本插件随 AgentRMC 安装包一起落到 `安装目录\plugins\`（源目录 +
+`agentrmc-bridge.zip`），用户在 App 的「使用引导 → 接入 AI Agent」里点「复制安装话术」，
+把那句话发给正在干活的 Agent，由 Agent 自己装。手工路径如下。
+
 - **ZCode**：应用市场添加本地目录（本仓库 `plugins/`，内含 `marketplace.json`），
   安装「AgentRMC 桌宠联动」即可；hooks 与 MCP 随插件自动生效。
 - **Qoder Desktop**：侧边栏 扩展 → 插件 → 添加插件 → 上传插件（ZIP）。Desktop 只有

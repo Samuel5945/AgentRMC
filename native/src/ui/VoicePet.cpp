@@ -15,10 +15,7 @@
 #include <QColor>
 #include <QContextMenuEvent>
 #include <QCursor>
-#include <QDesktopServices>
-#include <QDir>
 #include <QEnterEvent>
-#include <QFileDialog>
 #include <QGuiApplication>
 #include <QHBoxLayout>
 #include <QHideEvent>
@@ -31,11 +28,9 @@
 #include <QPushButton>
 #include <QScreen>
 #include <QShowEvent>
-#include <QStandardPaths>
 #include <QStringList>
 #include <QRegularExpression>
 #include <QTimer>
-#include <QUrl>
 #include <QVBoxLayout>
 #include <QVector>
 
@@ -703,30 +698,6 @@ void VoicePet::openLlmSettings() {
     dialog->deleteLater();
 }
 
-void VoicePet::importThemePackage() {
-    // 用系统文件对话框（同模型导入的理由：Qt 自绘的在深色主题下看不清）。
-    const QString file = QFileDialog::getOpenFileName(
-        this, QString::fromUtf8("选择主题包"),
-        QStandardPaths::writableLocation(QStandardPaths::DownloadLocation),
-        QString::fromUtf8("主题包 (*.zip)"));
-    if (file.isEmpty()) {
-        return;
-    }
-    QString error;
-    const QString id = ThemeManager::instance().importThemePackage(file, &error);
-    if (id.isEmpty()) {
-        bubbleOnly(QString::fromUtf8("导入失败：%1").arg(error), 6000);
-        return;
-    }
-    ThemeManager::instance().setTheme(id);  // 导入即换上
-    for (const ThemeInfo &info : ThemeManager::instance().themes()) {
-        if (info.id == id) {
-            speak(QString::fromUtf8("已导入并换上「%1」").arg(info.displayName));
-            return;
-        }
-    }
-}
-
 void VoicePet::applyTtsOptions() {
     if (tts_ == nullptr) {
         return;
@@ -943,8 +914,8 @@ void VoicePet::mouseReleaseEvent(QMouseEvent *event) {
 void VoicePet::contextMenuEvent(QContextMenuEvent *event) {
     QMenu menu(this);
 
-    // 一级只留最常用的两个动作；识别/对话/目标/主题/窗口都收进两个子菜单，
-    // 避免右键一拉开就是十几行。
+    // 桌宠右键只保留高频动作。识别方式、对话、主题、交给哪个 Agent、
+    // 朗读等都在语音面板/完整界面里操作，别把设置项堆到桌面球上。
     QAction *listen = menu.addAction(
         listening_ ? QString::fromUtf8("停止监听")
                    : QString::fromUtf8("开始监听"));
@@ -961,123 +932,14 @@ void VoicePet::contextMenuEvent(QContextMenuEvent *event) {
             [this] { voice_->mediaToggle(); });
 
     menu.addSeparator();
-
-    QMenu *voiceMenu = menu.addMenu(QString::fromUtf8("语音与 Agent"));
-
-    QMenu *mode = voiceMenu->addMenu(QString::fromUtf8("识别方式"));
-    const QVector<std::pair<int, QString>> backends = {
-        {int(VoiceBackend::Hotkey), QString::fromUtf8("转发热键 · 0 模型")},
-        {int(VoiceBackend::SenseVoice), QStringLiteral("SenseVoice")},
-        {int(VoiceBackend::Qwen3Asr), QStringLiteral("Qwen3-ASR")},
-        {int(VoiceBackend::CloudAsr), QString::fromUtf8("云端 ASR（联网）")}};
-    for (const auto &entry : backends) {
-        QAction *action = mode->addAction(entry.second);
-        action->setCheckable(true);
-        action->setChecked(int(voice_->options().backend) == entry.first);
-        connect(action, &QAction::triggered, this,
-                [this, entry] { setBackend(entry.first); });
-    }
-
-    QAction *chat = voiceMenu->addAction(QString::fromUtf8("对话模式"));
-    chat->setCheckable(true);
-    chat->setChecked(chatMode_);
-    connect(chat, &QAction::triggered, this,
-            [this] { setChatMode(!chatMode_); });
-    QAction *chatSettings = voiceMenu->addAction(QString::fromUtf8("对话设置…"));
-    connect(chatSettings, &QAction::triggered, this,
-            [this] { openLlmSettings(); });
-
-    // 交给哪个 Agent：几个宿主同时开着时，光靠「猜」会塞错窗口，
-    // 这里给个显式开关；默认「自动判断」= 前台优先 → 最近干活的那个。
-    QMenu *targetMenu =
-        voiceMenu->addMenu(QString::fromUtf8("交给哪个 Agent"));
-    const QString pinned = store_->uiString(QStringLiteral("agent_target"));
-    QAction *autoPick = targetMenu->addAction(QString::fromUtf8("自动判断"));
-    autoPick->setCheckable(true);
-    autoPick->setChecked(pinned.isEmpty());
-    autoPick->setToolTip(QString::fromUtf8("前台优先 → 最近发通知的宿主"));
-    connect(autoPick, &QAction::triggered, this, [this] {
-        store_->setUiString(QStringLiteral("agent_target"), QString());
-    });
-    bool anyAlive = false;
-    for (const QString &exe : AgentWindow::knownExes()) {
-        if (!AgentWindow::alive(exe)) {
-            continue;
-        }
-        anyAlive = true;
-        QAction *entry = targetMenu->addAction(AgentWindow::displayName(exe));
-        entry->setToolTip(exe);
-        entry->setCheckable(true);
-        entry->setChecked(pinned.compare(exe, Qt::CaseInsensitive) == 0);
-        connect(entry, &QAction::triggered, this, [this, exe] {
-            store_->setUiString(QStringLiteral("agent_target"), exe);
-        });
-    }
-    if (!pinned.isEmpty() && !AgentWindow::alive(pinned)) {
-        QAction *stale = targetMenu->addAction(
-            QString::fromUtf8("%1（未运行）")
-                .arg(AgentWindow::displayName(pinned)));
-        stale->setEnabled(false);
-    }
-    if (!anyAlive) {
-        QAction *none =
-            targetMenu->addAction(QString::fromUtf8("（没检测到在跑的 Agent）"));
-        none->setEnabled(false);
-    }
-
-    QAction *read = voiceMenu->addAction(QString::fromUtf8("朗读最近一句"));
-    read->setEnabled(!lastText_.isEmpty());
-    connect(read, &QAction::triggered, this, [this] { speak(lastText_); });
-
-    QAction *tts = voiceMenu->addAction(QString::fromUtf8("语音反馈"));
-    tts->setCheckable(true);
-    tts->setChecked(tts_ != nullptr && tts_->ready());
-    tts->setEnabled(!voice_->options().ttsApiKey.isEmpty());
-    connect(tts, &QAction::toggled, this,
-            [this](bool on) { setTtsEnabled(on); });
-
-    QMenu *windowMenu = menu.addMenu(QString::fromUtf8("外观与窗口"));
-
-    // 主题子菜单：形象/配色随时切，还能直接导入主题包（.zip）。
-    QMenu *themeMenu = windowMenu->addMenu(QString::fromUtf8("主题"));
-    const Theme &active = ThemeManager::instance().current();
-    for (const ThemeInfo &info : ThemeManager::instance().themes()) {
-        QAction *entry = themeMenu->addAction(info.displayName);
-        entry->setCheckable(true);
-        entry->setChecked(active.id == info.id);
-        entry->setEnabled(info.valid);
-        if (!info.valid) {
-            entry->setToolTip(info.error);
-        }
-        connect(entry, &QAction::triggered, this,
-                [this, info] { ThemeManager::instance().setTheme(info.id); });
-    }
-    themeMenu->addSeparator();
-    QAction *themeImport = themeMenu->addAction(
-        QString::fromUtf8("导入主题包…"));
-    connect(themeImport, &QAction::triggered, this,
-            [this] { importThemePackage(); });
-    QAction *themeDir = themeMenu->addAction(
-        QString::fromUtf8("打开主题目录"));
-    connect(themeDir, &QAction::triggered, this, [this] {
-        QDir().mkpath(ThemeManager::themesRoot());
-        QDesktopServices::openUrl(
-            QUrl::fromLocalFile(ThemeManager::themesRoot()));
-    });
-
-    QAction *full = windowMenu->addAction(QString::fromUtf8("显示主界面"));
-    connect(full, &QAction::triggered, this, [this] { openFullUi(); });
-    QAction *panel = windowMenu->addAction(QString::fromUtf8("语音面板"));
+    QAction *panel = menu.addAction(QString::fromUtf8("语音面板"));
     connect(panel, &QAction::triggered, this, [this] { openPanel(); });
-    QAction *dock = windowMenu->addAction(QString::fromUtf8("贴边隐藏"));
-    connect(dock, &QAction::triggered, this, [this] { dockAndPeek(); });
-    QAction *hide = windowMenu->addAction(QString::fromUtf8("隐藏桌宠"));
-    connect(hide, &QAction::triggered, this, [this] { closeFromUi(); });
+    QAction *full = menu.addAction(QString::fromUtf8("完整界面"));
+    connect(full, &QAction::triggered, this, [this] { openFullUi(); });
 
     menu.addSeparator();
-    QAction *guide = menu.addAction(QString::fromUtf8("使用引导…"));
-    connect(guide, &QAction::triggered, this,
-            [this] { emit guideRequested(); });
+    QAction *hide = menu.addAction(QString::fromUtf8("隐藏桌宠"));
+    connect(hide, &QAction::triggered, this, [this] { closeFromUi(); });
 
     menu.exec(event->globalPos());
 }

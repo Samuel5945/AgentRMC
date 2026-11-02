@@ -183,8 +183,8 @@ TtsSettingsDialog::TtsSettingsDialog(ProfileStore *store, QWidget *parent)
     root->addLayout(previewRow);
 
     note_ = new QLabel(QString::fromUtf8(
-        "桌宠可见时会念出反馈：切识别方式、复制、打开应用，"
-        "右键菜单可「朗读最近一句」并随时开关语音反馈。"));
+        "桌宠可见时会念出反馈：切识别方式、复制、打开应用。"
+        "语音面板可「朗读最近」；语音反馈开关就在上面。"));
     note_->setObjectName("dialogNote");
     note_->setWordWrap(true);
     root->addWidget(note_);

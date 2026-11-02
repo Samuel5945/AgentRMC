@@ -2,8 +2,8 @@
 
 - 文档版本：v1.2（P0 落地后的状态更新）
 - 日期：2026-11-02
-- 状态：P0 已提交；Native 0.3.1 UX 重做已出包装机；对外发布通道待执行
-- 适用版本：AgentRMC Native `0.3.1`（工作区，UX 重做）/ `agentrmc-bridge` `0.3.3`（工作区）
+- 状态：P0 已提交；Native 0.3.2 UX 真正精简已出包装机；对外发布通道待执行
+- 适用版本：AgentRMC Native `0.3.2`（工作区，UX 重做）/ `agentrmc-bridge` `0.3.3`（工作区）
 - 覆盖范围：版本演进与发布状态、hooks 提醒、桌宠气泡 / TTS、窗口回跳、语音分流给宿主 Agent、WorkBuddy 双宿主识别
 - 不覆盖：遥控器按键映射、主题系统、ASR / TTS / LLM 模型本身（只在 §2.0 的时间线里点名，不展开需求）
 
@@ -23,19 +23,21 @@
 - [x] 出包 / 装机：`dist\AgentRMC-Setup.exe`（20,009,113 B）+ `dist\agentrmc-bridge-0.3.3.zip`；静默安装到 `D:\apps\AgentRMC`，`/state` 验活，exe FileVersion / 注册表 DisplayVersion 均为 `0.3.0`。
 - [ ] 提交 / tag / GitHub release / 更新 JSON / 网盘包体：待执行（对外通道，需单独确认）。
 
-### 0.2 本轮 UX 重做（Native 0.3.1）
+### 0.2 本轮 UX 重做（Native 0.3.2）
 
-- [x] **桌宠右键菜单**：一级从 13 行压到 6 行——开始/停止监听、说一句/结束说话、
-  「语音与 Agent ▸」（识别方式、对话模式、对话设置、交给哪个 Agent、朗读最近一句、
-  语音反馈）、「外观与窗口 ▸」（主题、主界面、语音面板、贴边、隐藏）、「使用引导…」。
-- [x] **目标菜单可读**：新增 `AgentWindow::displayName()`，菜单显示 `WorkBuddy` /
-  `WorkBuddy AI` / `Qoder CN` 等产品名而不是裸 exe；钉住的目标未运行时显示
-  「（未运行）」而不是无提示。
+- [x] **桌宠右键菜单**：不再分组堆设置项，只留高频 5 项——开始/停止监听、
+  说一句/结束说话、语音面板、完整界面、隐藏桌宠；识别方式、对话、主题、
+  交给哪个 Agent、朗读最近全部移到语音面板 / 完整界面。
+- [x] **语音面板承接设置**：新增「交给」下拉（`WorkBuddy` / `WorkBuddy AI` /
+  `Qoder CN` 等产品名，钉住但未运行的显示「未运行」）和「朗读最近」按钮；
+  识别方式、对话、语音反馈、模型设置继续由底部快捷行承担。
+- [x] **目标菜单可读**：新增 `AgentWindow::displayName()`；桌宠气泡「已交给 X」
+  也改用产品名，不再显示裸 exe。
 - [x] **「没有遥控器」引导页重做**：从 3 行扩成「怎么触发 / 话交给谁识别 / 按需加一点」
   三段，覆盖全局热键、语音主界面、耳机、桌宠、转发/本地/云端、对话模式、TTS、
   Agent 提醒，并显示当前识别方式、提供「语音设置…」入口。
-- [x] **使用引导页**：新增「没有遥控器也能用」「桌宠右键菜单」两节；「语音怎么用」
-  改为有/无遥控器都适用，补充云端 ASR、对话模式与 Agent 分流。
+- [x] **使用引导页**：新增「没有遥控器也能用」「桌宠右键菜单（只留高频）」两节；
+  「语音怎么用」改为有/无遥控器都适用，补充云端 ASR、对话模式与 Agent 分流。
 - [x] **静默安装**：新增 `native/tools/install-silent.bat`，并在 `AGENTS.md` 记录
   Git Bash 直接传 `/S` 会被 MSYS 路径转换、必须走脚本或 `cmd //c` 的坑。
 
@@ -76,9 +78,9 @@
 | **插件 0.2.0 → 0.3.0 → 0.3.1 → 0.3.2** | 11-02 一天 | 0.2.0 适配 Qoder（独立清单 + hooks，`raise` 写死 `Qoder CN.exe`）→ 0.3.0 `lib/host.js` 自检取代写死 → `/notify` 加可选 `raise` 字段、拉前台改由原生端做 → 0.3.1 接入 WorkBuddy（`.codebuddy-plugin` 清单 + 市场源）→ 0.3.2 补 `hooks-workbuddy`、stop 念最终回复、文案去项目名 | 0.3.1 已提交（HEAD `137e3ca`）；**0.3.2 只在工作区**；本机两套 WorkBuddy 缓存分别是 0.3.2 / 0.3.1；`dist\agentrmc-bridge-0.3.1.zip` 是 09:48 的旧手动产物 | 三个清单 `version`（HEAD `0.3.1` / 工作区 `0.3.2`）；随包 zip 实测内含 0.3.2 |
 | **0.3.0（当前）** | 11-02 10:52 出包 | `AgentWindow`（宿主窗口探测 / `alive` / `raise`，含双 WorkBuddy 白名单）、`VoicePet` 语音分流（干活→宿主，闲聊→LLM）、气泡可点回跳、stop 不抢前台、右键「交给哪个 Agent」 | **已出包 + 已静默装机 + 进程活着**（`/state` 实测 `pet_visible=1 chat_mode=1 tts_ready=1`）；**代码未提交，官网 JSON 与 GitHub 都还没有 0.3.0** | `git status`（`AgentWindow.*` untracked、17 个文件 modified）；exe 时间戳 11-02 10:52 |
 
-一句话概括现状：**功能已经走到 Native 0.3.0 + 插件 0.3.3，版本元数据（CMake / NSIS / exe）已对齐到 0.3.0；对外仍只说到 0.2.0，代码库 HEAD 还停在插件 0.3.1，提交与发布待执行。** 四条通道各有各的版本号（见 §2.6），任何「我装的是哪版」的排障都会先撞在这上面。
+一句话概括现状：**功能已经走到 Native 0.3.2 + 插件 0.3.3，版本元数据（CMake / NSIS / exe）已对齐；对外仍只说到 0.2.0，最新 0.3.2 待提交、发布待执行。** 发布通道仍是四个版本号（见 §2.6），任何「我装的是哪版」的排障都会先撞在这上面。
 
-### 2.1 已交付能力（Native 0.3.0 + Plugin 0.3.3）
+### 2.1 已交付能力（Native 0.3.2 + Plugin 0.3.3）
 
 | 能力 | 现状 | 关键实现 | 状态 |
 |---|---|---|---|
@@ -181,7 +183,7 @@ Agent 宿主
 | 官网 `agentrmc-update.json` | 应用内「检查更新」（`MainWindow.cpp:1538-1541`，可用 `update_url` 覆盖） | **0.2.0**（2026-11-01） | 落后一个 minor：0.3.0 的语音分流 / 气泡回跳 / 双 WorkBuddy 白名单都没进说明 |
 | GitHub releases | 官网 / README 引的仓库页脚 | **v0.1.0** | 落后两个 minor，且无 tag |
 | 网盘（夸克 / 百度） | 更新弹窗与官网下载按钮给的链接 | **0.2.0**（作者 11-02 确认包体已滚动更新） | 与更新 JSON 一致，是实际生效的分发渠道。注意分享页 URL 不随版本变化——「链接一样」不代表没换包，也只能从包体（体积 / 文件时间）核对，外部看不出来 |
-| 本机 `D:\apps\AgentRMC` | 开发者自己 | 0.3.0 构建 + FileVersion 0.3.0 | 本机元数据已对齐；代码库 HEAD 仍是插件 0.3.1、未提交 |
+| 本机 `D:\apps\AgentRMC` | 开发者自己 | 0.3.2 构建 + FileVersion 0.3.2 | 本机元数据已对齐；0.3.2 UX 提交待做 |
 
 结论：**0.2.0 这一档对外是对齐的（更新 JSON + 网盘包体一致），不一致的是 0.3.x 完全没进对外通道，GitHub 还单独落后一个 minor；本机 exe 属性已在本轮对齐到 0.3.0，剩余差异在代码库 HEAD 与对外三通道。** FR-07 要收敛的是这条链——CMake → NSIS → exe 属性 → 更新 JSON → 网盘包 → GitHub release，六个点要么一次改齐，要么明确记录哪些通道不动（网盘不换 URL，只能靠换包体 + 体积对账）。
 
@@ -209,12 +211,14 @@ Agent 宿主
 
 | 读数 | 值 | 说明 |
 |---|---|---|
-| `native/CMakeLists.txt` | `project(... VERSION 0.3.1)` | UX 重做版本 |
-| `native/build/Release/AgentRMCNative.exe` | FileVersion / ProductVersion `0.3.1` | `check-version.ps1` 通过 |
-| `D:\apps\AgentRMC\AgentRMCNative.exe` | FileVersion / ProductVersion `0.3.1` | 静默装机器 |
-| NSIS `DisplayVersion` | `0.3.1` | 与 exe / CMake 一致 |
-| `dist\AgentRMC-Setup.exe` | 20,012,592 B，11-02 11:47 | 含 0.3.3 插件 |
+| `native/CMakeLists.txt` | `project(... VERSION 0.3.2)` | UX 精简版本 |
+| `native/build/Release/AgentRMCNative.exe` | FileVersion / ProductVersion `0.3.2` | `check-version.ps1` 通过 |
+| `D:\apps\AgentRMC\AgentRMCNative.exe` | FileVersion / ProductVersion `0.3.2` | 静默装机器 |
+| NSIS `DisplayVersion` | `0.3.2` | 与 exe / CMake 一致 |
+| `dist\AgentRMC-Setup.exe` | 20,010,218 B，11-02 11:58 | 含 0.3.3 插件 |
 | `dist\agentrmc-bridge-0.3.3.zip` | 0.3.3，22,729 B | 随包插件 |
+| 桌宠右键一级 | 5 项：开始/停止监听、说一句、语音面板、完整界面、隐藏桌宠 | UI Automation 实测 |
+| 语音面板 | 新增「交给」下拉与「朗读最近」按钮 | UI Automation 实测文本/按钮 |
 | `GET /state` | `pet_visible=1 chat_mode=1 listening=1 tts_ready=1` | 装机后验活 |
 | 静默安装命令 | `native\tools\install-silent.bat` | Git Bash 不再直接传 `/S` |
 
@@ -553,7 +557,7 @@ resolveHost(argv, scriptDir, env):
 | 0.1.0（2026-10-31） | 原生迁移线 M1–M5 + 分发流程 | GitHub release `v0.1.0`（公开）+ 网盘安装包与模型包 |
 | 0.2.0（2026-11-01） | 语音打开应用 / 语音主界面 / 桌宠 / TTS+LLM 对话闭环 / 主题系统 / ZCode 联动（AgentBridge + 插件） | **已对外发布**：官网 `agentrmc-update.json` 标 0.2.0 + 网盘包体已滚动更新到 0.2.0（作者确认）；GitHub 无 release、无 tag |
 | Native 0.3.0（已提交 + 已装机） | 语音分流、可点气泡、`AgentWindow`（含双 WorkBuddy 白名单）、stop 不抢前台、右键目标菜单；版本元数据已收敛到 CMake（FileVersion / ProductVersion = 0.3.0） | 提交 `03151c5`；`dist\AgentRMC-Setup.exe` 已静默装机并验活；**未发布** |
-| Native 0.3.1（UX 重做，已出包 + 已装机） | 桌宠右键菜单分组、目标菜单产品名、无遥控器引导重做、使用引导页补章节、静默安装脚本 | `dist\AgentRMC-Setup.exe`（20,012,592 B，11-02 11:47）；FileVersion / NSIS `0.3.1`；**待提交、未发布** |
+| Native 0.3.2（UX 真正精简，已出包 + 已装机） | 桌宠右键只留 5 项；识别/对话/主题/目标/朗读迁到语音面板与完整界面；语音面板新增「交给」「朗读最近」 | `dist\AgentRMC-Setup.exe`（20,010,218 B，11-02 11:58）；FileVersion / NSIS `0.3.2`；本次提交 |
 | Plugin 0.3.3（工作区 + 已出包） | FR-01 双 WorkBuddy 识别、FR-03 版本统一；stop 最终回复、`hooks-workbuddy` 沿用 0.3.2 | `dist\agentrmc-bridge-0.3.3.zip` + 随包 zip；两套 WorkBuddy 宿主缓存待各自市场升级 |
 
 ### 待排期
@@ -567,7 +571,7 @@ resolveHost(argv, scriptDir, env):
 
 发布检查清单：
 
-- [x] P0 已提交 `03151c5`；本次 UX 重做随下一笔提交；tag 仍待打。
+- [x] P0 已提交 `03151c5`；0.3.1 右键分组版已提交 `3bf3de4`；0.3.2 精简随本次提交；tag 仍待打。
 - [x] `app.rc` / CMake / NSIS 三处版本一致，装机 exe FileVersion 实测对得上（`check-version.ps1` 已接入 `package.bat`）。
 - [x] `node test/host.test.js` 全绿，含双 WorkBuddy 矩阵（23/23）。
 - [x] native 相关测试全绿（App / Store / Theme / Bridge / Router / Voice / Takeover / Audio）。

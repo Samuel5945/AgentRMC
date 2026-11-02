@@ -285,8 +285,6 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
     // 点气泡回跳：提醒不再靠自动抢前台，用户点了才把宿主窗口拉回来。
     connect(voicePet_, &VoicePet::bubbleActivated, this,
             [](const QString &exe) { AgentWindow::raise(exe); });
-    // 桌宠右键「使用引导…」：和主窗按钮走同一个引导窗。
-    connect(voicePet_, &VoicePet::guideRequested, this, &MainWindow::showGuide);
     connect(voicePet_, &VoicePet::voiceFeedbackError, this,
             [this](const QString &error) {
                 appendEvent(QStringLiteral("error"), QString(), QString(),
@@ -751,12 +749,11 @@ QWidget *MainWindow::buildGuidePage() {
                 {"对话", "右键桌宠 → 对话模式：闲聊走 LLM，"
                          "干活的话交给前台 Agent"},
                 {"耳机", "电脑没在放媒体时，播放/暂停 = 同一个语音开关"}});
-    addSection(QString::fromUtf8("桌宠右键菜单"),
+    addSection(QString::fromUtf8("桌宠右键菜单（只留高频）"),
                {{"一级", "开始/停止监听、说一句/结束说话"},
-                {"语音与 Agent", "识别方式、对话模式、对话设置、交给哪个 Agent、"
-                                 "朗读最近一句、语音反馈"},
-                {"外观与窗口", "主题、显示主界面、语音面板、贴边隐藏、隐藏桌宠"},
-                {"帮助", "使用引导…"}});
+                {"窗口", "语音面板、完整界面、隐藏桌宠"},
+                {"其它", "识别方式、对话、主题、交给哪个 Agent、朗读最近，"
+                         "都在语音面板 / 完整界面里操作"}});
     addSection(QString::fromUtf8("打开应用"),
                {{"怎么说", "按住语音键说「打开剪映」「打开 Qoder」「打开浏览器」，"
                           "松手后直接启动，不会再往输入框里贴这几个字"},
@@ -1128,6 +1125,13 @@ void MainWindow::showVoicePanel() {
         connect(voiceWindow_, &VoiceWindow::panelHidden, this, [this] {
             voicePet_->presentIfEnabled();
         });
+        // 面板里的「朗读最近」交给桌宠的 TTS，面板本身不持有 TTS。
+        connect(voiceWindow_, &VoiceWindow::speakRequested, this,
+                [this](const QString &text) {
+                    if (voicePet_ != nullptr) {
+                        voicePet_->speak(text);
+                    }
+                });
     }
     store_->setUiBool("voice_mode", true);
     if (const QPoint cursor = QCursor::pos();

@@ -81,8 +81,6 @@ signals:
     void chatReplied(const QString &text);
     // 用户点了气泡：把这条提醒对应的宿主窗口拉回前台。
     void bubbleActivated(const QString &raiseExe);
-    // 右键「使用引导…」：主窗负责把引导窗叫出来。
-    void guideRequested();
     void voiceFeedbackError(const QString &error);
 
 protected:
@@ -131,7 +129,6 @@ private:
     // 把话交给宿主 Agent：拉窗口 → 等焦点切过去 → 粘贴 + 回车。
     bool handOffToAgent(const QString &text, const QString &exe);
     void openLlmSettings();
-    void importThemePackage();
     void tick();
     QString chatPersona() const;  // llm_api.system → 主题人设 → 内置默认
     QString spriteState() const;  // 当前应显示的精灵状态名

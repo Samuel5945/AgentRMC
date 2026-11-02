@@ -9,6 +9,7 @@
 class QCloseEvent;
 class QEvent;
 class QMouseEvent;
+class QShowEvent;
 class ProfileStore;
 class Toast;
 class VoiceController;
@@ -30,9 +31,12 @@ signals:
     void fullUiRequested();
     // 面板被收起（✕）：主窗负责把桌宠叫出来。
     void panelHidden();
+    // 「朗读最近」：交给桌宠的 TTS 念，面板自己不持有 TTS。
+    void speakRequested(const QString &text);
 
 protected:
     void closeEvent(QCloseEvent *event) override;
+    void showEvent(QShowEvent *event) override;
     void paintEvent(QPaintEvent *event) override;
     void mousePressEvent(QMouseEvent *event) override;
     bool eventFilter(QObject *watched, QEvent *event) override;
@@ -45,6 +49,7 @@ private:
     void copyText(const QString &text);
     void pushHistory(const QString &text, int costMs);
     void refreshHint();
+    void refreshAgentTarget();
 
     VoiceController *voice_ = nullptr;
     ProfileStore *store_ = nullptr;
@@ -57,7 +62,10 @@ private:
     QLabel *transcript_ = nullptr;
     QListWidget *history_ = nullptr;
     QComboBox *backend_ = nullptr;
+    QComboBox *agentTarget_ = nullptr;
+    QPushButton *readLast_ = nullptr;
     QTimer *levelTimer_ = nullptr;
+    QString lastText_;
 
     bool listening_ = false;
     bool recording_ = false;

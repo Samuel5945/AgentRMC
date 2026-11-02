@@ -3,6 +3,7 @@
 #include "Toast.h"
 #include "TtsSettingsDialog.h"
 #include "VoiceSettingsDialog.h"
+#include "core/AgentWindow.h"
 #include "core/Profiles.h"
 #include "core/ThemeManager.h"
 #include "core/VoiceController.h"
@@ -16,6 +17,7 @@
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
+#include <QShowEvent>
 #include <QSignalBlocker>
 #include <QToolButton>
 #include <QVBoxLayout>
@@ -208,9 +210,25 @@ VoiceWindow::VoiceWindow(VoiceController *voice, ProfileStore *store,
     transcript_->installEventFilter(this);
     body->addWidget(transcript_);
 
+    auto *historyRow = new QHBoxLayout;
     auto *historyTitle = new QLabel(QString::fromUtf8("最近"));
     historyTitle->setObjectName("muted");
-    body->addWidget(historyTitle);
+    readLast_ = new QPushButton(QString::fromUtf8("朗读最近"));
+    readLast_->setObjectName("ghostText");
+    readLast_->setCursor(Qt::PointingHandCursor);
+    readLast_->setToolTip(QString::fromUtf8("用桌宠的 TTS 念出最近一条转写"));
+    readLast_->setEnabled(false);
+    connect(readLast_, &QPushButton::clicked, this, [this] {
+        if (lastText_.isEmpty()) {
+            toast_->showText(QString::fromUtf8("还没有可朗读的内容"));
+            return;
+        }
+        emit speakRequested(lastText_);
+    });
+    historyRow->addWidget(historyTitle);
+    historyRow->addStretch(1);
+    historyRow->addWidget(readLast_);
+    body->addLayout(historyRow);
 
     history_ = new QListWidget;
     history_->setObjectName("voiceHistory");
@@ -228,6 +246,26 @@ VoiceWindow::VoiceWindow(VoiceController *voice, ProfileStore *store,
     connect(history_, &QListWidget::itemClicked, this,
             [this](QListWidgetItem *item) { copyText(item->data(Qt::UserRole).toString()); });
     body->addWidget(history_, 1);
+
+    // 交给哪个 Agent：从桌宠右键挪到语音面板，设置一次就能一直用。
+    auto *agentRow = new QHBoxLayout;
+    auto *agentLabel = new QLabel(QString::fromUtf8("交给"));
+    agentLabel->setObjectName("muted");
+    agentTarget_ = new QComboBox;
+    agentTarget_->setToolTip(QString::fromUtf8(
+        "语音派活交给哪个 Agent；自动判断 = 前台优先 → 最近发通知的宿主"));
+    connect(agentTarget_, &QComboBox::currentIndexChanged, this,
+            [this](int index) {
+                if (index < 0) {
+                    return;
+                }
+                store_->setUiString(QStringLiteral("agent_target"),
+                                    agentTarget_->itemData(index).toString());
+            });
+    agentRow->addWidget(agentLabel);
+    agentRow->addWidget(agentTarget_, 1);
+    body->addLayout(agentRow);
+    refreshAgentTarget();
 
     auto *foot = new QHBoxLayout;
     foot->setSpacing(6);
@@ -294,7 +332,7 @@ VoiceWindow::VoiceWindow(VoiceController *voice, ProfileStore *store,
     chatMode->setCursor(Qt::PointingHandCursor);
     chatMode->setToolTip(QString::fromUtf8(
         "桌宠对话模式：说话发给模型聊，回复用 TTS 念出来；"
-        "模型在「模型设置 → 桌宠对话」里配，桌宠右键也有开关"));
+        "模型在「模型设置 → 桌宠对话」里配"));
     connect(chatMode, &QPushButton::toggled, this, [this](bool on) {
         store_->setUiBool(QStringLiteral("pet_chat"), on);
         voice_->setChatMode(on);
@@ -396,6 +434,41 @@ void VoiceWindow::refreshHint() {
     hintLabel_->setVisible(!hint.isEmpty());
 }
 
+void VoiceWindow::refreshAgentTarget() {
+    if (agentTarget_ == nullptr) {
+        return;
+    }
+    const QSignalBlocker block(agentTarget_);
+    const QString pinned = store_->uiString(QStringLiteral("agent_target"));
+    agentTarget_->clear();
+    agentTarget_->addItem(QString::fromUtf8("自动判断"), QString());
+    bool anyAlive = false;
+    for (const QString &exe : AgentWindow::knownExes()) {
+        if (!AgentWindow::alive(exe)) {
+            continue;
+        }
+        anyAlive = true;
+        agentTarget_->addItem(AgentWindow::displayName(exe), exe);
+    }
+    if (!pinned.isEmpty() && !AgentWindow::alive(pinned)) {
+        agentTarget_->addItem(
+            QString::fromUtf8("%1（未运行）")
+                .arg(AgentWindow::displayName(pinned)),
+            pinned);
+    }
+    int index = agentTarget_->findData(pinned);
+    if (index < 0) {
+        index = 0;
+    }
+    agentTarget_->setCurrentIndex(index);
+    agentTarget_->setToolTip(
+        anyAlive || !pinned.isEmpty()
+            ? QString::fromUtf8("语音派活交给哪个 Agent；"
+                                "自动判断 = 前台优先 → 最近发通知的宿主")
+            : QString::fromUtf8("没检测到在跑的 Agent；"
+                                "语音会走自带 LLM 或提示先打开 Agent"));
+}
+
 void VoiceWindow::copyText(const QString &text) {
     if (text.isEmpty()) {
         return;
@@ -411,6 +484,10 @@ void VoiceWindow::pushHistory(const QString &text, int costMs) {
                            QString::number(costMs / 1000.0, 'f', 1)));
     item->setData(Qt::UserRole, text);
     item->setToolTip(text);
+    lastText_ = text;
+    if (readLast_ != nullptr) {
+        readLast_->setEnabled(true);
+    }
     history_->insertItem(0, item);
     while (history_->count() > 30) {
         delete history_->takeItem(history_->count() - 1);
@@ -481,6 +558,11 @@ void VoiceWindow::paintEvent(QPaintEvent *event) {
     painter.setPen(QPen(QColor(255, 255, 255, 22), 1.0));
     painter.setBrush(Qt::NoBrush);
     painter.drawRoundedRect(box, 12, 12);
+}
+
+void VoiceWindow::showEvent(QShowEvent *event) {
+    refreshAgentTarget();
+    QWidget::showEvent(event);
 }
 
 void VoiceWindow::closeEvent(QCloseEvent *event) {

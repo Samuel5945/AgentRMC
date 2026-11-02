@@ -62,10 +62,18 @@ QStringList knownExes() {
     // WorkBuddy 的进程映像是 WorkBuddyAI.exe（插件侧 host.js 的兜底 raise
     // 同名），WorkBuddy.exe 留给改名/旧版安装。
     // 别把 Code.exe 放进来——VS Code 遍地都是，会误判成 Agent 在线。
+    // DeepSeek Harness 是 DSH 桌面端自己的可执行文件（Electron，窗口标题非空）：
+    // 它的插件（plugins/deepseek-harness）按这个名字发 raise，放进白名单后
+    // 它才能成为编制内的 Worker——否则待办会进列表却没人认领，open_items 对不上。
+    // OpenSquilla 排最后：它不走插件包，靠外部桥发同一个 /notify 接口
+    // （见 README「OpenSquilla 接入」）。放进白名单只是为了让它成为
+    // 编制内的 Worker——否则它的待办会进列表却没人认领，open_items 对不上。
     return {QStringLiteral("WorkBuddyAI.exe"),
             QStringLiteral("WorkBuddy.exe"), QStringLiteral("CodeBuddy.exe"),
             QStringLiteral("ZCode.exe"), QStringLiteral("Qoder.exe"),
-            QStringLiteral("Qoder CN.exe")};
+            QStringLiteral("Qoder CN.exe"),
+            QStringLiteral("DeepSeek Harness.exe"),
+            QStringLiteral("OpenSquilla.exe")};
 }
 
 QString displayName(const QString &exe) {
@@ -76,6 +84,8 @@ QString displayName(const QString &exe) {
         {QStringLiteral("ZCode.exe"), QStringLiteral("ZCode")},
         {QStringLiteral("Qoder.exe"), QStringLiteral("Qoder")},
         {QStringLiteral("Qoder CN.exe"), QStringLiteral("Qoder CN")},
+        {QStringLiteral("DeepSeek Harness.exe"), QStringLiteral("DeepSeek Harness")},
+        {QStringLiteral("OpenSquilla.exe"), QStringLiteral("OpenSquilla")},
     };
     for (const auto &entry : kNames) {
         if (entry.first.compare(exe, Qt::CaseInsensitive) == 0) {

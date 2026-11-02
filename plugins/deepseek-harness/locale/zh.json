@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "AgentRMC 桌宠联动",
+    "description": "等授权、等选方案、一轮结束时由 AgentRMC 桌宠冒气泡并语音提醒，等授权和等选方案还会把宿主窗口拉回前台；另提供 pet_notify / pet_speak / pet_state / pet_work_update 四个工具汇报进度、让桌宠说话、查状态。"
+  }
+}

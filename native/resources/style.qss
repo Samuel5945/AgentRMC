@@ -721,6 +721,19 @@ QPushButton#choiceCard {
     padding: 18px;
 }
 
+/* 卡片正文改成 QLabel 之后单独给字号：标题大一点、说明小一点并允许换行，
+   否则长描述会被卡片边缘裁掉两头。 */
+QLabel#choiceCardTitle {
+    font-size: 17px;
+    font-weight: 600;
+    color: @text@;
+}
+
+QLabel#choiceCardDesc {
+    font-size: 14px;
+    color: @muted@;
+}
+
 QPushButton#choiceCard:hover {
     border-color: @a150@;
     background: @raised@;

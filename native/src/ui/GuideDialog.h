@@ -40,6 +40,10 @@ signals:
     void modelPackageDropped(const QString &file);
     // 无遥控器路线里点了「进入语音主界面」。
     void voiceModeRequested();
+    // 点了「进入完整界面」：现在是主按钮，第一次装完该落在完整界面上。
+    void mainWindowRequested();
+    // 点了「联动插件」：跳「使用引导 → 接入 AI Agent」那一节。
+    void pluginGuideRequested();
 
 protected:
     void keyPressEvent(QKeyEvent *event) override;

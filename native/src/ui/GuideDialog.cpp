@@ -45,6 +45,37 @@ const struct {
     {"红外键", "电源与音量拨杆电脑收不到"},
 };
 
+// 可换行的选择卡片：QPushButton 自己的文本不换行，长描述会被裁掉两头
+// （「蓝牙配对，按键控制电脑、按住语音键说」后面那个「话」就这么没了）。
+// 所以按钮里放两个 QLabel，并让它们对鼠标透明——点击照旧落在按钮上。
+class ChoiceCard final : public QPushButton {
+public:
+    ChoiceCard(const QString &title, const QString &desc,
+               QWidget *parent = nullptr)
+        : QPushButton(parent) {
+        setObjectName("choiceCard");
+        setCursor(Qt::PointingHandCursor);
+        // 文案在子 QLabel 里，按钮自己的 text() 是空的；无障碍和自动化工具都靠这个名字。
+        setAccessibleName(title + QStringLiteral(" · ") + desc);
+        auto *lay = new QVBoxLayout(this);
+        lay->setContentsMargins(0, 0, 0, 0);
+        lay->setSpacing(10);
+        auto *titleLabel = new QLabel(title, this);
+        titleLabel->setObjectName("choiceCardTitle");
+        titleLabel->setAlignment(Qt::AlignCenter);
+        titleLabel->setAttribute(Qt::WA_TransparentForMouseEvents);
+        auto *descLabel = new QLabel(desc, this);
+        descLabel->setObjectName("choiceCardDesc");
+        descLabel->setAlignment(Qt::AlignCenter);
+        descLabel->setWordWrap(true);
+        descLabel->setAttribute(Qt::WA_TransparentForMouseEvents);
+        lay->addStretch(1);
+        lay->addWidget(titleLabel);
+        lay->addWidget(descLabel);
+        lay->addStretch(1);
+    }
+};
+
 // 原图按控件物理尺寸一次缩放：先缩成逻辑像素再交给 QLabel，高 DPI 屏会二次放大糊掉细线。
 class GuideImage final : public QLabel {
 public:
@@ -110,12 +141,16 @@ GuideDialog::GuideDialog(QWidget *parent) : QDialog(parent) {
     setObjectName("guideDialog");
     setWindowFlags(Qt::Dialog | Qt::FramelessWindowHint |
                    Qt::WindowStaysOnTopHint);
-    setFixedWidth(700);
+    // 只给「最小宽度」而不是固定宽度：文案和按钮会随版本变长（比如底部多了
+    // 「联动插件」），写死 700 就会把内容压扁——文字被裁掉两头，看着像丢了内容。
+    setMinimumWidth(700);
     setAcceptDrops(true);
 
     auto *root = new QVBoxLayout(this);
     root->setContentsMargins(20, 16, 20, 16);
     root->setSpacing(12);
+    // 让窗口跟着内容长：宁可对话框宽一点，也不要把字压没。
+    root->setSizeConstraint(QLayout::SetMinimumSize);
 
     auto *head = new QHBoxLayout;
     head->setSpacing(8);
@@ -228,9 +263,7 @@ QWidget *GuideDialog::buildChoicePage() {
     cards->setSpacing(16);
     auto makeCard = [&cards](const QString &title, const QString &desc,
                              const std::function<void()> &action) {
-        auto *card = new QPushButton(QString::fromUtf8("%1\n\n%2").arg(title, desc));
-        card->setObjectName("choiceCard");
-        card->setCursor(Qt::PointingHandCursor);
+        auto *card = new ChoiceCard(title, desc);
         card->setFixedHeight(190);
         connect(card, &QPushButton::clicked, card, action);
         cards->addWidget(card, 1);
@@ -389,16 +422,6 @@ QWidget *GuideDialog::buildVoiceOnlyPage() {
     voiceOnlyStatus_->setObjectName("muted");
     voiceOnlyStatus_->setWordWrap(true);
     rl->addWidget(voiceOnlyStatus_);
-
-    auto *settings = new QPushButton(QString::fromUtf8("语音设置…"));
-    settings->setObjectName("ghostSmall");
-    settings->setCursor(Qt::PointingHandCursor);
-    connect(settings, &QPushButton::clicked, this,
-            [this] { emit openVoiceSettingsRequested(); });
-    auto *settingsRow = new QHBoxLayout;
-    settingsRow->addWidget(settings);
-    settingsRow->addStretch(1);
-    rl->addLayout(settingsRow);
     rl->addStretch(1);
     cols->addWidget(right, 1);
 
@@ -420,19 +443,51 @@ QWidget *GuideDialog::buildVoiceOnlyPage() {
         68));
     el->addWidget(guide::row(
         QString::fromUtf8("提醒"),
-        QString::fromUtf8("装 agentrmc-bridge 插件：等授权、等选方案、任务完成时"
-                          "桌宠气泡 + 语音。"),
+        QString::fromUtf8("装 agentrmc-bridge 联动插件：等授权、等选方案、任务完成时"
+                          "桌宠气泡 + 语音。ZCode / WorkBuddy / Qoder / "
+                          "DeepSeek Harness / OpenSquilla 都能接，装法见「使用引导 → "
+                          "接入 AI Agent」。"),
         68));
     lay->addWidget(enhance);
 
+    // 底部动作行：联动插件 / 语音设置 / 进入语音主界面 都是同级入口，
+    // 主按钮是「进入完整界面」——第一次装完先落在完整界面上更稳，语音主界面只是
+    // 一种可选外观，不该是默认落点。
     auto *enterRow = new QHBoxLayout;
-    auto *enter = new QPushButton(QString::fromUtf8("进入语音主界面"));
+    enterRow->setSpacing(8);
+
+    auto *pluginButton = new QPushButton(QString::fromUtf8("联动插件"));
+    pluginButton->setObjectName("ghostSmall");
+    pluginButton->setCursor(Qt::PointingHandCursor);
+    pluginButton->setToolTip(QString::fromUtf8(
+        "让 Agent 在等确认 / 等选方案 / 任务结束时提醒你：装法与「复制安装话术」在"
+        "「使用引导 → 接入 AI Agent」"));
+    connect(pluginButton, &QPushButton::clicked, this,
+            [this] { emit pluginGuideRequested(); });
+
+    auto *settings = new QPushButton(QString::fromUtf8("语音设置…"));
+    settings->setObjectName("ghostSmall");
+    settings->setCursor(Qt::PointingHandCursor);
+    connect(settings, &QPushButton::clicked, this,
+            [this] { emit openVoiceSettingsRequested(); });
+
+    auto *voiceButton = new QPushButton(QString::fromUtf8("进入语音主界面"));
+    voiceButton->setObjectName("ghost");
+    voiceButton->setCursor(Qt::PointingHandCursor);
+    connect(voiceButton, &QPushButton::clicked, this,
+            [this] { emit voiceModeRequested(); });
+
+    auto *enter = new QPushButton(QString::fromUtf8("进入完整界面"));
     enter->setObjectName("primary");
     enter->setCursor(Qt::PointingHandCursor);
     enter->setFixedWidth(150);
     connect(enter, &QPushButton::clicked, this,
-            [this] { emit voiceModeRequested(); });
+            [this] { emit mainWindowRequested(); });
+
     enterRow->addStretch(1);
+    enterRow->addWidget(pluginButton);
+    enterRow->addWidget(settings);
+    enterRow->addWidget(voiceButton);
     enterRow->addWidget(enter);
     lay->addLayout(enterRow);
     return page;

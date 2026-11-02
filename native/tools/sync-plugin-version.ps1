@@ -4,9 +4,13 @@ param(
 $ErrorActionPreference = 'Stop'
 
 # Single source of truth for the plugin version is plugins/agentrmc-bridge/VERSION.
-# The five manifests below must agree with it; Qoder's plugin page, the local
-# marketplace index and the zip filename all show a version, and when they drift
-# you cannot tell which package is actually installed.
+# The manifests below must agree with it; Qoder's plugin page, the local
+# marketplace index, the DeepSeek Harness bundle row and the zip filename all
+# show a version, and when they drift you cannot tell which package is actually
+# installed.
+#
+# 3 plugin.json + 2 marketplace.json = the ZCode / WorkBuddy / Qoder package;
+# 1 package.json = the DeepSeek Harness bundle (plugins/deepseek-harness).
 #
 # -Check  : verify only, exit 1 on drift (package.bat runs this before packaging)
 # default : rewrite the manifests to match VERSION
@@ -24,6 +28,7 @@ $targets = @(
   'plugins\agentrmc-bridge\.qoder-plugin\plugin.json',
   'plugins\agentrmc-bridge\.zcode-plugin\plugin.json',
   'plugins\agentrmc-bridge\.codebuddy-plugin\plugin.json',
+  'plugins\deepseek-harness\package.json',
   'plugins\marketplace.json',
   'plugins\.codebuddy-plugin\marketplace.json'
 )

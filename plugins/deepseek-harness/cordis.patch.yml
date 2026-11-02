@@ -1,0 +1,14 @@
+# AgentRMC 桌宠联动（DeepSeek Harness 版）。
+#
+# 这一行把 Host 插件挂进当前 profile：装上之后，DSH 等授权 / 等选方案 / 一轮结束
+# 都会通知本机 AgentRMC 桌宠，同时给模型加 pet_notify / pet_speak / pet_state /
+# pet_work_update 四个工具。
+#
+# config 是「替换」不是深合并：patch 里写出一个字段，其余字段走插件内置缺省值
+# （见 index.js 的 DEFAULTS 与 README 的配置表）。全部字段都可省略。
+- insert:
+    - id: agentrmc-bridge
+      name: '@local/agentrmc-bridge'
+      config:
+        agentName: DeepSeek Harness
+        raiseExe: DeepSeek Harness.exe

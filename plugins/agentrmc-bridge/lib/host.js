@@ -91,6 +91,20 @@ function isQoderFamily(env) {
   );
 }
 
+// OpenSquilla 不走插件包，也没有插件注册表：它由外部桥（技能目录里的
+// opensquilla-pet-bridge.mjs）直接 POST 同一个 /notify。所以这里的判据只有
+// 「显式声明」一条——脚本自己被 OpenSquilla 调起时由桥传 argv 或环境变量，
+// 装进 OpenSquilla 技能目录时看安装路径。不猜，猜错会把 Qoder 的窗口拽起来。
+const OPENSQUILLA = { agent: 'OpenSquilla', raise: 'OpenSquilla.exe' };
+
+function isOpenSquillaPath(value) {
+  const s = normPath(value);
+  if (!s) return false;
+  // 技能装在两处：状态家 ~/.opensquilla 与个人技能层 ~/.agents/skills。
+  // 后者只有配上 AGENTRMC_NOTIFY_HOST=OpenSquilla 才算，别把别的技能误认成宿主。
+  return /(^|\/)\.opensquilla(\/|$)/.test(s);
+}
+
 /**
  * @param {object} [options] 全部可注入，方便测试矩阵不真去建目录。
  * @param {string} [options.scriptDir] 调用方自己的 __dirname。
@@ -110,6 +124,24 @@ function resolveHost(options) {
   // 1) 显式给了完整一对就用它。
   if (argvAgent && argvRaise) {
     return { agent: argvAgent, raise: argvRaise, source: 'argv' };
+  }
+
+  // 1.5) OpenSquilla：外部桥调用，没有插件注册表可判，只认显式声明。
+  //      放这里是因为它既不属于 Qoder 家族、也不该落进 ZCode 兜底
+  //      （兜底会把 raise 留空，原生端就去找 ZCode.exe 了）。
+  if (env.AGENTRMC_NOTIFY_HOST && /^opensquilla$/i.test(env.AGENTRMC_NOTIFY_HOST.trim())) {
+    return {
+      agent: OPENSQUILLA.agent,
+      raise: argvRaise || OPENSQUILLA.raise,
+      source: 'opensquilla-env',
+    };
+  }
+  if (isOpenSquillaPath(scriptDir) || isOpenSquillaPath(env.OPENSQUILLA_STATE_DIR)) {
+    return {
+      agent: argvAgent || OPENSQUILLA.agent,
+      raise: argvRaise || OPENSQUILLA.raise,
+      source: 'opensquilla-path',
+    };
   }
 
   // 2) 自己的安装路径。
@@ -180,6 +212,8 @@ module.exports = {
   variantFromPath,
   workbuddyVariantFromPath,
   workbuddyVariantFromName,
+  isOpenSquillaPath,
   VARIANTS,
   WORKBUDDY_VARIANTS,
+  OPENSQUILLA,
 };

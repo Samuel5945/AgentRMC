@@ -22,15 +22,18 @@ class QDropEvent;
 class QLabel;
 class QListWidget;
 class QPushButton;
+class QScrollArea;
 class QSystemTrayIcon;
 class QTabWidget;
 class QTableWidget;
 class QTimer;
+class QWidget;
 class AgentBridge;
 class InputEngine;
 class AppPage;
 class KeymapPage;
 class GuideDialog;
+class AgentBridgeDialog;
 class RemotePanel;
 class Toast;
 class VoiceController;
@@ -92,9 +95,13 @@ private:
                       const QString &message, const QString &spoken,
                       const QString &raise, const QString &sessionId);
     // 联动插件版本对账：{"bundled":内置版,"hosts":[每家 name/installed/loaded/
-    // enabled/running/state]}。loaded 是 hook 报上来的「此刻真在跑的那版」，
-    // 注册表只能说盘上装成哪版。需要动手的成因写进 problems，别压成一个词。
+    // enabled/running/state],"bridges":[不走插件包的外部接入]}。loaded 是 hook
+    // 报上来的「此刻真在跑的那版」，注册表只能说盘上装成哪版。需要动手的成因
+    // 写进 problems，别压成一个词。
     QJsonObject pluginHealth(QStringList *problems) const;
+    // 不走插件包的外部桥（OpenSquilla）：没有注册表可对账，只报装没装、进程在不在。
+    // 别把它们塞进 Host 列表——那会让「读不出注册表」变成常驻故障。
+    QJsonArray pluginBridges() const;
     void upgradePlugins();
     // 5 秒一拍：发现某家的已装版本在运行期间变过，就挂「等新版上报」标记。
     void trackPluginTransitions();
@@ -108,6 +115,10 @@ private:
     bool autoStartEnabled() const;
     void setAutoStart(bool on);
     void showGuide();
+    // 一键接入：复制安装话术 + 各家装没装。新手引导的「联动插件」和系统页都走这里。
+    void showAgentBridgeDialog();
+    // 直接跳到「使用引导 → 接入 AI Agent」那一节（弹窗里的「详细说明」）。
+    void openPluginGuide();
     void toggleListening();
     void updateListenUi();
     void registerVoiceHotkey();
@@ -160,6 +171,9 @@ private:
     QTableWidget *sysWorkers_ = nullptr;
     QLabel *sysPlugin_ = nullptr;
     QPushButton *pluginUpgrade_ = nullptr;
+    // 「使用引导」页里的「接入 AI Agent」那一节：新手引导点了「联动插件」直接滚过去。
+    QScrollArea *guideScroll_ = nullptr;
+    QWidget *guideAgentSection_ = nullptr;
     QLabel *statusDot_ = nullptr;
     QLabel *statusText_ = nullptr;
     QPushButton *listenButton_ = nullptr;
@@ -197,6 +211,7 @@ private:
     QDateTime startedAt_;
     QDateTime lastEventAt_;
     GuideDialog *guide_ = nullptr;
+    AgentBridgeDialog *agentDialog_ = nullptr;
     VoiceWindow *voiceWindow_ = nullptr;
     VoicePet *voicePet_ = nullptr;
     QLabel *dropHint_ = nullptr;

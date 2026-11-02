@@ -1,0 +1,27 @@
+{
+  "name": "@local/agentrmc-bridge",
+  "version": "0.3.9",
+  "private": true,
+  "description": "AgentRMC 桌宠联动（DeepSeek Harness 版）：等授权、等选方案、一轮结束时自动气泡 + 语音提醒，并注册 pet_* 工具让桌宠汇报进度、说一句话、查状态。",
+  "type": "module",
+  "exports": {
+    ".": "./index.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "lib/bridge.js",
+    "lib/text.js",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg",
+    "skills/**/*.md"
+  ],
+  "license": "MIT",
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}

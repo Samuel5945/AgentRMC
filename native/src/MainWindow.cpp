@@ -1,6 +1,7 @@
 #include "MainWindow.h"
 
 #include "ui/AppPage.h"
+#include "ui/AgentBridgeDialog.h"
 #include "ui/GuideDialog.h"
 #include "ui/KeymapPage.h"
 #include "ui/RemotePanel.h"
@@ -86,26 +87,13 @@
 
 namespace {
 
-// 「使用引导」里的一句话安装话术：插件源和 zip 随安装包落在 exe 旁的 plugins\ 下，
-// 用户不用认路径——复制这一句发给正在干活的 Agent，它自己装好并启用。
+// 「使用引导」/「接入 Agent」里的一句话安装话术：插件源和 zip 随安装包落在 exe 旁的
+// plugins\ 下，用户不用认路径——复制这一句发给正在干活的 Agent，它自己装好并启用。
 // 让 Agent 走宿主自己的安装器（install_extension）而不是手改注册表：本地包的版本号
 // 只在文件名和清单里，装错了没人看得出来。
+// 文案本身在 pluginupgrade::installSentence()，那儿有测试盯着占位符替换。
 QString agentBridgeInstallSentence() {
-    const QString root = QDir::toNativeSeparators(
-        QCoreApplication::applicationDirPath() + QStringLiteral("/plugins"));
-    const QString zip = root + QStringLiteral("\\agentrmc-bridge.zip");
-    const QString version = pluginupgrade::bundledVersion(
-        QCoreApplication::applicationDirPath() +
-        QStringLiteral("/plugins/agentrmc-bridge"));
-    return QString::fromUtf8(
-               "帮我装或升级本机的 AgentRMC 桌宠联动插件 agentrmc-bridge（内置版本 %3），装好并启用。"
-               "Qoder / Qoder CN：用你手上的 Qoder 设置安装器装本地包 —— install_extension，"
-               "参数 source=local、kind=plugin、filePath=%1；"
-               "国际版和 Qoder CN 是两个独立 app，各装一次，装完重启那个 app 才真加载。"
-               "没有安装器时才手工：侧边栏 扩展 → 插件 → 添加插件 → 上传插件，选同一个 zip。"
-               "ZCode / WorkBuddy：在应用市场添加目录 %2（内含 marketplace.json）。"
-               "装完把两边各自的版本报给我。之后在我等确认或任务结束时用桌宠提醒我。")
-        .arg(zip, root, version.isEmpty() ? QStringLiteral("未知") : version);
+    return pluginupgrade::installSentence(QCoreApplication::applicationDirPath());
 }
 
 class TitleBar final : public QWidget {
@@ -1341,11 +1329,20 @@ QString pluginZipPath() {
            QStringLiteral("/plugins/agentrmc-bridge.zip");
 }
 
+// DeepSeek Harness 的联动插件是一个 bundle 目录（不是 zip）：装的时候由 DSH 里的
+// Agent 拿这个目录去 install_bundle，所以引导话术要给的是目录而不是包。
+QString pluginBundleDir() {
+    return QCoreApplication::applicationDirPath() +
+           QStringLiteral("/plugins/deepseek-harness");
+}
+
 }  // namespace
 
 QJsonObject MainWindow::pluginHealth(QStringList *problems) const {
     QJsonArray rows;
     const QString bundled = pluginupgrade::bundledVersion(pluginSourceDir());
+    const QString bundledBundle =
+        pluginupgrade::bundledBundleVersion(pluginBundleDir());
     const QList<pluginupgrade::Host> hosts =
         pluginupgrade::scanHomes(QDir::homePath());
     for (const pluginupgrade::Host &host : hosts) {
@@ -1406,10 +1403,102 @@ QJsonObject MainWindow::pluginHealth(QStringList *problems) const {
             {QStringLiteral("awaiting_report"), awaiting},
         });
     }
+
+    // 装在宿主 profile 里的 bundle（DeepSeek Harness）：没有注册表，装法、版本来源、
+    // 升级方式都和上面五家不一样，所以单独一组，字段名保持一致好让界面用同一套渲染。
+    QJsonArray bundleRows;
+    for (const pluginupgrade::Bundle &bundle :
+         pluginupgrade::scanBundles(QDir::homePath())) {
+        QString state;
+        if (!bundle.problem.isEmpty()) {
+            state = QString::fromUtf8("读不出");
+            if (problems != nullptr) {
+                problems->append(QString::fromUtf8("%1 插件状态读不出：%2")
+                                     .arg(bundle.name, bundle.problem));
+            }
+        } else if (!bundle.installed) {
+            // 和上面一样：没装是一种状态，不是故障。
+            state = QString::fromUtf8("未装");
+        } else if (bundledBundle.isEmpty()) {
+            state = QString::fromUtf8("安装包没带版本");
+            if (problems != nullptr) {
+                problems->append(QString::fromUtf8(
+                    "安装包里没有 plugins/deepseek-harness/package.json"));
+            }
+        } else if (versionIsNewer(bundledBundle, bundle.version)) {
+            state = QString::fromUtf8("落后");
+            if (problems != nullptr) {
+                problems->append(QString::fromUtf8("%1 插件 %2 → 内置 %3（不代升级）")
+                                     .arg(bundle.name, bundle.version,
+                                          bundledBundle));
+            }
+        } else {
+            state = QString::fromUtf8("已装齐");
+        }
+        // 进程里真在跑的版本：DSH 插件的 /notify 带 plugin_version，title 就是
+        // 「DeepSeek Harness」，所以这个读数一直都在，只是以前没人读。
+        // 注意它是**按宿主名**记的，分不清是哪个 profile 在跑；没装的那个 profile
+        // 再显示这个数就是撒谎，所以只在已装的行上给。
+        const QString loaded =
+            bundle.installed ? pluginLoaded_.value(bundle.name) : QString();
+        const bool staleProcess =
+            state == QString::fromUtf8("已装齐") && !loaded.isEmpty() &&
+            loaded != bundledBundle;
+        if (staleProcess && problems != nullptr) {
+            problems->append(QString::fromUtf8("%1 盘上 %2，进程里还是 %3，重启宿主才生效")
+                                 .arg(bundle.name, bundledBundle, loaded));
+        }
+        const QDateTime lastReport =
+            bundle.installed ? pluginLastReport_.value(bundle.name) : QDateTime();
+        bundleRows.append(QJsonObject{
+            {QStringLiteral("name"), bundle.name},
+            {QStringLiteral("kind"), QStringLiteral("bundle")},
+            {QStringLiteral("profile"), bundle.profile},
+            {QStringLiteral("path"), bundle.path},
+            {QStringLiteral("installed"), bundle.version},
+            {QStringLiteral("loaded"), loaded},
+            {QStringLiteral("enabled"), bundle.enabled},
+            {QStringLiteral("running"), AgentWindow::alive(bundle.exe)},
+            {QStringLiteral("state"), state},
+            {QStringLiteral("last_report"),
+             lastReport.isValid()
+                 ? lastReport.toUTC().toString(Qt::ISODateWithMs)
+                 : QString()},
+            {QStringLiteral("awaiting_report"),
+             bundle.installed && pluginAwaitingReport_.contains(bundle.name)},
+        });
+    }
+
     return QJsonObject{
         {QStringLiteral("bundled"), bundled},
+        {QStringLiteral("bundled_bundle"), bundledBundle},
         {QStringLiteral("hosts"), rows},
+        {QStringLiteral("bundles"), bundleRows},
+        {QStringLiteral("bridges"), pluginBridges()},
     };
+}
+
+// 不走插件包的外部桥（目前只有 OpenSquilla）：它没有插件注册表，也不该参与
+// 「内置版本 vs 已装版本」的对账——硬塞进 kFamily 只会每 5 秒报一次「读不出」。
+// 这里只回答两件事：本机装没装、桥是不是活着（进程在不在）。
+QJsonArray MainWindow::pluginBridges() const {
+    QJsonArray bridges;
+    // OpenSquilla：状态家 ~/.opensquilla，桥脚本自己开机自启，靠 /notify
+    // 与插件走同一条路。判据只认这家的配置家存在，不猜别家。
+    const QString home = QDir::homePath() + QStringLiteral("/.opensquilla");
+    if (QDir(home).exists()) {
+        const bool running = AgentWindow::alive(QStringLiteral("OpenSquilla.exe"));
+        bridges.append(QJsonObject{
+            {QStringLiteral("name"), QStringLiteral("OpenSquilla")},
+            {QStringLiteral("exe"), QStringLiteral("OpenSquilla.exe")},
+            {QStringLiteral("installed"), true},
+            {QStringLiteral("running"), running},
+            {QStringLiteral("kind"), QStringLiteral("bridge")},
+            {QStringLiteral("detail"),
+             QString::fromUtf8("靠外部桥接入，不占插件版本，也不用升级")},
+        });
+    }
+    return bridges;
 }
 
 void MainWindow::upgradePlugins() {
@@ -1434,12 +1523,21 @@ void MainWindow::upgradePlugins() {
             lines << QString::fromUtf8("%1 已 %2").arg(host.name, host.version);
             continue;
         }
+        // WorkBuddy 落后也由它自己的市场源（autoUpdate）去拉：这里只报状态。
+        // 提前把话说清，免得点完以为「WorkBuddy 怎么没动」。
+        if (!host.upgradable) {
+            lines << QString::fromUtf8("%1 落后（%2），由宿主自己更新")
+                         .arg(host.name, host.version);
+            continue;
+        }
         const pluginupgrade::Result result =
             pluginupgrade::upgrade(host, zip, bundled, backupDir);
         if (result.ok) {
             ++upgraded;
-            lines << QString::fromUtf8("%1 %2→%3%4")
-                         .arg(host.name, result.from, result.to,
+            // 用 result.detail 而不是自己拼 from→to：镜像没同步这类附注也挂在
+            // detail 上，自己拼会把它吞掉。
+            lines << QString::fromUtf8("%1 %2%3")
+                         .arg(host.name, result.detail,
                               AgentWindow::alive(host.exe)
                                   ? QString::fromUtf8("（重启该宿主才加载）")
                                   : QString());
@@ -1447,10 +1545,23 @@ void MainWindow::upgradePlugins() {
             lines << QString::fromUtf8("%1 没成：%2").arg(host.name, result.detail);
         }
     }
-    // 只列 Qoder 家族，点完容易让人以为「WorkBuddy 怎么没动」，把边界一起说清。
-    const QString detail =
-        lines.join(QString::fromUtf8(" · ")) +
-        QString::fromUtf8(" · WorkBuddy / ZCode 走市场目录源自动更新，不用点这里");
+    // 五家都在上面走了一遍：能代升级的已经升了，WorkBuddy 只报状态。
+    // DSH 的 bundle 不在这条链里——升它要 pnpm 重装 + 重启 Host，改注册表做不到。
+    // 只把「落后了」这件事说出来，并指向引导里的那句话，免得用户以为按钮漏了它。
+    const QString bundledBundle =
+        pluginupgrade::bundledBundleVersion(pluginBundleDir());
+    for (const pluginupgrade::Bundle &bundle :
+         pluginupgrade::scanBundles(QDir::homePath())) {
+        if (bundle.problem.isEmpty() && bundle.installed &&
+            !bundledBundle.isEmpty() &&
+            versionIsNewer(bundledBundle, bundle.version)) {
+            lines << QString::fromUtf8(
+                         "%1 插件 %2 → %3：不代升级，让 DSH 里的 Agent 重装后再重启 "
+                         "DeepSeek Harness")
+                         .arg(bundle.name, bundle.version, bundledBundle);
+        }
+    }
+    const QString detail = lines.join(QString::fromUtf8(" · "));
     appendEvent(upgraded > 0 ? QStringLiteral("status") : QStringLiteral("error"),
                 QString(), QString(),
                 QString::fromUtf8("联动插件升级：%1").arg(detail), 0);
@@ -1587,42 +1698,122 @@ void MainWindow::refreshSystemPage() {
                                     ? QString::fromUtf8("读不到")
                                     : plugin.value(QStringLiteral("bundled")).toString());
         const QJsonArray rows = plugin.value(QStringLiteral("hosts")).toArray();
-        if (rows.isEmpty()) {
-            text += QString::fromUtf8(" · 本机没有 Qoder 配置家");
+        const QJsonArray bundleRows = plugin.value(QStringLiteral("bundles")).toArray();
+        if (rows.isEmpty() && bundleRows.isEmpty()) {
+            text += QString::fromUtf8(" · 本机没有宿主配置家");
         }
-        for (const QJsonValue &value : rows) {
-            const QJsonObject row = value.toObject();
-            text += QString::fromUtf8(" · %1 %2（%3%4）")
-                        .arg(row.value(QStringLiteral("name")).toString(),
-                             row.value(QStringLiteral("installed"))
-                                 .toString()
-                                 .isEmpty()
-                             ? QString::fromUtf8("未装")
-                             : row.value(QStringLiteral("installed")).toString(),
-                             row.value(QStringLiteral("state")).toString(),
-                             row.value(QStringLiteral("enabled")).toBool()
-                                 ? QString()
-                                 : QString::fromUtf8("·未启用"));
-            // 盘上已装齐但进程还跑旧版：只有 hook 报上来的 loaded 能看出来。
+        // 五家宿主各占一段会把这行撑成一堵墙，而绝大多数时候它们只是「都装齐了」。
+        // 所以按状态分两堆：干净的合并成一句「已同步 A、B、C」，有事的单独说。
+        // DSH 的 bundle 行字段名一样，用同一套规则渲染（未装时说清去哪儿装）。
+        QStringList synced;
+        QStringList pending;
+        auto renderRow = [&](const QJsonObject &row) {
+            const QString name = row.value(QStringLiteral("name")).toString();
+            const bool isBundle =
+                row.value(QStringLiteral("kind")).toString() ==
+                QStringLiteral("bundle");
+            const QString installed =
+                row.value(QStringLiteral("installed")).toString();
+            const QString state = row.value(QStringLiteral("state")).toString();
+            const bool enabled = row.value(QStringLiteral("enabled")).toBool();
+            // 盘上已装齐但进程还跑旧版：只有发通知上报的 loaded 能看出来。
             const QString loaded = row.value(QStringLiteral("loaded")).toString();
-            if (!loaded.isEmpty() &&
-                loaded != row.value(QStringLiteral("installed")).toString()) {
-                text += QString::fromUtf8("·进程 %1").arg(loaded);
+            const bool staleProcess =
+                !loaded.isEmpty() && loaded != installed;
+            const bool awaiting =
+                row.value(QStringLiteral("awaiting_report")).toBool();
+
+            // 只有「装齐 + 启用 + 进程也是这版 + 没在等上报」才算真同步，
+            // 少任何一条都得单独露出来，别被合并吃掉。
+            if (installed.isEmpty()) {
+                pending << (isBundle
+                                ? QString::fromUtf8("%1 插件未装（装法见「使用引导」）")
+                                      .arg(name)
+                                : QString::fromUtf8("%1 未装").arg(name));
+                return;
             }
-            if (row.value(QStringLiteral("awaiting_report")).toBool()) {
-                text += QString::fromUtf8("·等新版上报");
+            if (state == QString::fromUtf8("已装齐") && enabled &&
+                !staleProcess && !awaiting) {
+                synced << (isBundle ? QString::fromUtf8("%1 插件").arg(name) : name);
+                return;
+            }
+            QString line = QString::fromUtf8("%1 %2（%3%4）")
+                               .arg(name, installed, state,
+                                    enabled ? QString()
+                                            : QString::fromUtf8("·未启用"));
+            if (staleProcess) {
+                line += QString::fromUtf8("·进程 %1").arg(loaded);
+            }
+            if (awaiting) {
+                line += QString::fromUtf8("·等新版上报");
+            }
+            pending << line;
+        };
+        for (const QJsonValue &value : rows) {
+            renderRow(value.toObject());
+        }
+        // DSH 的 bundle：多 profile 时只报「装了的那些」（用 profile 名区分）；
+        // 一个都没装才给一行「未装」，否则每个没用过的 profile 都会刷一句。
+        QList<QJsonObject> installedBundles;
+        for (const QJsonValue &value : bundleRows) {
+            const QJsonObject row = value.toObject();
+            if (!row.value(QStringLiteral("installed")).toString().isEmpty()) {
+                installedBundles.append(row);
             }
         }
-        // 这行只列 Qoder 家族，WorkBuddy / ZCode 不在里面是设计如此，不是读漏——
-        // 不写一句，用户只会以为插件状态没被读出来。
-        text += QString::fromUtf8(" · WorkBuddy / ZCode 走市场目录源，自动更新");
+        if (installedBundles.isEmpty() && !bundleRows.isEmpty()) {
+            const QString name = bundleRows.first()
+                                     .toObject()
+                                     .value(QStringLiteral("name"))
+                                     .toString();
+            pending << QString::fromUtf8("%1 插件未装（装法见「使用引导」）").arg(name);
+        }
+        for (const QJsonObject &row : installedBundles) {
+            QJsonObject named = row;
+            const QString profile = row.value(QStringLiteral("profile")).toString();
+            if (bundleRows.size() > 1 && !profile.isEmpty()) {
+                named.insert(QStringLiteral("name"),
+                             QString::fromUtf8("%1（%2）")
+                                 .arg(row.value(QStringLiteral("name")).toString(),
+                                      profile));
+            }
+            renderRow(named);
+        }
+        if (!synced.isEmpty()) {
+            text += QString::fromUtf8(" · 已同步 %1")
+                        .arg(synced.join(QString::fromUtf8("、")));
+        }
+        for (const QString &line : pending) {
+            text += QString::fromUtf8(" · ") + line;
+        }
+        // 外部桥（OpenSquilla）不占插件版本，单独提一句：用户否则会奇怪
+        // “每天在用的那个 Agent 怎么没出现在这行里”。
+        const QJsonArray bridges = plugin.value(QStringLiteral("bridges")).toArray();
+        for (const QJsonValue &value : bridges) {
+            const QJsonObject bridge = value.toObject();
+            const QString name = bridge.value(QStringLiteral("name")).toString();
+            const bool running = bridge.value(QStringLiteral("running")).toBool();
+            text += QString::fromUtf8(" · %1 外部桥（%2）")
+                        .arg(name, running ? QString::fromUtf8("运行中")
+                                           : QString::fromUtf8("未启动"));
+        }
         sysPlugin_->setText(text);
         sysPlugin_->setToolTip(QString::fromUtf8(
-            "这一行只对账 Qoder / Qoder CN：它们把上传的 zip 记成本地插件，"
-            "插件页的「更新」按钮不会去拉新包，所以要这里代劳。\n"
-            "WorkBuddy / ZCode 的市场源是安装目录下的 plugins 目录（目录源 + "
-            "自动更新），宿主自己就会拉到新版，不用点「升级联动插件」——"
-            "AgentRMC 插手反而会和宿主抢插件注册表。\n"
+            "这一行对账 Qoder / Qoder CN / ZCode / WorkBuddy AI / WorkBuddy 五家"
+            "已装的插件，外加装在宿主 profile 里的 DeepSeek Harness；"
+            "版本和内置一致的合并成「已同步」，其余单独列。\n"
+            "Qoder 家族把上传的 zip 记成本地插件，插件页的「更新」按钮不会去拉新包；\n"
+            "ZCode 的目录市场源只在宿主自己重扫时才重新拉，重启宿主并不会重扫，"
+            "所以也会停在旧版——这两类由「升级联动插件」代劳。\n"
+            "WorkBuddy 的市场源条目带 autoUpdate，宿主自己就会拉到新版，"
+            "这里只报状态，不动它的注册表。\n"
+            "DeepSeek Harness 的插件是个 bundle 目录（~/.dsh/profiles/<profile> 里"
+            "一条 link 依赖 + dsh.profile.bundles），没有注册表可改："
+            "升它要 pnpm 重装并重启 Host，所以这里只报盘上版本和进程版本，"
+            "装法是「使用引导 → 接入 AI Agent」里那句给 DSH 的 Agent 的话。\n"
+            "OpenSquilla 不同：它没有插件目录，也不能把插件的 zip 塞进去，走的是"
+            "外部桥（技能目录里的 opensquilla-pet-bridge.mjs）向同一个 45915 端口"
+            "发提醒，所以不占插件版本、也不用升级；只报进程在不在。\n"
             "改完插件重启对应宿主即可；行里的「进程」是此刻真在跑的版本。"));
     }
 
@@ -2080,12 +2271,22 @@ QWidget *MainWindow::buildSystemPage() {
     pluginUpgrade_->setObjectName("ghostSmall");
     pluginUpgrade_->setCursor(Qt::PointingHandCursor);
     pluginUpgrade_->setToolTip(QString::fromUtf8(
-        "只升级 Qoder / Qoder CN 两家已装的插件。\n"
-        "WorkBuddy / ZCode 不用点这里：它们的市场源是安装目录 plugins "
-        "（目录源、自动更新），宿主自己拉新版，重启宿主生效。"));
+        "升级 Qoder / Qoder CN / ZCode 三家已装的插件。\n"
+        "WorkBuddy AI / WorkBuddy 只在这里报状态：它们的市场源带自动更新，"
+        "宿主自己拉新版，重启宿主生效。"));
     connect(pluginUpgrade_, &QPushButton::clicked, this,
             &MainWindow::upgradePlugins);
+    // 装：一句话 + 各家状态。以前只有「复制安装话术」藏在引导页底部，太难找。
+    auto *connectAgent = new QPushButton(QString::fromUtf8("接入 Agent"));
+    connectAgent->setObjectName("ghostSmall");
+    connectAgent->setCursor(Qt::PointingHandCursor);
+    connectAgent->setToolTip(QString::fromUtf8(
+        "一键复制安装话术：粘给任意一个正在干活的 Agent，它自己按所在宿主装好。\n"
+        "顺便看各家装没装、进程里跑的是哪一版。"));
+    connect(connectAgent, &QPushButton::clicked, this,
+            &MainWindow::showAgentBridgeDialog);
     actions->addWidget(refresh);
+    actions->addWidget(connectAgent);
     actions->addWidget(pluginUpgrade_);
     actions->addWidget(openDir);
     actions->addStretch(1);
@@ -2105,6 +2306,7 @@ QWidget *MainWindow::buildGuidePage() {
     auto *scroll = new QScrollArea;
     scroll->setWidgetResizable(true);
     scroll->setFrameShape(QFrame::NoFrame);
+    guideScroll_ = scroll;
     auto *holder = new QWidget;
     holder->setObjectName("guideHolder");
     auto *hl = new QVBoxLayout(holder);
@@ -2132,6 +2334,7 @@ QWidget *MainWindow::buildGuidePage() {
             boxLay->addWidget(guide::row(line.first, line.second, 92));
         }
         cl->addWidget(box);
+        return box;
     };
     const auto addSection = [addSectionQ](const QString &name,
                                           const QVector<Line> &lines) {
@@ -2214,17 +2417,38 @@ QWidget *MainWindow::buildGuidePage() {
                          "转发热键时语音是整个交给前台应用的"},
                 {"不想被抢", "想把「打开剪映」这句话原样打给 Agent，就在「应用」页右下角"
                             "关掉「语音启动」（默认开）"}});
-    addSectionQ(QString::fromUtf8("接入 AI Agent（桌宠提醒）"),
+    guideAgentSection_ = addSectionQ(QString::fromUtf8("接入 AI Agent（桌宠提醒）"),
                {{QString::fromUtf8("自动提醒"),
-                 QString::fromUtf8("在你干活的那个 Agent（Qoder / ZCode / WorkBuddy）里装上 "
-                                   "agentrmc-bridge 插件：等你确认、任务结束时，桌宠冒气泡念一句")},
-                {QString::fromUtf8("怎么装"),
+                 QString::fromUtf8("在你干活的那个 Agent（Qoder / ZCode / WorkBuddy / "
+                                   "DeepSeek Harness / OpenSquilla）里接上：等你确认、"
+                                   "等你选方案、任务结束时，桌宠冒气泡念一句并可以在点气泡时"
+                                   "把窗口拉回来")},
+                {QString::fromUtf8("怎么装（Qoder / ZCode / WorkBuddy）"),
                  QString::fromUtf8("点下面「复制安装话术」，把那句话发给正在干活的 Agent，"
                                    "它自己装好并启用——话术里已经带你本机上的位置")},
+                {QString::fromUtf8("DeepSeek Harness 怎么装"),
+                 QString::fromUtf8("它的插件不是 zip，是一个 bundle 目录（安装目录 plugins 里的 "
+                                   "deepseek-harness）。让 DeepSeek Harness 里的 Agent 用 Plugin "
+                                   "管理器装：plugin_manager → install_bundle，target 指这个目录；"
+                                   "或手工两步：pnpm 把它 link 进 ~/.dsh/profiles/<profile>，"
+                                   "再把 @local/agentrmc-bridge 加进该 profile 的 "
+                                   "dsh.profile.bundles。装完必须重启 DeepSeek Harness，"
+                                   "Host 才会加载新代码。上面那句话里已经带了这条路径，"
+                                   "粘给 DSH 里的 Agent 就行")},
+                {QString::fromUtf8("OpenSquilla 怎么接"),
+                 QString::fromUtf8("它没有插件目录，装不了上面的 zip，走的是外部桥："
+                                   "把技能目录里的 agentrmc-voice-reminder 技能（含 "
+                                   "opensquilla-pet-bridge.mjs）拷到 ~/.agents/skills 下，"
+                                   "再把它加进启动项；桥自己订阅 OpenSquilla 的会话事件，"
+                                   "转成同一个 45915 端口的 /notify。详见 README「OpenSquilla 接入」")},
                 {QString::fromUtf8("自己动手"),
-                 QString::fromUtf8("Qoder：侧边栏 扩展 → 插件 → 添加插件 → 上传插件，选安装目录 "
-                                   "plugins 里的 agentrmc-bridge.zip；ZCode / WorkBuddy："
-                                   "在应用市场添加同一个 plugins 目录")},
+                 QString::fromUtf8("只需要认一个落点——安装目录里的 plugins 目录，"
+                                   "要装的东西全在它里面："
+                                   "Qoder 上传 plugins 里的 agentrmc-bridge.zip；"
+                                   "ZCode / WorkBuddy 把 plugins 目录本身加进应用市场"
+                                   "（它就是目录市场源）；"
+                                   "DeepSeek Harness 用 plugin_manager 装 "
+                                   "plugins 里的 deepseek-harness 子目录")},
                 {QString::fromUtf8("怎么升级"),
                  QString::fromUtf8("Qoder 把上传的包记成本地插件，插件页那个「更新」按钮不拉新包，"
                                    "而且 Qoder 和 Qoder CN 是两个独立 app、各装各的。"
@@ -2237,7 +2461,13 @@ QWidget *MainWindow::buildGuidePage() {
                                    "（目录源、自动更新），宿主自己会拉到新版；"
                                    "改完重启宿主就生效。注意 WorkBuddy 和 WorkBuddy AI "
                                    "是两份独立安装，各读各的配置家（.workbuddy / .workbuddy-ai），"
-                                   "要升就得两家各自刷新")}});
+                                   "要升就得两家各自刷新")},
+                {QString::fromUtf8("DeepSeek Harness 怎么升"),
+                 QString::fromUtf8("也不走「升级联动插件」：它是装在 DSH profile 里的 bundle，"
+                                   "升它要 pnpm 重装 + 重启 Host，改注册表做不到。"
+                                   "让 DSH 里的 Agent 重新 install_bundle 一次"
+                                   "（或把 profile 里那条 link 指到新目录），再重启 DeepSeek Harness；"
+                                   "「系统」页那行的「进程」能看到它此刻真在跑的版本")}});
     addSection(QString::fromUtf8("已知限制"),
                {{"电源 / 音量", "这两个键走红外，电脑收不到，无法映射"},
                 {"未开接管", "遥控器按键仍会原生送达前台，映射动作和原生动作可能同时生效"},
@@ -2468,6 +2698,23 @@ void MainWindow::showGuide() {
             }
             showVoicePanel();
         });
+        // 「进入完整界面」：引导页里现在把它当主按钮——第一次装完看到的是完整界面，
+        // 语音主界面只是一个可选外观，不该是默认落点。
+        connect(guide_, &GuideDialog::mainWindowRequested, this, [this] {
+            store_->setUiBool("voice_mode", false);
+            if (guide_ != nullptr) {
+                guide_->close();
+            }
+            wake();
+        });
+        // 「联动插件」：直接开一键接入弹窗（复制话术 + 各家状态），
+        // 不再把人扔进「使用引导」那一页的长文里自己找。
+        connect(guide_, &GuideDialog::pluginGuideRequested, this, [this] {
+            if (guide_ != nullptr) {
+                guide_->close();
+            }
+            showAgentBridgeDialog();
+        });
         connect(guide_, &GuideDialog::openVoiceSettingsRequested, this, [this] {
             // 引导是置顶窗口，直接开设置会被它挡住：先收起引导，设置关掉再放回来。
             guide_->hide();
@@ -2487,6 +2734,54 @@ void MainWindow::showGuide() {
     }
     guide_->show();
     guide_->raise();
+}
+
+void MainWindow::showAgentBridgeDialog() {
+    if (agentDialog_ == nullptr) {
+        agentDialog_ = new AgentBridgeDialog(this);
+        connect(agentDialog_, &AgentBridgeDialog::openFolderRequested, this,
+                [] {
+                    QDesktopServices::openUrl(QUrl::fromLocalFile(
+                        QCoreApplication::applicationDirPath() +
+                        QStringLiteral("/plugins")));
+                });
+        connect(agentDialog_, &AgentBridgeDialog::detailsRequested, this,
+                [this] {
+                    if (agentDialog_ != nullptr) {
+                        agentDialog_->hide();
+                    }
+                    openPluginGuide();
+                });
+    }
+    QStringList problems;
+    agentDialog_->setData(
+        pluginHealth(&problems), agentBridgeInstallSentence(),
+        QDir::toNativeSeparators(QCoreApplication::applicationDirPath() +
+                                 QStringLiteral("/plugins")));
+    agentDialog_->show();
+    agentDialog_->raise();
+    agentDialog_->activateWindow();
+}
+
+void MainWindow::openPluginGuide() {
+    wake();
+    if (tabs_ != nullptr) {
+        for (int i = 0; i < tabs_->count(); ++i) {
+            if (tabs_->tabText(i).startsWith(QString::fromUtf8("使用引导"))) {
+                tabs_->setCurrentIndex(i);
+                break;
+            }
+        }
+    }
+    if (guideScroll_ == nullptr || guideAgentSection_ == nullptr) {
+        return;
+    }
+    // 等这一帧布局稳定再滚：ensureWidgetVisible 用的是当时的几何，切页当帧还没算完。
+    QTimer::singleShot(0, this, [this] {
+        if (guideScroll_ != nullptr && guideAgentSection_ != nullptr) {
+            guideScroll_->ensureWidgetVisible(guideAgentSection_, 0, 16);
+        }
+    });
 }
 
 void MainWindow::toggleListening() {

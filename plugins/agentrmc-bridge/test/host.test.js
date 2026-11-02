@@ -138,6 +138,50 @@ check('未知变体不空手: 只知是 Qoder 家族时按国际版，绝不退�
   assert.strictEqual(h.source, 'qoder-unknown-variant');
 });
 
+// OpenSquilla 不走插件包，没有注册表可判，只认显式声明与安装路径。
+// 放错位置就会把 Qoder 的窗口拽起来，所以既要能认出来、也不能认错。
+check('OpenSquilla: 环境变量显式声明', () => {
+  const h = resolveHost({
+    scriptDir: '',
+    argv: ['stop'],
+    env: { AGENTRMC_NOTIFY_HOST: 'OpenSquilla' },
+  });
+  assert.deepStrictEqual([h.agent, h.raise, h.source], ['OpenSquilla', 'OpenSquilla.exe', 'opensquilla-env']);
+});
+
+check('OpenSquilla: 装在 ~/.opensquilla 下按路径认', () => {
+  const h = resolveHost({
+    scriptDir: 'C:/Users/PC/.opensquilla/skills/agentrmc/hooks',
+    argv: ['stop'],
+    env: {},
+  });
+  assert.deepStrictEqual([h.agent, h.raise, h.source], ['OpenSquilla', 'OpenSquilla.exe', 'opensquilla-path']);
+  const byEnv = resolveHost({
+    scriptDir: '',
+    argv: ['stop'],
+    env: { OPENSQUILLA_STATE_DIR: 'C:/Users/PC/.opensquilla' },
+  });
+  assert.strictEqual(byEnv.agent, 'OpenSquilla');
+});
+
+check('OpenSquilla: 不误伤别的宿主与普通技能目录', () => {
+  // ~/.agents/skills 是个人技能层，装着大量非宿主技能，不能因为路径就认成 OpenSquilla。
+  const skill = resolveHost({
+    scriptDir: 'C:/Users/PC/.agents/skills/agentrmc-voice-reminder',
+    argv: ['stop'],
+    env: {},
+  });
+  assert.strictEqual(skill.agent, 'ZCode');
+  assert.strictEqual(skill.source, 'zcode');
+  // Qoder 仍然按自己的路径判，不被 OpenSquilla 抢走。
+  const qoder = resolveHost({
+    scriptDir: 'C:/Users/PC/.qoder/plugins/cache/local/agentrmc-bridge/0.3.9/hooks',
+    argv: ['stop'],
+    env: {},
+  });
+  assert.strictEqual(qoder.agent, 'Qoder');
+});
+
 // ------------------------------------------------------- B) 真脚本端到端
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'agentrmc-host-'));
 

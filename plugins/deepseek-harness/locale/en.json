@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "AgentRMC Desktop Pet",
+    "description": "Bubble and voice alerts from the AgentRMC desktop pet when the agent waits for approval, waits for a choice, or finishes a turn, plus pet_notify / pet_speak / pet_state / pet_work_update tools."
+  }
+}

@@ -58,11 +58,16 @@
   内部重构/试验不升。插件跟着同号，不再单独判断「插件该不该升」——但插件**确实改了**
   才跟着升，纯 native 改动不必为了对齐而空升插件。
 - 出包前跑 `native\tools\check-version.ps1`（CMake / NSIS / exe 一致）和
-  `native\tools\sync-plugin-version.ps1 -Check`（五处清单 == VERSION）。
+  `native\tools\sync-plugin-version.ps1 -Check`（六处清单 == VERSION）。
 - 当前批次：Native `0.3.9` / 插件 `0.3.9`。
 - **插件版本只有一个来源**：`plugins/agentrmc-bridge/VERSION`。构建时
-  `native/tools/sync-plugin-version.ps1` 把它同步进 3 个 `plugin.json` 和
-  2 个 `marketplace.json`；改插件版本只改 VERSION 文件，别逐个改清单。
+  `native/tools/sync-plugin-version.ps1` 把它同步进 3 个 `plugin.json`、
+  `plugins/deepseek-harness/package.json`（DSH 版）和 2 个 `marketplace.json`；
+  改插件版本只改 VERSION 文件，别逐个改清单。
+- **两套宿主形态**：`plugins/agentrmc-bridge/` 是 ZCode / WorkBuddy / Qoder 用的
+  hooks + MCP 包（打 zip 分发）；`plugins/deepseek-harness/` 是 DeepSeek Harness 用的
+  Cordis bundle（Host 插件，**不用 zip**，装法是 `plugin_manager` 的 `install_bundle`
+  指向这个目录）。改了 DSH 版要跑 `node plugins\deepseek-harness\test\plugin.test.js`。
 - **别删旧版本号目录**：`~/.qoder(-cn)/plugins/cache/local/agentrmc-bridge/<ver>`
   里的旧那一层，宿主**已经开着的会话**还在按它的路径调 hook（会话启动时路径已烧进
   命令里）。删掉不会报错，只会让那个会话的提醒**静默消失**。Qoder 官方安装器自己会删，

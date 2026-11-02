@@ -46,5 +46,8 @@ native/third_party/
 # ---------- ZCode 工作区 ----------
 .zcode/
 
+# ---------- OpenSquilla 运行时状态（附件缓存等，桥本体在 plugins/opensquilla-bridge）----------
+.opensquilla/
+
 # ---------- 主题生成候选帧（人工挑选素材，不入库）----------
 themes-candidate/

@@ -95,6 +95,8 @@ qt_add_executable(AgentRMCNative
     src/ui/ThemeDialog.h
     src/ui/GuideDialog.cpp
     src/ui/GuideDialog.h
+    src/ui/AgentBridgeDialog.cpp
+    src/ui/AgentBridgeDialog.h
     src/ui/VoiceSettingsDialog.cpp
     src/ui/VoiceSettingsDialog.h
     src/ui/VoicePet.cpp

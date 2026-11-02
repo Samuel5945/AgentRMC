@@ -12,7 +12,7 @@
 
 **关键词**：桌宠 · 桌面宠物 · AI 助理 · 语音助手 · 语音交互 · 离线语音识别 ·
 SenseVoice · Qwen3-ASR · TTS · LLM 对话 · MCP · Claude Code · ZCode · Qoder ·
-WorkBuddy · Qt 6 · C++ · Windows
+WorkBuddy · OpenSquilla · Qt 6 · C++ · Windows
 
 ## 核心特性
 
@@ -20,10 +20,10 @@ WorkBuddy · Qt 6 · C++ · Windows
   语音打开应用；TTS 音色跟随主题（接任意 OpenAI 兼容 TTS，默认小米 MiMo）
 - 🎨 **主题系统**：形象（精灵帧动画 / 圆球）、背景、配色、音色整套切换，
   主题包即拖即用，支持主题轮播
-- 🔔 **AI Agent 联动**：ZCode / Claude Code 等任务完成、等确认时，桌宠自动
+- 🔔 **AI Agent 联动**：ZCode / Qoder / WorkBuddy / DeepSeek Harness / OpenSquilla 等任务完成、等确认时，桌宠自动
   气泡 + 语音提醒；等确认会直接把 Agent 窗口拉回前台，完成提醒点一下气泡再回去
-  （不抢你正在做的事）；MCP 三工具（pet_notify / pet_speak / pet_state）让 Agent
-  汇报进度、让桌宠出声、查桌宠状态
+  （不抢你正在做的事）；MCP 四工具（pet_notify / pet_speak / pet_state /
+  pet_work_update）让 Agent 汇报进度、让桌宠出声、查桌宠状态
 - 🎙️ **语音输入**：本地 SenseVoice（快）/ Qwen3-ASR（准）离线转写 → 粘贴进
   任意应用；云端 ASR 可选；蓝牙耳机播放键当语音开关；也能 0 模型转发 Qoder /
   WorkBuddy 等前台 Agent 自己的语音热键
@@ -513,6 +513,21 @@ Python 线的 `commands.json` 是另一套东西（任意关键词 → `run` / `
 permission / progress / stop 也会兜底归档。
 端口被占用时只是放弃监听，不影响其它功能。
 
+### 装一次就够：接入 Agent
+
+装完安装包，接入走一条路：**「系统」页 →「接入 Agent」**（新手引导里的「联动插件」也
+是同一个弹窗）→ 看一眼各家装没装 → 点「复制安装话术」→ 粘给正在干活的 Agent。
+
+- 一句话覆盖所有宿主（Qoder / Qoder CN / ZCode / WorkBuddy / DeepSeek Harness），
+  Agent 只做自己在的那一行，不用你判断它是什么宿主；
+- 弹窗里直接写着 `安装目录\plugins` 这个落点并可以一键打开——手动装也从这一个目录拿
+  东西：`agentrmc-bridge.zip` 给 Qoder 上传，`plugins` 目录本身给 ZCode / WorkBuddy
+  当目录市场源，`deepseek-harness\` 给 DSH 装；
+- 行首的圆点就是状态：装了显示版本、没装显示「未装」，`进程` 那截是此刻真在跑的版本。
+
+「升级联动插件」只代升 Qoder / Qoder CN / ZCode；WorkBuddy 宿主自己拉，DSH 要
+pnpm 重装 + 重启 Host，都只报状态。
+
 ### ZCode 插件（推荐给其他用户）
 
 `plugins/agentrmc-bridge/` 是打包好的 ZCode 插件（hooks + MCP + skill，全部零依赖
@@ -528,6 +543,27 @@ node 脚本，安装包已带在程序目录 `plugins\` 下）：
 
 安装：ZCode → 插件市场 → 添加 → 选本仓库 `plugins/` 目录（或安装目录里的
 `plugins\`）→ 安装「AgentRMC 桌宠联动」。前提：node 在 PATH、AgentRMC ≥ v0.3.4。
+
+### DeepSeek Harness 插件（0.3.9 起）
+
+`plugins/deepseek-harness/` 是同一套提醒的 **DeepSeek Harness 版**。DSH 没有
+`hooks.json`，扩展单位是 Cordis 插件，所以那份是 Host 插件：从**持久会话事件**旁听
+`approval/asked`（等授权）与 `tool/call` 里的 `ask_user_question`（等选方案），
+监听 `agent/turn-stopping`（一轮结束，并从 `agent/assistant-stream` 取最终回复）；
+四个 `pet_*` 工具注册成原生工具（不再起 MCP 子进程）。走的还是同一个
+`127.0.0.1:45915`。
+
+> 为什么不挂 `approval/request` / `user-questions/request` 这两个瀑布：DSH Web UI 的
+> 应答者本身就是这两个瀑布的监听器，它一作答就不再调 `next()`，排在后面的监听器永远
+> 轮不到——实测桌面端点完选方案，桌宠一声没响、`/notify` 一条没到。会话事件是 emit，
+> 所有监听器都会跑，与原版用 `PreToolUse` 旁听的思路一致。
+
+**App 里认它**：从 `~/.dsh/profiles/<profile>/package.json` 的 link 依赖读盘上版本，
+从它发来的通知读「进程里真在跑的版本」，一起和内置版本对账。
+
+安装：把 `plugins/deepseek-harness` 这个本地目录交给 `plugin_manager` 的
+`install_bundle`（或按该目录 `README.md` 里手工改 profile 的两步），然后重启 DSH。
+改配置改它 `cordis.patch.yml` 里那一行的 `config:`。
 
 ### 手工接入（不用插件时）
 
@@ -546,6 +582,33 @@ hook 脚本在 `native/tools/zcode-hook/agentrmc-notify.js`，复制到固定位
 `curl -X POST http://127.0.0.1:45915/notify -d "{\"event\":\"stop\"}"`
 （注意中文 Windows 终端可能把命令行里的中文转成 GBK 发出，验证气泡文案请用
 ASCII 或 node 脚本）。
+
+### OpenSquilla 接入（外部桥，不是插件）
+
+OpenSquilla **没有插件目录，装不了上面的 zip**：它的扩展单位是 Skill，扩展点是
+网关的 WebSocket 事件流。所以接入方式是一个**外部桥**——订阅网关会话事件，
+转成同一个 45915 端口的 `/notify`，桌宠侧不用改动。
+
+`plugins/opensquilla-bridge/` 里有现成的桥（零依赖 node 脚本 + 开机自启 + 立即
+说话脚本），详细的安装与参数见该目录的 `README.md`。一句话版本：
+
+```powershell
+$dst = "$env:USERPROFILE\.agents\skills\agentrmc-opensquilla-bridge"
+New-Item -ItemType Directory -Force $dst | Out-Null
+Copy-Item plugins\opensquilla-bridge\* $dst -Force
+node "$dst\opensquilla-pet-bridge.mjs" --selftest      # 期望 SELFTEST OK
+Copy-Item "$dst\startup-bridge.vbs" "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup\OpenSquillaPetBridge.vbs"
+```
+
+触发时机：一轮对话结束（`session.event.done`）、等授权（`session.event.approval_required`）、
+等选方案（`session.event.plan_presentation`）——分别对应桌宠的 `stop` 与 `permission`，
+和插件走的是同一条路。
+
+**原生端为什么要改两处**：`AgentWindow::knownExes()` 得认 `OpenSquilla.exe`，否则
+它的待办会进 `/work-items` 却没人认领（`/workers` 里没有它，`open_count` 对不上）；
+而它又**不能**塞进 `PluginUpgrade.cpp` 的 `kFamily`——那张表每一项都指向一个插件
+注册表 JSON，OpenSquilla 没有，硬套只会让「系统」页每 5 秒报一次「读不出」。
+所以它单独走 `pluginHealth` 的 `bridges` 一段：只报装没装、进程在不在，不参与版本对账。
 
 ## 场景 Profile
 

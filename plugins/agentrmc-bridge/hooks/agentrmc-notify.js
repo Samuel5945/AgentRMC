@@ -17,7 +17,6 @@
 'use strict';
 
 const http = require('http');
-const path = require('path');
 
 const PORT = 45915;
 const event = process.argv[2] || 'message';
@@ -50,13 +49,12 @@ process.stdin.on('end', () => {
 
   const tool = hook.tool_name || hook.toolName || '';
   const input = hook.tool_input || hook.toolInput || {};
-  const cwd = hook.cwd || process.env.QODER_PROJECT_DIR || process.env.CLAUDE_PROJECT_DIR || '';
-  const project = cwd ? path.basename(String(cwd)) : '';
 
   let message = '';
   if (event === 'stop') {
-    // 完成走语音：<Agent> 已完成任务 X，等你回来验收。
-    message = project ? `${agent} 已完成任务 ${project}，等你回来验收` : `${agent} 已完成任务，等你回来验收`;
+    // 完成走语音：<Agent> 已完成任务，等你回来验收。不带项目名——气泡上一句
+    // 话越短越好念，项目名对「回来验收」这个动作没有增量信息。
+    message = `${agent} 已完成任务，等你回来验收`;
   } else if (event === 'permission') {
     const detail = String(input.file_path || input.path || input.command || input.url || '');
     const short = detail.length > 60 ? detail.slice(0, 57) + '…' : detail;
@@ -66,10 +64,8 @@ process.stdin.on('end', () => {
     } else {
       message = `等你确认${tool ? ' ' + tool : ''}${short ? '：' + short : ''}`;
     }
-    if (project) message += `【${project}】`;
   } else {
     message = String(hook.message || '有新消息');
-    if (project) message += `【${project}】`;
   }
 
   const payloadObj = { event, title: agent, message };

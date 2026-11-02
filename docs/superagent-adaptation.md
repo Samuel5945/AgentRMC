@@ -1,7 +1,7 @@
 # AgentRMC × DeepSeek Super-agent 优化方案
 
 - 日期：2026-11-02
-- 状态：Phase 0 + Phase 1 已落地（Native 0.3.4 / Plugin 0.3.4）；Phase 2+ 待排期
+- 状态：Phase 0 + Phase 1 已落地；Phase 2 的 Worker 注册表与任务生命周期已落地（Native 0.3.6）；Phase 2 安静策略与 Phase 3 待排期
 - 参考：
   - 文章《Exploring Super-agent Design: Towards a More Autonomous Agent System》
     <https://mp.weixin.qq.com/s/zoS7GlReWPhfCjENGxXCdg>
@@ -193,7 +193,11 @@ AgentRMC 已经有一个「Router 雏形」，但还没有领域模型和持久�
 
 验收：两个宿主各跑一个任务，面板能区分；重启后列表不丢；点条目能拉起正确窗口。
 
-### Phase 2：Worker 注册表 + 任务生命周期（2–3 天）
+### Phase 2：Worker 注册表 + 任务生命周期（2–3 天，Worker 部分已落地）
+
+> 已落地（Native 0.3.6）：`GET /workers`、语音派活建 working 单、permission 合并
+> needs-me、stop 合并 review、progress 更新 working、Worker 状态行与过滤。
+> 安静时段 / per-event 开关仍待排期；语音提醒保持「前台不静音」。
 
 - 监控宿主进程/窗口/最近事件，维护 Worker 列表：`alive / foreground / last_seen / current_work_item`。
 - 语音派活时创建 Work Item（`working`）；stop 时转 `review`；permission/question 转 `needs-me`。

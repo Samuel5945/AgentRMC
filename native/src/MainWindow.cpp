@@ -45,6 +45,8 @@
 #include <QCursor>
 #include <QDesktopServices>
 #include <QGuiApplication>
+#include <QJsonArray>
+#include <QJsonDocument>
 #include <QJsonObject>
 #include <QListWidget>
 #include <QSignalBlocker>
@@ -329,6 +331,17 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
             &MainWindow::showVoicePanel);
     connect(voicePet_, &VoicePet::listenToggleRequested, this,
             &MainWindow::toggleListening);
+    // 语音派活成功：先落一条 working，后续 permission/stop 会合并到同一张卡。
+    connect(voicePet_, &VoicePet::workHandedOff, this,
+            [this](const QString &exe, const QString &text) {
+                if (workItems_ == nullptr) {
+                    return;
+                }
+                workItems_->upsert(QStringLiteral("voice"), exe, QString(),
+                                   QString(), QStringLiteral("voice"),
+                                   AgentWindow::displayName(exe), text, exe);
+                refreshWorkItems();
+            });
     // 桌宠收起时对话回复照常给出：语音面板转写框 + 事件流。
     connect(voicePet_, &VoicePet::chatReplied, this, [this](const QString &text) {
         if (voiceWindow_ != nullptr) {
@@ -400,6 +413,7 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
                 refreshWorkItems();
                 return true;
             });
+            bridge->setWorkersProvider([this] { return workersJson(); });
             connect(bridge, &AgentBridge::notify, this,
                     [this](const QString &kind, const QString &title,
                            const QString &message, const QString &raise,
@@ -409,6 +423,7 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
                         if (workItems_ != nullptr &&
                             (kind == QStringLiteral("permission") ||
                              kind == QStringLiteral("question") ||
+                             kind == QStringLiteral("progress") ||
                              kind == QStringLiteral("stop"))) {
                             workItems_->upsert(QStringLiteral("hook"), raise,
                                                sessionId, project, kind, title,
@@ -757,6 +772,22 @@ QWidget *MainWindow::buildWorkPage() {
     head->addWidget(clear);
     cl->addLayout(head);
 
+    workWorkers_ = new QLabel;
+    workWorkers_->setObjectName("muted");
+    workWorkers_->setWordWrap(true);
+    cl->addWidget(workWorkers_);
+
+    auto *filterRow = new QHBoxLayout;
+    auto *filterLabel = new QLabel(QString::fromUtf8("Worker"));
+    filterLabel->setObjectName("muted");
+    workFilter_ = new QComboBox;
+    workFilter_->setMinimumWidth(150);
+    connect(workFilter_, &QComboBox::currentIndexChanged, this,
+            [this](int) { refreshWorkItems(); });
+    filterRow->addWidget(filterLabel);
+    filterRow->addWidget(workFilter_, 1);
+    cl->addLayout(filterRow);
+
     workEmpty_ = new QLabel(QString::fromUtf8("没有需要你处理的事"));
     workEmpty_->setObjectName("muted");
     workEmpty_->setAlignment(Qt::AlignCenter);
@@ -824,6 +855,42 @@ void MainWindow::refreshWorkItems() {
     const QString selected = selectedWorkId();
     workList_->clear();
 
+    QStringList aliveWorkers;
+    QStringList aliveNames;
+    const QString foreground = AgentWindow::foregroundAgentExe();
+    for (const QString &exe : AgentWindow::knownExes()) {
+        if (!AgentWindow::alive(exe)) {
+            continue;
+        }
+        aliveWorkers.append(exe);
+        QString name = AgentWindow::displayName(exe);
+        if (foreground.compare(exe, Qt::CaseInsensitive) == 0) {
+            name += QString::fromUtf8("（前台）");
+        }
+        aliveNames.append(name);
+    }
+    if (workWorkers_ != nullptr) {
+        workWorkers_->setText(
+            aliveNames.isEmpty()
+                ? QString::fromUtf8("Worker：没有在跑的 Agent")
+                : QString::fromUtf8("Worker：%1")
+                      .arg(aliveNames.join(QString::fromUtf8(" · "))));
+    }
+
+    const QString filterExe =
+        workFilter_ != nullptr ? workFilter_->currentData().toString()
+                               : QString();
+    if (workFilter_ != nullptr) {
+        const QSignalBlocker filterBlock(workFilter_);
+        workFilter_->clear();
+        workFilter_->addItem(QString::fromUtf8("全部 Worker"), QString());
+        for (const QString &exe : aliveWorkers) {
+            workFilter_->addItem(AgentWindow::displayName(exe), exe);
+        }
+        const int index = workFilter_->findData(filterExe);
+        workFilter_->setCurrentIndex(index >= 0 ? index : 0);
+    }
+
     QVector<WorkItem> items = workItems_->items();
     std::sort(items.begin(), items.end(),
               [](const WorkItem &a, const WorkItem &b) {
@@ -853,6 +920,15 @@ void MainWindow::refreshWorkItems() {
     for (const WorkItem &item : items) {
         if (item.done) {
             continue;
+        }
+        if (!filterExe.isEmpty()) {
+            const bool match =
+                item.agentExe.compare(filterExe, Qt::CaseInsensitive) == 0 ||
+                item.title.compare(AgentWindow::displayName(filterExe),
+                                   Qt::CaseInsensitive) == 0;
+            if (!match) {
+                continue;
+            }
         }
         ++open;
         QString stage = QString::fromUtf8("待办");
@@ -908,8 +984,13 @@ void MainWindow::refreshWorkItems() {
     if (open == 0) {
         workList_->hide();
         workEmpty_->show();
-        workEmpty_->setText(QString::fromUtf8("没有需要你处理的事"));
-        workCount_->setText(QString::fromUtf8("没有待处理"));
+        const bool filtered = !filterExe.isEmpty();
+        workEmpty_->setText(
+            filtered ? QString::fromUtf8("这个 Worker 没有待处理")
+                     : QString::fromUtf8("没有需要你处理的事"));
+        workCount_->setText(
+            filtered ? QString::fromUtf8("这个 Worker 没有待处理")
+                     : QString::fromUtf8("没有待处理"));
     } else {
         workEmpty_->hide();
         workList_->show();
@@ -948,6 +1029,64 @@ QString MainWindow::selectedWorkId() const {
     return selected.isEmpty()
                ? QString()
                : selected.first()->data(Qt::UserRole).toString();
+}
+
+QString MainWindow::workersJson() const {
+    QJsonArray workers;
+    const QString foreground = AgentWindow::foregroundAgentExe();
+    for (const QString &exe : AgentWindow::knownExes()) {
+        if (!AgentWindow::alive(exe)) {
+            continue;
+        }
+        int open = 0;
+        int needs = 0;
+        int review = 0;
+        int working = 0;
+        QDateTime last;
+        const QString name = AgentWindow::displayName(exe);
+        if (workItems_ != nullptr) {
+            for (const WorkItem &item : workItems_->items()) {
+                if (item.done) {
+                    continue;
+                }
+                const bool match =
+                    item.agentExe.compare(exe, Qt::CaseInsensitive) == 0 ||
+                    item.title.compare(name, Qt::CaseInsensitive) == 0;
+                if (!match) {
+                    continue;
+                }
+                ++open;
+                if (item.stage == QStringLiteral("needs-me")) {
+                    ++needs;
+                } else if (item.stage == QStringLiteral("review")) {
+                    ++review;
+                } else if (item.stage == QStringLiteral("working")) {
+                    ++working;
+                }
+                if (!last.isValid() || item.updatedAt > last) {
+                    last = item.updatedAt;
+                }
+            }
+        }
+        workers.append(QJsonObject{
+            {QStringLiteral("exe"), exe},
+            {QStringLiteral("name"), name},
+            {QStringLiteral("alive"), true},
+            {QStringLiteral("foreground"),
+             foreground.compare(exe, Qt::CaseInsensitive) == 0},
+            {QStringLiteral("open_items"), open},
+            {QStringLiteral("needs_me"), needs},
+            {QStringLiteral("review"), review},
+            {QStringLiteral("working"), working},
+            {QStringLiteral("last_activity"),
+             last.isValid()
+                 ? last.toUTC().toString(Qt::ISODateWithMs)
+                 : QString()},
+        });
+    }
+    return QString::fromUtf8(
+        QJsonDocument(QJsonObject{{QStringLiteral("workers"), workers}})
+            .toJson(QJsonDocument::Compact));
 }
 
 void MainWindow::raiseWorkItem(const QString &id) {

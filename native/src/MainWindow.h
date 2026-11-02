@@ -63,6 +63,7 @@ private:
     void ackSelectedWork();
     void raiseWorkItem(const QString &id);
     QString selectedWorkId() const;
+    QString workersJson() const;
     void buildTray();
     void checkUpdates(bool manual);
     void onUpdateChecked(const UpdateInfo &info, bool manual);
@@ -102,6 +103,8 @@ private:
     QListWidget *workList_ = nullptr;
     QLabel *workCount_ = nullptr;
     QLabel *workEmpty_ = nullptr;
+    QLabel *workWorkers_ = nullptr;
+    QComboBox *workFilter_ = nullptr;
     QPushButton *workRaise_ = nullptr;
     QPushButton *workDone_ = nullptr;
     QLabel *statusDot_ = nullptr;

@@ -46,11 +46,12 @@ int main(int argc, char *argv[]) {
     const WorkItem second = store.upsert(
         "hook", "WorkBuddyAI.exe", "s1", "D:/repo", "permission",
         "WorkBuddy AI", "等你确认 Write", "WorkBuddyAI.exe", "tool-2");
-    check("a different tool_use_id creates a new item",
-          second.id != first.id && store.items().size() == 2 &&
-              store.attentionCount() == 2);
+    check("a second permission merges into the session's live item",
+          second.id == first.id && store.items().size() == 1 &&
+              second.message == "等你确认 Write" &&
+              store.attentionCount() == 1);
 
-    check("stop resolves the session's pending needs-me items",
+    check("resolveSession closes the live needs-me item",
           store.resolveSession("s1") && store.attentionCount() == 0);
 
     const WorkItem stop = store.upsert(
@@ -64,7 +65,7 @@ int main(int argc, char *argv[]) {
 
     WorkItemStore reloaded(path);
     check("reload keeps items and state",
-          reloaded.load() && reloaded.items().size() == 3 &&
+          reloaded.load() && reloaded.items().size() == 2 &&
               reloaded.attentionCount() == 0);
 
     check("clearFinished removes done items",
@@ -79,6 +80,45 @@ int main(int argc, char *argv[]) {
                                       "WorkBuddyAI.exe");
     check("no event id dedupes a quick retry",
           d1.id == d2.id && dedupe.items().size() == 1);
+
+    WorkItemStore lifecycle(dir.path() + "/lifecycle.json");
+    const WorkItem voice = lifecycle.upsert(
+        "voice", "WorkBuddyAI.exe", "", "", "voice", "WorkBuddy AI",
+        "帮我改一下这个报错", "WorkBuddyAI.exe");
+    check("voice handoff creates a working item",
+          voice.stage == "working" && lifecycle.attentionCount() == 0);
+
+    const WorkItem perm = lifecycle.upsert(
+        "hook", "WorkBuddyAI.exe", "s9", "D:/repo", "permission",
+        "WorkBuddy AI", "等你确认 Bash", "WorkBuddyAI.exe", "p1");
+    check("permission merges into the voice working item",
+          perm.id == voice.id && perm.stage == "needs-me" &&
+              perm.sessionId == "s9" && lifecycle.attentionCount() == 1);
+
+    const WorkItem done = lifecycle.upsert(
+        "hook", "WorkBuddyAI.exe", "s9", "D:/repo", "stop", "WorkBuddy AI",
+        "WorkBuddy AI：改好了", "WorkBuddyAI.exe", "");
+    check("stop merges the same item into review",
+          done.id == voice.id && done.stage == "review" &&
+              lifecycle.attentionCount() == 1);
+
+    WorkItemStore progress(dir.path() + "/progress.json");
+    const WorkItem p1 = progress.upsert(
+        "hook", "WorkBuddyAI.exe", "s10", "D:/repo", "progress",
+        "WorkBuddy AI", "正在跑测试", "WorkBuddyAI.exe", "");
+    const WorkItem p2 = progress.upsert(
+        "hook", "WorkBuddyAI.exe", "s10", "D:/repo", "progress",
+        "WorkBuddy AI", "正在打包", "WorkBuddyAI.exe", "");
+    check("progress updates one working item per session",
+          p1.id == p2.id && p2.stage == "working" &&
+              p2.message == "正在打包" && progress.items().size() == 1);
+
+    const WorkItem pstop = progress.upsert(
+        "hook", "WorkBuddyAI.exe", "s10", "D:/repo", "stop", "WorkBuddy AI",
+        "WorkBuddy AI：完成", "WorkBuddyAI.exe", "");
+    check("stop closes the progress item as review",
+          pstop.id == p1.id && pstop.stage == "review" &&
+              progress.attentionCount() == 1);
 
     std::printf(failures == 0 ? "\nALL PASS\n" : "\n%d FAILED\n", failures);
     return failures == 0 ? 0 : 1;

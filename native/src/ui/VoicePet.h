@@ -86,6 +86,8 @@ signals:
     void chatReplied(const QString &text);
     // 用户点了气泡：把这条提醒对应的宿主窗口拉回前台。
     void bubbleActivated(const QString &raiseExe);
+    // 语音派活成功：主窗落一条 working Work Item。
+    void workHandedOff(const QString &agentExe, const QString &text);
     void voiceFeedbackError(const QString &error);
 
 protected:

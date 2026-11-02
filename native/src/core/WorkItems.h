@@ -48,7 +48,8 @@ public:
     int openCount() const;
 
     bool ack(const QString &id);
-    bool resolveSession(const QString &sessionId);
+    bool resolveSession(const QString &sessionId,
+                        const QString &keepId = QString());
     bool clearFinished();
 
     QString toJson() const;

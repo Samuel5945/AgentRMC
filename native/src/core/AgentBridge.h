@@ -20,6 +20,7 @@ class QTcpSocket;
 //   GET  /state   → 200 + 桌宠状态 JSON（pet_visible/listening/tts_ready/...）
 //   GET  /work-items → 注意力队列 JSON（attention_count / items）
 //   POST /work-items/ack {"id":"..."} → 标记一条待办已处理
+//   GET  /workers → 当前在跑的 Worker 列表（alive / foreground / 待办计数）
 // 纯回环、只此一用；端口被占就放弃监听，不影响主功能。
 class AgentBridge final : public QObject {
     Q_OBJECT
@@ -36,6 +37,8 @@ public:
     void setWorkItemsProvider(std::function<QString()> provider);
     // POST /work-items/ack 的处理器；返回 false 表示 id 不存在。
     void setWorkItemAckHandler(std::function<bool(const QString &)> handler);
+    // GET /workers 的应答来源。
+    void setWorkersProvider(std::function<QString()> provider);
 
 signals:
     // kind：/notify 透传 event 字段；/speak 固定为 "speak"。
@@ -60,4 +63,5 @@ private:
     std::function<QString()> stateProvider_;
     std::function<QString()> workItemsProvider_;
     std::function<bool(const QString &)> workItemAckHandler_;
+    std::function<QString()> workersProvider_;
 };

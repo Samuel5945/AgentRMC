@@ -49,6 +49,9 @@ QString WorkItemStore::stageForKind(const QString &kind) {
     if (kind == QStringLiteral("progress")) {
         return QStringLiteral("working");
     }
+    if (kind == QStringLiteral("voice")) {
+        return QStringLiteral("working");
+    }
     return QStringLiteral("info");
 }
 
@@ -128,7 +131,60 @@ WorkItem WorkItemStore::upsert(const QString &source, const QString &agentExe,
     const QDateTime now = QDateTime::currentDateTimeUtc();
     const QString stage = stageForKind(kind);
 
-    // stop 说明这一轮结束：同 session 还挂着的 needs-me 已经过期。
+    // 生命周期合并：同一 session（或同一 Agent 的近期 working 项）上来了
+    // permission/question/stop，就更新原工单，而不是再长一张卡片。
+    if (kind == QStringLiteral("permission") ||
+        kind == QStringLiteral("question") || kind == QStringLiteral("stop") ||
+        kind == QStringLiteral("progress")) {
+        const int windowSecs = sessionId.isEmpty() ? 300 : 1800;
+        const QDateTime cutoff = now.addSecs(-windowSecs);
+        WorkItem *target = nullptr;
+        for (WorkItem &item : items_) {
+            if (item.done || item.updatedAt < cutoff) {
+                continue;
+            }
+            if (item.stage != QStringLiteral("working") &&
+                item.stage != QStringLiteral("needs-me")) {
+                continue;
+            }
+            const bool sameSession = !sessionId.isEmpty() &&
+                                     item.sessionId == sessionId;
+            const bool sameAgent =
+                !agentExe.isEmpty() &&
+                item.agentExe.compare(agentExe, Qt::CaseInsensitive) == 0;
+            const bool sameTitle =
+                !title.isEmpty() &&
+                item.title.compare(title, Qt::CaseInsensitive) == 0;
+            const bool loose = item.sessionId.isEmpty() || sessionId.isEmpty();
+            if (sameSession || (loose && (sameAgent || sameTitle))) {
+                target = &item;
+                break;
+            }
+        }
+        if (target != nullptr) {
+            const bool wasAttention = isAttentionStage(target->stage);
+            target->kind = kind;
+            target->stage = stage;
+            target->title = title;
+            target->message = message;
+            target->raiseExe = raiseExe;
+            target->project = project;
+            if (target->sessionId.isEmpty() && !sessionId.isEmpty()) {
+                target->sessionId = sessionId;
+            }
+            target->updatedAt = now;
+            if (!wasAttention && isAttentionStage(stage)) {
+                target->attentionSince = now;
+            }
+            if (kind == QStringLiteral("stop") && !sessionId.isEmpty()) {
+                resolveSession(sessionId, target->id);
+            }
+            save();
+            return *target;
+        }
+    }
+
+    // 没有可合并的工单：stop 仍然要把同 session 其它 needs-me 收掉。
     if (kind == QStringLiteral("stop") && !sessionId.isEmpty()) {
         resolveSession(sessionId);
     }
@@ -222,14 +278,15 @@ bool WorkItemStore::ack(const QString &id) {
     return false;
 }
 
-bool WorkItemStore::resolveSession(const QString &sessionId) {
+bool WorkItemStore::resolveSession(const QString &sessionId,
+                                   const QString &keepId) {
     if (sessionId.isEmpty()) {
         return false;
     }
     bool changed = false;
     const QDateTime now = QDateTime::currentDateTimeUtc();
     for (WorkItem &item : items_) {
-        if (!item.done && item.sessionId == sessionId &&
+        if (!item.done && item.id != keepId && item.sessionId == sessionId &&
             item.stage == QStringLiteral("needs-me")) {
             item.done = true;
             item.stage = QStringLiteral("done");

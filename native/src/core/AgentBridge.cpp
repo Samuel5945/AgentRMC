@@ -55,6 +55,10 @@ void AgentBridge::setWorkItemAckHandler(
     workItemAckHandler_ = std::move(handler);
 }
 
+void AgentBridge::setWorkersProvider(std::function<QString()> provider) {
+    workersProvider_ = std::move(provider);
+}
+
 void AgentBridge::onConnected() {
     while (server_->hasPendingConnections()) {
         auto *socket = server_->nextPendingConnection();
@@ -102,6 +106,12 @@ void AgentBridge::onReadable(QTcpSocket *socket) {
                                   : QStringLiteral(
                                         "{\"attention_count\":0,\"items\":[]}");
         finish(socket, "200 OK", items.toUtf8(), "application/json");
+        return;
+    }
+    if (requestLine.startsWith("GET /workers ")) {
+        const QString workers =
+            workersProvider_ ? workersProvider_() : QStringLiteral("{\"workers\":[]}");
+        finish(socket, "200 OK", workers.toUtf8(), "application/json");
         return;
     }
     const bool isNotify = requestLine.startsWith("POST /notify ");

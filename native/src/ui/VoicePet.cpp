@@ -642,6 +642,7 @@ bool VoicePet::handOffToAgent(const QString &text, const QString &exe) {
             return true;
         }
         bubbleOnly(QString::fromUtf8("已交给 %1").arg(shortName), 4200, exe);
+        emit workHandedOff(exe, text);
         return true;
     }
     // 先把宿主窗口拉到前台：直接粘会落进用户原本待着的窗口里。
@@ -656,6 +657,7 @@ bool VoicePet::handOffToAgent(const QString &text, const QString &exe) {
             return;
         }
         bubbleOnly(QString::fromUtf8("已交给 %1").arg(shortName), 4200, exe);
+        emit workHandedOff(exe, text);
     });
     return true;
 }

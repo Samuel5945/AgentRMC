@@ -2,10 +2,11 @@
 
 把 [AgentRMC](https://github.com/AgentRMC/Agentrmc) 桌宠接进你的 Agent：
 
-- **自动提醒（hooks）**：Agent 需要确认工具调用（PermissionRequest）时桌宠气泡 +
-  TTS 语音提醒（方案选择会念「等你选方案」），并把该 Agent 主窗口拉到前台；一轮
-  回答结束（Stop）时桌宠念「X 已完成…」同样拉前台（任务一般很长，完成值得出声）。
-  AgentRMC 没开就静默跳过（<100ms），不拖慢会话。
+- **自动提醒（hooks）**：三类提醒都出声并把该 Agent 主窗口拉到前台——等工具授权
+  （`PermissionRequest`，念「等你确认 Bash：命令…」）、等选方案（念「等你选方案」；
+  Qoder 里走 `PreToolUse` + `matcher:"AskUserQuestion"`，见下）、一轮回答结束
+  （`Stop`，念「X 已完成任务，等你回来验收」）。AgentRMC 没开就静默跳过（<100ms），
+  不拖慢会话。
 - **主动交互（MCP）**：三个工具——`pet_notify`（阶段进度气泡）、`pet_speak`
   （让桌宠 TTS 说一句话）、`pet_state`（查桌宠状态），配 `agentrmc-pet` skill
   教模型何时用、怎么不刷屏。
@@ -14,12 +15,48 @@
 
 ## 宿主差异
 
-|              | ZCode                              | Qoder                                          |
-| ------------ | ---------------------------------- | ---------------------------------------------- |
-| 清单         | `.zcode-plugin/plugin.json`        | `.qoder-plugin/plugin.json`                    |
-| hooks 配置   | `hooks/hooks.json`（manifest 给目录）| `hooks-qoder/hooks.json`（manifest 要给到 .json 文件）|
-| 拉前台       | 原生端缺省找 `ZCode.exe`           | hook 传 `raise: "Qoder CN.exe"`，按它找窗口    |
-| 宿主署名     | 缺省 ZCode                         | argv + `AGENTRMC_NOTIFY_HOST=Qoder`（气泡署名）|
+**Qoder 和 Qoder CN 是两个独立 app**：各自的配置家（`~/.qoder` 与 `~/.qoder-cn`）、各自的插件注册表、
+不同的进程映像名（`Qoder.exe` 与 `Qoder CN.exe`）。在一个里装好，另一个不会自动有；同一个 zip
+两边通用，装完各落各家。
+
+|              | ZCode                                | WorkBuddy                            | Qoder                                | Qoder CN                             |
+| ------------ | ------------------------------------ | ------------------------------------ | ------------------------------------ | ------------------------------------ |
+| 清单         | `.zcode-plugin/plugin.json`          | `.codebuddy-plugin/plugin.json`      | `.qoder-plugin/plugin.json`          | 同 Qoder（装在 `~/.qoder-cn`）       |
+| hooks 配置   | `hooks/hooks.json`（manifest 给目录）| 与 ZCode 共用根 `hooks/`             | `hooks-qoder/hooks.json`（要给到 .json 文件）| 同 Qoder                    |
+| 拉前台       | 原生端缺省找 `ZCode.exe`             | 自检兜底 `WorkBuddyAI.exe`           | 自检 → `Qoder.exe`                   | 自检 → `Qoder CN.exe`                |
+| 宿主署名     | 缺省 ZCode                           | 按环境变量认 WorkBuddy               | 自检 → 气泡念「Qoder」               | 自检 → 气泡念「Qoder CN」            |
+
+### 署名与拉前台靠自检，不写死
+
+0.2.0 把 Qoder 那份 hooks 的 `raise` 写死成 `Qoder CN.exe`，于是在国际版里桌宠会把**另一个 app**
+的窗口拽到前台；手工改已装副本又会被下一次更新/重装覆盖回去。0.3.0 起 `lib/host.js` 自己认宿主，
+判据按可靠性排序：
+
+1. argv 显式给了「宿主名 + 进程映像名」→ 照办（老的手写配置行为不变）；
+2. 脚本自身安装路径落在哪个配置家（每个 app 只会把插件解到自己的 `~/.qoder(-cn)/plugins/cache/` 下，
+   这是最硬的证据，不依赖宿主注入什么）；
+3. 宿主注入的 `QODER_CONFIG_DIR` / `QODERCN_CONFIG_DIR` / `QODER_PLUGIN_ROOT` / `QODER_PRODUCT_ID`；
+4. 认不出变体但确认是 Qoder 家族 → 按国际版（绝不退化成去找 `ZCode.exe`）；都不是才按 ZCode / WorkBuddy。
+
+原生端按进程映像名**精确**匹配窗口，`Qoder.exe` 不会误命中 `Qoder CN.exe`，两个 app 各拉各的窗。
+`AGENTRMC_DRY_RUN=1` 让 hook 只打印将要发送的 payload（含判定来源 `source`）而不真发，用来验判据。
+
+### 提醒分别走哪些事件
+
+| 提醒       | Qoder / Qoder CN                                  | ZCode / WorkBuddy                     |
+| ---------- | ------------------------------------------------- | ------------------------------------- |
+| 等工具授权 | `PermissionRequest`                               | `PermissionRequest`                   |
+| 等选方案   | `PreToolUse` + `matcher:"AskUserQuestion"`        | `PermissionRequest`（tool_name 命中） |
+| 一轮结束   | `Stop`                                            | `Stop`                                |
+
+「等选方案」在 Qoder 里必须挂 `PreToolUse`：拿 `~/.qoder/logs/runs/<run>/qodercli.log` 的
+`hook.started` 对账实测，Qoder 对 `AskUserQuestion` **不发** `PermissionRequest`（只有一条
+`source="runtime"` 的 SDK `PreToolUse:AskUserQuestion`），所以 0.2.0 里那个按 `tool_name`
+判定的分支在这条链路上永远进不去——桌宠选方案时不出声就是这么来的。脚本收到 `question`
+后仍按 `permission` 发给原生端：原生端只对 `stop` / `permission` 出语音并拉前台
+（`MainWindow.cpp` 的 notify 分支），别的 kind 只冒气泡，这样不用动原生。`matcher` 万一不被
+宿主执行，脚本会再判一次 `tool_name`，认不出来直接静默——`PreToolUse` 每个工具都触发，
+宁可少一条也不能把提醒刷成屏。
 
 Qoder 同时导出 `${QODER_PLUGIN_ROOT}` 和 `${CLAUDE_PLUGIN_ROOT}`，也认 manifest 里的
 `mcpServers`，所以只有清单目录名和 hooks 那份必须分开。两条链路的 hook 事件名一致
@@ -40,10 +77,12 @@ Qoder 同时导出 `${QODER_PLUGIN_ROOT}` 和 `${CLAUDE_PLUGIN_ROOT}`，也认 m
 
 - **ZCode**：应用市场添加本地目录（本仓库 `plugins/`，内含 `marketplace.json`），
   安装「AgentRMC 桌宠联动」即可；hooks 与 MCP 随插件自动生效。
-- **Qoder Desktop**：侧边栏 扩展 → 插件 → 添加插件 → 上传插件（ZIP）。Desktop 只有
-  「官方市场」和「本地 ZIP」两种来源，不认「本地目录市场源」（那条路只有 CLI 的代码
-  里在找 `marketplace.json`）。把 `plugins/agentrmc-bridge/` 打成 zip 上传即可，
-  装完落在 `~/.qoder-cn/plugins/cache/local/agentrmc-bridge/<version>`。
+- **Qoder Desktop**（国际版与 Qoder CN 各装一次）：侧边栏 扩展 → 插件 → 添加插件 → 上传插件（ZIP）。
+  Desktop 只有「官方市场」和「本地 ZIP」两种来源，不认「本地目录市场源」（那条路只有 CLI 的代码
+  里在找 `marketplace.json`）。把 `plugins/agentrmc-bridge/` 打成 zip 上传即可，装完落在
+  `~/.qoder/plugins/cache/local/agentrmc-bridge/<version>`（Qoder CN 落在 `~/.qoder-cn/...`）。
+  两个 app 的注册表互不相干，**在一个里装好另一个仍然没有**；装对之后两边的气泡署名和拉前台
+  目标都由自检给出，不用再改任何文件。
 - 打 Qoder 用的 zip 有两个坑：条目名必须用 `/` 分隔（PowerShell `Compress-Archive`
   写成 `\`，Qoder 解不出清单，会报 `EXTENSION_PLUGIN_VALIDATION_FAILED`）；manifest 的
   `hooks` 要指到 `./hooks-qoder/hooks.json` 这个文件，给目录报 `Path must end with .json`。
@@ -54,9 +93,12 @@ Qoder 同时导出 `${QODER_PLUGIN_ROOT}` 和 `${CLAUDE_PLUGIN_ROOT}`，也认 m
 
 ## 文件
 
-- `.zcode-plugin/plugin.json`、`.qoder-plugin/plugin.json`：两个宿主各自的清单；
+- `.zcode-plugin/plugin.json`、`.qoder-plugin/plugin.json`、`.codebuddy-plugin/`：各宿主自己的清单；
 - `hooks/hooks.json`、`hooks-qoder/hooks.json`：各自的 hook 注册；
-- `hooks/agentrmc-notify.js`：共用的通知脚本，`argv[3]` 给宿主署名、`argv[4]` 给
-  要拉前台的进程映像名；不给就按环境变量认 ZCode / WorkBuddy；
+- `hooks/agentrmc-notify.js`：共用的通知脚本（argv 可给宿主署名和要拉前台的进程映像名，
+  一般不给，由自检决定）；
+- `lib/host.js`：宿主自检（判据见上），hooks 与 MCP server 共用；
 - `mcp/server.js`：stdio MCP server（pet_notify / pet_speak / pet_state）；
-- `skills/agentrmc-pet/SKILL.md`：模型使用指南。
+- `skills/agentrmc-pet/SKILL.md`：模型使用指南；
+- `test/host.test.js`：`node test/host.test.js`，11 个用例覆盖四种宿主 + 两个 Qoder 变体的
+  端到端判定（会把插件树复制到假装的 `~/.qoder` / `~/.qoder-cn` 里跑真脚本）。

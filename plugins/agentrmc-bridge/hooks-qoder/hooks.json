@@ -9,11 +9,27 @@
             "command": "node",
             "args": [
               "${QODER_PLUGIN_ROOT}/hooks/agentrmc-notify.js",
-              "permission",
-              "Qoder",
-              "Qoder CN.exe"
+              "permission"
             ],
             "name": "agentrmc-notify-permission",
+            "timeout": 3
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "async": true,
+        "matcher": "AskUserQuestion",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": [
+              "${QODER_PLUGIN_ROOT}/hooks/agentrmc-notify.js",
+              "question"
+            ],
+            "name": "agentrmc-notify-question",
             "timeout": 3
           }
         ]
@@ -28,9 +44,7 @@
             "command": "node",
             "args": [
               "${QODER_PLUGIN_ROOT}/hooks/agentrmc-notify.js",
-              "stop",
-              "Qoder",
-              "Qoder CN.exe"
+              "stop"
             ],
             "name": "agentrmc-notify-stop",
             "timeout": 3

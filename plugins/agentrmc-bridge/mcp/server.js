@@ -5,15 +5,22 @@
 //   pet_notify  阶段进度/自定义提示 → 桌宠气泡（不出声；收起时走托盘）
 //   pet_speak   让桌宠说一句话     → 气泡 + TTS 朗读
 //   pet_state   查桌宠状态（可见/监听/录音/转写/对话模式/TTS 就绪）
-// 权限确认与任务完成的提醒由本插件的 hook 自动完成，不要用 pet_notify 重复发。
+// 等授权、等选方案、任务完成的提醒由本插件的 hook 自动完成，不要用 pet_notify 重复发。
 "use strict";
 
 const http = require("http");
+const { resolveHost } = require("../lib/host");
 
 const PORT = Number(process.env.AGENTRMC_BRIDGE_PORT || 45915);
 const HOST = "127.0.0.1";
-// 气泡署名跟随宿主 Agent（与 hook 用同一个环境变量），别在 Qoder 里念成 ZCode。
-const AGENT = process.env.AGENTRMC_NOTIFY_HOST || "ZCode";
+// 气泡署名跟随宿主 Agent（与 hook 用同一套自检），别在 Qoder 里念成 ZCode，
+// 也别把 Qoder CN 念成国际版那个 Qoder。环境变量显式给了仍以给的为准。
+const HOST_INFO = resolveHost({
+  scriptDir: __dirname,
+  argv: [],
+  env: process.env,
+});
+const AGENT = HOST_INFO.agent;
 
 function post(route, payload) {
   return new Promise((resolve, reject) => {
@@ -68,7 +75,7 @@ const TOOLS = [
     name: "pet_notify",
     description:
       "在 AgentRMC 桌宠上冒一条气泡提示（不出声）。适合长任务的阶段进度、" +
-      "中途发现的重要信息等非阻塞提醒；权限确认与任务完成的提醒由 hook 自动发，" +
+      "中途发现的重要信息等非阻塞提醒；等授权、等选方案、任务完成的提醒由 hook 自动发，" +
       "不要用这个工具重复发。message 一句话以内，太长的信息用户来不及看。",
     inputSchema: {
       type: "object",
@@ -188,4 +195,6 @@ process.stdin.on("data", (d) => {
   }
 });
 process.stdin.on("end", () => process.exit(0));
-console.error(`[agentrmc-mcp] ready | bridge ${HOST}:${PORT}`);
+console.error(
+  `[agentrmc-mcp] ready | bridge ${HOST}:${PORT} | host ${AGENT} (${HOST_INFO.source})`,
+);

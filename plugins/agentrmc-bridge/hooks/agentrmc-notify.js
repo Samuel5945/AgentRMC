@@ -1,11 +1,17 @@
 #!/usr/bin/env node
 // Agent hook → AgentRMC 桌宠通知桥。
-// 宿主的 PermissionRequest（等确认）和 Stop（一轮结束）hook 调它：
-//   node agentrmc-notify.js permission [Agent名] [窗口进程名]
-//   node agentrmc-notify.js stop       [Agent名] [窗口进程名]
-// 后两个参数省略时按环境变量认宿主（ZCode 的 hooks.json 保持原样不改）；Qoder 那份
-// hooks.json 传 `Qoder` + `Qoder CN.exe`——原生端只按 raise 给的进程映像名找窗口，
-// 不给就退回找 ZCode.exe。
+// 宿主的 hook 调它：
+//   node agentrmc-notify.js permission [Agent名] [窗口进程名]   ← 工具等授权
+//   node agentrmc-notify.js question   [Agent名] [窗口进程名]   ← AskUserQuestion 等选方案
+//        （Qoder 把 AskUserQuestion 走 PreToolUse 而非 PermissionRequest，所以单独
+//          一个事件名，payload 里仍按 permission 发——原生只对 stop/permission 出声）
+//   node agentrmc-notify.js stop       [Agent名] [窗口进程名]   ← 一轮结束
+// 后两个参数**现在一般不用传**：宿主名和要拉前台的进程映像名由 lib/host.js 自检
+// （脚本装在哪个配置家就是哪个宿主，Qoder 国际版 → Qoder.exe，Qoder CN →
+// Qoder CN.exe，不传则按环境变量认 WorkBuddy / ZCode）。显式传了以传的为准，
+// 老的手写配置行为不变。原生端只按 raise 给的进程映像名找窗口，不给就退回找
+// ZCode.exe。
+// AGENTRMC_DRY_RUN=1 只打印将要发送的 payload 不真发，供测试矩阵断言用。
 // stdin 是 hook 事件 JSON（可能为空），脚本从中挑有用的字段拼文案，
 // 一律 POST /notify，事件类型原样交给原生端决定怎么提醒：
 //   permission → 气泡 + TTS 念出来 + 把 Agent 主窗口拉到前台；
@@ -17,22 +23,19 @@
 'use strict';
 
 const http = require('http');
+const { resolveHost } = require('../lib/host');
 
 const PORT = 45915;
+const DRY_RUN = process.env.AGENTRMC_DRY_RUN === '1';
 const event = process.argv[2] || 'message';
-// 宿主标识：argv 传的优先（Qoder 那份 hooks.json 显式给 Qoder + 进程名），没传
-// 就按环境变量认 ZCode / WorkBuddy——两者共用 ./hooks，气泡标题和语音里别把
-// 对方叫成自己。
-const agent =
-  process.argv[3] ||
-  process.env.AGENTRMC_NOTIFY_HOST ||
-  (process.env.WORKBUDDY_APP_VERSION || process.env.CLIENT_INFO_PRODUCT_NAME === 'WorkBuddy'
-    ? 'WorkBuddy'
-    : 'ZCode');
-// 拉前台的进程映像名：argv 传的优先（Qoder 那份 hooks.json 显式给 Qoder CN.exe）；
-// WorkBuddy 那份 hooks.json 与 ZCode 共用（根 hooks 目录会被 WorkBuddy 自动加载，
-// 再声明一份会重复触发），所以按宿主兜底进程名，否则原生端只会去找 ZCode.exe。
-const raise = process.argv[4] || (agent === 'WorkBuddy' ? 'WorkBuddyAI.exe' : '');
+const host = resolveHost({
+  scriptDir: __dirname,
+  argv: process.argv.slice(2),
+  env: process.env,
+});
+const agent = host.agent;
+// 拉前台的进程映像名：Qoder 两个变体靠自检区分，别写死成其中一个。
+const raise = host.raise;
 
 let raw = '';
 process.stdin.setEncoding('utf8');
@@ -51,15 +54,28 @@ process.stdin.on('end', () => {
   const input = hook.tool_input || hook.toolInput || {};
 
   let message = '';
+  // 发给原生端的事件类型：原生端只对 stop / permission 出语音并把窗口拉回前台
+  // （MainWindow.cpp 的 notify 分支），其它 kind 只冒气泡。所以 question 复用
+  // permission 通道，别在原生端加新类型。
+  let outEvent = event;
   if (event === 'stop') {
     // 完成走语音：<Agent> 已完成任务，等你回来验收。不带项目名——气泡上一句
     // 话越短越好念，项目名对「回来验收」这个动作没有增量信息。
     message = `${agent} 已完成任务，等你回来验收`;
+  } else if (event === 'question') {
+    // 「等你选方案」：实测 Qoder 把 AskUserQuestion 当**普通工具**走 PreToolUse
+    // （hook.started 只有 source=runtime 的 SDK 记录，PermissionRequest 根本没发），
+    // 所以这条挂在 hooks-qoder 的 PreToolUse + matcher:"AskUserQuestion" 上。
+    // matcher 万一不被宿主执行，这里再判一次 tool_name 兜底——PreToolUse 每个工具
+    // 都会触发，认不出来就静默，绝不能把授权提醒刷成屏。
+    if (tool !== 'AskUserQuestion') process.exit(0);
+    outEvent = 'permission';
+    message = '等你选方案';
   } else if (event === 'permission') {
     const detail = String(input.file_path || input.path || input.command || input.url || '');
     const short = detail.length > 60 ? detail.slice(0, 57) + '…' : detail;
     if (tool === 'AskUserQuestion') {
-      // 方案选择对人是「选哪个」，念中文比念工具名顺。
+      // 少数宿主会把方案选择当成授权请求；念中文比念工具名顺。
       message = '等你选方案';
     } else {
       message = `等你确认${tool ? ' ' + tool : ''}${short ? '：' + short : ''}`;
@@ -68,9 +84,14 @@ process.stdin.on('end', () => {
     message = String(hook.message || '有新消息');
   }
 
-  const payloadObj = { event, title: agent, message };
+  const payloadObj = { event: outEvent, title: agent, message };
   if (raise) payloadObj.raise = raise;
   const payload = JSON.stringify(payloadObj);
+  if (DRY_RUN) {
+    // 测试用：把判据一起吐出来，好断言「哪个宿主 → 拉哪个窗」。
+    console.log(JSON.stringify({ dry_run: true, source: host.source, payload: payloadObj }));
+    process.exit(0);
+  }
   const req = http.request(
     {
       host: '127.0.0.1',

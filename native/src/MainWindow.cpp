@@ -1445,7 +1445,10 @@ void MainWindow::upgradePlugins() {
             lines << QString::fromUtf8("%1 没成：%2").arg(host.name, result.detail);
         }
     }
-    const QString detail = lines.join(QString::fromUtf8(" · "));
+    // 只列 Qoder 家族，点完容易让人以为「WorkBuddy 怎么没动」，把边界一起说清。
+    const QString detail =
+        lines.join(QString::fromUtf8(" · ")) +
+        QString::fromUtf8(" · WorkBuddy / ZCode 走市场目录源自动更新，不用点这里");
     appendEvent(upgraded > 0 ? QStringLiteral("status") : QStringLiteral("error"),
                 QString(), QString(),
                 QString::fromUtf8("联动插件升级：%1").arg(detail), 0);
@@ -1608,7 +1611,17 @@ void MainWindow::refreshSystemPage() {
                 text += QString::fromUtf8("·等新版上报");
             }
         }
+        // 这行只列 Qoder 家族，WorkBuddy / ZCode 不在里面是设计如此，不是读漏——
+        // 不写一句，用户只会以为插件状态没被读出来。
+        text += QString::fromUtf8(" · WorkBuddy / ZCode 走市场目录源，自动更新");
         sysPlugin_->setText(text);
+        sysPlugin_->setToolTip(QString::fromUtf8(
+            "这一行只对账 Qoder / Qoder CN：它们把上传的 zip 记成本地插件，"
+            "插件页的「更新」按钮不会去拉新包，所以要这里代劳。\n"
+            "WorkBuddy / ZCode 的市场源是安装目录下的 plugins 目录（目录源 + "
+            "自动更新），宿主自己就会拉到新版，不用点「升级联动插件」——"
+            "AgentRMC 插手反而会和宿主抢插件注册表。\n"
+            "改完插件重启对应宿主即可；行里的「进程」是此刻真在跑的版本。"));
     }
 
     QStringList problems = pluginProblems;
@@ -1948,6 +1961,10 @@ QWidget *MainWindow::buildSystemPage() {
     pluginUpgrade_ = new QPushButton(QString::fromUtf8("升级联动插件"));
     pluginUpgrade_->setObjectName("ghostSmall");
     pluginUpgrade_->setCursor(Qt::PointingHandCursor);
+    pluginUpgrade_->setToolTip(QString::fromUtf8(
+        "只升级 Qoder / Qoder CN 两家已装的插件。\n"
+        "WorkBuddy / ZCode 不用点这里：它们的市场源是安装目录 plugins "
+        "（目录源、自动更新），宿主自己拉新版，重启宿主生效。"));
     connect(pluginUpgrade_, &QPushButton::clicked, this,
             &MainWindow::upgradePlugins);
     actions->addWidget(refresh);
@@ -2095,7 +2112,14 @@ QWidget *MainWindow::buildGuidePage() {
                                    "而且 Qoder 和 Qoder CN 是两个独立 app、各装各的。"
                                    "升级去「系统」页看「联动插件」那一行：落后的话点"
                                    "「升级联动插件」，两家一起指到内置版本；改完要重启对应的 "
-                                   "app 才真加载新代码（那行里的「进程」就是此刻真在跑的版本）")}});
+                                   "app 才真加载新代码（那行里的「进程」就是此刻真在跑的版本）")},
+                {QString::fromUtf8("WorkBuddy 怎么升"),
+                 QString::fromUtf8("不用点「升级联动插件」——那个按钮只认 Qoder 家族。"
+                                   "WorkBuddy / ZCode 的市场源是安装目录下的 plugins 目录"
+                                   "（目录源、自动更新），宿主自己会拉到新版；"
+                                   "改完重启宿主就生效。注意 WorkBuddy 和 WorkBuddy AI "
+                                   "是两份独立安装，各读各的配置家（.workbuddy / .workbuddy-ai），"
+                                   "要升就得两家各自刷新")}});
     addSection(QString::fromUtf8("已知限制"),
                {{"电源 / 音量", "这两个键走红外，电脑收不到，无法映射"},
                 {"未开接管", "遥控器按键仍会原生送达前台，映射动作和原生动作可能同时生效"},

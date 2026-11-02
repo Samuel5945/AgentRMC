@@ -575,6 +575,8 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
             return true;
         });
         bridge->setWorkersProvider([this] { return workersJson(); });
+        bridge->setWorkItemUpdateHandler(
+            [this](const QJsonObject &payload) { return reportWorkItem(payload); });
         connect(bridge, &AgentBridge::notify, this,
                 [this](const QString &kind, const QString &title,
                        const QString &message, const QString &raise,
@@ -1762,6 +1764,65 @@ int MainWindow::importSpool() {
                     QString::fromUtf8("补投离线通知 %1 条").arg(imported), 0);
     }
     return imported;
+}
+
+QJsonObject MainWindow::reportWorkItem(const QJsonObject &payload) {
+    const QString stage =
+        payload.value(QStringLiteral("stage")).toString().trimmed();
+    if (WorkItemStore::kindForReport(stage).isEmpty()) {
+        return QJsonObject{
+            {QStringLiteral("ok"), false},
+            {QStringLiteral("error"),
+             QString::fromUtf8("stage 只支持 progress / blocked / ready")}};
+    }
+    if (workItems_ == nullptr) {
+        return QJsonObject{{QStringLiteral("ok"), false},
+                           {QStringLiteral("error"),
+                            QStringLiteral("work item store not ready")}};
+    }
+    const QString title =
+        payload.value(QStringLiteral("title")).toString().trimmed();
+    QString agentExe =
+        payload.value(QStringLiteral("agent_exe")).toString().trimmed();
+    if (agentExe.isEmpty()) {
+        // MCP 只知道自己叫什么产品名，进程映像名在这里反查——Worker 行按 exe
+        // 归堆，认错了待办就会挂到另一个宿主头上（本机有两份 WorkBuddy）。
+        for (const QString &exe : AgentWindow::knownExes()) {
+            if (!title.isEmpty() &&
+                AgentWindow::displayName(exe).compare(title,
+                                                      Qt::CaseInsensitive) == 0) {
+                agentExe = exe;
+                break;
+            }
+        }
+    }
+    QString message =
+        payload.value(QStringLiteral("message")).toString().trimmed();
+    if (message.isEmpty()) {
+        // 没给文案也要有话说，否则列表里是一行空白。
+        const QString s = stage.toLower();
+        message = s == QStringLiteral("progress")
+                      ? QString::fromUtf8("正在处理")
+                      : s == QStringLiteral("blocked")
+                            ? QString::fromUtf8("卡住了，等你")
+                            : QString::fromUtf8("做完了，等你验收");
+    }
+    const WorkItem item = workItems_->report(
+        agentExe, payload.value(QStringLiteral("raise")).toString().trimmed(),
+        payload.value(QStringLiteral("session_id")).toString().trimmed(),
+        payload.value(QStringLiteral("project")).toString().trimmed(), stage,
+        title, message);
+    if (item.id.isEmpty()) {
+        return QJsonObject{{QStringLiteral("ok"), false},
+                           {QStringLiteral("error"),
+                            QStringLiteral("stage rejected")}};
+    }
+    lastEventAt_ = QDateTime::currentDateTimeUtc();
+    refreshWorkItems();
+    return QJsonObject{{QStringLiteral("ok"), true},
+                       {QStringLiteral("id"), item.id},
+                       {QStringLiteral("stage"), item.stage},
+                       {QStringLiteral("title"), item.title}};
 }
 
 void MainWindow::handleNotify(const QString &kind, const QString &title,

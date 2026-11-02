@@ -83,6 +83,9 @@ private:
                       const QString &sessionId, const QString &project,
                       const QString &eventId, const QString &pluginVersion,
                       const QString &speech, bool replay);
+    // POST /work-items/update 的处理：宿主 Agent 用 MCP 工具 pet_work_update
+    // 主动汇报 progress / blocked / ready。只落工单，不冒气泡也不念话。
+    QJsonObject reportWorkItem(const QJsonObject &payload);
     // 联动插件版本对账：{"bundled":内置版,"hosts":[每家 name/installed/loaded/
     // enabled/running/state]}。loaded 是 hook 报上来的「此刻真在跑的那版」，
     // 注册表只能说盘上装成哪版。需要动手的成因写进 problems，别压成一个词。

@@ -55,6 +55,34 @@ QString WorkItemStore::stageForKind(const QString &kind) {
     return QStringLiteral("info");
 }
 
+QString WorkItemStore::kindForReport(const QString &stage) {
+    const QString s = stage.trimmed().toLower();
+    if (s == QStringLiteral("progress") || s == QStringLiteral("working")) {
+        return QStringLiteral("progress");
+    }
+    if (s == QStringLiteral("blocked") || s == QStringLiteral("needs-me")) {
+        // 卡住=等人，和「等你选方案」同一个注意力档位，复用 question。
+        return QStringLiteral("question");
+    }
+    if (s == QStringLiteral("ready") || s == QStringLiteral("review")) {
+        // 做完了等人验收，复用 stop 的语义（会把同 session 的旧 needs-me 归档）。
+        return QStringLiteral("stop");
+    }
+    return QString();
+}
+
+WorkItem WorkItemStore::report(const QString &agentExe, const QString &raiseExe,
+                               const QString &sessionId, const QString &project,
+                               const QString &stage, const QString &title,
+                               const QString &message) {
+    const QString kind = kindForReport(stage);
+    if (kind.isEmpty()) {
+        return WorkItem{};  // 调用方据此回 400，别静默当成成功
+    }
+    return upsert(QStringLiteral("mcp"), agentExe, sessionId, project, kind,
+                  title, message, raiseExe);
+}
+
 bool WorkItemStore::load(QString *error) {
     items_.clear();
     QFile file(path_);

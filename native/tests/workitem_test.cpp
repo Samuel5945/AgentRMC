@@ -144,6 +144,34 @@ int main(int argc, char *argv[]) {
     check("turn-start archives the session's review",
           reviews.resolveReviews("s12") && reviews.attentionCount() == 0);
 
+    // MCP 的 pet_work_update：stage 映射到既有 kind，走同一条合并逻辑。
+    WorkItemStore reported(dir.path() + "/reported.json");
+    const WorkItem rProgress = reported.report(
+        "WorkBuddyAI.exe", "WorkBuddyAI.exe", "m1", "D:/repo", "progress",
+        "WorkBuddy AI", "在改 MainWindow");
+    check("report progress lands as working",
+          rProgress.stage == "working" && rProgress.source == "mcp" &&
+              reported.attentionCount() == 0);
+
+    const WorkItem rBlocked = reported.report(
+        "WorkBuddyAI.exe", "WorkBuddyAI.exe", "m1", "D:/repo", "blocked",
+        "WorkBuddy AI", "缺一个 token");
+    check("report blocked turns the same item into needs-me",
+          rBlocked.id == rProgress.id && rBlocked.stage == "needs-me" &&
+              reported.attentionCount() == 1);
+
+    const WorkItem rReady = reported.report(
+        "WorkBuddyAI.exe", "WorkBuddyAI.exe", "m1", "D:/repo", "ready",
+        "WorkBuddy AI", "改完了");
+    check("report ready turns it into review",
+          rReady.id == rProgress.id && rReady.stage == "review" &&
+              reported.items().size() == 1);
+
+    const WorkItem rBogus = reported.report(
+        "WorkBuddyAI.exe", "", "m1", "D:/repo", "done-ish", "WorkBuddy AI", "");
+    check("unknown stage is rejected instead of silently accepted",
+          rBogus.id.isEmpty() && reported.items().size() == 1);
+
     std::printf(failures == 0 ? "\nALL PASS\n" : "\n%d FAILED\n", failures);
     return failures == 0 ? 0 : 1;
 }

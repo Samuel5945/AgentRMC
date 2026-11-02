@@ -47,6 +47,16 @@ public:
     int attentionCount() const;
     int openCount() const;
 
+    // 宿主 Agent 主动汇报（MCP 工具 pet_work_update）：
+    //   progress → working / blocked → needs-me / ready → review。
+    // 复用 upsert 的去重与「同 session 生命周期合并」，不另起一套状态机。
+    // stage 认不出来时返回 id 为空的 WorkItem，调用方据此回 400。
+    static QString kindForReport(const QString &stage);
+    WorkItem report(const QString &agentExe, const QString &raiseExe,
+                    const QString &sessionId, const QString &project,
+                    const QString &stage, const QString &title,
+                    const QString &message);
+
     bool ack(const QString &id);
     bool resolveSession(const QString &sessionId,
                         const QString &keepId = QString(),

@@ -5,6 +5,9 @@
 //   pet_notify  阶段进度/自定义提示 → 桌宠气泡（不出声；收起时走托盘）
 //   pet_speak   让桌宠说一句话     → 气泡 + TTS 朗读
 //   pet_state   查桌宠状态（可见/监听/录音/转写/对话模式/TTS 就绪）
+//   pet_work_update 主动汇报阶段    → 更新「待我处理」列表里的工单
+//                   （progress 正在干 / blocked 卡住等人 / ready 做完等验收；
+//                    只落工单，不冒气泡也不念话）
 // 等授权、等选方案、任务完成的提醒由本插件的 hook 自动完成，不要用 pet_notify 重复发。
 "use strict";
 
@@ -115,6 +118,33 @@ const TOOLS = [
       "chat_mode（对话模式）、tts_ready（TTS 可用）。想在桌宠上提示前可先查一眼。",
     inputSchema: { type: "object", properties: {} },
   },
+  {
+    name: "pet_work_update",
+    description:
+      "把当前任务的阶段汇报给 AgentRMC 的「待我处理」列表：" +
+      "progress（正在干）、blocked（卡住了，等人）、ready（做完了，等验收）。" +
+      "只更新工单，不冒气泡也不念话——要喊人请用 pet_speak / pet_notify。" +
+      "阶段真的变了才报，别每跑一条命令都报一次。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        stage: {
+          type: "string",
+          enum: ["progress", "blocked", "ready"],
+          description: "progress 正在干 / blocked 卡住等人 / ready 做完等验收",
+        },
+        message: {
+          type: "string",
+          description: "一句话说明在做什么、卡在哪、做完了什么；省略时按阶段给默认文案",
+        },
+        project: {
+          type: "string",
+          description: "可选，工作目录，用来区分同名的多个任务",
+        },
+      },
+      required: ["stage"],
+    },
+  },
 ];
 
 async function callTool(name, args) {
@@ -137,6 +167,27 @@ async function callTool(name, args) {
   if (name === "pet_state") {
     const res = await callBridge("/state", null);
     return { text: res.body };
+  }
+  if (name === "pet_work_update") {
+    const stage = String(args?.stage || "").trim().toLowerCase();
+    if (stage !== "progress" && stage !== "blocked" && stage !== "ready") {
+      return { isError: true, text: "stage 只支持 progress / blocked / ready" };
+    }
+    const res = await callBridge("/work-items/update", {
+      stage,
+      message: String(args?.message || "").trim(),
+      // 产品名让原生端反查进程映像名：Worker 行按 exe 归堆，认错就挂到别人头上。
+      title: AGENT,
+      raise: HOST_INFO.raise || "",
+      project: String(args?.project || "").trim(),
+    });
+    if (res.status >= 400) {
+      return {
+        isError: true,
+        text: `AgentRMC 拒绝了这次汇报（HTTP ${res.status}）：${res.body}`,
+      };
+    }
+    return { text: `已汇报 stage=${stage}（HTTP ${res.status}）${res.body || ""}` };
   }
   return { isError: true, text: `未知工具: ${name}` };
 }

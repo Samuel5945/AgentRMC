@@ -58,6 +58,11 @@ void AgentBridge::setWorkItemAckHandler(
     workItemAckHandler_ = std::move(handler);
 }
 
+void AgentBridge::setWorkItemUpdateHandler(
+    std::function<QJsonObject(const QJsonObject &)> handler) {
+    workItemUpdateHandler_ = std::move(handler);
+}
+
 void AgentBridge::setWorkersProvider(std::function<QString()> provider) {
     workersProvider_ = std::move(provider);
 }
@@ -130,7 +135,8 @@ void AgentBridge::onReadable(QTcpSocket *socket) {
     const bool isNotify = requestLine.startsWith("POST /notify ");
     const bool isSpeak = requestLine.startsWith("POST /speak ");
     const bool isAck = requestLine.startsWith("POST /work-items/ack ");
-    if (!isNotify && !isSpeak && !isAck) {
+    const bool isUpdate = requestLine.startsWith("POST /work-items/update ");
+    if (!isNotify && !isSpeak && !isAck && !isUpdate) {
         finish(socket, "404 Not Found");
         return;
     }
@@ -165,6 +171,22 @@ void AgentBridge::onReadable(QTcpSocket *socket) {
         }
         const bool ok = workItemAckHandler_ && workItemAckHandler_(id);
         finish(socket, ok ? "204 No Content" : "404 Not Found");
+        return;
+    }
+    if (isUpdate) {
+        // 宿主 Agent 主动汇报阶段。stage 不认识就 400，别静默当成功——
+        // 静默成功会让 Agent 以为报上去了，而列表里什么都没变。
+        const QJsonObject result =
+            workItemUpdateHandler_
+                ? workItemUpdateHandler_(obj)
+                : QJsonObject{{QStringLiteral("ok"), false},
+                              {QStringLiteral("error"),
+                               QStringLiteral("bridge has no update handler")}};
+        finish(socket,
+               result.value(QStringLiteral("ok")).toBool() ? "200 OK"
+                                                           : "400 Bad Request",
+               QJsonDocument(result).toJson(QJsonDocument::Compact),
+               "application/json");
         return;
     }
     QString kind;

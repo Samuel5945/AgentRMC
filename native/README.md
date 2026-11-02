@@ -1,7 +1,7 @@
 # AgentRMC Native（C++/Qt + sherpa-onnx）
 
 这里是**原生迁移线**的记录：为什么重写、工具链、构建、里程碑、与 Python 版的兼容性。
-面向使用者的产品文档（界面、键位与场景、语音三条路线、耳机、已知限制）在
+面向使用者的产品文档（界面、键位与场景、语音四条路线、耳机、已知限制）在
 [根 README.md](../README.md)。
 
 原生线现在就是 `master` 上的当前实现；Python 线整体留在 `legacy-python` 分支。
@@ -75,7 +75,7 @@ call "C:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\v
    直接喂 Router、直通动作补发源键/连发补发、鼠标模式低层钩子（短按 8px、按住加速）、
    钩子链序无关；接管自测覆盖 pass/double/repeat/模式标记/钩子判定。
    耳机播放键属于语音，和 M5 一起接。
-5. **语音（已完成）**：三条路线共用一套语音键状态机——
+5. **语音（已完成）**：四条路线共用一套语音键状态机——
    - 默认 **转发热键**：0 模型，按当前前台场景转发——Qoder `Ctrl+Shift+V`、
      WorkBuddy `Ctrl+D`、通用场景用全局 `Ctrl+Shift+V`；不编译 sherpa 时 app
      约 30MB，带运行库约 46MB；
@@ -83,7 +83,9 @@ call "C:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\v
      解压约 230MB，中文/粤语/英日韩，自带标点 ITN；16kHz 单声道 PCM 直接送识别，
      3 秒测试音频热态约 150ms（首帧含模型加载约 1.8s）；
    - **本地 Qwen3-ASR**：同一套 sherpa 运行时的 `qwen3_asr` 分支，0.6B int8
-     下载 838MB、解压约 1GB，代码路径已接，按需下载。
+     下载 838MB、解压约 1GB，代码路径已接，按需下载；
+   - **云端 ASR**：任意 OpenAI 兼容 `/audio/transcriptions` 接口，不装模型，
+     音频会出本机。
    录音用 WinMM（Qt 6.8 没装 Multimedia），自动降级 44.1/48kHz 再重采样到 16k。
    部分设备打开后约 0.85s 才送第一块数据，所以监听开始时预热麦克风并保留 400ms
    预录，按住即说不会丢开头。支持按住说话、静音兜底、3 秒自测、转写后粘贴/复制。

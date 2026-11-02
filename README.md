@@ -1,29 +1,45 @@
 # AgentRMC 🐋
 
-**桌面 AI 智能宠物助理**：一只住在你桌面上的语音桌宠——说话就能对话、打开应用、
-朗读回复，AI Agent 的权限确认和任务完成会自动冒气泡 + 语音提醒；顺手把极米 /
-快乐星球投影仪遥控器改造成了电脑 AI Agent 的输入终端。
+**多 Agent 桌面助理 · 语音桌宠**：Qoder、Qoder CN、ZCode、WorkBuddy、WorkBuddy AI、
+DeepSeek Harness、OpenSquilla 七个宿主的等确认、等选方案、待验收、进行中收进一个
+「待我处理」收件箱；桌宠自动冒泡 + 语音，点一下回到对应 Agent。它同时也是语音助理
+和输入终端：说话就能对话、打开应用、朗读回复，本地离线转写；投影仪遥控器与蓝牙耳机
+都能当按键 / 语音输入。
 
-> **AgentRMC** — Desktop AI pet assistant for Windows. A voice-driven desktop
-> companion: LLM chat loop, offline ASR (SenseVoice / Qwen3-ASR), theme-aware
-> TTS voices, agent notifications via MCP & hooks (ZCode / Claude Code), plus
-> a BLE projector remote retrofitted as an AI-agent input terminal.
-> Qt 6 / C++, zero drivers.
+> **AgentRMC** — A multi-agent desktop companion and voice pet for Windows.
+> A Pending inbox gathers approvals, option picks, reviews and in-progress work
+> from Qoder, Qoder CN, ZCode, WorkBuddy, WorkBuddy AI, DeepSeek Harness and
+> OpenSquilla; the pet bubbles and speaks when they need you and returns you to
+> the right agent. It also does LLM chat, offline ASR (SenseVoice / Qwen3-ASR),
+> theme-aware TTS, and turns a BLE projector remote and headset into key / voice
+> input terminals. Qt 6 / C++, zero drivers.
 
-**关键词**：桌宠 · 桌面宠物 · AI 助理 · 语音助手 · 语音交互 · 离线语音识别 ·
-SenseVoice · Qwen3-ASR · TTS · LLM 对话 · MCP · Claude Code · ZCode · Qoder ·
-WorkBuddy · OpenSquilla · Qt 6 · C++ · Windows
+**关键词**：多 Agent · AI Agent · Agent 待办 · 任务完成提醒 · 桌面助理 · 桌宠 ·
+桌面宠物 · 语音助手 · 语音交互 · 离线语音识别 · SenseVoice · Qwen3-ASR · TTS ·
+LLM 对话 · MCP · Claude Code · ZCode · Qoder · Qoder CN · WorkBuddy ·
+DeepSeek Harness · OpenSquilla · 遥控器 · Qt 6 · C++ · Windows
+
+**Keywords**: multi-agent, AI agent, agent inbox, task notifications, desktop
+companion, desktop pet, virtual pet, voice assistant, offline ASR, SenseVoice,
+Qwen3-ASR, TTS, LLM, MCP, Claude Code, ZCode, Qoder, WorkBuddy, DeepSeek
+Harness, OpenSquilla, BLE remote, Qt 6, C++, Windows
 
 ## 核心特性
 
+- 🧭 **多 Agent 收件箱**：「待我处理」把 Qoder / Qoder CN / ZCode / WorkBuddy /
+  WorkBuddy AI / DeepSeek Harness / OpenSquilla 的等确认、等选方案、待验收、
+  进行中收进一处；按「等你处理 → 待验收 → 进行中」排序，按 Worker 过滤，
+  双击回到对应 Agent，标为已处理归档，重启不丢
+- 🔔 **Agent 提醒**：任务完成、等确认时桌宠自动冒泡 + 语音；等确认 / 等选方案会把
+  Agent 窗口拉回前台，完成提醒点一下气泡再回去（不抢你正在做的事）；MCP 四工具
+  （pet_notify / pet_speak / pet_state / pet_work_update）让 Agent 汇报进度、
+  让桌宠出声、查桌宠状态
+- 🩺 **系统状态**：「系统」页显示桥接端口、运行时长、最近事件、离线待补、Worker 表
+  与健康问题；端口被占用自动重试，AgentRMC 没开时通知先落盘、启动后补投
 - 🐋 **语音桌宠**：说话 → 转写 → LLM → 气泡 + 朗读的完整闭环，带多轮记忆；
   语音打开应用；TTS 音色跟随主题（接任意 OpenAI 兼容 TTS，默认小米 MiMo）
 - 🎨 **主题系统**：形象（精灵帧动画 / 圆球）、背景、配色、音色整套切换，
   主题包即拖即用，支持主题轮播
-- 🔔 **AI Agent 联动**：ZCode / Qoder / WorkBuddy / DeepSeek Harness / OpenSquilla 等任务完成、等确认时，桌宠自动
-  气泡 + 语音提醒；等确认会直接把 Agent 窗口拉回前台，完成提醒点一下气泡再回去
-  （不抢你正在做的事）；MCP 四工具（pet_notify / pet_speak / pet_state /
-  pet_work_update）让 Agent 汇报进度、让桌宠出声、查桌宠状态
 - 🎙️ **语音输入**：本地 SenseVoice（快）/ Qwen3-ASR（准）离线转写 → 粘贴进
   任意应用；云端 ASR 可选；蓝牙耳机播放键当语音开关；也能 0 模型转发 Qoder /
   WorkBuddy 等前台 Agent 自己的语音热键
@@ -34,12 +50,27 @@ WorkBuddy · OpenSquilla · Qt 6 · C++ · Windows
 实测机型为极米「快乐星球 O3」13 键 BLE 遥控器（VID `0x000D` / PID `0x3838`）；
 同款 HID 遥控器改 `config.json` 的 `device_mark` 即可复用。
 
-当前实现是 **C++/Qt 6 原生版**（`native/`，v0.3.9；按键映射不接 LLM，动作直接交给 Qoder / WorkBuddy 服务端；只有桌宠对话模式会调用你在「对话设置」里自配的 LLM）。
+当前实现是 **C++/Qt 6 原生版**（`native/`，v0.3.9；按键映射不接 LLM，动作直接交给 Qoder / WorkBuddy 等前台 Agent；只有桌宠对话模式会调用你在「对话设置」里自配的 LLM）。
 Python 版留在 `legacy-python` 分支，两版读写同一套 `config.json` / `profiles.json`。
 
-![AgentRMC · 经典主题与鲸鱼娘主题](assets/readme-showcase.gif)
+当前 0.3.9：新增「待我处理」多 Agent 收件箱、「系统」健康页与「接入 Agent」一键弹窗；联动插件与 Native 同号。
 
-*经典主题 ⇄ 鲸鱼娘主题：形象、背景、音色整套切换，主题包即拖即用（见「主题系统与自定义应用」）。*
+<p align="center">
+  <img src="assets/screenshots/agentrmc-inbox.jpg" alt="AgentRMC「待我处理」：Qoder、Qoder CN、ZCode、WorkBuddy、DeepSeek Harness、OpenSquilla 等七个 Agent 的待办收进一张列表" width="100%">
+</p>
+<p align="center">
+  <img src="assets/screenshots/agentrmc-system.jpg" alt="AgentRMC 系统页：桥接状态、运行时长、离线待补与七个 Worker 的在线状态" width="49%">
+  <img src="assets/screenshots/agentrmc-keymap.jpg" alt="AgentRMC 按键映射页：单击 / 双击 / 长按直接改动作" width="49%">
+</p>
+<p align="center">
+  <img src="assets/screenshots/agentrmc-apps.jpg" alt="AgentRMC 应用页：本机应用与来源，说「打开剪映」就启动" width="49%">
+  <img src="assets/screenshots/agentrmc-guide.jpg" alt="AgentRMC 使用引导：有遥控器 / 没有遥控器两条路线" width="49%">
+</p>
+<p align="center">
+  <img src="assets/screenshots/agentrmc-desktop.jpg" alt="AgentRMC 桌宠在 Windows 桌面右下角冒泡：ZCode 任务完成提醒" width="100%">
+</p>
+
+*真机截图（0.3.9）：七路 Agent 待办、系统健康、按键映射、应用页、使用引导；最后一张是桌宠在桌面右下角冒泡。*
 
 ```
 遥控器 → HID → Raw Input ─┬→ 按键 → 场景 Profile → 动作（按键/滚动/鼠标/模式/启动程序）
@@ -94,15 +125,20 @@ native\tools\download_voice_models.bat qwen3         rem Qwen3-ASR 0.6B，下载
 AgentRMC/
 ├── native/                 ← 当前实现（C++/Qt 6 + sherpa-onnx）
 │   ├── src/core/           InputEngine（Raw Input + 钩子）、KeyRouter、Injector、
-│   │                       VoiceController、AsrEngine、AudioRecorder、ProfileStore、Presets、
-│   │                       AppLauncher（按名字找应用并启动）
-│   ├── src/ui/             遥控器卡片、按键映射页、应用页、语音设置、使用引导、Toast、
-│   │                       ToggleSwitch、矢量键位图标（KeyIcon）
+│   │                       VoiceController、AsrEngine / AsrClient、AudioRecorder、
+│   │                       ProfileStore / Profiles、Presets、AppLauncher、
+│   │                       AgentBridge、WorkItems、AgentWindow、PluginUpgrade、
+│   │                       ThemeManager、LlmClient、TtsClient、Updater
+│   ├── src/ui/             待我处理、系统、遥控器卡片、按键映射页、应用页、语音设置 /
+│   │                       语音主界面 / 桌宠、使用引导、接入 Agent 弹窗、主题、
+│   │                       Toast、ToggleSwitch、矢量键位图标（KeyIcon）
 │   ├── tests/              无头自测（store / router / takeover / voice / app / audio / asr）
-│   ├── tools/              build.bat、download_voice_models.bat
+│   ├── tools/              build.bat、package.bat、download_voice_models.bat
 │   ├── models/             本地模型（git 忽略，需自行下载）
 │   ├── third_party/        sherpa-onnx 预编译库（git 忽略）
 │   └── README.md           迁移记录、里程碑、工具链、构建与体积
+├── plugins/                联动插件：agentrmc-bridge（hooks / MCP / skill）、
+│                           deepseek-harness（Cordis Host 插件）、opensquilla-bridge（外部桥）
 ├── config.json             语音键码、耳机键、麦克风与 ASR 参数（开发期默认值）
 ├── profiles.json           场景表（按前台窗口切换键映射，支持 extends / 双击 / 长按 / 导航键表）
 ├── commands.json           任意语音指令表（只有 Python 线读；原生线用内置的「打开应用」，见下）
@@ -119,7 +155,7 @@ AgentRMC/
 ├── tests/                  Python 线无头测试
 ├── tools/                  Python 线的 setup / run / build 脚本
 ├── agentrc.py / agentrc_gui.py / legacy/   历史 Python 线（完整文档在 legacy-python 分支）
-└── assets/                 应用图标与配对示意图
+└── assets/                 应用图标、配对示意图与 README 截图
 ```
 
 ## 设备
@@ -225,7 +261,7 @@ keydown  keydown  keydown  ...  keydown   keyup
 
 遥控器第一次配对：把它靠近要连接的设备，**同时长按「返回」+「主页」约 3 秒**，指示灯快闪后
 在系统蓝牙列表里点它。配对过一次之后不用再配，按一下任意键就会自动回连。
-软件里点顶栏 **使用引导** 会弹出图文版步骤：先选路线——**有遥控器**走
+软件里点顶栏 **新手引导** 会弹出图文版步骤：先选路线——**有遥控器**走
 配对示意图 + 四步配对 + 常用手势 + 模式说明 + 已知限制，**没有遥控器**走
 语音路线（热键 / 麦克风 / 转写说明），点「进入语音主界面」直接切过去；
 卡片上的 `蓝牙设置` 直接打开系统的蓝牙设置页。
@@ -241,10 +277,17 @@ keydown  keydown  keydown  ...  keydown   keyup
   徽标随状态切 `待机 / 监听中 / 模式名`；电源键与音量拨杆标灰（红外，电脑收不到）
 - **左下 · 语音卡片** —— 状态与当前接法（例：`Qoder · CTRL+SHIFT+V · 按一下开始/再按一次结束`）、
   `测试 3 秒`、`模型设置`、最近一次转写（超长截断，悬停看全文）、事件条数与 `清空`
-- **右 · 四页签** —— `事件流`（可清空）、`按键映射`、`应用`、`使用引导`
-- **顶栏** —— 状态点 + `监听中 / 未监听` + 当前场景，右侧 `使用引导` 和窗口按钮
+- **右 · 六页签** —— `待我处理`（多 Agent 待办收件箱）、`事件流`（可清空）、
+  `系统`（桥接 / Worker / 健康）、`按键映射`、`应用`、`使用引导`
+- **顶栏** —— 状态点 + `监听中 / 未监听` + 当前场景，右侧 `检查更新`、`主题`、
+  `新手引导` 和窗口按钮
 - **托盘** —— 左键唤回界面并置前；右键 显示主界面 / 语音面板 / 隐藏到托盘、开始监听 / 停止监听、退出；
   窗口 `✕` **只是收进托盘，监听继续**（`ui.close_to_tray` 设 false 则关窗即退出）
+
+**待我处理**是第一个页签：按「等你处理 → 待验收 → 进行中」排序，可按 Worker 过滤；
+双击一条待办回到对应 Agent，点「标为已处理」归档，Work Item 落盘、重启不丢。
+**系统**页显示桥接端口、运行时长、最近事件、离线待补、七个 Worker 的在线状态和问题
+列表；桥接端口被占用时每 5 秒自动重试，释放后自动恢复。
 
 ### 语音主界面（无遥控器）
 
@@ -403,6 +446,10 @@ native\build\Release\AgentRMCAsrTest.exe native\models\sensevoice\test_wavs\zh.w
 
 ## 主题系统与自定义应用（v0.2.0）
 
+![AgentRMC · 经典主题与鲸鱼娘主题](assets/readme-showcase.gif)
+
+*经典主题 ⇄ 鲸鱼娘主题：形象、背景、音色整套切换，主题包即拖即用。*
+
 界面形象、背景、配色、音色是一套可切换的「主题」，入口在 **语音设置 → 主题** 下拉，
 切换即时生效：
 
@@ -479,19 +526,21 @@ AUMID（`explorer.exe shell:AppsFolder\…`）→ 默认浏览器走注册表 `h
 Python 线的 `commands.json` 是另一套东西（任意关键词 → `run` / `key` / `paste`），
 **原生版不读它**；启动应用这条能力已经内置，不需要指令表。
 
-## Agent 会话通知与桌宠交互（ZCode 联动，v0.2.0）
+## Agent 会话通知与桌宠交互（多 Agent 联动，v0.3.9）
 
 > 双 WorkBuddy（`WorkBuddy` / `WorkBuddy AI`）共存时的宿主识别、目标选择、版本升级与验收标准，见
 > [docs/PRD-agent-integration.md](docs/PRD-agent-integration.md)。
 > DeepSeek Super-agent 架构的借鉴与分阶段优化方案，见
 > [docs/superagent-adaptation.md](docs/superagent-adaptation.md)。
 
-程序在本机回环监听 `127.0.0.1:45915`（AgentBridge），五个口子：
+目前接七路：Qoder、Qoder CN、ZCode、WorkBuddy、WorkBuddy AI、DeepSeek Harness
+（插件），以及 OpenSquilla（外部桥）。程序在本机回环监听 `127.0.0.1:45915`
+（AgentBridge），七个口子：
 
 - `POST /notify`：JSON `{"event":"stop|permission|...","title":"...","message":"...",
   "raise":"WorkBuddyAI.exe","session_id":"...","project":"...","event_id":"..."}`，
   桌宠冒气泡（不出声，不打断在放的音频）；桌宠收起时改走托盘气泡；事件流里留一条
-  「ZCode · …」。`permission` / `question` / `stop` 会额外落成一条 Work Item。
+  「宿主 · …」。`permission` / `question` / `stop` 会额外落成一条 Work Item。
 - `POST /speak`：JSON `{"message":"..."}`，桌宠冒气泡并 TTS 朗读（桌宠收起也照念）。
 - `GET /state`：返回桌宠状态 JSON（`pet_visible / docked / listening / recording /
   transcribing / chat_mode / tts_ready`）。
@@ -518,8 +567,8 @@ permission / progress / stop 也会兜底归档。
 装完安装包，接入走一条路：**「系统」页 →「接入 Agent」**（新手引导里的「联动插件」也
 是同一个弹窗）→ 看一眼各家装没装 → 点「复制安装话术」→ 粘给正在干活的 Agent。
 
-- 一句话覆盖所有宿主（Qoder / Qoder CN / ZCode / WorkBuddy / DeepSeek Harness），
-  Agent 只做自己在的那一行，不用你判断它是什么宿主；
+- 一句话覆盖所有插件宿主（Qoder / Qoder CN / ZCode / WorkBuddy / WorkBuddy AI /
+  DeepSeek Harness），Agent 只做自己在的那一行，不用你判断它是什么宿主；
 - 弹窗里直接写着 `安装目录\plugins` 这个落点并可以一键打开——手动装也从这一个目录拿
   东西：`agentrmc-bridge.zip` 给 Qoder 上传，`plugins` 目录本身给 ZCode / WorkBuddy
   当目录市场源，`deepseek-harness\` 给 DSH 装；
@@ -528,21 +577,24 @@ permission / progress / stop 也会兜底归档。
 「升级联动插件」只代升 Qoder / Qoder CN / ZCode；WorkBuddy 宿主自己拉，DSH 要
 pnpm 重装 + 重启 Host，都只报状态。
 
-### ZCode 插件（推荐给其他用户）
+### 联动插件（Qoder / ZCode / WorkBuddy）
 
-`plugins/agentrmc-bridge/` 是打包好的 ZCode 插件（hooks + MCP + skill，全部零依赖
-node 脚本，安装包已带在程序目录 `plugins\` 下）：
+`plugins/agentrmc-bridge/` 是打包好的联动插件（hooks + MCP + skill，全部零依赖
+node 脚本，安装包已带在程序目录 `plugins\` 下）；同一份包里有 `.qoder-plugin`、
+`.zcode-plugin`、`.codebuddy-plugin` 清单，Qoder / Qoder CN / ZCode / WorkBuddy /
+WorkBuddy AI 走同一套 hooks：
 
-- **hooks 自动提醒**：ZCode 需要确认工具调用（PermissionRequest）时桌宠冒气泡；
-  一轮回答结束（Stop）时桌宠念「ZCode 已完成…」（TTS）并把 ZCode 主窗口拉到
+- **hooks 自动提醒**：宿主需要确认工具调用（PermissionRequest）时桌宠冒气泡；
+  一轮回答结束（Stop）时桌宠念「<宿主> 已完成…」（TTS）并把宿主主窗口拉到
   前台——任务一般很长，完成值得出声。AgentRMC 没开就静默跳过（实测 <100ms），
   不拖慢会话。
-- **MCP 主动交互**：三个工具——`pet_notify`（阶段进度气泡）、`pet_speak`（让桌宠
-  TTS 说一句话）、`pet_state`（查桌宠状态），随附 `agentrmc-pet` skill 约束使用
-  礼仪（一句话以内、不刷屏、完成提醒不重复发）。
+- **MCP 主动交互**：四个工具——`pet_notify`（阶段进度气泡）、`pet_speak`（让桌宠
+  TTS 说一句话）、`pet_state`（查桌宠状态）、`pet_work_update`（汇报任务阶段），
+  随附 `agentrmc-pet` skill 约束使用礼仪（一句话以内、不刷屏、完成提醒不重复发）。
 
-安装：ZCode → 插件市场 → 添加 → 选本仓库 `plugins/` 目录（或安装目录里的
-`plugins\`）→ 安装「AgentRMC 桌宠联动」。前提：node 在 PATH、AgentRMC ≥ v0.3.4。
+安装：走「系统」页 →「接入 Agent」一键装，或按宿主手动来——ZCode / WorkBuddy
+在市场里添加本仓库 `plugins/` 目录（或安装目录里的 `plugins\`），Qoder / Qoder CN
+上传 `agentrmc-bridge.zip`。前提：node 在 PATH、AgentRMC ≥ v0.3.4。
 
 ### DeepSeek Harness 插件（0.3.9 起）
 
@@ -1193,5 +1245,7 @@ Router 按映射处理。
 - [x] 原生线 M1–M5：壳、配置与映射表、输入链、钩子接管、三条语音路线（细节见 native/README.md）
 - [ ] 原生线收尾：BLE 电量、跨屏 DPI 回归、托盘菜单、体积回归
 - [x] 语音打开应用（v0.2.0）：内置 10 个应用 + 开始菜单按名启动 + 「应用」页 + 按键预设
-- [ ] TTS 播报 Agent 回复，形成语音闭环
+- [x] 多 Agent 待办收件箱（v0.3.x）：Work Item + Worker 注册表 + 系统健康页
+- [x] 联动插件一键接入（Qoder / Qoder CN / ZCode / WorkBuddy / DeepSeek Harness）+ OpenSquilla 外部桥
+- [x] TTS 播报 Agent 回复，形成语音闭环（TTS + 桌宠对话，0.2.0 起）
 - [ ] 若换 ATVV 遥控器（RC003-MS / 遥控器 2 Pro），把 `rc_probe/atvv_probe.py` 的解码链并进主程序

@@ -10,6 +10,7 @@
 #include "ui/VoiceWindow.h"
 
 #include "core/AgentBridge.h"
+#include "core/AgentWindow.h"
 #include "core/AppLauncher.h"
 #include "core/InputEngine.h"
 #include "core/ModelImport.h"
@@ -73,58 +74,6 @@
 #include <QWindow>
 
 namespace {
-
-// 把发通知的 Agent 主窗口拉到前台。按进程映像名枚举顶层可见窗口，
-// 直接调 Win32——hook 里 detached PowerShell 中转会被运行环境连带清掉
-// 从来没生效过，常驻的原生端自己做才可靠。
-// ALT 按放一下是绕 SetForegroundWindow 前台限制的通用手法。
-struct FindAgentWindowCtx {
-    const wchar_t *exe;
-    HWND found = nullptr;
-};
-
-BOOL CALLBACK findAgentWindow(HWND hwnd, LPARAM lparam) {
-    auto *ctx = reinterpret_cast<FindAgentWindowCtx *>(lparam);
-    if (!IsWindowVisible(hwnd) || GetWindowTextLengthW(hwnd) == 0) {
-        return TRUE;
-    }
-    DWORD pid = 0;
-    GetWindowThreadProcessId(hwnd, &pid);
-    HANDLE proc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
-    if (proc == nullptr) {
-        return TRUE;
-    }
-    wchar_t path[MAX_PATH] = {};
-    DWORD size = MAX_PATH;
-    const BOOL ok = QueryFullProcessImageNameW(proc, 0, path, &size);
-    CloseHandle(proc);
-    if (ok) {
-        const wchar_t *name = wcsrchr(path, L'\\');
-        name = name != nullptr ? name + 1 : path;
-        if (_wcsicmp(name, ctx->exe) == 0) {
-            ctx->found = hwnd;
-            return FALSE;
-        }
-    }
-    return TRUE;
-}
-
-void raiseAgentWindow(const QString &exeName) {
-    // 没给 raise 的（老手写 hook）仍按 ZCode 找，行为不变。
-    const std::wstring image =
-        exeName.isEmpty() ? std::wstring(L"ZCode.exe") : exeName.toStdWString();
-    FindAgentWindowCtx ctx{image.c_str(), nullptr};
-    EnumWindows(findAgentWindow, reinterpret_cast<LPARAM>(&ctx));
-    if (ctx.found == nullptr) {
-        return;
-    }
-    if (IsIconic(ctx.found)) {
-        ShowWindow(ctx.found, SW_RESTORE);
-    }
-    keybd_event(VK_MENU, 0, 0, 0);
-    keybd_event(VK_MENU, 0, KEYEVENTF_KEYUP, 0);
-    SetForegroundWindow(ctx.found);
-}
 
 // 「使用引导」里的一句话安装话术：插件源和 zip 随安装包落在 exe 旁的 plugins\ 下，
 // 用户不用认路径——复制这一句发给正在干活的 Agent，它自己装好并启用。
@@ -333,6 +282,9 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
         appendEvent(QStringLiteral("voice"), QString(), QString(),
                     QString::fromUtf8("鲸鱼娘：%1").arg(text), 0);
     });
+    // 点气泡回跳：提醒不再靠自动抢前台，用户点了才把宿主窗口拉回来。
+    connect(voicePet_, &VoicePet::bubbleActivated, this,
+            [](const QString &exe) { AgentWindow::raise(exe); });
     connect(voicePet_, &VoicePet::voiceFeedbackError, this,
             [this](const QString &error) {
                 appendEvent(QStringLiteral("error"), QString(), QString(),
@@ -388,20 +340,27 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
                         appendEvent(QStringLiteral("status"), QString(),
                                     QString(),
                                     title + QStringLiteral(" · ") + message, 0);
+                        // 记住发通知的宿主，桌宠分流时要靠它判断「Agent 在不在」，
+                        // 冷启动也能直接用上次的值，不用重新猜。只在变了才写盘。
+                        if (!raise.isEmpty() &&
+                            store_->uiString(QStringLiteral("agent_exe")) !=
+                                raise) {
+                            store_->setUiString(QStringLiteral("agent_exe"),
+                                                raise);
+                        }
                         if (kind == QStringLiteral("stop")) {
-                            // 任务完成：念出来 + 把发通知的 Agent 拉回前台；
-                            // 气泡停满 7s（和 permission 一致）。
+                            // 任务完成：念出来 + 气泡停满 7s。**不自动抢前台**——
+                            // 活儿干完就把焦点拽走很烦，气泡可点，点了再回去。
                             if (voicePet_ != nullptr) {
-                                voicePet_->speak(message, 7000);
+                                voicePet_->speak(message, 7000, raise);
                             }
-                            raiseAgentWindow(raise);
                             return;
                         }
                         if (kind == QStringLiteral("permission")) {
                             // 等确认要把人喊回来：气泡停久一点 + 语音，桌宠收起也照念；
                             // 收起又没 TTS 时退回托盘，别让提醒凭空消失。
                             if (voicePet_ != nullptr) {
-                                voicePet_->speak(message, 7000);
+                                voicePet_->speak(message, 7000, raise);
                                 if (!voicePet_->isVisible() &&
                                     !voicePet_->ttsReady() && tray_ != nullptr) {
                                     tray_->showMessage(
@@ -413,7 +372,7 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
                                     title, message,
                                     QSystemTrayIcon::Information, 6000);
                             }
-                            raiseAgentWindow(raise);
+                            AgentWindow::raise(raise);
                             return;
                         }
                         if (kind == QStringLiteral("speak")) {
@@ -425,7 +384,7 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
                         }
                         if (voicePet_ != nullptr && voicePet_->isVisible() &&
                             voicePet_->petEnabled()) {
-                            voicePet_->notify(message);
+                            voicePet_->notify(message, raise);
                         } else if (tray_ != nullptr) {
                             tray_->showMessage(
                                 title, message, QSystemTrayIcon::Information,
@@ -953,6 +912,11 @@ void MainWindow::showOnStartup(bool startHidden) {
     } else {
         wake();
     }
+    // 桌宠常驻：界面开着也露头。以前只有「关窗进托盘」「收起语音面板」「开机只留
+    // 托盘」这三处才把桌宠叫出来，所以手动启动时 pet_visible 一直是 false，看起来
+    // 像桌宠没开。present() 自己兼顾已可见（只 raise）和贴边收纳（popOut）两种态；
+    // 关掉桌宠开关时 presentIfEnabled 什么都不做，尊重用户设置。
+    QTimer::singleShot(0, this, [this] { voicePet_->presentIfEnabled(); });
     if (firstRun) {
         QFile file(marker);
         if (file.open(QIODevice::WriteOnly)) {

@@ -1,5 +1,6 @@
 #include "ui/VoicePet.h"
 
+#include "core/AgentWindow.h"
 #include "core/LlmClient.h"
 #include "core/Profiles.h"
 #include "core/ThemeManager.h"
@@ -32,12 +33,14 @@
 #include <QShowEvent>
 #include <QStandardPaths>
 #include <QStringList>
+#include <QRegularExpression>
 #include <QTimer>
 #include <QUrl>
 #include <QVBoxLayout>
 #include <QVector>
 
 #include <cmath>
+#include <functional>
 
 namespace {
 
@@ -204,6 +207,7 @@ private:
 };
 
 // 说话气泡：Toast 同款画法（自定义 paintEvent），保证半透明圆角底稳定渲染。
+// 带 raise 目标时气泡可点：点了把宿主窗口拉回前台，回调由 VoicePet 给。
 class PetBubble final : public QLabel {
 public:
     explicit PetBubble(QWidget *parent) : QLabel(parent) {
@@ -212,11 +216,16 @@ public:
                        Qt::WindowStaysOnTopHint | Qt::NoDropShadowWindowHint);
         setAttribute(Qt::WA_TranslucentBackground);
         setAttribute(Qt::WA_ShowWithoutActivating);
-        setAttribute(Qt::WA_TransparentForMouseEvents);
         setAlignment(Qt::AlignCenter);
         setWordWrap(true);
         setFixedWidth(220);
         hide();
+    }
+
+    // 空 handler = 气泡只展示不响应（没 raise 目标时的默认状态）。
+    void setClickHandler(std::function<void()> handler) {
+        handler_ = std::move(handler);
+        setCursor(handler_ ? Qt::PointingHandCursor : Qt::ArrowCursor);
     }
 
 protected:
@@ -229,6 +238,18 @@ protected:
         painter.drawRoundedRect(box, 10, 10);
         QLabel::paintEvent(event);
     }
+
+    void mouseReleaseEvent(QMouseEvent *event) override {
+        if (event->button() == Qt::LeftButton && handler_) {
+            handler_();
+            event->accept();
+            return;
+        }
+        QLabel::mouseReleaseEvent(event);
+    }
+
+private:
+    std::function<void()> handler_;
 };
 
 VoicePet::VoicePet(ProfileStore *store, VoiceController *voice, QWidget *parent)
@@ -276,10 +297,7 @@ VoicePet::VoicePet(ProfileStore *store, VoiceController *voice, QWidget *parent)
                 bubbleOnly(QString::fromUtf8("对话失败：%1").arg(error), 4200);
             });
     connect(voice_, &VoiceController::chatRequested, this,
-            [this](const QString &text) {
-                bubbleOnly(QString::fromUtf8("你：%1").arg(text), 2400);
-                askLlm(text);
-            });
+            [this](const QString &text) { handleUtterance(text); });
     // 对话模式可能在语音面板那边开关：控制器广播过来，桌宠缓存必须跟进，
     // 不然 hideEvent 判断的还是旧值，「收起即退出对话模式」会失效。
     connect(voice_, &VoiceController::chatModeChanged, this, [this](bool on) {
@@ -409,13 +427,14 @@ void VoicePet::presentIfEnabled() {
     }
 }
 
-void VoicePet::speak(const QString &text, int durationMs) {
+void VoicePet::speak(const QString &text, int durationMs,
+                     const QString &raiseExe) {
     if (text.isEmpty()) {
         return;
     }
     // 气泡只在桌宠可见时出；语音反馈是声音，桌宠收起也照说。
     if (isVisible()) {
-        bubbleOnly(text, durationMs);
+        bubbleOnly(text, durationMs, raiseExe);
     }
     if (tts_ != nullptr && tts_->ready()) {
         tts_->speak(text);
@@ -440,11 +459,24 @@ void VoicePet::speakAs(const QString &text) {
     }
 }
 
-void VoicePet::notify(const QString &text) {
+void VoicePet::notify(const QString &text, const QString &raiseExe) {
     if (text.isEmpty() || !isVisible()) {
         return;
     }
-    bubbleOnly(text, 6000);
+    bubbleOnly(text, 6000, raiseExe);
+}
+
+void VoicePet::hideBubble() {
+    if (bubbleTimer_ != nullptr) {
+        bubbleTimer_->stop();
+    }
+    pendingRaise_.clear();
+    if (bubble_ != nullptr) {
+        bubble_->hide();
+        if (auto *pet = static_cast<PetBubble *>(bubble_)) {
+            pet->setClickHandler(nullptr);
+        }
+    }
 }
 
 bool VoicePet::ttsReady() const {
@@ -466,13 +498,29 @@ QString VoicePet::stateJson() const {
         QJsonDocument(obj).toJson(QJsonDocument::Compact));
 }
 
-void VoicePet::bubbleOnly(const QString &text, int durationMs) {
+void VoicePet::bubbleOnly(const QString &text, int durationMs,
+                          const QString &raiseExe) {
     if (text.isEmpty() || !isVisible()) {
         return;
     }
     ensureBubble();
     bubble_->setText(text);
     bubble_->adjustSize();
+    // 有 raise 目标才可点：点了收起气泡并把宿主窗口拉回前台。
+    pendingRaise_ = raiseExe;
+    if (auto *pet = static_cast<PetBubble *>(bubble_)) {
+        if (raiseExe.isEmpty()) {
+            pet->setClickHandler(nullptr);
+        } else {
+            pet->setClickHandler([this] {
+                const QString target = pendingRaise_;
+                hideBubble();
+                if (!target.isEmpty()) {
+                    emit bubbleActivated(target);
+                }
+            });
+        }
+    }
     QScreen *scr = screen();
     if (scr == nullptr) {
         scr = QGuiApplication::primaryScreen();
@@ -524,6 +572,99 @@ void VoicePet::setChatMode(bool on) {
     } else {
         bubbleOnly(QString::fromUtf8("已退出对话模式"), 2000);
     }
+}
+
+// 分流判据：纯本地正则，不调模型。判断本身要是还得等一次推理，
+// 「说完就有反应」就没了——这层必须零延迟。
+bool VoicePet::looksLikeTask(const QString &text) {
+    static const QRegularExpression kTask(QStringLiteral(
+        "打开|启动|运行|执行|帮我|替我|给我|改一下|改改|修改|修复|构建|编译|"
+        "打包|安装|卸载|部署|跑一下|跑个|测试|提交|推送|拉取|合并|搜索|查一下|"
+        "查查|看一下|读一下|总结|生成|写一个|新建|创建|删除|重命名|移动|"
+        "git |npm |pip |cmake|报错|日志|仓库"));
+    if (kTask.match(text).hasMatch()) {
+        return true;
+    }
+    // 长句多半是任务描述（"帮我看看这个为什么……"），短句多半是闲聊。
+    return text.size() >= 40;
+}
+
+QString VoicePet::onlineAgentExe() const {
+    // 交给谁，按可信度从高到低判，**不靠候选顺序瞎猜**：
+    // 1) 右键菜单里显式指定过，且它真在跑 → 就用它（用户说了算）；
+    // 2) 说话那一刻前台就是某个 Agent → 用户在哪儿说就回哪儿，最准；
+    // 3) 最近发过通知的那个宿主 → 说明它正在干活；
+    // 4) 都没有才按候选顺序探测（退路，可能不是用户想的那一个）。
+    const QString pinned =
+        store_ != nullptr ? store_->uiString(QStringLiteral("agent_target"))
+                          : QString();
+    if (!pinned.isEmpty() && AgentWindow::alive(pinned)) {
+        return pinned;
+    }
+    const QString fg = AgentWindow::foregroundAgentExe();
+    if (!fg.isEmpty()) {
+        return fg;
+    }
+    const QString remembered =
+        store_ != nullptr ? store_->uiString(QStringLiteral("agent_exe"))
+                          : QString();
+    if (!remembered.isEmpty() && AgentWindow::alive(remembered)) {
+        return remembered;
+    }
+    return AgentWindow::detectAgentExe();
+}
+
+bool VoicePet::handOffToAgent(const QString &text, const QString &exe) {
+    const QString shortName = exe.section(QLatin1Char('.'), 0, 0);
+    // 目标窗口已经在前台就别折腾：省掉 raise + 180ms 等待，说完立刻落字。
+    if (AgentWindow::foregroundAgentExe().compare(exe, Qt::CaseInsensitive) == 0) {
+        if (voice_ == nullptr || !voice_->injectText(text, true)) {
+            QApplication::clipboard()->setText(text);
+            bubbleOnly(QString::fromUtf8("没贴上，已复制，手动发一下"), 4200,
+                       exe);
+            return true;
+        }
+        bubbleOnly(QString::fromUtf8("已交给 %1").arg(shortName), 4200, exe);
+        return true;
+    }
+    // 先把宿主窗口拉到前台：直接粘会落进用户原本待着的窗口里。
+    AgentWindow::raise(exe);
+    // 焦点切换不是瞬时的，等一拍再粘，否则粘贴打到旧窗口上。
+    QTimer::singleShot(180, this, [this, text, exe, shortName] {
+        if (voice_ == nullptr || !voice_->injectText(text, true)) {
+            // 注入被拦（UIPI/宿主不吃模拟按键）：退回复制，至少这句话不丢。
+            QApplication::clipboard()->setText(text);
+            bubbleOnly(QString::fromUtf8("没贴上，已复制，手动发一下"), 4200,
+                       exe);
+            return;
+        }
+        bubbleOnly(QString::fromUtf8("已交给 %1").arg(shortName), 4200, exe);
+    });
+    return true;
+}
+
+void VoicePet::handleUtterance(const QString &text) {
+    if (text.isEmpty()) {
+        return;
+    }
+    bubbleOnly(QString::fromUtf8("你：%1").arg(text), 2400);
+    const QString agent = onlineAgentExe();
+    const bool llmReady = llm_ != nullptr && llm_->ready();
+    const bool task = looksLikeTask(text);
+    // 干活的话优先给宿主 Agent（已在项目上下文里，也不用另配 key）；
+    // 闲聊优先自带 LLM（快、不占会话）。哪边缺就回落另一边——
+    // 没有 Agent 时自带 LLM 照常用，反过来也一样，两条腿走路。
+    if (agent.isEmpty() && !llmReady) {
+        bubbleOnly(
+            QString::fromUtf8("没找到 Agent，对话模型也没配：右键 → 对话设置"),
+            4600);
+        return;
+    }
+    if (!agent.isEmpty() && (task || !llmReady)) {
+        handOffToAgent(text, agent);
+        return;
+    }
+    askLlm(text);
 }
 
 void VoicePet::askLlm(const QString &text) {
@@ -834,6 +975,34 @@ void VoicePet::contextMenuEvent(QContextMenuEvent *event) {
     QAction *chatSettings = menu.addAction(QString::fromUtf8("对话设置…"));
     connect(chatSettings, &QAction::triggered, this,
             [this] { openLlmSettings(); });
+    // 交给哪个 Agent：几个宿主同时开着时，光靠「猜」会塞错窗口，
+    // 这里给个显式开关；默认「自动判断」= 前台优先 → 最近干活的那个。
+    QMenu *targetMenu = menu.addMenu(QString::fromUtf8("交给哪个 Agent"));
+    const QString pinned = store_->uiString(QStringLiteral("agent_target"));
+    QAction *autoPick = targetMenu->addAction(QString::fromUtf8("自动判断"));
+    autoPick->setCheckable(true);
+    autoPick->setChecked(pinned.isEmpty());
+    connect(autoPick, &QAction::triggered, this, [this] {
+        store_->setUiString(QStringLiteral("agent_target"), QString());
+    });
+    bool anyAlive = false;
+    for (const QString &exe : AgentWindow::knownExes()) {
+        if (!AgentWindow::alive(exe)) {
+            continue;
+        }
+        anyAlive = true;
+        QAction *entry = targetMenu->addAction(exe);
+        entry->setCheckable(true);
+        entry->setChecked(pinned.compare(exe, Qt::CaseInsensitive) == 0);
+        connect(entry, &QAction::triggered, this, [this, exe] {
+            store_->setUiString(QStringLiteral("agent_target"), exe);
+        });
+    }
+    if (!anyAlive) {
+        QAction *none =
+            targetMenu->addAction(QString::fromUtf8("（没检测到在跑的 Agent）"));
+        none->setEnabled(false);
+    }
     QAction *read = menu.addAction(QString::fromUtf8("朗读最近一句"));
     read->setEnabled(!lastText_.isEmpty());
     connect(read, &QAction::triggered, this, [this] { speak(lastText_); });

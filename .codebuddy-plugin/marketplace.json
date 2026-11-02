@@ -8,11 +8,11 @@
     {
       "name": "agentrmc-bridge",
       "source": "./plugins/agentrmc-bridge",
-      "version": "0.2.0",
-      "description": "AgentRMC 桌宠联动：权限确认/任务完成自动气泡提醒（hooks），MCP 工具汇报进度、让桌宠说话、查桌宠状态。",
+      "version": "0.3.3",
+      "description": "AgentRMC 桌宠联动：等授权、等选方案时桌宠自动气泡加语音提醒并把 Agent 窗口带回前台；任务完成的提醒点一下气泡也能回去。支持 WorkBuddy / WorkBuddy AI 双宿主各自安装，还能让桌宠汇报进度、说一句话、查状态。",
       "displayName": "AgentRMC Bridge",
       "displayName_i18n": { "zh-CN": "AgentRMC 桌宠联动" },
-      "description_i18n": { "zh-CN": "AgentRMC 桌宠联动：权限确认/任务完成自动气泡提醒（hooks），MCP 工具汇报进度、让桌宠说话、查桌宠状态。" },
+      "description_i18n": { "zh-CN": "AgentRMC 桌宠联动：等授权、等选方案时桌宠自动气泡加语音提醒并把 Agent 窗口带回前台；任务完成的提醒点一下气泡也能回去。支持 WorkBuddy / WorkBuddy AI 双宿主各自安装，还能让桌宠汇报进度、说一句话、查状态。" },
       "category": "productivity"
     }
   ]

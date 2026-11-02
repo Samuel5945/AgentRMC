@@ -34,6 +34,9 @@ public:
     bool chatMode() const { return chatMode_; }
     // 麦克风实时电平（0~1，未开麦时为 0），给语音主界面画电平环。
     double micLevel() const { return recorder_.level(); }
+    // 把一句话直接粘到当前前台窗口（桌宠「交给 Agent」用，不做前台判断）。
+    // 调用方负责先把目标窗口拉到前台。
+    bool injectText(const QString &text, bool autoEnter = true);
 
 public slots:
     void voiceDown();

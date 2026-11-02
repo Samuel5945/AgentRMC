@@ -16,6 +16,11 @@ if not exist "%NSIS%" (
 call "%HERE%build.bat" %1
 if errorlevel 1 exit /b 1
 
+rem FR-07: CMake is the only version source. Fail before packaging if the
+rem generated NSIS include or the built exe disagree with it.
+powershell -NoProfile -ExecutionPolicy Bypass -File "%HERE%check-version.ps1"
+if errorlevel 1 exit /b 1
+
 echo.
 echo ============================================================
 echo   Pack installer -^> dist\AgentRMC-Setup.exe

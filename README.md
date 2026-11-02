@@ -1,13 +1,40 @@
-# AgentRMC
+# AgentRMC 🐋
 
-把极米 / 快乐星球投影仪遥控器改造成电脑 Agent 的输入终端：按键走标准 HID（零驱动），
-语音交给前台 Agent 自己的语音键或本地模型转写，键映射按前台窗口自动切换，
-蓝牙耳机播放键也能当语音开关。
+**桌面 AI 智能宠物助理**：一只住在你桌面上的语音桌宠——说话就能对话、打开应用、
+朗读回复，AI Agent 的权限确认和任务完成会自动冒气泡 + 语音提醒；顺手把极米 /
+快乐星球投影仪遥控器改造成了电脑 AI Agent 的输入终端。
+
+> **AgentRMC** — Desktop AI pet assistant for Windows. A voice-driven desktop
+> companion: LLM chat loop, offline ASR (SenseVoice / Qwen3-ASR), theme-aware
+> TTS voices, agent notifications via MCP & hooks (ZCode / Claude Code), plus
+> a BLE projector remote retrofitted as an AI-agent input terminal.
+> Qt 6 / C++, zero drivers.
+
+**关键词**：桌宠 · 桌面宠物 · AI 助理 · 语音助手 · 语音交互 · 离线语音识别 ·
+SenseVoice · Qwen3-ASR · TTS · LLM 对话 · MCP · Claude Code · ZCode · Qoder ·
+WorkBuddy · Qt 6 · C++ · Windows
+
+## 核心特性
+
+- 🐋 **语音桌宠**：说话 → 转写 → LLM → 气泡 + 朗读的完整闭环，带多轮记忆；
+  语音打开应用；TTS 音色跟随主题（接任意 OpenAI 兼容 TTS，默认小米 MiMo）
+- 🎨 **主题系统**：形象（精灵帧动画 / 圆球）、背景、配色、音色整套切换，
+  主题包即拖即用，支持主题轮播
+- 🔔 **AI Agent 联动**：ZCode / Claude Code 等任务完成、等确认时，桌宠自动
+  气泡 + 语音提醒；等确认会直接把 Agent 窗口拉回前台，完成提醒点一下气泡再回去
+  （不抢你正在做的事）；MCP 三工具（pet_notify / pet_speak / pet_state）让 Agent
+  汇报进度、让桌宠出声、查桌宠状态
+- 🎙️ **语音输入**：本地 SenseVoice（快）/ Qwen3-ASR（准）离线转写 → 粘贴进
+  任意应用；云端 ASR 可选；蓝牙耳机播放键当语音开关；也能 0 模型转发 Qoder /
+  WorkBuddy 等前台 Agent 自己的语音热键
+- 🎮 **遥控器改造**：极米「快乐星球 O3」13 键 BLE 遥控器标准 HID 零驱动直连，
+  按键映射按前台窗口自动切换（场景 Profile），滚动 / 鼠标 / 模式 / 启动程序
+  全能映射
 
 实测机型为极米「快乐星球 O3」13 键 BLE 遥控器（VID `0x000D` / PID `0x3838`）；
 同款 HID 遥控器改 `config.json` 的 `device_mark` 即可复用。
 
-当前实现是 **C++/Qt 6 原生版**（`native/`，v0.2.0；按键映射不接 LLM，动作直接交给 Qoder / WorkBuddy 服务端；只有桌宠对话模式会调用你在「对话设置」里自配的 LLM）。
+当前实现是 **C++/Qt 6 原生版**（`native/`，v0.3.0；按键映射不接 LLM，动作直接交给 Qoder / WorkBuddy 服务端；只有桌宠对话模式会调用你在「对话设置」里自配的 LLM）。
 Python 版留在 `legacy-python` 分支，两版读写同一套 `config.json` / `profiles.json`。
 
 ![AgentRMC · 经典主题与鲸鱼娘主题](assets/readme-showcase.gif)
@@ -272,6 +299,18 @@ base_url / key 同样留空沿用 TTS 的，模型默认 `mimo-v2.6-flash`（快
 「人设」可自定义回复风格。对话模式下切回转发（hotkey）路线时对话不生效——
 那条路线上语音根本不经过本程序。
 
+说话时会先按本地关键词判一次「这是干活还是闲聊」（打开 / 修改 / 打包 / 查日志…
+或明显偏长的句子算干活），**干活优先交给正在运行的宿主 Agent**：显式指定过且
+在线的 > 说话那一刻前台的那个 > 最近发过通知的那个 > 按常见宿主探测。前台就是
+目标 Agent 时直接把话粘进输入框并回车；否则先把宿主窗口拉回前台、等焦点切过去
+再粘（注入被系统拦下时退回复制，气泡提示手动发一下）。闲聊仍走自带 LLM；一边缺
+（没开 Agent 或没配模型）就回落另一边，两边都没有才提示去配置。判断本身是本地
+正则，零延迟、不额外调模型。
+
+提醒气泡也带回流入口：等确认 / 等选方案的提醒会自动把 Agent 拉回前台；任务完成
+只冒气泡 + 语音，**不再自动抢焦点**——但气泡可点，点一下就把发通知的 Agent
+窗口叫回来。
+
 `ui.pet_enabled`（默认 true）控制桌宠是否自动弹出。
 
 `ui.auto_listen`（默认 true）启动即监听；`ui.start_minimized` 启动就藏进托盘、不抢 Qoder 的焦点；
@@ -437,6 +476,9 @@ Python 线的 `commands.json` 是另一套东西（任意关键词 → `run` / `
 **原生版不读它**；启动应用这条能力已经内置，不需要指令表。
 
 ## Agent 会话通知与桌宠交互（ZCode 联动，v0.2.0）
+
+> 双 WorkBuddy（`WorkBuddy` / `WorkBuddy AI`）共存时的宿主识别、目标选择、版本升级与验收标准，见
+> [docs/PRD-agent-integration.md](docs/PRD-agent-integration.md)。
 
 程序在本机回环监听 `127.0.0.1:45915`（AgentBridge），三个口子：
 

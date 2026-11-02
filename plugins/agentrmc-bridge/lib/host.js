@@ -21,10 +21,52 @@ const VARIANTS = {
   cn: { agent: 'Qoder CN', raise: 'Qoder CN.exe' },
 };
 
+// WorkBuddy 有两个独立安装：WorkBuddy（WorkBuddy.exe）和 WorkBuddy AI
+// （WorkBuddyAI.exe）。两者产品名、配置家、插件缓存、进程名都不同；0.3.2
+// 之前一律拉 WorkBuddyAI.exe，旧版发通知就会把另一个 app 拽起来。
+const WORKBUDDY_VARIANTS = {
+  ai: { agent: 'WorkBuddy AI', raise: 'WorkBuddyAI.exe' },
+  classic: { agent: 'WorkBuddy', raise: 'WorkBuddy.exe' },
+};
+
 function normPath(value) {
   return String(value || '')
     .toLowerCase()
     .replace(/\\/g, '/');
+}
+
+// 从一条路径里认 WorkBuddy 变体：看它挂在哪个配置家目录下。
+// 必须先判 .workbuddy-ai，再判 .workbuddy——后者是前者的子串。
+function workbuddyVariantFromPath(value) {
+  const s = normPath(value);
+  if (!s) return null;
+  if (/(^|\/)\.workbuddy-ai(\/|$)/.test(s)) return 'ai';
+  if (/(^|\/)\.workbuddy(\/|$)/.test(s)) return 'classic';
+  return null;
+}
+
+// 显式宿主名只在明确写了 AI 时用来定变体；裸 WorkBuddy 有歧义，交给路径判据。
+function workbuddyVariantFromName(value) {
+  const s = String(value || '')
+    .trim()
+    .toLowerCase();
+  if (!s || s.indexOf('workbuddy') < 0) return null;
+  if (s.indexOf('workbuddy ai') >= 0 || s.indexOf('workbuddyai') >= 0) {
+    return 'ai';
+  }
+  return null;
+}
+
+function isWorkBuddyFamily(env) {
+  return Boolean(
+    env.WORKBUDDY_APP_VERSION ||
+      env.CLIENT_INFO_PRODUCT_NAME === 'WorkBuddy' ||
+      workbuddyVariantFromPath(env.WORKBUDDY_CONFIG_DIR) ||
+      workbuddyVariantFromPath(env.WORKBUDDY_PLUGIN_ROOT) ||
+      workbuddyVariantFromPath(env.CLAUDE_PLUGIN_ROOT) ||
+      workbuddyVariantFromPath(env.CODEBUDDY_PLUGIN_ROOT) ||
+      /workbuddy/i.test(env.AGENTRMC_NOTIFY_HOST || ''),
+  );
 }
 
 // 从一条路径里认 Qoder 变体：看它挂在哪个配置家目录下。
@@ -96,7 +138,8 @@ function resolveHost(options) {
   }
 
   // 认出是 Qoder 家族但认不出变体 → 按国际版，别让 raise 空掉退化成找 ZCode.exe。
-  if (isQoderFamily(env) || argvAgent) {
+  // 只给了宿主名、没给进程名的 WorkBuddy 不算 Qoder，交给下面按路径判。
+  if (isQoderFamily(env) || (argvAgent && !/workbuddy/i.test(argvAgent))) {
     return {
       agent: argvAgent || VARIANTS.intl.agent,
       raise: argvRaise || VARIANTS.intl.raise,
@@ -104,14 +147,39 @@ function resolveHost(options) {
     };
   }
 
-  // 4) 非 Qoder 宿主：沿用旧逻辑（ZCode 那份 hooks.json 不传 argv）。
-  const workbuddy = Boolean(env.WORKBUDDY_APP_VERSION || env.CLIENT_INFO_PRODUCT_NAME === 'WorkBuddy');
-  const agent = env.AGENTRMC_NOTIFY_HOST || (workbuddy ? 'WorkBuddy' : 'ZCode');
+  // 4) 非 Qoder 宿主。WorkBuddy 家族先按安装路径判变体：这是唯一能区分
+  //    「旧版 WorkBuddy 发的通知」和「WorkBuddy AI 发的通知」的硬证据，不依赖
+  //    宿主注入什么。路径判不出才退回产品名，并按旧行为兜底 AI，同时标记
+  //    unknown-variant，避免再次把「拉错 app」当成正常。
+  const wbVariant =
+    workbuddyVariantFromPath(scriptDir) ||
+    workbuddyVariantFromPath(env.WORKBUDDY_CONFIG_DIR) ||
+    workbuddyVariantFromPath(env.WORKBUDDY_PLUGIN_ROOT) ||
+    workbuddyVariantFromPath(env.CLAUDE_PLUGIN_ROOT) ||
+    workbuddyVariantFromPath(env.CODEBUDDY_PLUGIN_ROOT) ||
+    workbuddyVariantFromName(env.AGENTRMC_NOTIFY_HOST);
+  if (wbVariant || isWorkBuddyFamily(env)) {
+    const v = wbVariant ? WORKBUDDY_VARIANTS[wbVariant] : null;
+    return {
+      agent: env.AGENTRMC_NOTIFY_HOST || (v ? v.agent : 'WorkBuddy'),
+      raise: argvRaise || (v ? v.raise : 'WorkBuddyAI.exe'),
+      source: v ? 'workbuddy-' + wbVariant : 'workbuddy-unknown-variant',
+    };
+  }
+
+  // 5) 缺省 ZCode。ZCode 那份 hooks.json 不传 argv，raise 留空由原生端找 ZCode.exe。
   return {
-    agent,
-    raise: argvRaise || (agent === 'WorkBuddy' ? 'WorkBuddyAI.exe' : ''),
-    source: agent === 'WorkBuddy' ? 'workbuddy' : 'zcode',
+    agent: env.AGENTRMC_NOTIFY_HOST || 'ZCode',
+    raise: argvRaise || '',
+    source: 'zcode',
   };
 }
 
-module.exports = { resolveHost, variantFromPath, VARIANTS };
+module.exports = {
+  resolveHost,
+  variantFromPath,
+  workbuddyVariantFromPath,
+  workbuddyVariantFromName,
+  VARIANTS,
+  WORKBUDDY_VARIANTS,
+};

@@ -7,7 +7,8 @@ Unicode true
 
 !define APPNAME "AgentRMC"
 !define APPEXE "AgentRMCNative.exe"
-!define APPVERSION "0.2.0"
+; 版本号由 CMake 从 project(... VERSION x.y.z) 生成，不在安装脚本里手写第三处。
+!include "${__FILEDIR__}\..\build\generated\version.nsi"
 !define PUBLISHER "LIG"
 
 !define SRC "${__FILEDIR__}\..\build\Release"

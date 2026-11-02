@@ -23,6 +23,7 @@
 'use strict';
 
 const http = require('http');
+const fs = require('fs');
 const { resolveHost } = require('../lib/host');
 
 const PORT = 45915;
@@ -36,6 +37,68 @@ const host = resolveHost({
 const agent = host.agent;
 // 拉前台的进程映像名：Qoder 两个变体靠自检区分，别写死成其中一个。
 const raise = host.raise;
+
+// —— 念出 Agent 的最终回复 ——
+// Stop 事件里宿主要是给了 transcript_path，就从会话记录里取最后一条 assistant
+// 文本，压成一句话交给桌宠念。拿不到（老宿主/文件读不动/没有正文）返回空，
+// 调用方退回原来的「已完成任务」通用文案——这条通路坏掉不能影响提醒本身。
+function flattenText(content) {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+  return content
+    .filter((c) => c && typeof c.text === 'string')
+    .map((c) => c.text)
+    .join(' ');
+}
+
+function trimSentence(text) {
+  let t = String(text)
+    .replace(/```[\s\S]*?```/g, ' ')  // 代码块不念
+    .replace(/[#*`>_~|]+/g, ' ')  // markdown 记号
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!t) return '';
+  // 只念第一句：整段念下来又长又吵。
+  const first = t.match(/^[^。！？!?]{1,80}[。！？!?]?/);
+  if (first) t = first[0].trim();
+  if (t.length > 80) t = t.slice(0, 78) + '…';
+  return t;
+}
+
+function lastAssistantText(hook) {
+  const file = hook.transcript_path || hook.transcriptPath || '';
+  if (!file || typeof file !== 'string') return '';
+  let raw = '';
+  try {
+    // 会话记录可能很大：只读尾部 512KB，够覆盖最后几轮。
+    const cap = 512 * 1024;
+    const size = fs.statSync(file).size;
+    const start = size > cap ? size - cap : 0;
+    const fd = fs.openSync(file, 'r');
+    const buf = Buffer.alloc(size - start);
+    fs.readSync(fd, buf, 0, buf.length, start);
+    fs.closeSync(fd);
+    raw = buf.toString('utf8');
+  } catch {
+    return '';
+  }
+  const lines = raw.split(/\r?\n/).filter(Boolean);
+  for (let i = lines.length - 1; i >= 0; i--) {
+    let obj;
+    try {
+      obj = JSON.parse(lines[i]);
+    } catch {
+      continue;  // 尾部截断可能从半行开始，跳过就好
+    }
+    if (!obj) continue;
+    const msg = obj.message || obj;
+    const role = (msg && msg.role) || obj.type || '';
+    if (role !== 'assistant') continue;
+    const text = trimSentence(flattenText(msg && msg.content));
+    if (text) return text;
+  }
+  return '';
+}
 
 let raw = '';
 process.stdin.setEncoding('utf8');
@@ -59,9 +122,10 @@ process.stdin.on('end', () => {
   // permission 通道，别在原生端加新类型。
   let outEvent = event;
   if (event === 'stop') {
-    // 完成走语音：<Agent> 已完成任务，等你回来验收。不带项目名——气泡上一句
-    // 话越短越好念，项目名对「回来验收」这个动作没有增量信息。
-    message = `${agent} 已完成任务，等你回来验收`;
+    // 优先念 Agent 的最终回复（transcript 最后一条 assistant），
+    // 拿不到才退回通用文案——宿主不给 transcript 也照样能用。
+    const said = lastAssistantText(hook);
+    message = said ? `${agent}：${said}` : `${agent} 已完成任务，等你回来验收`;
   } else if (event === 'question') {
     // 「等你选方案」：实测 Qoder 把 AskUserQuestion 当**普通工具**走 PreToolUse
     // （hook.started 只有 source=runtime 的 SDK 记录，PermissionRequest 根本没发），

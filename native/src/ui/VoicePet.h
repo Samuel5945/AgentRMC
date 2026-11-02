@@ -54,10 +54,15 @@ public:
     bool ttsReady() const;
 
     // 气泡反馈 + TTS 出声（接小米 MiMo TTS，key 用户自填；没 key 只有气泡）。
-    void speak(const QString &text, int durationMs = 0);
+    // raiseExe 非空时气泡可点击，点了把该进程的窗口拉回前台。
+    void speak(const QString &text, int durationMs = 0,
+               const QString &raiseExe = QString());
 
     // Agent 普通进度通知：只冒气泡不出声，别打断在放的东西（等确认走 speak）。
-    void notify(const QString &text);
+    void notify(const QString &text, const QString &raiseExe = QString());
+
+    // 收起当前气泡（点击拉回窗口后调用）。
+    void hideBubble();
 
     // 桌宠状态快照（AgentBridge GET /state 的应答），给 Agent 决策用。
     QString stateJson() const;
@@ -74,6 +79,8 @@ signals:
     void hiddenByUser();
     // 对话模式的一条回复（桌宠可见时有气泡，收起时靠它落到面板/事件流）。
     void chatReplied(const QString &text);
+    // 用户点了气泡：把这条提醒对应的宿主窗口拉回前台。
+    void bubbleActivated(const QString &raiseExe);
     void voiceFeedbackError(const QString &error);
 
 protected:
@@ -108,9 +115,19 @@ private:
     void applyTtsOptions();
     void applyLlmOptions();
     void setTtsEnabled(bool on);
-    void bubbleOnly(const QString &text, int durationMs);
+    void bubbleOnly(const QString &text, int durationMs,
+                    const QString &raiseExe = QString());
     void speakAs(const QString &text);  // 对话回复朗读：tts.chat_voice 独立音色
     void askLlm(const QString &text);
+    // 对话模式的一句话：先按本地规则判断该谁接，再分流给宿主 Agent 或自带 LLM。
+    void handleUtterance(const QString &text);
+    // 这句话像「让 Agent 干活」而不是闲聊（纯本地规则，零延迟，不调模型）。
+    static bool looksLikeTask(const QString &text);
+    // 这句话该交给哪个宿主：显式指定 > 说话时前台的那个 > 最近发通知的那个 > 探测。
+    // 返回空 = 一个 Agent 都不在。
+    QString onlineAgentExe() const;
+    // 把话交给宿主 Agent：拉窗口 → 等焦点切过去 → 粘贴 + 回车。
+    bool handOffToAgent(const QString &text, const QString &exe);
     void openLlmSettings();
     void importThemePackage();
     void tick();
@@ -125,6 +142,7 @@ private:
     LlmClient *llm_ = nullptr;
     PetSprite *sprite_ = nullptr;  // 主题没精灵时为空帧，画圆球回落
     QString lastText_;  // 最近一次转写，右键菜单「朗读最近一句」用
+    QString pendingRaise_;  // 当前气泡点了要拉回的宿主进程名，空 = 气泡不可点
     bool ttsErrorShown_ = false;  // TTS 失败提示一次就够，不刷屏
 
     bool chatMode_ = false;

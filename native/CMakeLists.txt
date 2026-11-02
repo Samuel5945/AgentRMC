@@ -1,6 +1,13 @@
 cmake_minimum_required(VERSION 3.24)
 
-project(AgentRMCNative VERSION 0.2.0 LANGUAGES CXX)
+project(AgentRMCNative VERSION 0.3.0 LANGUAGES CXX)
+
+# 版本唯一入口就是上面的 PROJECT_VERSION：app.rc 与 NSIS 的版本号都由这里生成，
+# 不再手写第二、第三处。改了版本只需重新 configure（build.bat 每次都会）。
+file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/generated")
+set(APP_ICON_PATH "${CMAKE_CURRENT_SOURCE_DIR}/resources/app.ico")
+configure_file(resources/app.rc.in "${CMAKE_CURRENT_BINARY_DIR}/generated/app.rc" @ONLY)
+configure_file(resources/version.nsi.in "${CMAKE_CURRENT_BINARY_DIR}/generated/version.nsi" @ONLY)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -12,11 +19,13 @@ qt_standard_project_setup()
 
 qt_add_executable(AgentRMCNative
     src/main.cpp
-    resources/app.rc
+    "${CMAKE_CURRENT_BINARY_DIR}/generated/app.rc"
     src/MainWindow.cpp
     src/MainWindow.h
     src/core/AgentBridge.cpp
     src/core/AgentBridge.h
+    src/core/AgentWindow.cpp
+    src/core/AgentWindow.h
     src/core/Profiles.cpp
     src/core/Profiles.h
     src/core/Presets.cpp

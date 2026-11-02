@@ -56,4 +56,13 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "%HERE%zip-plugin.ps1" ^
     -Out "%ROOT%\native\build\Release\plugins\agentrmc-bridge.zip" >nul
 if errorlevel 1 echo [!] plugin zip step failed (Qoder upload needs the zip; other hosts read the source dir)
 
+rem Mirror the plugin zip into dist with the manifest version in the filename.
+rem FR-07: "which zip is current" must be answerable from the name alone.
+for /f "usebackq delims=" %%v in (`powershell -NoProfile -Command "(Get-Content -Raw -Encoding UTF8 '%ROOT%\plugins\agentrmc-bridge\.zcode-plugin\plugin.json' | ConvertFrom-Json).version"`) do set "PLUGVER=%%v"
+if defined PLUGVER (
+    if not exist "%ROOT%\dist" mkdir "%ROOT%\dist"
+    copy /y "%ROOT%\native\build\Release\plugins\agentrmc-bridge.zip" "%ROOT%\dist\agentrmc-bridge-%PLUGVER%.zip" >nul
+    echo Plugin zip -^> dist\agentrmc-bridge-%PLUGVER%.zip
+)
+
 echo Done -^> native\build\Release\AgentRMCNative.exe

@@ -605,6 +605,13 @@ void VoiceController::deliver(const QString &text, int costMs,
                           .arg(costMs / 1000.0, 0, 'f', 1));
 }
 
+bool VoiceController::injectText(const QString &text, bool autoEnter) {
+    if (text.isEmpty()) {
+        return false;
+    }
+    return injector_.pasteText(text, autoEnter);
+}
+
 void VoiceController::setState(State state, const QString &detail) {
     state_ = state;
     const QString name = state == State::Recording

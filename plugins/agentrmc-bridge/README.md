@@ -2,10 +2,12 @@
 
 把 [AgentRMC](https://github.com/AgentRMC/Agentrmc) 桌宠接进你的 Agent：
 
-- **自动提醒（hooks）**：三类提醒都出声并把该 Agent 主窗口拉到前台——等工具授权
-  （`PermissionRequest`，念「等你确认 Bash：命令…」）、等选方案（念「等你选方案」；
-  Qoder 里走 `PreToolUse` + `matcher:"AskUserQuestion"`，见下）、一轮回答结束
-  （`Stop`，念「X 已完成任务，等你回来验收」）。AgentRMC 没开就静默跳过（<100ms），
+- **自动提醒（hooks）**：三类提醒都出声，等确认 / 等选方案时直接把该 Agent 主
+  窗口拉到前台——等工具授权（`PermissionRequest`，念「等你确认 Bash：命令…」）、
+  等选方案（念「等你选方案」；Qoder 和 WorkBuddy 里走 `PreToolUse` +
+  `matcher:"AskUserQuestion"`，见下）、一轮回答结束（`Stop`，念「X：<最终回复>」，
+  取不到 transcript 时退回「X 已完成任务，等你回来验收」）。完成提醒**不自动抢
+  前台**，但气泡可点，点一下把 Agent 窗口叫回来。AgentRMC 没开就静默跳过（<100ms），
   不拖慢会话。
 - **主动交互（MCP）**：三个工具——`pet_notify`（阶段进度气泡）、`pet_speak`
   （让桌宠 TTS 说一句话）、`pet_state`（查桌宠状态），配 `agentrmc-pet` skill
@@ -19,12 +21,12 @@
 不同的进程映像名（`Qoder.exe` 与 `Qoder CN.exe`）。在一个里装好，另一个不会自动有；同一个 zip
 两边通用，装完各落各家。
 
-|              | ZCode                                | WorkBuddy                            | Qoder                                | Qoder CN                             |
+|              | ZCode                                | WorkBuddy / WorkBuddy AI             | Qoder                                | Qoder CN                             |
 | ------------ | ------------------------------------ | ------------------------------------ | ------------------------------------ | ------------------------------------ |
 | 清单         | `.zcode-plugin/plugin.json`          | `.codebuddy-plugin/plugin.json`      | `.qoder-plugin/plugin.json`          | 同 Qoder（装在 `~/.qoder-cn`）       |
-| hooks 配置   | `hooks/hooks.json`（manifest 给目录）| 与 ZCode 共用根 `hooks/`             | `hooks-qoder/hooks.json`（要给到 .json 文件）| 同 Qoder                    |
-| 拉前台       | 原生端缺省找 `ZCode.exe`             | 自检兜底 `WorkBuddyAI.exe`           | 自检 → `Qoder.exe`                   | 自检 → `Qoder CN.exe`                |
-| 宿主署名     | 缺省 ZCode                           | 按环境变量认 WorkBuddy               | 自检 → 气泡念「Qoder」               | 自检 → 气泡念「Qoder CN」            |
+| hooks 配置   | `hooks/hooks.json`（manifest 给目录）| 根 `hooks/`（永远加载）+ manifest 追加 `hooks-workbuddy/hooks.json` | `hooks-qoder/hooks.json`（要给到 .json 文件）| 同 Qoder      |
+| 拉前台       | 原生端缺省找 `ZCode.exe`             | 自检 → `WorkBuddy.exe` / `WorkBuddyAI.exe` | 自检 → `Qoder.exe`                   | 自检 → `Qoder CN.exe`                |
+| 宿主署名     | 缺省 ZCode                           | 自检 → `WorkBuddy` / `WorkBuddy AI`  | 自检 → 气泡念「Qoder」               | 自检 → 气泡念「Qoder CN」            |
 
 ### 署名与拉前台靠自检，不写死
 
@@ -41,13 +43,22 @@
 原生端按进程映像名**精确**匹配窗口，`Qoder.exe` 不会误命中 `Qoder CN.exe`，两个 app 各拉各的窗。
 `AGENTRMC_DRY_RUN=1` 让 hook 只打印将要发送的 payload（含判定来源 `source`）而不真发，用来验判据。
 
+### WorkBuddy / WorkBuddy AI 也是两个独立 app（0.3.3）
+
+`WorkBuddy`（`WorkBuddy.exe`，配置家 `~/.workbuddy`）和 `WorkBuddy AI`（`WorkBuddyAI.exe`，
+配置家 `~/.workbuddy-ai`）是两个独立安装：插件缓存、市场注册、进程名都不同。`lib/host.js`
+从插件安装路径判变体——`/.workbuddy-ai/` → AI，`/.workbuddy/` → 旧版；路径判不出才按产品名
+兜底 AI，并在 DRY_RUN 里标 `workbuddy-unknown-variant`，不再把「任意 WorkBuddy 都拉 AI」
+当成正常。两个 app 需要**各自安装/升级**本插件；同一个 zip 两边通用，装完各落各的缓存，
+`raise` 只拉自己那个 exe，找不到就静默，不会去拉另一个版本。
+
 ### 提醒分别走哪些事件
 
-| 提醒       | Qoder / Qoder CN                                  | ZCode / WorkBuddy                     |
-| ---------- | ------------------------------------------------- | ------------------------------------- |
-| 等工具授权 | `PermissionRequest`                               | `PermissionRequest`                   |
-| 等选方案   | `PreToolUse` + `matcher:"AskUserQuestion"`        | `PermissionRequest`（tool_name 命中） |
-| 一轮结束   | `Stop`                                            | `Stop`                                |
+| 提醒       | Qoder / Qoder CN                                  | WorkBuddy                                          | ZCode                                 |
+| ---------- | ------------------------------------------------- | -------------------------------------------------- | ------------------------------------- |
+| 等工具授权 | `PermissionRequest`                               | `PermissionRequest`                                | `PermissionRequest`                   |
+| 等选方案   | `PreToolUse` + `matcher:"AskUserQuestion"`        | `PreToolUse` + `matcher:"AskUserQuestion"`         | `PermissionRequest`（tool_name 命中） |
+| 一轮结束   | `Stop`                                            | `Stop`                                             | `Stop`                                |
 
 「等选方案」在 Qoder 里必须挂 `PreToolUse`：拿 `~/.qoder/logs/runs/<run>/qodercli.log` 的
 `hook.started` 对账实测，Qoder 对 `AskUserQuestion` **不发** `PermissionRequest`（只有一条
@@ -57,6 +68,19 @@
 （`MainWindow.cpp` 的 notify 分支），别的 kind 只冒气泡，这样不用动原生。`matcher` 万一不被
 宿主执行，脚本会再判一次 `tool_name`，认不出来直接静默——`PreToolUse` 每个工具都触发，
 宁可少一条也不能把提醒刷成屏。
+
+**WorkBuddy 是同一个病**（0.3.2 修）：给已装副本的 hook 脚本插探针后跑一次
+`AskUserQuestion`，探针日志一条都没有——文件型 hook 根本没被调用。原因在 CLI 源码里：
+插件 hook（`hookManager.executeHooks`）只在工具真的要走授权决策时才派发
+`PermissionRequest`，而 `AskUserQuestion` 走的是「问一句」的审批队列，那条路径只查 SDK 注册的
+回调（`sdkHooksManager`），不查 settings / 插件里的 hooks。所以 WorkBuddy 也改成挂
+`PreToolUse` + `matcher:"AskUserQuestion"`。
+
+为什么不直接写进共用的根 `hooks/hooks.json`：那份 ZCode 也在用，ZCode 对未知事件的处理没验过，
+不拿它冒险。WorkBuddy 的 `hooks/hooks.json` **永远加载**、manifest 里的 `hooks` 再合并一次，
+所以把 `PreToolUse` 单独放 `hooks-workbuddy/hooks.json` 由 manifest 声明，两边都拿到、
+也不会重复触发（根那份里没有 `PreToolUse`）。
+
 
 Qoder 同时导出 `${QODER_PLUGIN_ROOT}` 和 `${CLAUDE_PLUGIN_ROOT}`，也认 manifest 里的
 `mcpServers`，所以只有清单目录名和 hooks 那份必须分开。两条链路的 hook 事件名一致
@@ -94,7 +118,8 @@ Qoder 同时导出 `${QODER_PLUGIN_ROOT}` 和 `${CLAUDE_PLUGIN_ROOT}`，也认 m
 ## 文件
 
 - `.zcode-plugin/plugin.json`、`.qoder-plugin/plugin.json`、`.codebuddy-plugin/`：各宿主自己的清单；
-- `hooks/hooks.json`、`hooks-qoder/hooks.json`：各自的 hook 注册；
+- `hooks/hooks.json`、`hooks-qoder/hooks.json`、`hooks-workbuddy/hooks.json`：各自的 hook 注册
+  （WorkBuddy 根那份永远加载，manifest 再追加「等选方案」这份）；
 - `hooks/agentrmc-notify.js`：共用的通知脚本（argv 可给宿主署名和要拉前台的进程映像名，
   一般不给，由自检决定）；
 - `lib/host.js`：宿主自检（判据见上），hooks 与 MCP server 共用；

@@ -12,7 +12,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { execFileSync } = require('child_process');
-const { resolveHost } = require('../lib/host');
+const { resolveHost, workbuddyVariantFromPath } = require('../lib/host');
 
 const PLUGIN_ROOT = path.resolve(__dirname, '..');
 let passed = 0;
@@ -38,6 +38,8 @@ const ZCODE_HOOKS =
   'C:/Users/PC/.zcode/cli/plugins/cache/dev-agentrmc-local/agentrmc-bridge/0.3.0/hooks';
 const WB_HOOKS =
   'C:/Users/PC/.workbuddy/plugins/cache/dev-agentrmc-local/agentrmc-bridge/0.3.0/hooks';
+const WB_AI_HOOKS =
+  'C:/Users/PC/.workbuddy-ai/plugins/cache/dev-agentrmc-local/agentrmc-bridge/0.3.0/hooks';
 
 check('intl-hook: 路径在 .qoder 下 -> Qoder + Qoder.exe', () => {
   const h = resolveHost({ scriptDir: INTL_HOOKS, argv: ['stop'], env: {} });
@@ -65,15 +67,44 @@ check('zcode: 非 Qoder 路径不冒充 Qoder，raise 留空走原生缺省', ()
   assert.strictEqual(h.source, 'zcode');
 });
 
-check('workbuddy: 按环境变量认宿主并兜底 WorkBuddyAI.exe', () => {
+check('workbuddy-classic: 路径在 .workbuddy 下 -> WorkBuddy + WorkBuddy.exe', () => {
   const h = resolveHost({
     scriptDir: WB_HOOKS,
     argv: ['stop'],
     env: { WORKBUDDY_APP_VERSION: '1.2.3' },
   });
   assert.strictEqual(h.agent, 'WorkBuddy');
+  assert.strictEqual(h.raise, 'WorkBuddy.exe');
+  assert.strictEqual(h.source, 'workbuddy-classic');
+});
+
+check('workbuddy-ai: 路径在 .workbuddy-ai 下 -> WorkBuddy AI + WorkBuddyAI.exe', () => {
+  const h = resolveHost({
+    scriptDir: WB_AI_HOOKS,
+    argv: ['stop'],
+    env: { WORKBUDDY_APP_VERSION: '1.2.3' },
+  });
+  assert.strictEqual(h.agent, 'WorkBuddy AI');
   assert.strictEqual(h.raise, 'WorkBuddyAI.exe');
-  assert.strictEqual(h.source, 'workbuddy');
+  assert.strictEqual(h.source, 'workbuddy-ai');
+});
+
+check('workbuddy 路径判据: .workbuddy-ai 先于 .workbuddy，裸路径不误判', () => {
+  assert.strictEqual(workbuddyVariantFromPath(WB_AI_HOOKS), 'ai');
+  assert.strictEqual(workbuddyVariantFromPath(WB_HOOKS), 'classic');
+  assert.strictEqual(workbuddyVariantFromPath('C:/Users/PC/.workbuddy-custom/hooks'), null);
+  assert.strictEqual(workbuddyVariantFromPath(''), null);
+});
+
+check('workbuddy 未知变体: 路径判不出但产品名命中 -> AI 兜底并标记 unknown', () => {
+  const h = resolveHost({
+    scriptDir: 'D:/somewhere/else/hooks',
+    argv: ['stop'],
+    env: { WORKBUDDY_APP_VERSION: '1.2.3' },
+  });
+  assert.strictEqual(h.agent, 'WorkBuddy');
+  assert.strictEqual(h.raise, 'WorkBuddyAI.exe');
+  assert.strictEqual(h.source, 'workbuddy-unknown-variant');
 });
 
 check('argv 优先: 手写配置显式给了就照办（向后兼容）', () => {
@@ -153,6 +184,26 @@ check('e2e-cn: 复制到 .qoder-cn 里跑真脚本 -> 同一个包念出 Qoder C
   assert.strictEqual(r.source, 'qoder-cn');
 });
 
+check('e2e-workbuddy-classic: 复制到 .workbuddy 里跑真脚本 -> 旧版标题 + WorkBuddy.exe', () => {
+  const r = dryRun(installInto('.workbuddy'), 'stop', JSON.stringify({ session_id: 'x' }));
+  assert.strictEqual(r.dry_run, true);
+  assert.strictEqual(r.source, 'workbuddy-classic');
+  assert.strictEqual(r.payload.title, 'WorkBuddy');
+  assert.strictEqual(r.payload.raise, 'WorkBuddy.exe');
+  assert.match(r.payload.message, /^WorkBuddy 已完成任务/);
+  assert.doesNotMatch(JSON.stringify(r.payload), /WorkBuddyAI\.exe/);
+});
+
+check('e2e-workbuddy-ai: 复制到 .workbuddy-ai 里跑真脚本 -> AI 标题 + WorkBuddyAI.exe', () => {
+  const r = dryRun(installInto('.workbuddy-ai'), 'permission', JSON.stringify({ tool_name: 'Bash', tool_input: { command: 'ls' } }));
+  assert.strictEqual(r.dry_run, true);
+  assert.strictEqual(r.source, 'workbuddy-ai');
+  assert.strictEqual(r.payload.title, 'WorkBuddy AI');
+  assert.strictEqual(r.payload.raise, 'WorkBuddyAI.exe');
+  assert.strictEqual(r.payload.event, 'permission');
+  assert.doesNotMatch(JSON.stringify(r.payload), /"WorkBuddy\.exe"/);
+});
+
 check('e2e-permission 文案: AskUserQuestion 走 PermissionRequest 时也念「等你选方案」', () => {
   const r = dryRun(installInto('.qoder'), 'permission', JSON.stringify({ tool_name: 'AskUserQuestion' }));
   assert.strictEqual(r.payload.message, '等你选方案');
@@ -188,6 +239,41 @@ check('question 仍走 stop/permission 之外的静默边界: 未知事件名不
   assert.match(r.payload.message, /已完成任务/);
 });
 
+check('stop 念出最终回复: transcript 最后一条 assistant 压成一句', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentrmc-tr-'));
+  const file = path.join(dir, 'transcript.jsonl');
+  fs.writeFileSync(
+    file,
+    [
+      JSON.stringify({ type: 'user', message: { role: 'user', content: '改一下' } }),
+      JSON.stringify({
+        type: 'assistant',
+        message: { role: 'assistant', content: [{ type: 'text', text: '先看代码。' }] },
+      }),
+      JSON.stringify({
+        type: 'assistant',
+        message: {
+          role: 'assistant',
+          content: [{ type: 'text', text: '**改好了**，`dist` 已重新打包。后面还有一堆细节不用念。' }],
+        },
+      }),
+    ].join('\n'),
+  );
+  const r = dryRun(installInto('.qoder'), 'stop', JSON.stringify({ transcript_path: file }));
+  assert.match(r.payload.message, /改好了/);
+  assert.doesNotMatch(r.payload.message, /先看代码/);  // 只取最后一条
+  assert.ok(r.payload.message.length <= 90);  // 一句话，别整段念
+});
+
+check('stop 兜底: transcript 不存在时仍发通用文案', () => {
+  const r = dryRun(
+    installInto('.qoder'),
+    'stop',
+    JSON.stringify({ transcript_path: path.join(os.tmpdir(), 'agentrmc-none.jsonl') }),
+  );
+  assert.match(r.payload.message, /已完成任务/);
+});
+
 check('hooks-qoder 注册了 PreToolUse + matcher=AskUserQuestion', () => {
   const h = JSON.parse(fs.readFileSync(path.join(PLUGIN_ROOT, 'hooks-qoder', 'hooks.json'), 'utf8'));
   const group = h.hooks.PreToolUse[0];
@@ -195,6 +281,18 @@ check('hooks-qoder 注册了 PreToolUse + matcher=AskUserQuestion', () => {
   assert.strictEqual(group.async, true);
   assert.deepStrictEqual(group.hooks[0].args, ['${QODER_PLUGIN_ROOT}/hooks/agentrmc-notify.js', 'question']);
   assert.strictEqual(group.hooks[0].timeout, 3);
+});
+
+check('hooks-workbuddy 注册了 PreToolUse + matcher=AskUserQuestion（清单指向该文件）', () => {
+  const h = JSON.parse(fs.readFileSync(path.join(PLUGIN_ROOT, 'hooks-workbuddy', 'hooks.json'), 'utf8'));
+  const group = h.hooks.PreToolUse[0];
+  assert.strictEqual(group.matcher, 'AskUserQuestion');
+  assert.strictEqual(group.hooks[0].command, 'node "${CLAUDE_PLUGIN_ROOT}/hooks/agentrmc-notify.js" question');
+  assert.strictEqual(group.hooks[0].timeout, 3);
+  const manifest = JSON.parse(
+    fs.readFileSync(path.join(PLUGIN_ROOT, '.codebuddy-plugin', 'plugin.json'), 'utf8'),
+  );
+  assert.strictEqual(manifest.hooks, './hooks-workbuddy/hooks.json');
 });
 
 fs.rmSync(tmp, { recursive: true, force: true });

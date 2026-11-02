@@ -483,6 +483,8 @@ Python 线的 `commands.json` 是另一套东西（任意关键词 → `run` / `
 
 > 双 WorkBuddy（`WorkBuddy` / `WorkBuddy AI`）共存时的宿主识别、目标选择、版本升级与验收标准，见
 > [docs/PRD-agent-integration.md](docs/PRD-agent-integration.md)。
+> DeepSeek Super-agent 架构的借鉴与分阶段优化方案，见
+> [docs/superagent-adaptation.md](docs/superagent-adaptation.md)。
 
 程序在本机回环监听 `127.0.0.1:45915`（AgentBridge），三个口子：
 

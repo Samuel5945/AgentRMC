@@ -2,8 +2,8 @@
 
 - 文档版本：v1.2（P0 落地后的状态更新）
 - 日期：2026-11-02
-- 状态：P0 已提交；Native 0.3.8（同 session 旧验收自动归档）已出包装机；对外发布通道待执行
-- 适用版本：AgentRMC Native `0.3.8`（同 session 旧验收自动归档）/ `agentrmc-bridge` `0.3.6`（UserPromptSubmit）
+- 状态：P0 已提交；Native 0.3.9（Watchdog + 系统页）已出包装机；对外发布通道待执行
+- 适用版本：AgentRMC Native `0.3.9`（Watchdog + 系统页）/ `agentrmc-bridge` `0.3.6`（UserPromptSubmit）
 - 覆盖范围：版本演进与发布状态、hooks 提醒、桌宠气泡 / TTS、窗口回跳、语音分流给宿主 Agent、WorkBuddy 双宿主识别
 - 不覆盖：遥控器按键映射、主题系统、ASR / TTS / LLM 模型本身（只在 §2.0 的时间线里点名，不展开需求）
 
@@ -125,6 +125,16 @@
 - [x] **边界**：只按 `session_id` 归档；没有 session 的老宿主不清，避免误伤。
 - [x] **测试**：WorkItem 新增「新活动归档旧 review」「重复 stop 不重复建卡」
   「turn-start 归档 review」；插件新增 UserPromptSubmit/turn-start 用例，27/27。
+
+### 0.10 Watchdog + 系统页（Native 0.3.9）
+
+- [x] **桥接 Watchdog**：启动失败不再只报一次；每 5 秒重试 `AgentBridge::start()`，
+  端口释放后自动恢复，事件流提示「桥接已恢复」。
+- [x] **系统健康页**：新增「系统」页签，显示桥接 / 运行时长 / 最近事件 / 离线待补 /
+  问题列表，以及 Worker 表（状态、待你、待验收、进行中、最近）。
+- [x] **操作**：「刷新」重跑 watchdog/spool/health；「打开数据目录」直达
+  `%APPDATA%\LIG\AgentRMCNative`。
+- [x] **面板三问**：待我处理（工作）+ 系统（健康）+ 事件流（历史）已成形。
 
 ---
 
@@ -375,6 +385,19 @@ Agent 宿主
 | 实测 | stop review → turn-start → done | `sess-auto`，attention 8→7 |
 | 插件测试 | 27/27 PASS | 新增 UserPromptSubmit/turn-start |
 | WorkItem 测试 | 17 项断言 | 旧 review 归档、重复 stop 不重复建卡 |
+
+### 2.14 Watchdog + 系统页读数（2026-11-02 14:43）
+
+| 读数 | 值 | 说明 |
+|---|---|---|
+| `native/CMakeLists.txt` | `project(... VERSION 0.3.9)` | Watchdog + 系统页 |
+| `D:\apps\AgentRMC\AgentRMCNative.exe` | FileVersion / ProductVersion `0.3.9` | 静默装机器 |
+| NSIS `DisplayVersion` | `0.3.9` | 与 exe / CMake 一致 |
+| `dist\AgentRMC-Setup.exe` | 20,088,112 B，11-02 14:43 | 含 0.3.6 插件 |
+| 端口占用启动 | 系统页显示「桥接：异常 / 问题：桥接未启动」 | 实测 |
+| 释放端口后 | 5 秒内 `/health` `bridge=true`，UI「桥接：正常 / 问题：无」 | 实测 |
+| 系统页字段 | 桥接 / 运行时长 / 最近事件 / 离线待补 / Worker 表 / 问题 | UI Automation 实测 |
+| 插件测试 | 27/27 PASS | 不变 |
 
 ---
 
@@ -723,16 +746,18 @@ resolveHost(argv, scriptDir, env):
 | Native 0.3.6（Worker + 生命周期，已出包 + 已装机） | `GET /workers`；语音派活建 working 单、permission 合并 needs-me、stop 合并 review；progress 更新 working；Worker 状态/过滤 | `dist\AgentRMC-Setup.exe`（20,052,815 B，11-02 14:18）；FileVersion / NSIS `0.3.6` |
 | Native 0.3.7（离线 spool + health，已出包 + 已装机） | hook 离线写 spool；启动/5 秒补投；`GET /health`；UI 系统健康行 | `dist\AgentRMC-Setup.exe`（20,062,826 B，11-02 14:27）；FileVersion / NSIS `0.3.7` |
 | Native 0.3.8（同 session 旧验收自动归档，已出包 + 已装机） | `UserPromptSubmit` → `turn-start`；同 session 旧 review 自动 done；permission/progress/stop 兜底归档；重复 stop 不重复建卡 | `dist\AgentRMC-Setup.exe`（20,062,688 B，11-02 14:36）；FileVersion / NSIS `0.3.8` |
-| Plugin 0.3.6（已出包） | 根 hooks / Qoder hooks 注册 `UserPromptSubmit`；插件 27/27 | `dist\agentrmc-bridge-0.3.6.zip`；宿主缓存待自动更新 |
+| Native 0.3.9（Watchdog + 系统页，已出包 + 已装机） | 桥接启动失败每 5 秒重试；系统页显示桥接/运行时长/最近事件/离线待补/Worker 表/问题 | `dist\AgentRMC-Setup.exe`（20,088,112 B，11-02 14:43）；FileVersion / NSIS `0.3.9` |
 | Plugin 0.3.3（工作区 + 已出包） | FR-01 双 WorkBuddy 识别、FR-03 版本统一；stop 最终回复、`hooks-workbuddy` 沿用 0.3.2 | `dist\agentrmc-bridge-0.3.3.zip` + 随包 zip；两套 WorkBuddy 宿主缓存均已 0.3.3 |
 | Plugin 0.3.4（已出包） | hook payload 透传 `session_id` / `project` / `event_id`，给 Work Item 去重和分组 | `dist\agentrmc-bridge-0.3.4.zip`（23,014 B）；宿主缓存待自动更新 |
+| Plugin 0.3.5（已出包） | 离线 spool；`AGENTRMC_PORT` / `AGENTRMC_SPOOL_DIR` 可注入 | `dist\agentrmc-bridge-0.3.5.zip` |
+| Plugin 0.3.6（已出包） | 根 hooks / Qoder hooks 注册 `UserPromptSubmit`；新对话自动归档旧 review | `dist\agentrmc-bridge-0.3.6.zip`（24,182 B）；两套 WorkBuddy 缓存已更新到 0.3.6 |
 
 ### 待排期
 
 | 版本 | 内容 | 交付物 |
 |---|---|---|
 | 提交 / 发布 | Work Item 改动提交；tag、GitHub release、更新 JSON、网盘包体 | 对外动作需单独确认 |
-| Plugin 0.3.4 宿主升级 | 旧版 `~/.workbuddy` 与 AI `~/.workbuddy-ai` 各自升级到 0.3.4 | 宿主插件市场 / 自动更新 |
+| Plugin 0.3.6 剩余宿主升级 | ZCode / Qoder 缓存升级到 0.3.6（WorkBuddy 两套已更新） | 宿主插件市场 / 自动更新 |
 | Native 后续 | FR-05 语音启动别名、FR-06 在线判定分层；FR-04 的兜底顺序部分 | 新安装包 + GitHub release |
 | 补发 | 0.2.0 / 0.3.0 的 GitHub release（或记录「跳过 0.2.0，对外从 0.3.0 起算」） | release + 附件随创建命令上传 |
 

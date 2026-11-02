@@ -34,7 +34,7 @@ WorkBuddy · Qt 6 · C++ · Windows
 实测机型为极米「快乐星球 O3」13 键 BLE 遥控器（VID `0x000D` / PID `0x3838`）；
 同款 HID 遥控器改 `config.json` 的 `device_mark` 即可复用。
 
-当前实现是 **C++/Qt 6 原生版**（`native/`，v0.3.8；按键映射不接 LLM，动作直接交给 Qoder / WorkBuddy 服务端；只有桌宠对话模式会调用你在「对话设置」里自配的 LLM）。
+当前实现是 **C++/Qt 6 原生版**（`native/`，v0.3.9；按键映射不接 LLM，动作直接交给 Qoder / WorkBuddy 服务端；只有桌宠对话模式会调用你在「对话设置」里自配的 LLM）。
 Python 版留在 `legacy-python` 分支，两版读写同一套 `config.json` / `profiles.json`。
 
 ![AgentRMC · 经典主题与鲸鱼娘主题](assets/readme-showcase.gif)
@@ -503,6 +503,8 @@ Python 线的 `commands.json` 是另一套东西（任意关键词 → `run` / `
 - `GET /health`：桥接 / 运行时长 / 离线待补 / 最近事件 / 待办计数 / Worker / 问题列表。
   AgentRMC 没开时 hook 把通知写进 `%APPDATA%\LIG\AgentRMCNative\pending-events.jsonl`，
   启动和每 5 秒扫描补投；补投只落工单，不补喊、不抢前台。
+- **Watchdog / 系统页**：桥接端口被占用时每 5 秒自动重试，释放后恢复；「系统」页签
+  显示桥接、运行时长、最近事件、离线待补、Worker 表和问题列表，可打开数据目录。
 
 主界面第一个页签是「待我处理」：按「等你处理 → 待验收 → 进行中」排序，支持按 Worker
 过滤，显示 Worker 状态和系统健康行（桥接 / 最近事件 / 离线待补），双击回到对应 Agent，

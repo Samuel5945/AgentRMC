@@ -29,6 +29,9 @@ QString defaultFor(const QString &kind) {
 AgentBridge::AgentBridge(QObject *parent) : QObject(parent) {}
 
 bool AgentBridge::start(quint16 port) {
+    if (server_ != nullptr) {
+        return true;
+    }
     server_ = new QTcpServer(this);
     connect(server_, &QTcpServer::newConnection, this,
             &AgentBridge::onConnected);

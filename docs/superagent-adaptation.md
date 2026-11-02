@@ -1,7 +1,7 @@
 # AgentRMC × DeepSeek Super-agent 优化方案
 
 - 日期：2026-11-02
-- 状态：Phase 0 + Phase 1 已落地；Phase 2 Worker 注册表/生命周期已落地（0.3.6）；Phase 3 离线 spool + `/health` + 系统健康行已落地（0.3.7）；Watchdog 自动恢复/三问面板细节待排期
+- 状态：Phase 0 + Phase 1 已落地；Phase 2 Worker 注册表/生命周期已落地（0.3.6）；Phase 3 离线 spool + `/health` + 系统健康行 + Watchdog 自动恢复/系统页已落地（0.3.9）；`pet_work_update` MCP 工具待排期
 - 参考：
   - 文章《Exploring Super-agent Design: Towards a More Autonomous Agent System》
     <https://mp.weixin.qq.com/s/zoS7GlReWPhfCjENGxXCdg>
@@ -211,7 +211,8 @@ AgentRMC 已经有一个「Router 雏形」，但还没有领域模型和持久�
 
 > 已落地（Native 0.3.7 / Plugin 0.3.5）：hook 离线写 spool；原生启动/5 秒补投；
 > `GET /health`；「待我处理」系统健康行。补投只落工单，不补喊。
-> Watchdog 自动恢复、三问面板的独立健康页、`pet_work_update` MCP 工具待排期。
+> Native 0.3.9 起 Watchdog 每 5 秒重试桥接并自动恢复，独立「系统」页展示健康与 Worker。
+> 剩余：`pet_work_update` MCP 工具、更细的安静策略。
 
 - Outbox 落盘、重试、顺序；AgentRMC 未启动时事件暂存，启动后补播。
 - `/health` 返回桥接、宿主、最近事件心跳；面板显示系统问题。

@@ -234,6 +234,7 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
     tabs_->setDocumentMode(false);
     tabs_->addTab(buildWorkPage(), QString::fromUtf8("待我处理"));
     tabs_->addTab(buildLogPage(), QString::fromUtf8("事件流"));
+    tabs_->addTab(buildSystemPage(), QString::fromUtf8("系统"));
     keymapPage_ = new KeymapPage(store_.get(), this);
     connect(keymapPage_, &KeymapPage::mappingsChanged, this,
             &MainWindow::refreshRemoteCard);
@@ -400,45 +401,44 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
         // speak 走气泡 + TTS（桌宠收起也照念）。截图模式不起（会跟正在跑的真实例抢端口）。
         auto *bridge = new AgentBridge(this);
         bridge_ = bridge;
-        if (bridge->start()) {
-            bridge->setStateProvider([this] {
-                return voicePet_ != nullptr ? voicePet_->stateJson()
-                                            : QStringLiteral("{}");
-            });
-            bridge->setHealthProvider([this] { return healthJson(); });
-            bridge->setWorkItemsProvider([this] {
-                return workItems_ != nullptr ? workItems_->toJson()
-                                             : QStringLiteral("{}");
-            });
-            bridge->setWorkItemAckHandler([this](const QString &id) {
-                if (workItems_ == nullptr || !workItems_->ack(id)) {
-                    return false;
-                }
-                refreshWorkItems();
-                return true;
-            });
-            bridge->setWorkersProvider([this] { return workersJson(); });
-            connect(bridge, &AgentBridge::notify, this,
-                    [this](const QString &kind, const QString &title,
-                           const QString &message, const QString &raise,
-                           const QString &sessionId, const QString &project,
-                           const QString &eventId) {
-                        handleNotify(kind, title, message, raise, sessionId,
-                                     project, eventId, false);
-                    });
+        bridgeRequested_ = true;
+        bridge->setStateProvider([this] {
+            return voicePet_ != nullptr ? voicePet_->stateJson()
+                                        : QStringLiteral("{}");
+        });
+        bridge->setHealthProvider([this] { return healthJson(); });
+        bridge->setWorkItemsProvider([this] {
+            return workItems_ != nullptr ? workItems_->toJson()
+                                         : QStringLiteral("{}");
+        });
+        bridge->setWorkItemAckHandler([this](const QString &id) {
+            if (workItems_ == nullptr || !workItems_->ack(id)) {
+                return false;
+            }
+            refreshWorkItems();
+            return true;
+        });
+        bridge->setWorkersProvider([this] { return workersJson(); });
+        connect(bridge, &AgentBridge::notify, this,
+                [this](const QString &kind, const QString &title,
+                       const QString &message, const QString &raise,
+                       const QString &sessionId, const QString &project,
+                       const QString &eventId) {
+                    handleNotify(kind, title, message, raise, sessionId,
+                                 project, eventId, false);
+                });
+        if (!bridge->start()) {
+            appendEvent(QStringLiteral("error"), QString(), QString(),
+                        QString::fromUtf8(
+                            "桥接端口 45915 被占用，5 秒后自动重试"),
+                        0);
         }
     }
     // 离线 spool 补投 + 健康行；5 秒一拍，启动时先补一次。
     healthTimer_ = new QTimer(this);
-    connect(healthTimer_, &QTimer::timeout, this, [this] {
-        importSpool();
-        refreshHealth();
-    });
+    connect(healthTimer_, &QTimer::timeout, this, &MainWindow::watchdogTick);
     healthTimer_->start(5000);
-    QTimer::singleShot(0, this, [this] {
-        importSpool();
-        refreshHealth();
-    });
+    QTimer::singleShot(0, this, &MainWindow::watchdogTick);
 }
 
 QWidget *MainWindow::buildHeader() {
@@ -1119,6 +1119,95 @@ void MainWindow::refreshHealth() {
     workHealth_->setStyleSheet(
         problems.isEmpty() ? QStringLiteral("color:#8b949e;")
                            : QStringLiteral("color:#f0883e;"));
+    refreshSystemPage();
+}
+
+void MainWindow::refreshSystemPage() {
+    if (sysBridge_ == nullptr) {
+        return;
+    }
+    const bool bridgeOk = bridge_ != nullptr && bridge_->isRunning();
+    sysBridge_->setText(
+        QString::fromUtf8("桥接：%1（127.0.0.1:45915）")
+            .arg(bridgeOk ? QString::fromUtf8("正常")
+                          : QString::fromUtf8("异常")));
+    const qint64 secs = startedAt_.secsTo(QDateTime::currentDateTimeUtc());
+    sysUptime_->setText(QString::fromUtf8("运行时长：%1 分 %2 秒")
+                            .arg(secs / 60)
+                            .arg(secs % 60));
+    sysLast_->setText(
+        QString::fromUtf8("最近事件：%1")
+            .arg(lastEventAt_.isValid()
+                     ? lastEventAt_.toLocalTime().toString(
+                           QStringLiteral("MM-dd HH:mm:ss"))
+                     : QStringLiteral("—")));
+    const int spool = spoolPendingCount();
+    sysSpool_->setText(QString::fromUtf8("离线待补：%1 条").arg(spool));
+
+    QStringList problems;
+    if (!bridgeOk) {
+        problems.append(QString::fromUtf8("桥接未启动（端口可能被占用）"));
+    }
+    if (spool > 0) {
+        problems.append(
+            QString::fromUtf8("有 %1 条离线通知待补投").arg(spool));
+    }
+    sysProblems_->setText(
+        problems.isEmpty()
+            ? QString::fromUtf8("问题：无")
+            : QString::fromUtf8("问题：%1").arg(problems.join(QString::fromUtf8("；"))));
+    sysProblems_->setStyleSheet(
+        problems.isEmpty() ? QStringLiteral("color:#8b949e;")
+                           : QStringLiteral("color:#f0883e;"));
+
+    const QJsonArray workers = workersArray();
+    sysWorkers_->setRowCount(workers.size());
+    for (int i = 0; i < workers.size(); ++i) {
+        const QJsonObject worker = workers.at(i).toObject();
+        const QString name = worker.value(QStringLiteral("name")).toString();
+        const bool foreground =
+            worker.value(QStringLiteral("foreground")).toBool();
+        const QString last =
+            worker.value(QStringLiteral("last_activity")).toString();
+        QDateTime lastAt = QDateTime::fromString(last, Qt::ISODateWithMs);
+        if (!lastAt.isValid()) {
+            lastAt = QDateTime::fromString(last, Qt::ISODate);
+        }
+        const QString lastText =
+            lastAt.isValid()
+                ? lastAt.toLocalTime().toString(QStringLiteral("HH:mm"))
+                : QStringLiteral("—");
+        const QVector<QPair<QString, QString>> columns = {
+            {name, foreground ? QString::fromUtf8("前台")
+                              : QString::fromUtf8("在线")},
+            {QString::number(worker.value(QStringLiteral("needs_me")).toInt()),
+             QString::number(worker.value(QStringLiteral("review")).toInt())},
+            {QString::number(worker.value(QStringLiteral("working")).toInt()),
+             lastText},
+        };
+        int column = 0;
+        for (const auto &pair : columns) {
+            auto *first = new QTableWidgetItem(pair.first);
+            auto *second = new QTableWidgetItem(pair.second);
+            if (foreground && column == 0) {
+                first->setForeground(QColor("#58a6ff"));
+            }
+            sysWorkers_->setItem(i, column, first);
+            sysWorkers_->setItem(i, column + 1, second);
+            column += 2;
+        }
+    }
+}
+
+void MainWindow::watchdogTick() {
+    if (bridgeRequested_ && bridge_ != nullptr && !bridge_->isRunning()) {
+        if (bridge_->start()) {
+            appendEvent(QStringLiteral("status"), QString(), QString(),
+                        QString::fromUtf8("桥接已恢复"), 0);
+        }
+    }
+    importSpool();
+    refreshHealth();
 }
 
 int MainWindow::spoolPendingCount() const {
@@ -1302,6 +1391,78 @@ void MainWindow::ackSelectedWork() {
         appendEvent(QStringLiteral("status"), QString(), QString(),
                     QString::fromUtf8("待办已标记完成"), 0);
     }
+}
+
+QWidget *MainWindow::buildSystemPage() {
+    auto *page = new QWidget;
+    auto *lay = new QVBoxLayout(page);
+    lay->setContentsMargins(0, 0, 0, 0);
+    lay->setSpacing(0);
+
+    auto *card = new QFrame;
+    card->setObjectName("card");
+    auto *cl = new QVBoxLayout(card);
+    cl->setContentsMargins(14, 11, 12, 12);
+    cl->setSpacing(8);
+
+    auto *title = new QLabel(QString::fromUtf8("系统健康"));
+    title->setObjectName("cardTitle");
+    cl->addWidget(title);
+
+    sysBridge_ = new QLabel;
+    sysBridge_->setObjectName("muted");
+    cl->addWidget(sysBridge_);
+    sysUptime_ = new QLabel;
+    sysUptime_->setObjectName("muted");
+    cl->addWidget(sysUptime_);
+    sysLast_ = new QLabel;
+    sysLast_->setObjectName("muted");
+    cl->addWidget(sysLast_);
+    sysSpool_ = new QLabel;
+    sysSpool_->setObjectName("muted");
+    cl->addWidget(sysSpool_);
+    sysProblems_ = new QLabel;
+    sysProblems_->setObjectName("muted");
+    sysProblems_->setWordWrap(true);
+    cl->addWidget(sysProblems_);
+
+    sysWorkers_ = new QTableWidget(0, 6);
+    sysWorkers_->setHorizontalHeaderLabels(
+        {QString::fromUtf8("Worker"), QString::fromUtf8("状态"),
+         QString::fromUtf8("待你"), QString::fromUtf8("待验收"),
+         QString::fromUtf8("进行中"), QString::fromUtf8("最近")});
+    sysWorkers_->horizontalHeader()->setSectionResizeMode(
+        QHeaderView::Stretch);
+    sysWorkers_->verticalHeader()->setVisible(false);
+    sysWorkers_->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    sysWorkers_->setSelectionMode(QAbstractItemView::NoSelection);
+    sysWorkers_->setFocusPolicy(Qt::NoFocus);
+    sysWorkers_->setShowGrid(false);
+    sysWorkers_->setAlternatingRowColors(true);
+    cl->addWidget(sysWorkers_, 1);
+
+    auto *actions = new QHBoxLayout;
+    auto *refresh = new QPushButton(QString::fromUtf8("刷新"));
+    refresh->setObjectName("ghostSmall");
+    refresh->setCursor(Qt::PointingHandCursor);
+    connect(refresh, &QPushButton::clicked, this, &MainWindow::watchdogTick);
+    auto *openDir = new QPushButton(QString::fromUtf8("打开数据目录"));
+    openDir->setObjectName("ghostSmall");
+    openDir->setCursor(Qt::PointingHandCursor);
+    connect(openDir, &QPushButton::clicked, this, [this] {
+        const QString dir = QFileInfo(spoolPath_).absolutePath();
+        if (!dir.isEmpty()) {
+            QDesktopServices::openUrl(QUrl::fromLocalFile(dir));
+        }
+    });
+    actions->addWidget(refresh);
+    actions->addWidget(openDir);
+    actions->addStretch(1);
+    cl->addLayout(actions);
+
+    lay->addWidget(card);
+    refreshSystemPage();
+    return page;
 }
 
 QWidget *MainWindow::buildGuidePage() {

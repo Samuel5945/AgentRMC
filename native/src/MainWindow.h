@@ -22,6 +22,7 @@ class QListWidget;
 class QPushButton;
 class QSystemTrayIcon;
 class QTabWidget;
+class QTableWidget;
 class QTimer;
 class AgentBridge;
 class InputEngine;
@@ -60,6 +61,7 @@ private:
     QWidget *buildVoiceCard();
     QWidget *buildWorkPage();
     QWidget *buildLogPage();
+    QWidget *buildSystemPage();
     QWidget *buildGuidePage();
     void refreshWorkItems();
     void raiseSelectedWork();
@@ -70,6 +72,8 @@ private:
     QString workersJson() const;
     QString healthJson() const;
     void refreshHealth();
+    void refreshSystemPage();
+    void watchdogTick();
     int spoolPendingCount() const;
     int importSpool();
     void handleNotify(const QString &kind, const QString &title,
@@ -120,6 +124,12 @@ private:
     QLabel *workHealth_ = nullptr;
     QPushButton *workRaise_ = nullptr;
     QPushButton *workDone_ = nullptr;
+    QLabel *sysBridge_ = nullptr;
+    QLabel *sysUptime_ = nullptr;
+    QLabel *sysSpool_ = nullptr;
+    QLabel *sysLast_ = nullptr;
+    QLabel *sysProblems_ = nullptr;
+    QTableWidget *sysWorkers_ = nullptr;
     QLabel *statusDot_ = nullptr;
     QLabel *statusText_ = nullptr;
     QPushButton *listenButton_ = nullptr;
@@ -140,6 +150,7 @@ private:
     QLabel *remoteState_ = nullptr;
     QSystemTrayIcon *tray_ = nullptr;
     AgentBridge *bridge_ = nullptr;
+    bool bridgeRequested_ = false;
     QTimer *healthTimer_ = nullptr;
     QString spoolPath_;
     QDateTime startedAt_;

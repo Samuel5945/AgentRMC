@@ -49,4 +49,11 @@ rem Normalize so chained scripts don't treat a good copy as an error.
 if errorlevel 8 exit /b 1
 ver >nul
 
+rem Qoder Desktop only accepts a ZIP upload (no local directory source), so ship
+rem one next to the plugin source. Entry names must use "/" - see zip-plugin.ps1.
+powershell -NoProfile -ExecutionPolicy Bypass -File "%HERE%zip-plugin.ps1" ^
+    -Src "%ROOT%\plugins\agentrmc-bridge" ^
+    -Out "%ROOT%\native\build\Release\plugins\agentrmc-bridge.zip" >nul
+if errorlevel 1 echo [!] plugin zip step failed (Qoder upload needs the zip; other hosts read the source dir)
+
 echo Done -^> native\build\Release\AgentRMCNative.exe

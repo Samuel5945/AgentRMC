@@ -22,6 +22,7 @@
 #include <QAbstractItemView>
 #include <QAction>
 #include <QApplication>
+#include <QClipboard>
 #include <QColor>
 #include <QIcon>
 #include <QCloseEvent>
@@ -37,6 +38,7 @@
 #include <QDateTime>
 #include <QDialog>
 #include <QPointer>
+#include <QPair>
 #include <QThreadPool>
 #include <QCursor>
 #include <QDesktopServices>
@@ -122,6 +124,19 @@ void raiseAgentWindow(const QString &exeName) {
     keybd_event(VK_MENU, 0, 0, 0);
     keybd_event(VK_MENU, 0, KEYEVENTF_KEYUP, 0);
     SetForegroundWindow(ctx.found);
+}
+
+// 「使用引导」里的一句话安装话术：插件源和 zip 随安装包落在 exe 旁的 plugins\ 下，
+// 用户不用认路径——复制这一句发给正在干活的 Agent，它自己装好并启用。
+QString agentBridgeInstallSentence() {
+    const QString root = QDir::toNativeSeparators(
+        QCoreApplication::applicationDirPath() + QStringLiteral("/plugins"));
+    return QString::fromUtf8(
+               "帮我装本机的 AgentRMC 桌宠联动插件 agentrmc-bridge，装好并启用。"
+               "Qoder：走「扩展 → 插件 → 添加插件 → 上传插件」，选 %1；"
+               "ZCode / WorkBuddy：在应用市场添加目录 %2（内含 marketplace.json）。"
+               "之后在我等确认或任务结束时用桌宠提醒我。")
+        .arg(root + QStringLiteral("\\agentrmc-bridge.zip"), root);
 }
 
 class TitleBar final : public QWidget {
@@ -700,18 +715,26 @@ QWidget *MainWindow::buildGuidePage() {
         const char *key;
         const char *text;
     };
-    const auto addSection = [cl](const QString &name,
-                                 const QVector<Line> &lines) {
+    const auto addSectionQ = [cl](const QString &name,
+                                  const QVector<QPair<QString, QString>> &lines) {
         auto *box = new QWidget;
         auto *boxLay = new QVBoxLayout(box);
         boxLay->setContentsMargins(0, 0, 0, 0);
         boxLay->setSpacing(9);
         boxLay->addWidget(guide::heading(name));
-        for (const Line &line : lines) {
-            boxLay->addWidget(guide::row(QString::fromUtf8(line.key),
-                                         QString::fromUtf8(line.text), 92));
+        for (const auto &line : lines) {
+            boxLay->addWidget(guide::row(line.first, line.second, 92));
         }
         cl->addWidget(box);
+    };
+    const auto addSection = [addSectionQ](const QString &name,
+                                          const QVector<Line> &lines) {
+        QVector<QPair<QString, QString>> text;
+        for (const Line &line : lines) {
+            text.append({QString::fromUtf8(line.key),
+                         QString::fromUtf8(line.text)});
+        }
+        addSectionQ(name, text);
     };
 
     addSection(QString::fromUtf8("第一次使用：配对遥控器"),
@@ -758,6 +781,17 @@ QWidget *MainWindow::buildGuidePage() {
                          "转发热键时语音是整个交给前台应用的"},
                 {"不想被抢", "想把「打开剪映」这句话原样打给 Agent，就在「应用」页右下角"
                             "关掉「语音启动」（默认开）"}});
+    addSectionQ(QString::fromUtf8("接入 AI Agent（桌宠提醒）"),
+               {{QString::fromUtf8("自动提醒"),
+                 QString::fromUtf8("在你干活的那个 Agent（Qoder / ZCode / WorkBuddy）里装上 "
+                                   "agentrmc-bridge 插件：等你确认、任务结束时，桌宠冒气泡念一句")},
+                {QString::fromUtf8("怎么装"),
+                 QString::fromUtf8("点下面「复制安装话术」，把那句话发给正在干活的 Agent，"
+                                   "它自己装好并启用——话术里已经带你本机上的位置")},
+                {QString::fromUtf8("自己动手"),
+                 QString::fromUtf8("Qoder：侧边栏 扩展 → 插件 → 添加插件 → 上传插件，选安装目录 "
+                                   "plugins 里的 agentrmc-bridge.zip；ZCode / WorkBuddy："
+                                   "在应用市场添加同一个 plugins 目录")}});
     addSection(QString::fromUtf8("已知限制"),
                {{"电源 / 音量", "这两个键走红外，电脑收不到，无法映射"},
                 {"未开接管", "遥控器按键仍会原生送达前台，映射动作和原生动作可能同时生效"},
@@ -782,8 +816,21 @@ QWidget *MainWindow::buildGuidePage() {
     auto *version = new QLabel(
         QString::fromUtf8("当前版本 v%1").arg(appVersion()));
     version->setObjectName("muted");
+    const QString installSentence = agentBridgeInstallSentence();
+    auto *copySentence = new QPushButton(QString::fromUtf8("复制安装话术"));
+    copySentence->setObjectName("ghostSmall");
+    copySentence->setCursor(Qt::PointingHandCursor);
+    connect(copySentence, &QPushButton::clicked, copySentence,
+            [copySentence, installSentence] {
+                QApplication::clipboard()->setText(installSentence);
+                copySentence->setText(QString::fromUtf8("已复制 ✓ 去粘给 Agent"));
+                QTimer::singleShot(2600, copySentence, [copySentence] {
+                    copySentence->setText(QString::fromUtf8("复制安装话术"));
+                });
+            });
     links->addWidget(site);
     links->addWidget(github);
+    links->addWidget(copySentence);
     links->addSpacing(8);
     links->addWidget(version);
     links->addStretch(1);

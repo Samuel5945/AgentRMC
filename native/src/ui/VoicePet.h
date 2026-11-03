@@ -136,11 +136,17 @@ private:
     // 把话交给宿主 Agent：拉窗口 → 轮询等前台切过去 → 聚焦聊天输入框 → 粘贴 + 回车。
     bool handOffToAgent(const QString &text, const QString &exe);
     // 轮询等目标宿主真正到前台（Electron 切焦点不是瞬时的）；到位后先按
-    // 聚焦键再粘贴。attempts 用完还没到位 → 剪贴板兜底，绝不硬注入别的窗口。
+    // 聚焦键（或按名激活「新建任务」）再粘贴。attempts 用完还没到位 →
+    // 剪贴板兜底，绝不硬注入别的窗口。
     void handOffPollForeground(const QString &text, const QString &exe,
                                const QString &shortName,
                                const QStringList &focusMods, int focusVk,
-                               bool hasFocus, int attempts);
+                               bool hasFocus, const QStringList &newTaskNames,
+                               int attempts);
+    // 没有聚焦键的宿主：UIA 把焦点交给「新建任务」→ 回车 → 验焦点落进输入框
+    // → 粘贴。任一环节不满足就不粘那一步（见 .cpp 里的两条兜底）。
+    void handOffNewTask(const QString &text, const QString &exe,
+                        const QString &shortName, const QStringList &names);
     // 前台与输入框都就绪后的最后一粘：再验一次前台，注入失败诚实回落剪贴板。
     void handOffPaste(const QString &text, const QString &exe,
                       const QString &shortName);

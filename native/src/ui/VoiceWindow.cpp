@@ -267,7 +267,9 @@ VoiceWindow::VoiceWindow(VoiceController *voice, ProfileStore *store,
     agentLabel->setObjectName("muted");
     agentTarget_ = new QComboBox;
     agentTarget_->setToolTip(QString::fromUtf8(
-        "语音派活交给哪个 Agent；自动判断 = 前台优先 → 最近发通知的宿主 → 最近派活的宿主"));
+        "语音派活交给哪个 Agent；选定后说的话直接进它的会话（桌宠不再判断任务/"
+        "闲聊，也不走自带对话模型）。自动判断 = 前台优先 → 最近发通知的宿主 → "
+        "最近派活的宿主"));
     connect(agentTarget_, &QComboBox::currentIndexChanged, this,
             [this](int index) {
                 if (index < 0) {

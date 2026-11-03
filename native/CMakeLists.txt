@@ -30,6 +30,8 @@ qt_add_executable(AgentRMCNative
     src/core/WorkItems.h
     src/core/AgentWindow.cpp
     src/core/AgentWindow.h
+    src/core/HostNewTask.cpp
+    src/core/HostNewTask.h
     src/core/Profiles.cpp
     src/core/Profiles.h
     src/core/Presets.cpp
@@ -110,7 +112,8 @@ qt_add_executable(AgentRMCNative
 
 set_target_properties(AgentRMCNative PROPERTIES WIN32_EXECUTABLE TRUE)
 target_include_directories(AgentRMCNative PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
-target_link_libraries(AgentRMCNative PRIVATE Qt6::Widgets Qt6::Network winmm shell32 ole32)
+target_link_libraries(AgentRMCNative PRIVATE Qt6::Widgets Qt6::Network winmm
+    shell32 ole32 UIAutomationCore.lib)
 target_compile_options(AgentRMCNative PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
 target_compile_definitions(AgentRMCNative PRIVATE AGENTRMC_VERSION="${PROJECT_VERSION}")
 
@@ -209,6 +212,20 @@ add_executable(AgentRMCVoiceTest
 target_include_directories(AgentRMCVoiceTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(AgentRMCVoiceTest PRIVATE Qt6::Core)
 target_compile_options(AgentRMCVoiceTest PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
+
+# 按名激活「新建任务」那条链：这里只测能离线判定的部分（哪条路归谁管、
+# 失败分支有没有带判定输入）。真活体的 SetFocus+回车稳定性用 rc_probe 实测。
+add_executable(AgentRMCHostNewTaskTest
+    tests/host_new_task_test.cpp
+    src/core/HostNewTask.cpp
+    src/core/HostNewTask.h
+    src/core/AgentWindow.cpp
+    src/core/AgentWindow.h
+)
+target_include_directories(AgentRMCHostNewTaskTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(AgentRMCHostNewTaskTest PRIVATE Qt6::Core ole32 shell32
+    UIAutomationCore.lib)
+target_compile_options(AgentRMCHostNewTaskTest PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
 
 add_executable(AgentRMCThemeTest
     tests/theme_test.cpp

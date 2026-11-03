@@ -13,6 +13,25 @@
 
 namespace {
 
+bool matchesImage(HWND hwnd, const wchar_t *exe) {
+    DWORD pid = 0;
+    GetWindowThreadProcessId(hwnd, &pid);
+    HANDLE proc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+    if (proc == nullptr) {
+        return false;
+    }
+    wchar_t path[MAX_PATH] = {};
+    DWORD size = MAX_PATH;
+    const BOOL ok = QueryFullProcessImageNameW(proc, 0, path, &size);
+    CloseHandle(proc);
+    if (!ok) {
+        return false;
+    }
+    const wchar_t *name = wcsrchr(path, L'\\');
+    name = name != nullptr ? name + 1 : path;
+    return _wcsicmp(name, exe) == 0;
+}
+
 struct FindAgentWindowCtx {
     const wchar_t *exe;
     HWND found = nullptr;
@@ -23,25 +42,35 @@ BOOL CALLBACK findAgentWindow(HWND hwnd, LPARAM lparam) {
     if (!IsWindowVisible(hwnd) || GetWindowTextLengthW(hwnd) == 0) {
         return TRUE;
     }
-    DWORD pid = 0;
-    GetWindowThreadProcessId(hwnd, &pid);
-    HANDLE proc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
-    if (proc == nullptr) {
-        return TRUE;
-    }
-    wchar_t path[MAX_PATH] = {};
-    DWORD size = MAX_PATH;
-    const BOOL ok = QueryFullProcessImageNameW(proc, 0, path, &size);
-    CloseHandle(proc);
-    if (ok) {
-        const wchar_t *name = wcsrchr(path, L'\\');
-        name = name != nullptr ? name + 1 : path;
-        if (_wcsicmp(name, ctx->exe) == 0) {
-            ctx->found = hwnd;
-            return FALSE;
-        }
+    if (matchesImage(hwnd, ctx->exe)) {
+        ctx->found = hwnd;
+        return FALSE;
     }
     return TRUE;
+}
+
+struct LargestWindowCtx {
+    const wchar_t *exe;
+    HWND best = nullptr;
+    LONG bestArea = 0;
+};
+
+BOOL CALLBACK collectAgentWindows(HWND hwnd, LPARAM lparam) {
+    auto *ctx = reinterpret_cast<LargestWindowCtx *>(lparam);
+    if (!IsWindowVisible(hwnd) || GetWindowTextLengthW(hwnd) == 0) {
+        return TRUE;
+    }
+    if (!matchesImage(hwnd, ctx->exe)) {
+        return TRUE;
+    }
+    RECT r{};
+    GetWindowRect(hwnd, &r);
+    const LONG area = (r.right - r.left) * (r.bottom - r.top);
+    if (area > ctx->bestArea) {
+        ctx->best = hwnd;
+        ctx->bestArea = area;
+    }
+    return TRUE;  // 继续找更大的
 }
 
 HWND windowFor(const QString &exeName) {
@@ -213,6 +242,16 @@ QString chatFocusCombo(const QString &exe) {
         return QStringLiteral("ctrl+n");
     }
     return QString();
+}
+
+void *mainWindow(const QString &exe) {
+    if (exe.isEmpty()) {
+        return nullptr;
+    }
+    const std::wstring image = exe.toStdWString();
+    LargestWindowCtx ctx{image.c_str(), nullptr, 0};
+    EnumWindows(collectAgentWindows, reinterpret_cast<LPARAM>(&ctx));
+    return ctx.best;
 }
 
 }  // namespace AgentWindow

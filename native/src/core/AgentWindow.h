@@ -45,4 +45,9 @@ void raise(const QString &exeName);
 // 返回空 = 该宿主没有已知聚焦键，调用方退回「等焦点稳定后直接粘贴」。
 QString chatFocusCombo(const QString &exe);
 
+// 该宿主当前「面积最大」的可见标题窗口，返回值实为 HWND（头文件不引
+// windows.h，所以用 void*）。按面积挑而不靠枚举顺序：WorkBuddy 收起时只是
+// 个 314×50 的悬浮挂件，z 序第一扇窗不等于主面页。找不到返回 nullptr。
+void *mainWindow(const QString &exe);
+
 }  // namespace AgentWindow

@@ -2,6 +2,7 @@
 
 #include "core/AgentWindow.h"
 #include "core/ChatText.h"
+#include "core/HostNewTask.h"
 #include "core/LlmClient.h"
 #include "core/Profiles.h"
 #include "core/ThemeManager.h"
@@ -665,34 +666,47 @@ bool VoicePet::handOffToAgent(const QString &text, const QString &exe) {
     int focusVk = 0;
     const bool hasFocus = combo.trimmed() != QStringLiteral("none") &&
                           voiceParseCombo(combo, &focusMods, &focusVk);
+    // 没有聚焦键的宿主（WorkBuddy 系：Ctrl+N 是「新建文件」）改走 UIA 按名
+    // 激活「新建任务」。用户把这条键位设成 "none" 就一并禁用——不留第二个开关。
+    const QStringList newTaskNames =
+        hasFocus || combo.trimmed() == QStringLiteral("none")
+            ? QStringList()
+            : HostNewTask::controlNames(exe);
     // 目标窗口已经在前台就别折腾 raise：省掉抢前台的等待，稍等焦点稳定即注入。
     if (AgentWindow::foregroundAgentExe().compare(exe, Qt::CaseInsensitive) == 0) {
         handOffPollForeground(text, exe, shortName, focusMods, focusVk,
-                              hasFocus, 1);
+                              hasFocus, newTaskNames, 1);
         return true;
     }
     // 先把宿主窗口拉到前台：直接粘会落进用户原本待着的窗口里。
     AgentWindow::raise(exe);
     // 焦点切换不是瞬时的：轮询等前台真的切过去（60ms × 30 ≈ 1.8s），
     // 而不是赌一个固定延时——慢机器上 Electron 恢复焦点可能要几百毫秒。
-    handOffPollForeground(text, exe, shortName, focusMods, focusVk, hasFocus, 30);
+    handOffPollForeground(text, exe, shortName, focusMods, focusVk, hasFocus,
+                          newTaskNames, 30);
     return true;
 }
 
 void VoicePet::handOffPollForeground(const QString &text, const QString &exe,
                                      const QString &shortName,
                                      const QStringList &focusMods, int focusVk,
-                                     bool hasFocus, int attempts) {
+                                     bool hasFocus,
+                                     const QStringList &newTaskNames,
+                                     int attempts) {
     if (AgentWindow::foregroundAgentExe().compare(exe, Qt::CaseInsensitive) == 0) {
         // 前台已到位：再给 Electron 一拍恢复内部焦点，然后聚焦输入框 + 粘贴。
         QTimer::singleShot(150, this, [this, text, exe, shortName, focusMods,
-                                       focusVk, hasFocus] {
+                                       focusVk, hasFocus, newTaskNames] {
             if (AgentWindow::foregroundAgentExe().compare(
                     exe, Qt::CaseInsensitive) != 0) {
                 QApplication::clipboard()->setText(text);
                 bubbleOnly(QString::fromUtf8("%1 没抢到前台，已复制，切过去粘贴")
                                .arg(shortName),
                            4600, exe);
+                return;
+            }
+            if (!newTaskNames.isEmpty()) {
+                handOffNewTask(text, exe, shortName, newTaskNames);
                 return;
             }
             if (hasFocus && voice_ != nullptr &&
@@ -717,9 +731,43 @@ void VoicePet::handOffPollForeground(const QString &text, const QString &exe,
         return;
     }
     QTimer::singleShot(60, this, [this, text, exe, shortName, focusMods, focusVk,
-                                  hasFocus, attempts] {
+                                  hasFocus, newTaskNames, attempts] {
         handOffPollForeground(text, exe, shortName, focusMods, focusVk,
-                              hasFocus, attempts - 1);
+                              hasFocus, newTaskNames, attempts - 1);
+    });
+}
+
+void VoicePet::handOffNewTask(const QString &text, const QString &exe,
+                              const QString &shortName,
+                              const QStringList &names) {
+    // 焦点交给「新建任务」→ 发回车 → 验焦点是否落进输入框。实测这条链在
+    // WorkBuddy 两版各 5 轮全通过且不动鼠标（SetFocus + VK_RETURN）。
+    const HostNewTask::Attempt att =
+        HostNewTask::focusControl(exe, names, 1500);
+    constexpr int kVkReturn = 0x0D;  // 不引 windows.h，值就是 VK_RETURN
+    if (!att.focused || voice_ == nullptr ||
+        !voice_->sendHotkey(QStringList(), kVkReturn)) {
+        // 没成也照旧直粘：焦点位置未知，但这正是本次改动前的行为，
+        // 不做「剪贴板兜底」这种倒退；把成因写进气泡，便于事后判断。
+        bubbleOnly(QString::fromUtf8("%1 新建任务没成（%2），粘进当前会话")
+                       .arg(shortName, att.fail.isEmpty()
+                                           ? QStringLiteral("已粘贴")
+                                           : att.fail),
+                   5200, exe);
+        handOffPaste(text, exe, shortName);
+        return;
+    }
+    QTimer::singleShot(350, this, [this, text, exe, shortName] {
+        if (!HostNewTask::focusIsEditable(exe)) {
+            // 回车后焦点不在该宿主进程的可编辑控件上：不粘，交给剪贴板，
+            // 免得把一句话丢进宿主的某个按钮/编辑器里。
+            QApplication::clipboard()->setText(text);
+            bubbleOnly(QString::fromUtf8("%1 新建任务后焦点不在输入框，已复制")
+                           .arg(shortName),
+                       5200, exe);
+            return;
+        }
+        handOffPaste(text, exe, shortName);
     });
 }
 
@@ -763,6 +811,17 @@ void VoicePet::handleUtterance(const QString &text) {
         bubbleOnly(
             QString::fromUtf8("没找到 Agent，对话模型也没配：右键 → 对话设置"),
             4600);
+        return;
+    }
+    // 「交给」下拉里点了具体某个 Agent = 用户已经想清楚了，别再替他判一遍：
+    // 不跑任务正则、也不问自带 LLM，话直接进那台 Agent 的会话。
+    // 只有这个 pin 真的被采纳（它活着且有可交互窗口）才算数——
+    // pin 的宿主收进托盘时 onlineAgentExe 不会返回它，这时仍按下面的老逻辑走。
+    const QString pinned =
+        store_ != nullptr ? store_->uiString(QStringLiteral("agent_target"))
+                          : QString();
+    if (!pinned.isEmpty() && agent.compare(pinned, Qt::CaseInsensitive) == 0) {
+        handOffToAgent(text, agent);
         return;
     }
     if (!agent.isEmpty() && (task || !llmReady)) {

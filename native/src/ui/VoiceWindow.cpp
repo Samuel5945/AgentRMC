@@ -204,6 +204,20 @@ VoiceWindow::VoiceWindow(VoiceController *voice, ProfileStore *store,
     head->addWidget(statusDot_);
     head->addWidget(title);
     head->addStretch(1);
+    // 「朗读最近」收进页眉：不再单独占一行（能一行的不拆两行）。
+    readLast_ = new QPushButton(QString::fromUtf8("朗读最近"));
+    readLast_->setObjectName("ghostText");
+    readLast_->setCursor(Qt::PointingHandCursor);
+    readLast_->setToolTip(QString::fromUtf8("用桌宠的 TTS 念出最近一条转写"));
+    readLast_->setEnabled(false);
+    connect(readLast_, &QPushButton::clicked, this, [this] {
+        if (lastText_.isEmpty()) {
+            toast_->showText(QString::fromUtf8("还没有可朗读的内容"));
+            return;
+        }
+        emit speakRequested(lastText_);
+    });
+    head->addWidget(readLast_);
     if (embedded_) {
         // 嵌入态：窗口按钮没意义；给一个切回遥控器卡的入口。
         full->hide();
@@ -229,10 +243,8 @@ VoiceWindow::VoiceWindow(VoiceController *voice, ProfileStore *store,
     body->setSpacing(embedded_ ? 4 : 8);
 
     mic_ = new MicButton;
-    if (embedded_) {
-        // 左栏只有 286 宽、高度还要和语音卡分：紧凑版麦克风。
-        mic_->setFixedSize(64, 64);
-    }
+    // 与状态/提示同行后不再需要居中巨 mic：嵌入 56 / 独立 96。
+    mic_->setFixedSize(embedded_ ? 56 : 96, embedded_ ? 56 : 96);
     connect(mic_, &QPushButton::clicked, this, [this] {
         if (!listening_) {
             toast_->showText(QString::fromUtf8(
@@ -241,34 +253,55 @@ VoiceWindow::VoiceWindow(VoiceController *voice, ProfileStore *store,
         }
         voice_->mediaToggle();
     });
+    // 麦克风与状态/提示同一行：能一行的不拆两行（用户 2026-11-03 19:32）。
     auto *micRow = new QHBoxLayout;
-    micRow->addStretch(1);
+    micRow->setSpacing(embedded_ ? 8 : 12);
     micRow->addWidget(mic_);
-    micRow->addStretch(1);
-    body->addLayout(micRow);
-
+    auto *micText = new QVBoxLayout;
+    micText->setSpacing(2);
     stateLabel_ = new QLabel(QString::fromUtf8("点击开始 · 再点结束"));
     stateLabel_->setObjectName("voiceStateLine");
-    stateLabel_->setAlignment(Qt::AlignHCenter);
-    body->addWidget(stateLabel_);
-
+    stateLabel_->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+    micText->addWidget(stateLabel_);
     hintLabel_ = new QLabel;
     hintLabel_->setObjectName("muted");
-    hintLabel_->setAlignment(Qt::AlignHCenter);
+    hintLabel_->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+    hintLabel_->setWordWrap(true);
     refreshHint();
     // 嵌入态高度金贵：热键提示在引导/语音卡 tooltip 里有，这里不占行。
     if (embedded_) {
         hintLabel_->hide();
     }
-    body->addWidget(hintLabel_);
+    micText->addWidget(hintLabel_);
+    micText->addStretch(1);
+    micRow->addLayout(micText, 1);
+    body->addLayout(micRow);
 
+    // 对话块：最新转写 + 历史。整面板不滚动，只有这一块内部滚（滚轮）。
     transcript_ = new QLabel(QString::fromUtf8("说了话会显示在这里，点击可复制"));
     transcript_->setObjectName("voiceTranscript");
     transcript_->setWordWrap(true);
-    transcript_->setMinimumHeight(embedded_ ? 36 : 64);
+    transcript_->setMinimumHeight(embedded_ ? 32 : 56);
+    transcript_->setMaximumHeight(embedded_ ? 48 : 76);
     transcript_->setCursor(Qt::PointingHandCursor);
     transcript_->installEventFilter(this);
     body->addWidget(transcript_);
+
+    history_ = new QListWidget;
+    history_->setObjectName("voiceHistory");
+    history_->setFrameShape(QFrame::NoFrame);
+    history_->setSelectionMode(QAbstractItemView::NoSelection);
+    history_->setFocusPolicy(Qt::NoFocus);
+    history_->setWordWrap(true);
+    history_->setSpacing(2);
+    // 原生滚动条又粗又突兀：藏掉，滚轮照常滚（全局 QSS 也已宽/高 0）。
+    history_->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    history_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    history_->setHorizontalScrollMode(QAbstractItemView::ScrollPerPixel);
+    history_->setTextElideMode(Qt::ElideNone);
+    connect(history_, &QListWidget::itemClicked, this,
+            [this](QListWidgetItem *item) { copyText(item->data(Qt::UserRole).toString()); });
+    body->addWidget(history_, 1);
 
     // 打字对话：不想说话/环境吵时敲一句，路由与说话完全相同。
     auto *typedRow = new QHBoxLayout;
@@ -297,43 +330,9 @@ VoiceWindow::VoiceWindow(VoiceController *voice, ProfileStore *store,
     typedRow->addWidget(send);
     body->addLayout(typedRow);
 
-    auto *historyRow = new QHBoxLayout;
-    auto *historyTitle = new QLabel(QString::fromUtf8("最近"));
-    historyTitle->setObjectName("muted");
-    readLast_ = new QPushButton(QString::fromUtf8("朗读最近"));
-    readLast_->setObjectName("ghostText");
-    readLast_->setCursor(Qt::PointingHandCursor);
-    readLast_->setToolTip(QString::fromUtf8("用桌宠的 TTS 念出最近一条转写"));
-    readLast_->setEnabled(false);
-    connect(readLast_, &QPushButton::clicked, this, [this] {
-        if (lastText_.isEmpty()) {
-            toast_->showText(QString::fromUtf8("还没有可朗读的内容"));
-            return;
-        }
-        emit speakRequested(lastText_);
-    });
-    historyRow->addWidget(historyTitle);
-    historyRow->addStretch(1);
-    historyRow->addWidget(readLast_);
-
-    history_ = new QListWidget;
-    history_->setObjectName("voiceHistory");
-    history_->setFrameShape(QFrame::NoFrame);
-    history_->setSelectionMode(QAbstractItemView::NoSelection);
-    history_->setFocusPolicy(Qt::NoFocus);
-    history_->setWordWrap(true);
-    history_->setSpacing(2);
-    // 原生滚动条在深色小面板上又粗又突兀：都藏掉，滚轮照常滚。
-    // 横向按像素滚 + 只认视口宽，长句子换行而不是把列表撑出一根横条。
-    history_->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    history_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    history_->setHorizontalScrollMode(QAbstractItemView::ScrollPerPixel);
-    history_->setTextElideMode(Qt::ElideNone);
-    connect(history_, &QListWidget::itemClicked, this,
-            [this](QListWidgetItem *item) { copyText(item->data(Qt::UserRole).toString()); });
-
-    // 交给哪个 Agent：从桌宠右键挪到语音面板，设置一次就能一直用。
-    auto *agentRow = new QHBoxLayout;
+    // 交给 + 派活合并一行（能一行的不拆两行）。
+    auto *pickRow = new QHBoxLayout;
+    pickRow->setSpacing(6);
     auto *agentLabel = new QLabel(QString::fromUtf8("交给"));
     agentLabel->setObjectName("muted");
     agentTarget_ = new QComboBox;
@@ -350,12 +349,6 @@ VoiceWindow::VoiceWindow(VoiceController *voice, ProfileStore *store,
                                     agentTarget_->itemData(index).toString());
                 refreshDispatchMode();
             });
-    agentRow->addWidget(agentLabel);
-    agentRow->addWidget(agentTarget_, 1);
-    body->addLayout(agentRow);
-
-    // 每宿主派活模式：跟着「交给」的 pin 走；没 pin 时禁用并提示先选宿主。
-    auto *modeRow = new QHBoxLayout;
     auto *modeLabel = new QLabel(QString::fromUtf8("派活"));
     modeLabel->setObjectName("muted");
     dispatchMode_ = new QComboBox;
@@ -363,6 +356,9 @@ VoiceWindow::VoiceWindow(VoiceController *voice, ProfileStore *store,
                            QString());
     dispatchMode_->addItem(QString::fromUtf8("下次派活开新任务"),
                            QStringLiteral("new"));
+    dispatchMode_->setToolTip(QString::fromUtf8(
+        "续当前会话 = 粘进当前打开的会话输入框，读回验证；"
+        "下次派活开新任务 = 一次性，交付后自动回到续当前会话"));
     connect(dispatchMode_, &QComboBox::currentIndexChanged, this,
             [this](int index) {
                 if (index < 0 || agentTarget_ == nullptr) {
@@ -375,13 +371,11 @@ VoiceWindow::VoiceWindow(VoiceController *voice, ProfileStore *store,
                 store_->setUiString(QStringLiteral("dispatch_mode_") + exe,
                                     dispatchMode_->itemData(index).toString());
             });
-    modeRow->addWidget(modeLabel);
-    modeRow->addWidget(dispatchMode_, 1);
-    body->addLayout(modeRow);
-    // 历史垫底（stretch）：嵌入态高度紧时先把它压到 0，保证「交给/派活」
-    // 两个下拉永远可见，不被裁到滚动折叠线下面（2026-11-03 真机）。
-    body->addLayout(historyRow);
-    body->addWidget(history_, 1);
+    pickRow->addWidget(agentLabel);
+    pickRow->addWidget(agentTarget_, 1);
+    pickRow->addWidget(modeLabel);
+    pickRow->addWidget(dispatchMode_, 1);
+    body->addLayout(pickRow);
     refreshAgentTarget();
 
     auto *footW = new QWidget;

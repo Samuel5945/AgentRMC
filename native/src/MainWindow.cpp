@@ -401,16 +401,9 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
     leftStack_ = new QStackedWidget;
     leftStack_->addWidget(buildRemoteCard());
     embeddedVoice_ = new VoiceWindow(voice_, store_.get(), this, true);
-    // 滚动兜底：左栏高度不够时出滚动条，而不是把语音页控件压到重叠。
-    auto *voiceScroll = new QScrollArea;
-    voiceScroll->setFrameShape(QFrame::NoFrame);
-    voiceScroll->setWidgetResizable(true);
-    voiceScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    voiceScroll->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    voiceScroll->viewport()->setStyleSheet(
-        QStringLiteral("background: transparent;"));
-    voiceScroll->setWidget(embeddedVoice_);
-    leftStack_->addWidget(voiceScroll);
+    // 控件整体不滚动（用户 19:32）：只有面板内对话块内部滚；布局已紧凑到
+    // 主窗最小高度也放得下，不再套外层 QScrollArea。
+    leftStack_->addWidget(embeddedVoice_);
     connect(embeddedVoice_, &VoiceWindow::embedExitRequested, this,
             [this] { setLeftPanel(false); });
     connect(embeddedVoice_, &VoiceWindow::typedSubmitted, this,

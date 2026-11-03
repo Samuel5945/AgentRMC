@@ -1070,7 +1070,8 @@ void MainWindow::refreshWorkItems() {
 
     QStringList aliveWorkers;
     for (const QString &exe : AgentWindow::knownExes()) {
-        if (AgentWindow::alive(exe)) {
+        // 过滤下拉按进程算：宿主收进托盘时它的待办仍要能被筛出来。
+        if (AgentWindow::processAlive(exe)) {
             aliveWorkers.append(exe);
         }
     }
@@ -1258,7 +1259,9 @@ QJsonArray MainWindow::workersArray() const {
     QJsonArray workers;
     const QString foreground = AgentWindow::foregroundAgentExe();
     for (const QString &exe : AgentWindow::knownExes()) {
-        if (!AgentWindow::alive(exe)) {
+        // 进程在跑就算 Worker（收进托盘 / 隐藏窗口的宿主不能从表里消失，
+        // 否则待办「进了列表没人认领」）；有没有可交互窗口单独给 window 字段。
+        if (!AgentWindow::processAlive(exe)) {
             continue;
         }
         int open = 0;
@@ -1295,6 +1298,7 @@ QJsonArray MainWindow::workersArray() const {
             {QStringLiteral("exe"), exe},
             {QStringLiteral("name"), name},
             {QStringLiteral("alive"), true},
+            {QStringLiteral("window"), AgentWindow::alive(exe)},
             {QStringLiteral("foreground"),
              foreground.compare(exe, Qt::CaseInsensitive) == 0},
             {QStringLiteral("open_items"), open},
@@ -1394,7 +1398,7 @@ QJsonObject MainWindow::pluginHealth(QStringList *problems) const {
             {QStringLiteral("installed"), host.version},
             {QStringLiteral("loaded"), loaded},
             {QStringLiteral("enabled"), host.enabled},
-            {QStringLiteral("running"), AgentWindow::alive(host.exe)},
+            {QStringLiteral("running"), AgentWindow::processAlive(host.exe)},
             {QStringLiteral("state"), state},
             {QStringLiteral("last_report"),
              lastReport.isValid()
@@ -1458,7 +1462,7 @@ QJsonObject MainWindow::pluginHealth(QStringList *problems) const {
             {QStringLiteral("installed"), bundle.version},
             {QStringLiteral("loaded"), loaded},
             {QStringLiteral("enabled"), bundle.enabled},
-            {QStringLiteral("running"), AgentWindow::alive(bundle.exe)},
+            {QStringLiteral("running"), AgentWindow::processAlive(bundle.exe)},
             {QStringLiteral("state"), state},
             {QStringLiteral("last_report"),
              lastReport.isValid()
@@ -1487,7 +1491,8 @@ QJsonArray MainWindow::pluginBridges() const {
     // 与插件走同一条路。判据只认这家的配置家存在，不猜别家。
     const QString home = QDir::homePath() + QStringLiteral("/.opensquilla");
     if (QDir(home).exists()) {
-        const bool running = AgentWindow::alive(QStringLiteral("OpenSquilla.exe"));
+        const bool running =
+            AgentWindow::processAlive(QStringLiteral("OpenSquilla.exe"));
         bridges.append(QJsonObject{
             {QStringLiteral("name"), QStringLiteral("OpenSquilla")},
             {QStringLiteral("exe"), QStringLiteral("OpenSquilla.exe")},
@@ -1538,7 +1543,7 @@ void MainWindow::upgradePlugins() {
             // detail 上，自己拼会把它吞掉。
             lines << QString::fromUtf8("%1 %2%3")
                          .arg(host.name, result.detail,
-                              AgentWindow::alive(host.exe)
+                              AgentWindow::processAlive(host.exe)
                                   ? QString::fromUtf8("（重启该宿主才加载）")
                                   : QString());
         } else {
@@ -1579,7 +1584,7 @@ void MainWindow::trackPluginTransitions() {
         }
         const QString seen = pluginSeenInstalled_.value(host.name);
         if (!seen.isEmpty() && seen != host.version &&
-            AgentWindow::alive(host.exe)) {
+            AgentWindow::processAlive(host.exe)) {
             // 版本是在运行期间换的，而这家宿主还开着：它已经起来的会话里 hook 命令
             // 仍指向上一版目录。那一版目录要是被安装器删了，提醒就静默没了。
             pluginAwaitingReport_.insert(host.name, true);
@@ -1632,7 +1637,8 @@ void MainWindow::refreshHealth() {
     }
     int workers = 0;
     for (const QString &exe : AgentWindow::knownExes()) {
-        if (AgentWindow::alive(exe)) {
+        // 健康行的 Worker 数按进程算，和「待我处理」页 / Worker 表同口径。
+        if (AgentWindow::processAlive(exe)) {
             ++workers;
         }
     }
@@ -1840,6 +1846,7 @@ void MainWindow::refreshSystemPage() {
         const QString name = worker.value(QStringLiteral("name")).toString();
         const bool foreground =
             worker.value(QStringLiteral("foreground")).toBool();
+        const bool window = worker.value(QStringLiteral("window")).toBool();
         const QString last =
             worker.value(QStringLiteral("last_activity")).toString();
         QDateTime lastAt = QDateTime::fromString(last, Qt::ISODateWithMs);
@@ -1850,9 +1857,13 @@ void MainWindow::refreshSystemPage() {
             lastAt.isValid()
                 ? lastAt.toLocalTime().toString(QStringLiteral("HH:mm"))
                 : QStringLiteral("—");
+        // 进程活着但窗口收起来了要跟「在线」区分开：用户得知道为什么
+        // 语音派活没送到它头上（没有可交互窗口就不注入）。
+        const QString state = foreground ? QString::fromUtf8("前台")
+                              : window   ? QString::fromUtf8("在线")
+                                         : QString::fromUtf8("窗口隐藏");
         const QVector<QPair<QString, QString>> columns = {
-            {name, foreground ? QString::fromUtf8("前台")
-                              : QString::fromUtf8("在线")},
+            {name, state},
             {QString::number(worker.value(QStringLiteral("needs_me")).toInt()),
              QString::number(worker.value(QStringLiteral("review")).toInt())},
             {QString::number(worker.value(QStringLiteral("working")).toInt()),

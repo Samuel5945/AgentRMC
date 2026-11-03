@@ -21,6 +21,11 @@ QString detectAgentExe(const QString &preferred = QString());
 // 该映像名对应的宿主是否真活着（严格按这一个名字找窗口，不回落其它宿主）。
 bool alive(const QString &exe);
 
+// 该映像名的进程是否在跑（不看窗口）。托盘 / 隐藏窗口的宿主进程活着但没有
+// 可交互窗口——alive() 会判否，这里判是。状态展示、Worker 表、「交给」下拉
+// 用它；语音分流和 raise 仍必须 alive()（没窗口的话注入会打进别的窗口）。
+bool processAlive(const QString &exe);
+
 // 前台窗口的进程映像名（取不到返回空）。
 QString foregroundExe();
 

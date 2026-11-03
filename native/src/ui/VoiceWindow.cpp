@@ -444,17 +444,34 @@ void VoiceWindow::refreshAgentTarget() {
     agentTarget_->addItem(QString::fromUtf8("自动判断"), QString());
     bool anyAlive = false;
     for (const QString &exe : AgentWindow::knownExes()) {
-        if (!AgentWindow::alive(exe)) {
+        // 进程在跑就列出；窗口收进托盘的标注「窗口隐藏」——选它语音派活
+        // 不会硬注入（没有可交互窗口，粘了也是粘到别人窗口上）。
+        if (!AgentWindow::processAlive(exe)) {
             continue;
         }
         anyAlive = true;
-        agentTarget_->addItem(AgentWindow::displayName(exe), exe);
+        if (AgentWindow::alive(exe)) {
+            agentTarget_->addItem(AgentWindow::displayName(exe), exe);
+        } else {
+            agentTarget_->addItem(
+                QString::fromUtf8("%1（窗口隐藏）")
+                    .arg(AgentWindow::displayName(exe)),
+                exe);
+        }
     }
-    if (!pinned.isEmpty() && !AgentWindow::alive(pinned)) {
+    if (!pinned.isEmpty() && !AgentWindow::processAlive(pinned)) {
         agentTarget_->addItem(
             QString::fromUtf8("%1（未运行）")
                 .arg(AgentWindow::displayName(pinned)),
             pinned);
+    } else if (!pinned.isEmpty() && !AgentWindow::alive(pinned)) {
+        // 钉住的宿主进程在但窗口收起来了：也标出来，别让用户以为能直接派。
+        const int existing = agentTarget_->findData(pinned);
+        if (existing >= 0) {
+            agentTarget_->setItemText(
+                existing, QString::fromUtf8("%1（窗口隐藏）")
+                              .arg(AgentWindow::displayName(pinned)));
+        }
     }
     int index = agentTarget_->findData(pinned);
     if (index < 0) {

@@ -501,6 +501,18 @@ bool VoicePet::ttsReady() const {
 }
 
 QString VoicePet::stateJson() const {
+    // agents：已知宿主逐个报「进程在不在 / 有没有可交互窗口」。用户排查
+    // 「为什么没送过去」时不用再猜——收进托盘的宿主是 process=1 window=0，
+    // 语音派活这时候会故意不注入（粘了也是粘到别的窗口上）。
+    QJsonArray agents;
+    for (const QString &exe : AgentWindow::knownExes()) {
+        agents.append(QJsonObject{
+            {QStringLiteral("exe"), exe},
+            {QStringLiteral("name"), AgentWindow::displayName(exe)},
+            {QStringLiteral("process"), AgentWindow::processAlive(exe)},
+            {QStringLiteral("window"), AgentWindow::alive(exe)},
+        });
+    }
     const QJsonObject obj{
         {QStringLiteral("pet_visible"), isVisible()},
         {QStringLiteral("pet_enabled"), petEnabled()},
@@ -510,6 +522,7 @@ QString VoicePet::stateJson() const {
         {QStringLiteral("transcribing"), transcribing_},
         {QStringLiteral("chat_mode"), chatMode_},
         {QStringLiteral("tts_ready"), tts_ != nullptr && tts_->ready()},
+        {QStringLiteral("agents"), agents},
     };
     return QString::fromUtf8(
         QJsonDocument(obj).toJson(QJsonDocument::Compact));
@@ -659,6 +672,17 @@ bool VoicePet::handOffToAgent(const QString &text, const QString &exe) {
     AgentWindow::raise(exe);
     // 焦点切换不是瞬时的，等一拍再粘，否则粘贴打到旧窗口上。
     QTimer::singleShot(180, this, [this, text, exe, shortName] {
+        // raise 之后前台必须真的切到目标宿主才注入：宿主收在托盘 / 完全
+        // 退出时 raise 找不到窗口，硬注入会把这句话打进用户正待着的窗口。
+        if (AgentWindow::foregroundAgentExe().compare(exe,
+                                                      Qt::CaseInsensitive) != 0) {
+            QApplication::clipboard()->setText(text);
+            bubbleOnly(
+                QString::fromUtf8("%1 没抢到前台，已复制，切过去粘贴")
+                    .arg(shortName),
+                4600, exe);
+            return;
+        }
         if (voice_ == nullptr || !voice_->injectText(text, true)) {
             // 注入被拦（UIPI/宿主不吃模拟按键）：退回复制，至少这句话不丢。
             QApplication::clipboard()->setText(text);

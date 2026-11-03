@@ -4,6 +4,7 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+#include <tlhelp32.h>
 
 #include <QPair>
 #include <QVector>
@@ -116,6 +117,32 @@ QString detectAgentExe(const QString &preferred) {
 
 bool alive(const QString &exe) {
     return !exe.isEmpty() && windowFor(exe) != nullptr;
+}
+
+bool processAlive(const QString &exe) {
+    if (exe.isEmpty()) {
+        return false;
+    }
+    // 窗口枚举找不到它，但进程可能还在（收进托盘 / 隐藏窗口）：直接查
+    // 进程快照按映像名对。Electron 宿主会有七八个子进程，命中一个就算在跑。
+    const std::wstring image = exe.toStdWString();
+    HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snapshot == INVALID_HANDLE_VALUE) {
+        return false;
+    }
+    PROCESSENTRY32W entry{};
+    entry.dwSize = sizeof(entry);
+    bool found = false;
+    if (Process32FirstW(snapshot, &entry)) {
+        do {
+            if (_wcsicmp(entry.szExeFile, image.c_str()) == 0) {
+                found = true;
+                break;
+            }
+        } while (Process32NextW(snapshot, &entry));
+    }
+    CloseHandle(snapshot);
+    return found;
 }
 
 QString foregroundExe() {

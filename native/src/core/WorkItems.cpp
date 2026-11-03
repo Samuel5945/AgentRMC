@@ -159,6 +159,35 @@ WorkItem WorkItemStore::upsert(const QString &source, const QString &agentExe,
     const QDateTime now = QDateTime::currentDateTimeUtc();
     const QString stage = stageForKind(kind);
 
+    // 已有活跃工单的 session，它的 stop 归那张卡的 lineage：无 session 的
+    // voice 派活回执不许吸收（真机 16:29 把用户会话错标到派活卡上），
+    // 而是把 voice 回执结案，注意力落在该 session 自己的卡上。
+    if (kind == QStringLiteral("stop") && !sessionId.isEmpty()) {
+        bool owned = false;
+        for (const WorkItem &item : items_) {
+            if (!item.done && item.sessionId == sessionId) {
+                owned = true;
+                break;
+            }
+        }
+        if (owned) {
+            const QDateTime cutoff = now.addSecs(-300);
+            for (WorkItem &item : items_) {
+                if (item.done || item.source != QStringLiteral("voice") ||
+                    !item.sessionId.isEmpty() || item.updatedAt < cutoff) {
+                    continue;
+                }
+                if (!agentExe.isEmpty() &&
+                    item.agentExe.compare(agentExe, Qt::CaseInsensitive) != 0) {
+                    continue;
+                }
+                item.done = true;
+                item.stage = QStringLiteral("done");
+                item.updatedAt = now;
+            }
+        }
+    }
+
     // 同一 session 的新活动（permission/progress/…）说明上一轮已经翻篇，
     // 旧 review 直接归档；stop 还要保留本轮新 review，所以放到后面处理。
     if (kind != QStringLiteral("stop") && !sessionId.isEmpty()) {

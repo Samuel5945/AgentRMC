@@ -750,8 +750,9 @@ void VoicePet::handOffPollForeground(const QString &text, const QString &exe,
             if (hasFocus && voice_ != nullptr &&
                 voice_->sendHotkey(focusMods, focusVk)) {
                 // 等聊天输入页打开并聚焦再粘（Qoder 的 Ctrl+N 开新任务输入页）。
+                // 走读回验证：一次性新任务的消费要有真交付证明，与 WorkBuddy 路同口径。
                 QTimer::singleShot(300, this, [this, text, exe, shortName] {
-                    handOffPaste(text, exe, shortName);
+                    handOffVerifiedPaste(text, exe, shortName);
                 });
                 return;
             }
@@ -787,14 +788,14 @@ void VoicePet::handOffNewTask(const QString &text, const QString &exe,
     constexpr int kVkReturn = 0x0D;  // 不引 windows.h，值就是 VK_RETURN
     if (!att.focused || voice_ == nullptr ||
         !voice_->sendHotkey(QStringList(), kVkReturn)) {
-        // 没成也照旧直粘：焦点位置未知，但这正是本次改动前的行为，
-        // 不做「剪贴板兜底」这种倒退；把成因写进气泡，便于事后判断。
-        bubbleOnly(QString::fromUtf8("%1 新建任务没成（%2），粘进当前会话")
+        // 新任务意图失败不降级成续聊：粘进用户当前会话等于替用户决定语义
+        // （真机 16:29 泄漏）。回落剪贴板喊人手动发，成因写进气泡。
+        QApplication::clipboard()->setText(text);
+        bubbleOnly(QString::fromUtf8("%1 新建任务没成（%2），已复制，切过去手动发")
                        .arg(shortName, att.fail.isEmpty()
-                                           ? QStringLiteral("已粘贴")
+                                           ? QStringLiteral("回车注入失败")
                                            : att.fail),
                    5200, exe);
-        handOffPaste(text, exe, shortName);
         return;
     }
     QTimer::singleShot(350, this, [this, text, exe, shortName] {

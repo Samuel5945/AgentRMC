@@ -167,6 +167,50 @@ int main(int argc, char *argv[]) {
           rReady.id == rProgress.id && rReady.stage == "review" &&
               reported.items().size() == 1);
 
+    // voice 回执与 stop 的归属（真机 16:29 错标复核）：
+    // 1) session 无活跃卡 → stop 吸收进 voice 卡（续聊/新任务首轮）；
+    // 2) session 已有活跃卡 → stop 归该 session 的卡，voice 回执结案不吸收。
+    WorkItemStore own(dir.path() + "/voice-owned.json");
+    const WorkItem v1 = own.upsert("voice", "WorkBuddy.exe", "", "", "voice",
+                                   "WorkBuddy", "派活句一", "WorkBuddy.exe");
+    const WorkItem s1 = own.upsert("hook", "WorkBuddy.exe", "sA", "D:/repo",
+                                   "stop", "WorkBuddy", "收到",
+                                   "WorkBuddy.exe", "");
+    check("untracked session stop merges into the voice receipt",
+          s1.id == v1.id && s1.stage == "review" && s1.sessionId == "sA");
+    check("ack the merged review", own.ack(s1.id));
+
+    const WorkItem v2 = own.upsert("voice", "WorkBuddy.exe", "", "", "voice",
+                                   "WorkBuddy", "派活句二", "WorkBuddy.exe");
+    const WorkItem s2 = own.upsert("hook", "WorkBuddy.exe", "sA", "D:/repo",
+                                   "stop", "WorkBuddy", "收到二",
+                                   "WorkBuddy.exe", "");
+    check("acked session is untracked again: stop merges into new receipt",
+          s2.id == v2.id && s2.stage == "review");
+
+    const WorkItem foreign = own.upsert("hook", "WorkBuddy.exe", "sB",
+                                        "D:/repo", "stop", "WorkBuddy",
+                                        "用户自己的会话跑完了",
+                                        "WorkBuddy.exe", "");
+    check("foreign session gets its own review",
+          foreign.stage == "review" && foreign.id != v2.id);
+    const WorkItem v3 = own.upsert("voice", "WorkBuddy.exe", "", "", "voice",
+                                   "WorkBuddy", "派活句三", "WorkBuddy.exe");
+    const WorkItem sB2 = own.upsert("hook", "WorkBuddy.exe", "sB", "D:/repo",
+                                    "stop", "WorkBuddy", "用户会话又跑完了",
+                                    "WorkBuddy.exe", "");
+    bool v3done = false;
+    QString v3msg;
+    for (const WorkItem &item : own.items()) {
+        if (item.id == v3.id) {
+            v3done = item.done;
+            v3msg = item.message;
+        }
+    }
+    check("tracked session stop does not relabel the voice receipt",
+          v3done && v3msg == QStringLiteral("派活句三") &&
+              sB2.sessionId == "sB" && sB2.id != v3.id);
+
     const WorkItem rBogus = reported.report(
         "WorkBuddyAI.exe", "", "m1", "D:/repo", "done-ish", "WorkBuddy AI", "");
     check("unknown stage is rejected instead of silently accepted",

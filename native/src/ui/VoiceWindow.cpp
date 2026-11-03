@@ -66,27 +66,31 @@ protected:
 
         const QRectF area = rect();
         const QPointF center = area.center();
+        // 几何随控件尺寸缩放（嵌入 64 / 独立 124）：写死 124 的几何在小尺寸
+        // 上会把内盘裁成方块（2026-11-03 真机）。
+        const double side = qMin(area.width(), area.height());
+        const double k = side / 124.0;
 
         // 外环：录音时随电平加粗，给出「听到你了」的反馈。
         QPen ring(recording_
                       ? QColor(0x3f, 0xb9, 0x50)
                       : paletteColor(QStringLiteral("accent"),
                                      QColor(79, 140, 255)));
-        ring.setWidth(recording_ ? int(3 + level_ * 5) : 4);
+        ring.setWidth(qMax(2, int((recording_ ? 3 + level_ * 5 : 4) * k)));
         painter.setPen(ring);
         painter.setBrush(Qt::NoBrush);
-        const double radius = area.width() / 2.0 - ring.width();
+        const double radius = side / 2.0 - ring.width();
         painter.drawEllipse(center, radius, radius);
 
         painter.setPen(Qt::NoPen);
         painter.setBrush(paletteColor(QStringLiteral("card.bg"),
                                       QColor(0x12, 0x17, 0x22)));
-        painter.drawEllipse(center, 44, 44);
+        painter.drawEllipse(center, 44 * k, 44 * k);
 
         if (recording_) {
             painter.setBrush(QColor(0xf8, 0x51, 0x49));
-            painter.drawRoundedRect(QRectF(center.x() - 13, center.y() - 13,
-                                           26, 26), 5, 5);
+            painter.drawRoundedRect(QRectF(center.x() - 13 * k, center.y() - 13 * k,
+                                           26 * k, 26 * k), 5 * k, 5 * k);
             return;
         }
 
@@ -94,18 +98,18 @@ protected:
         const QColor glyph =
             paletteColor(QStringLiteral("text.dim"), QColor(0xc9, 0xd1, 0xd9));
         QPen pen(glyph);
-        pen.setWidth(3);
+        pen.setWidthF(qMax(1.5, 3 * k));
         painter.setPen(pen);
         painter.setBrush(glyph);
-        painter.drawRoundedRect(QRectF(center.x() - 9, center.y() - 22, 18,
-                                       30), 9, 9);
+        painter.drawRoundedRect(QRectF(center.x() - 9 * k, center.y() - 22 * k,
+                                       18 * k, 30 * k), 9 * k, 9 * k);
         painter.setBrush(Qt::NoBrush);
-        painter.drawArc(QRectF(center.x() - 17, center.y() - 12, 34, 26),
-                        180 * 16, 180 * 16);
-        painter.drawLine(QPointF(center.x(), center.y() + 8),
-                         QPointF(center.x(), center.y() + 15));
-        painter.drawLine(QPointF(center.x() - 9, center.y() + 15),
-                         QPointF(center.x() + 9, center.y() + 15));
+        painter.drawArc(QRectF(center.x() - 17 * k, center.y() - 12 * k, 34 * k,
+                               26 * k), 180 * 16, 180 * 16);
+        painter.drawLine(QPointF(center.x(), center.y() + 8 * k),
+                         QPointF(center.x(), center.y() + 15 * k));
+        painter.drawLine(QPointF(center.x() - 9 * k, center.y() + 15 * k),
+                         QPointF(center.x() + 9 * k, center.y() + 15 * k));
     }
 
 private:
@@ -170,7 +174,7 @@ VoiceWindow::VoiceWindow(VoiceController *voice, ProfileStore *store,
 
     auto *header = new DragStrip(this, !embedded_);
     header->setObjectName("voiceHeader");
-    header->setFixedHeight(embedded_ ? 40 : 44);
+    header->setFixedHeight(embedded_ ? 36 : 44);
     auto *head = new QHBoxLayout(header);
     head->setContentsMargins(14, 0, 10, 0);
     head->setSpacing(8);
@@ -220,14 +224,14 @@ VoiceWindow::VoiceWindow(VoiceController *voice, ProfileStore *store,
     root->addWidget(header);
 
     auto *body = new QVBoxLayout;
-    body->setContentsMargins(embedded_ ? 12 : 20, embedded_ ? 8 : 10,
-                             embedded_ ? 12 : 20, embedded_ ? 10 : 14);
-    body->setSpacing(embedded_ ? 6 : 8);
+    body->setContentsMargins(embedded_ ? 10 : 20, embedded_ ? 6 : 10,
+                             embedded_ ? 10 : 20, embedded_ ? 8 : 14);
+    body->setSpacing(embedded_ ? 4 : 8);
 
     mic_ = new MicButton;
     if (embedded_) {
         // 左栏只有 286 宽、高度还要和语音卡分：紧凑版麦克风。
-        mic_->setFixedSize(72, 72);
+        mic_->setFixedSize(64, 64);
     }
     connect(mic_, &QPushButton::clicked, this, [this] {
         if (!listening_) {
@@ -261,7 +265,7 @@ VoiceWindow::VoiceWindow(VoiceController *voice, ProfileStore *store,
     transcript_ = new QLabel(QString::fromUtf8("说了话会显示在这里，点击可复制"));
     transcript_->setObjectName("voiceTranscript");
     transcript_->setWordWrap(true);
-    transcript_->setMinimumHeight(embedded_ ? 40 : 64);
+    transcript_->setMinimumHeight(embedded_ ? 36 : 64);
     transcript_->setCursor(Qt::PointingHandCursor);
     transcript_->installEventFilter(this);
     body->addWidget(transcript_);
@@ -273,6 +277,17 @@ VoiceWindow::VoiceWindow(VoiceController *voice, ProfileStore *store,
     typed_->setObjectName("voiceTyped");
     typed_->setPlaceholderText(QString::fromUtf8("打字说一句话，Enter 发送"));
     typed_->setClearButtonEnabled(true);
+    // placeholder 颜色不吃 QSS：跟主题手动同步，深色下别黑字黑底。
+    const auto syncPlaceholder = [this](const Theme &) {
+        QPalette pal = typed_->palette();
+        pal.setColor(QPalette::PlaceholderText,
+                     paletteColor(QStringLiteral("text.dim"),
+                                  QColor(0x8b, 0x94, 0x9e)));
+        typed_->setPalette(pal);
+    };
+    syncPlaceholder(ThemeManager::instance().current());
+    connect(&ThemeManager::instance(), &ThemeManager::themeChanged, this,
+            syncPlaceholder);
     connect(typed_, &QLineEdit::returnPressed, this, &VoiceWindow::submitTyped);
     auto *send = new QPushButton(QString::fromUtf8("发送"));
     send->setObjectName("ghostSmall");
@@ -300,7 +315,6 @@ VoiceWindow::VoiceWindow(VoiceController *voice, ProfileStore *store,
     historyRow->addWidget(historyTitle);
     historyRow->addStretch(1);
     historyRow->addWidget(readLast_);
-    body->addLayout(historyRow);
 
     history_ = new QListWidget;
     history_->setObjectName("voiceHistory");
@@ -317,7 +331,6 @@ VoiceWindow::VoiceWindow(VoiceController *voice, ProfileStore *store,
     history_->setTextElideMode(Qt::ElideNone);
     connect(history_, &QListWidget::itemClicked, this,
             [this](QListWidgetItem *item) { copyText(item->data(Qt::UserRole).toString()); });
-    body->addWidget(history_, 1);
 
     // 交给哪个 Agent：从桌宠右键挪到语音面板，设置一次就能一直用。
     auto *agentRow = new QHBoxLayout;
@@ -365,6 +378,10 @@ VoiceWindow::VoiceWindow(VoiceController *voice, ProfileStore *store,
     modeRow->addWidget(modeLabel);
     modeRow->addWidget(dispatchMode_, 1);
     body->addLayout(modeRow);
+    // 历史垫底（stretch）：嵌入态高度紧时先把它压到 0，保证「交给/派活」
+    // 两个下拉永远可见，不被裁到滚动折叠线下面（2026-11-03 真机）。
+    body->addLayout(historyRow);
+    body->addWidget(history_, 1);
     refreshAgentTarget();
 
     auto *footW = new QWidget;
@@ -684,6 +701,17 @@ void VoiceWindow::paintEvent(QPaintEvent *event) {
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing, true);
     const QRectF box = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
+
+    if (embedded_) {
+        // 嵌入页跟卡片体系走：card.bg + 细边圆角，与上方语音卡/遥控器卡
+        // 同一视觉语言，不再是一块孤立的平底（2026-11-03 用户反馈）。
+        painter.setPen(QPen(paletteColor(QStringLiteral("w18"),
+                                         QColor(255, 255, 255, 28)), 1.0));
+        painter.setBrush(paletteColor(QStringLiteral("card.bg"),
+                                      QColor(0x12, 0x17, 0x22)));
+        painter.drawRoundedRect(box, 12, 12);
+        return;
+    }
 
     // 主题带面板背景就先铺图再压暗，保住文字可读；classic 走纯色底。
     const Theme &theme = ThemeManager::instance().current();

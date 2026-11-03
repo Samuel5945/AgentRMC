@@ -135,11 +135,12 @@ QPushButton#primarySmall:disabled {
     background: @w8@;
 }
 
-/* 细滚动条：默认的 Windows 滚动条压在背景图上很扎眼。 */
+/* 隐藏滚动条（用户 2026-11-03：所有地方都不要明显滚动条）：
+   宽高 0 不占位，滚轮/触控板照常滚。 */
 QScrollBar:vertical {
     background: transparent;
-    width: 9px;
-    margin: 2px 2px 2px 0;
+    width: 0px;
+    margin: 0;
 }
 
 QScrollBar::handle:vertical {
@@ -164,8 +165,8 @@ QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
 
 QScrollBar:horizontal {
     background: transparent;
-    height: 9px;
-    margin: 0 2px 2px 2px;
+    height: 0px;
+    margin: 0;
 }
 
 QScrollBar::handle:horizontal {
@@ -582,6 +583,21 @@ QDialog#voiceDialog QLineEdit {
     padding: 4px 8px;
     font-size: 11px;
     selection-background-color: @a120@;
+}
+
+/* 输入框全局跟主题：此前只有 voiceDialog 有规则，语音主界面打字行
+   在深色下白框黑底、placeholder 看不见（2026-11-03 真机）。 */
+QLineEdit {
+    color: @text@;
+    background: @card.bg@;
+    border: 1px solid @w18@;
+    border-radius: 8px;
+    padding: 5px 8px;
+    selection-background-color: @a120@;
+}
+
+QLineEdit:focus {
+    border: 1px solid @accent@;
 }
 
 QDialog#voiceDialog QCheckBox {

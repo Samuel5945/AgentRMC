@@ -406,6 +406,7 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
     voiceScroll->setFrameShape(QFrame::NoFrame);
     voiceScroll->setWidgetResizable(true);
     voiceScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    voiceScroll->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     voiceScroll->viewport()->setStyleSheet(
         QStringLiteral("background: transparent;"));
     voiceScroll->setWidget(embeddedVoice_);

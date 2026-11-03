@@ -35,6 +35,16 @@
 - Python 旧版 GUI（agentrc_gui.py）如需打包用 `tools\build_exe.bat`，产物在
   `release\`（与 native 的 dist 交付无关）。
 
+## UI/UX 约定（用户 2026-11-03）
+
+- **所有地方都不要明显滚动条**：全局 QSS 已把 QScrollBar 宽/高设 0（滚轮照常滚）；
+  新增滚动容器一律 `ScrollBarAlwaysOff`，别 reintroduce 可见滚动条。
+- 自绘控件几何必须随控件尺寸缩放（写死像素会在小尺寸上裁切变形）；颜色走主题
+  token；QSS 管不到的（如 QLineEdit placeholder）用 palette 手动同步并挂
+  themeChanged。
+- 嵌入主窗的面板跟卡片体系走（card.bg + 细边圆角）；高度紧张时先压 stretch 项
+  （历史列表等），关键控件（下拉/输入）不许掉到滚动折叠线下面。
+
 ## Native 测试
 
 - **跑 build.bat / package.bat 前先 `unset https_proxy http_proxy`**：Git Bash 里

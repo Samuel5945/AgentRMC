@@ -65,8 +65,8 @@ TtsSettingsDialog::TtsSettingsDialog(ProfileStore *store, QWidget *parent)
     baseUrl_ = new QLineEdit(tts.value("base_url").toString());
     baseUrl_->setPlaceholderText(defaults.ttsBaseUrl);
     baseUrl_->setToolTip(QString::fromUtf8(
-        "OpenAI 兼容的 API 根地址（不含 /chat/completions）。"
-        "默认小米 MiMo；改成 OpenAI / 硅基流动 / DashScope 等同样可用。"));
+        "OpenAI 兼容的 API 根地址（不含 /chat/completions）\n"
+        "默认小米 MiMo；改成 OpenAI / 硅基流动 / DashScope 等同样可用"));
     addRow(QString::fromUtf8("Base URL"), baseUrl_);
 
     apiKey_ = new QLineEdit(tts.value("api_key").toString());
@@ -74,8 +74,8 @@ TtsSettingsDialog::TtsSettingsDialog(ProfileStore *store, QWidget *parent)
     apiKey_->setPlaceholderText(
         QString::fromUtf8("sk-… 在对应平台自填；留空则只有气泡不出声"));
     apiKey_->setToolTip(QString::fromUtf8(
-        "只保存在本机 config.json，不会随配置上传。也可以设环境变量 "
-        "MIMO_API_KEY，此处留空即可。"));
+        "只保存在本机 config.json，不会随配置上传\n"
+        "也可以设环境变量 MIMO_API_KEY，此处留空即可"));
     addRow(QString::fromUtf8("API Key"), apiKey_);
 
     model_ = new QComboBox;
@@ -89,7 +89,8 @@ TtsSettingsDialog::TtsSettingsDialog(ProfileStore *store, QWidget *parent)
         model_->setCurrentText(defaults.ttsModel);
     }
     model_->setToolTip(QString::fromUtf8(
-        "对应平台的 TTS 模型名，可以直接改；默认 mimo-v2.5-tts（限时免费）。"));
+        "对应平台的 TTS 模型名，可以直接改\n"
+        "默认 mimo-v2.5-tts（限时免费）"));
     addRow(QString::fromUtf8("TTS 模型"), model_);
 
     voice_ = new QComboBox;
@@ -131,9 +132,10 @@ TtsSettingsDialog::TtsSettingsDialog(ProfileStore *store, QWidget *parent)
         }
     });
     voice_->setToolTip(QString::fromUtf8(
-        "Chloe = 平台默认音色；跟随主题 = 音色名与描述都用当前主题自带的"
-        "（换主题/主题轮播自动跟着换）；也可以直接手输平台支持的任意音色名。"
-        "换模型/平台后记得换配套音色。"));
+        "Chloe = 平台默认音色\n"
+        "跟随主题 = 音色名与描述都用当前主题自带的（换主题/主题轮播自动跟着换）\n"
+        "也可以直接手输平台支持的任意音色名\n"
+        "换模型/平台后记得换配套音色"));
     addRow(QString::fromUtf8("音色"), voice_);
 
     // 文字音色设定：MiMo 这类 TTS 支持用一句描述定制嗓音和语气，空 = 默认。
@@ -146,8 +148,9 @@ TtsSettingsDialog::TtsSettingsDialog(ProfileStore *store, QWidget *parent)
                                 "留空 = 内置默认（轻快清晰）")
             : themeStyle + QString::fromUtf8("（当前主题的音色，正在生效）"));
     styleEdit_->setToolTip(QString::fromUtf8(
-        "用一句自然语言描述想要的嗓音、语气、语速，合成时作为指令发给模型。"
-        "想正式一点可以写「沉稳的男声，播音腔」；对话多的话别写太长的句子。"));
+        "用一句自然语言描述想要的嗓音、语气、语速，合成时作为指令发给模型\n"
+        "想正式一点可以写「沉稳的男声，播音腔」\n"
+        "对话多的话别写太长的句子"));
     addRow(QString::fromUtf8("音色描述"), styleEdit_);
 
     // 输出设备：软件只能从这里的列表选，系统默认还是耳机自己定。
@@ -161,8 +164,9 @@ TtsSettingsDialog::TtsSettingsDialog(ProfileStore *store, QWidget *parent)
         }
     }
     output_->setToolTip(QString::fromUtf8(
-        "桌宠说话从哪个设备出声。列表来自当前插着的输出设备，"
-        "插上耳机/音箱后重新打开这个设置刷新。"));
+        "桌宠说话从哪个设备出声\n"
+        "列表来自当前插着的输出设备\n"
+        "插上耳机/音箱后重新打开这个设置刷新"));
     addRow(QString::fromUtf8("输出设备"), output_);
 
     auto *previewRow = new QHBoxLayout;

@@ -106,8 +106,9 @@ LlmSettingsDialog::LlmSettingsDialog(ProfileStore *store, QWidget *parent)
             QString::fromUtf8("留空 = 跟随语音反馈的音色"));
     }
     chatVoice_->setToolTip(QString::fromUtf8(
-        "对话模式朗读回复用的音色；留空 = 跟随「语音反馈 → 设置」里的音色。"
-        "换 TTS 平台/模型后记得换成它支持的音色名。"));
+        "对话模式朗读回复用的音色\n"
+        "留空 = 跟随「语音反馈 → 设置」里的音色\n"
+        "换 TTS 平台/模型后记得换成它支持的音色名"));
     addRow(QString::fromUtf8("回复音色"), chatVoice_);
 
     auto *testRow = new QHBoxLayout;

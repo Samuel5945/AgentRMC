@@ -33,8 +33,8 @@ AppPage::AppPage(ProfileStore *store, QWidget *parent)
     add->setObjectName("ghostText");
     add->setCursor(Qt::PointingHandCursor);
     add->setToolTip(QString::fromUtf8(
-        "加一个自定义应用：填名字和一个 exe/快捷方式/网址路径，"
-        "之后说「打开 名字」就能启动。"));
+        "加一个自定义应用：填名字和一个 exe/快捷方式/网址路径\n"
+        "之后说「打开 名字」就能启动"));
     connect(add, &QPushButton::clicked, this, [this] { addCustomApp(); });
     auto *rescan = new QPushButton(QString::fromUtf8("重新扫描"));
     rescan->setObjectName("ghostText");
@@ -79,8 +79,8 @@ AppPage::AppPage(ProfileStore *store, QWidget *parent)
     summary_->setObjectName("muted");
     summary_->setWordWrap(true);
     const QString tip = QStringLiteral(
-        "开着时，本地识别出来的「打开 xx」会直接启动应用，不再贴进输入框；"
-        "想把这句话原样打给 Agent，就关掉它。");
+        "开着：本地识别出的「打开 xx」直接启动应用，不再贴进输入框\n"
+        "想把这句话原样打给 Agent，就关掉它");
     auto *voiceLabel = new QLabel(QStringLiteral("语音启动"));
     voiceLabel->setObjectName("muted");
     voiceLabel->setToolTip(tip);

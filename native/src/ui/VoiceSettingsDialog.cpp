@@ -78,8 +78,8 @@ VoiceSettingsDialog::VoiceSettingsDialog(ProfileStore *store, QWidget *parent)
     themeImport->setObjectName("ghostSmall");
     themeImport->setCursor(Qt::PointingHandCursor);
     themeImport->setToolTip(QString::fromUtf8(
-        "选一个主题包 .zip（theme.json + pet/ + backgrounds/），"
-        "装进 themes 并立即换上；同名主题会被更新覆盖。"));
+        "选一个主题包 .zip（theme.json + pet/ + backgrounds/）\n"
+        "装进 themes 并立即换上；同名主题会被更新覆盖"));
     connect(themeImport, &QPushButton::clicked, this, [this] {
         const QString file = QFileDialog::getOpenFileName(
             this, QString::fromUtf8("选择主题包"),
@@ -104,8 +104,8 @@ VoiceSettingsDialog::VoiceSettingsDialog(ProfileStore *store, QWidget *parent)
     themeDir->setObjectName("ghostSmall");
     themeDir->setCursor(Qt::PointingHandCursor);
     themeDir->setToolTip(QString::fromUtf8(
-        "每个主题一个文件夹（theme.json + pet 状态帧 + backgrounds）。"
-        "把新主题文件夹丢进去，重开设置就能选。"));
+        "每个主题一个文件夹（theme.json + pet 状态帧 + backgrounds）\n"
+        "把新主题文件夹丢进去，重开设置就能选"));
     connect(themeDir, &QPushButton::clicked, this, [] {
         QDir().mkpath(ThemeManager::themesRoot());
         QDesktopServices::openUrl(QUrl::fromLocalFile(ThemeManager::themesRoot()));
@@ -155,8 +155,9 @@ VoiceSettingsDialog::VoiceSettingsDialog(ProfileStore *store, QWidget *parent)
     const int langIndex = language_->findData(languageKey);
     language_->setCurrentIndex(langIndex >= 0 ? langIndex : 0);
     language_->setToolTip(QString::fromUtf8(
-        "只对 SenseVoice 生效。说「打开 WorkBuddy」这类中英混的话选自动，"
-        "英文应用名不会被硬翻成汉字。"));
+        "只对 SenseVoice 生效\n"
+        "说「打开 WorkBuddy」这类中英混的话选自动\n"
+        "英文应用名不会被硬翻成汉字"));
     langRow->addWidget(langLabel);
     langRow->addWidget(language_, 1);
     root->addLayout(langRow);
@@ -173,8 +174,8 @@ VoiceSettingsDialog::VoiceSettingsDialog(ProfileStore *store, QWidget *parent)
     kbHotkey_->addItem(QString::fromUtf8("Ctrl+Shift+Space"), "ctrl+shift+32");
     kbHotkey_->addItem(QString::fromUtf8("Alt+V"), "alt+86");
     kbHotkey_->setToolTip(QString::fromUtf8(
-        "不插遥控器也能用：全局一键开始/结束说话，静音后自动收尾。"
-        "组合键被别的程序占用时会注册失败，换一个即可。"));
+        "不插遥控器也能用：全局一键开始/结束说话，静音后自动收尾\n"
+        "组合键被别的程序占用时会注册失败，换一个即可"));
     const QJsonObject kb = voice.value("keyboard_hotkey").toObject();
     if (!kb.value("enabled").toBool(true)) {
         kbHotkey_->setCurrentIndex(0);
@@ -279,8 +280,9 @@ VoiceSettingsDialog::VoiceSettingsDialog(ProfileStore *store, QWidget *parent)
     headset_ = new QCheckBox(QString::fromUtf8("耳机播放键 = 语音开关"));
     headset_->setChecked(media.value("enabled").toBool(true));
     headset_->setToolTip(QString::fromUtf8(
-        "按一次开始、再按一次结束。本地转写时静音 %1 秒自动收尾；"
-        "转发热键模式 %2 秒自动释放组合键，免得 Ctrl+Shift 一直按住。")
+        "按一次开始、再按一次结束\n"
+        "本地转写时静音 %1 秒自动收尾\n"
+        "转发热键模式 %2 秒自动释放组合键，免得 Ctrl+Shift 一直按住")
         .arg(defaults.mediaSilenceMs / 1000)
         .arg(defaults.mediaAutoStopMs / 1000));
     root->addWidget(headset_);

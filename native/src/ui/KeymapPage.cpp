@@ -246,8 +246,9 @@ void KeymapPage::buildUi() {
     footHint_->setStyleSheet(
         "QLabel#mapFoot { color: #5b6472; font-size: 10px; }");
     const QString takeoverTip = QStringLiteral(
-        "开关打开后，当前前台场景生效：吞掉映射键原生事件再按映射注入。"
-        "实体键盘同名键也会按映射处理；双击键的单击延迟约 0.3 秒。");
+        "打开后当前前台场景生效：吞掉映射键原生事件，再按映射注入\n"
+        "实体键盘同名键也会按映射处理\n"
+        "双击键的单击延迟约 0.3 秒");
     takeoverLabel_ = new QLabel(QStringLiteral("接管原生键"));
     takeoverLabel_->setObjectName("mapTakeover");
     takeoverLabel_->setFixedWidth(58);
@@ -482,18 +483,19 @@ MapCellData KeymapPage::doubleCell(int vk, const Profile &profile) const {
     }
     if (vk == 27) {
         return {QStringLiteral("音量/亮度模式"), QStringLiteral("双击进入"),
-                QStringLiteral("双击进入音量 / 亮度模式：↑↓ 音量、←→ 屏幕亮度；"
-                               "再双击返回或 12 秒无操作退出"),
+                QStringLiteral("双击进入音量 / 亮度模式\n"
+                               "↑↓ 音量、←→ 屏幕亮度\n"
+                               "再双击返回，或 12 秒无操作退出"),
                 true};
     }
     if (vk == 93) {
         return {QStringLiteral("鼠标模式"), QStringLiteral("双击进入"),
-                QStringLiteral("双击进入鼠标模式：方向键移动、OK 左键；单击菜单退出"),
+                QStringLiteral("双击进入鼠标模式\n方向键移动、OK 左键\n单击菜单退出"),
                 true};
     }
     if (vk == 36 && hasNav(profile)) {
         return {QStringLiteral("导航模式"), QStringLiteral("双击切换"),
-                QStringLiteral("双击切换导航模式：↑↓ 翻页、←→ 切换控件；单击主页退出"),
+                QStringLiteral("双击切换导航模式\n↑↓ 翻页、←→ 切换控件\n单击主页退出"),
                 true};
     }
     return {dash(), {}, QStringLiteral("双击无动作，点击选择常用动作"), true};

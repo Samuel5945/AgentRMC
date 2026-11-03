@@ -61,16 +61,16 @@ AsrSettingsDialog::AsrSettingsDialog(ProfileStore *store, QWidget *parent)
             : QStringLiteral("chat");
     style_->setCurrentIndex(style_->findData(styleKey));
     style_->setToolTip(QString::fromUtf8(
-        "小米 MiMo（mimo-v2.5-asr）选 MiMo 式；OpenAI/硅基流动/Groq 的 "
-        "whisper 类选 OpenAI 式。"));
+        "MiMo 式：小米 MiMo（mimo-v2.5-asr）\n"
+        "OpenAI 式：OpenAI / 硅基流动 / Groq 的 whisper 类"));
     addRow(QString::fromUtf8("协议"), style_);
 
     baseUrl_ = new QLineEdit(asrApi.value("base_url").toString());
     baseUrl_->setPlaceholderText(
         QString::fromUtf8("留空 = 用语音反馈（TTS）的 Base URL"));
     baseUrl_->setToolTip(QString::fromUtf8(
-        "OpenAI 兼容根地址（/audio/transcriptions 会被自动拼在后面）。"
-        "留空时和 TTS 用同一个平台。"));
+        "OpenAI 兼容根地址（/audio/transcriptions 会被自动拼在后面）\n"
+        "留空时和 TTS 用同一个平台"));
     addRow(QString::fromUtf8("Base URL"), baseUrl_);
 
     apiKey_ = new QLineEdit(asrApi.value("api_key").toString());
@@ -100,9 +100,10 @@ AsrSettingsDialog::AsrSettingsDialog(ProfileStore *store, QWidget *parent)
     model_->addItem(QStringLiteral("gpt-4o-transcribe"));
     model_->setCurrentText(asrApi.value("model").toString());
     model_->setToolTip(QString::fromUtf8(
-        "对应平台的 ASR 模型名，必填。MiMo 平台用 mimo-v2.5-asr（选 MiMo 式）；"
-        "硅基流动 SenseVoiceSmall、Groq whisper-large-v3、OpenAI whisper-1 "
-        "（选 OpenAI 式）。"));
+        "对应平台的 ASR 模型名，必填\n"
+        "MiMo 式：mimo-v2.5-asr\n"
+        "OpenAI 式：硅基流动 SenseVoiceSmall、Groq whisper-large-v3、"
+        "OpenAI whisper-1"));
     addRow(QString::fromUtf8("模型"), model_);
 
     note_ = new QLabel(QString::fromUtf8(

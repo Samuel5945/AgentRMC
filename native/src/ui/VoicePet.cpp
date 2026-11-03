@@ -656,7 +656,8 @@ bool VoicePet::handOffToAgent(const QString &text, const QString &exe) {
     const QString shortName = AgentWindow::displayName(exe);
     // 派活模式（ui.dispatch_mode_<exe>，语音面板「派活」下拉）：
     // 默认（空 / 旧值 current）= 续当前会话，粘进宿主正在跑的对话；
-    // new = 每次新任务（Qoder 系 ctrl+n、WorkBuddy 系 UIA 新建任务）。
+    // new = 一次性「下次派活开新任务」：该句走新任务机器，真交付后由
+    // handOffDelivered 消费回默认（开新任务后也应续当前会话）。
     const QString mode =
         store_ != nullptr
             ? store_->uiString(QStringLiteral("dispatch_mode_") + exe)
@@ -851,6 +852,14 @@ void VoicePet::handOffVerifiedPaste(const QString &text, const QString &exe,
 
 void VoicePet::handOffDelivered(const QString &text, const QString &exe,
                                 const QString &shortName) {
+    // 「下次派活开新任务」是一次性意图：真交付后消费掉，后续续当前会话
+    // （用户 16:25：开新任务后也应继续当前会话，而不是继续开新任务）。
+    // 交付失败走剪贴板兜底时不消费，下一句仍重试新任务。
+    if (store_ != nullptr &&
+        store_->uiString(QStringLiteral("dispatch_mode_") + exe)
+            .compare(QStringLiteral("new"), Qt::CaseInsensitive) == 0) {
+        store_->setUiString(QStringLiteral("dispatch_mode_") + exe, QString());
+    }
     bubbleOnly(QString::fromUtf8("已交给 %1").arg(shortName), 4200, exe);
     // 记下这次派活目标：下次没有前台/通知线索时优先还给它，而不是
     // 按白名单顺序固定偏向某个宿主。

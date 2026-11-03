@@ -518,6 +518,10 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
                                    QString(), QStringLiteral("voice"),
                                    AgentWindow::displayName(exe), text, exe);
                 refreshWorkItems();
+                // 「下次开新任务」被消费后下拉要回到默认项，别留在旧选择上。
+                if (voiceWindow_ != nullptr) {
+                    voiceWindow_->refreshDispatchMode();
+                }
             });
     // 桌宠收起时对话回复照常给出：语音面板转写框 + 事件流。
     connect(voicePet_, &VoicePet::chatReplied, this, [this](const QString &text) {

@@ -44,6 +44,8 @@ protected:
 public:
     // 桌宠收起时对话回复的落点：转写框显示 + 进「最近」历史。
     void showChatReply(const QString &text);
+    // 派活模式被消费（一次性新任务交付后）时由主窗调用，下拉回到默认项。
+    void refreshDispatchMode();
 
 private:
     void copyText(const QString &text);
@@ -51,7 +53,6 @@ private:
     void refreshHint();
     void refreshStatusDot();
     void refreshAgentTarget();
-    void refreshDispatchMode();
 
     VoiceController *voice_ = nullptr;
     ProfileStore *store_ = nullptr;

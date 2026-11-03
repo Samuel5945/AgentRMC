@@ -11,13 +11,18 @@ OpenSquilla 和 Qoder / ZCode / WorkBuddy 不一样：**它没有插件目录，
 ```
 OpenSquilla 网关 :18791 (ws)
         │  connect → sessions.messages.subscribe（每个会话）
-        │  session.event.done / approval_required / plan_presentation
+        │  session.event.done / approval_required / plan_presentation / turn_committed
         ▼
 opensquilla-pet-bridge.mjs
-        │  POST /notify {event:stop|permission, title, message, raise}
+        │  POST /notify {event:stop|permission|turn-start, title, message, raise, session_id}
         ▼
 AgentBridge :45915  →  气泡 + TTS + 把 OpenSquilla 窗口拉回前台
 ```
+
+> **session_id 必须带**：原生端靠它把同一会话的旧「待验收」归档、把新事件并进
+> 同一张工单。不带的话每个会话每跑完一轮就多一条重复待办（2026-11-03 踩过：
+> 同一个 WebChat 会话攒了 3 条一模一样的「待验收」）。`turn_committed` 发的
+> turn-start 则是「人已经回来开新轮」的静默归档信号，不出声、不建卡。
 
 ## 文件
 
@@ -94,6 +99,8 @@ schtasks /Create /F /TN OpenSquillaPetBridgeWatchdog /SC MINUTE /MO 5 /TR "wscri
 - **事件覆盖**：`session.event.done`（回合结束）已实测触发；`approval_required`
   和 `plan_presentation` 的映射已写进桥，但还没在真实审批/Plan 流程里实跑过。
   真用到时看日志有没有 `NOTIFY permission`，没有就按事件名调。
+  `turn_committed` → turn-start 是后补的：就算这个事件哪天改名，只影响「新轮
+  开始即时归档」，不影响主链路——stop 自带同会话旧验收归档，列表仍只留最新一张。
 - **短回合**：事件名在 `frame.event` 顶层，不在 `payload.event`；cron 这类短回合
   必须靠 `sessions.changed` 即时补订阅，靠轮询会漏。
 - **端口**：45915 是单实例资源。被别的程序占了 OpenSquilla 这边发不出去，

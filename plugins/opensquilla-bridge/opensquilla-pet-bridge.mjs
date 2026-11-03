@@ -5,6 +5,11 @@
 //   session.event.done / chat.done            → POST /notify event=stop       （出声 + 拉窗口）
 //   session.event.approval_required           → POST /notify event=permission （出声 + 拉窗口）
 //   session.event.plan_presentation           → POST /notify event=permission （出声 + 拉窗口）
+//   session.event.turn_committed              → POST /notify event=turn-start （静默：归档旧验收）
+//
+// 每条通知都带 session_id（网关的会话 key）：原生端靠它把同一会话的旧「待验收」
+// 归档，一轮只留一张卡——不带它的话，同一会话每跑完一轮就多攒一条重复待办
+// （2026-11-03 实测踩坑：WebChat 一个会话攒了 3 条一模一样的「待验收」）。
 //
 // 用法：
 //   node opensquilla-pet-bridge.mjs                       # 前台跑，Ctrl+C 退出
@@ -72,9 +77,11 @@ const dedupe = (key) => {
   return true;
 };
 
-async function notifyPet(kind, message) {
+async function notifyPet(kind, message, sessionKey) {
   const body = { event: kind, title: "OpenSquilla", message };
   if (CFG.raise) body.raise = CFG.raise;
+  // 会话归属：native 端靠它做「同会话旧验收归档」和工单合并。
+  if (sessionKey) body.session_id = sessionKey;
   const res = await fetch(`${CFG.bridge}/notify`, {
     method: "POST",
     headers: { "Content-Type": "application/json; charset=utf-8" },
@@ -159,6 +166,11 @@ function eventKind(evName) {
   if (evName === "session.event.plan_presentation") {
     return { kind: "permission", tpl: CFG.msgPlan };
   }
+  if (evName === "session.event.turn_committed") {
+    // 新一轮开始：只发归档信号，不出声、不建卡（免打扰时也照发——
+    // 人已经回来开新轮了，旧验收本来就该翻篇）。
+    return { kind: "turn-start", tpl: "" };
+  }
   return null;
 }
 
@@ -184,6 +196,17 @@ async function onFrame(frame) {
   if (!CFG.includeCron && String(sessionKey).startsWith("cron:")) return;
   if (!dedupe(`${sessionKey}|${mapped.kind}`)) return;
 
+  if (mapped.kind === "turn-start") {
+    if (sessionKey === "?") return;
+    try {
+      await notifyPet("turn-start", "新一轮对话开始", sessionKey);
+      log(`TURNSTART sess=${sessionKey}`);
+    } catch (e) {
+      log(`turn-start failed: ${e.message}`);
+    }
+    return;
+  }
+
   if (existsSync(CFG.pauseFile)) {
     log(`paused (${mapped.kind} suppressed, delete ${CFG.pauseFile} to resume)`);
     return;
@@ -192,7 +215,7 @@ async function onFrame(frame) {
   const rawText = (p.message || p.text || "").toString().trim();
   const text = renderTemplate(mapped.tpl, sessionKey, CFG.relay ? rawText.slice(0, 80) : "").slice(0, 200);
   try {
-    await notifyPet(mapped.kind, text);
+    await notifyPet(mapped.kind, text, sessionKey === "?" ? "" : sessionKey);
     log(`NOTIFY ${mapped.kind} sess=${sessionKey} raise=${CFG.raise || "(none)"} msg=${text.slice(0, 40)}`);
   } catch (e) {
     log(`notify failed (${mapped.kind}): ${e.message} — AgentRMC 没在跑？`);

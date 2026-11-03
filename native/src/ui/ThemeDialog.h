@@ -5,6 +5,7 @@
 class ProfileStore;
 class QLabel;
 class QListWidget;
+class QPushButton;
 class QSlider;
 class QTimer;
 
@@ -20,12 +21,17 @@ public:
 private:
     void reloadThemes();
     void reloadSliders();
+    // 配色模式三选一的选中态 / 可用性：只有 classic 吃这套，自定义主题置灰。
+    void reloadScheme();
     void syncLabels();
     // 滑块拖动时别每一格都重刷整窗样式：攒 60ms 再落一次。
     void scheduleApply();
 
     ProfileStore *store_ = nullptr;
     QListWidget *themes_ = nullptr;
+    QPushButton *schemeLight_ = nullptr;
+    QPushButton *schemeDark_ = nullptr;
+    QPushButton *schemeAuto_ = nullptr;
     QSlider *alpha_ = nullptr;
     QSlider *dim_ = nullptr;
     QLabel *alphaValue_ = nullptr;

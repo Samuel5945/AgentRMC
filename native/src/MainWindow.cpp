@@ -168,7 +168,8 @@ public:
             painter->setPen(selected ? QPen(QColor(79, 140, 255, 150), 1.0)
                                      : QPen(Qt::NoPen));
             painter->setBrush(selected ? QColor(79, 140, 255, 44)
-                                       : QColor(255, 255, 255, 10));
+                                       : ThemeManager::instance().color(
+                                             QStringLiteral("w10")));
             painter->drawRoundedRect(row, 10, 10);
         }
 
@@ -200,14 +201,14 @@ public:
                            textRight - textLeft - timeWidth, 16);
 
         painter->setFont(metaFont);
-        painter->setPen(QColor(0x7c, 0x87, 0x98));
+        painter->setPen(ThemeManager::instance().color(QStringLiteral("ghost")));
         painter->drawText(line1, Qt::AlignRight | Qt::AlignVCenter, when);
 
         const qreal stageWidth = metaMetrics.horizontalAdvance(stageText);
         const qreal nameRoom =
             qMax<qreal>(40, line1.width() - stageWidth - 14);
         painter->setFont(nameFont);
-        painter->setPen(QColor(0xe6, 0xed, 0xf3));
+        painter->setPen(ThemeManager::instance().color(QStringLiteral("text")));
         const QString shownAgent =
             nameMetrics.elidedText(agent, Qt::ElideRight, int(nameRoom));
         painter->drawText(line1, Qt::AlignLeft | Qt::AlignVCenter, shownAgent);
@@ -222,7 +223,7 @@ public:
         QFont bodyFont = painter->font();
         bodyFont.setPixelSize(11);
         painter->setFont(bodyFont);
-        painter->setPen(QColor(0xa9, 0xb6, 0xc6));
+        painter->setPen(ThemeManager::instance().color(QStringLiteral("text.body")));
         const QRectF line2(textLeft, row.top() + 29,
                            textRight - textLeft, 16);
         painter->drawText(
@@ -347,6 +348,35 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
     // 换主题时 QSS 会重刷，但背景是我们自己画的，得手动重绘一次。
     connect(&ThemeManager::instance(), &ThemeManager::themeChanged, root,
             [root](const Theme &) { root->update(); });
+    // 状态点 / 语音状态 / 遥控器灯这些内联样式的字色是运行时写进去的，全局 QSS
+    // 重刷带不上它们：切浅色/深色或换主题时再刷一遍。只改色，不碰热键注册那些副作用。
+    connect(&ThemeManager::instance(), &ThemeManager::themeChanged, this,
+            [this](const Theme &) {
+                const bool running = engine_ != nullptr && engine_->isRunning();
+                const QString line =
+                    ThemeManager::instance().css(QStringLiteral("line"));
+                const QString dot = running ? QStringLiteral("#3fb950") : line;
+                if (statusDot_ != nullptr) {
+                    statusDot_->setStyleSheet(
+                        QStringLiteral("background: %1; border-radius: 3px;").arg(dot));
+                }
+                if (statusText_ != nullptr) {
+                    statusText_->setStyleSheet(
+                        running ? QStringLiteral("color:#3fb950; font-size:11px;"
+                                                 " font-weight:600;")
+                                : QStringLiteral("color:%1; font-size:11px;")
+                                      .arg(ThemeManager::instance().css(
+                                          QStringLiteral("muted"))));
+                }
+                if (remoteDot_ != nullptr) {
+                    remoteDot_->setStyleSheet(
+                        QStringLiteral("background:%1; border-radius:3px;").arg(dot));
+                }
+                refreshVoiceUi();
+                if (workList_ != nullptr) {
+                    workList_->viewport()->update();
+                }
+            });
 
     auto *outer = new QVBoxLayout(root);
     outer->setContentsMargins(0, 0, 0, 0);
@@ -620,7 +650,8 @@ QWidget *MainWindow::buildHeader() {
     pillLay->setSpacing(6);
     statusDot_ = new QLabel;
     statusDot_->setStyleSheet(
-        QStringLiteral("background: #4a5568; border-radius: 3px;"));
+        QStringLiteral("background: %1; border-radius: 3px;")
+            .arg(ThemeManager::instance().css(QStringLiteral("line"))));
     statusDot_->setFixedSize(6, 6);
     statusText_ = new QLabel(QString::fromUtf8("未监听"));
     statusText_->setObjectName("statusText");
@@ -1132,7 +1163,7 @@ void MainWindow::refreshWorkItems() {
         }
         ++open;
         QString stage = QString::fromUtf8("待办");
-        QColor color("#8b949e");
+        QColor color = ThemeManager::instance().color(QStringLiteral("muted"));
         if (item.stage == QStringLiteral("needs-me")) {
             stage = QString::fromUtf8("等你处理");
             color = QColor("#f0883e");
@@ -1836,8 +1867,10 @@ void MainWindow::refreshSystemPage() {
             ? QString::fromUtf8("问题：无")
             : QString::fromUtf8("问题：%1").arg(problems.join(QString::fromUtf8("；"))));
     sysProblems_->setStyleSheet(
-        problems.isEmpty() ? QStringLiteral("color:#8b949e;")
-                           : QStringLiteral("color:#f0883e;"));
+        problems.isEmpty()
+            ? QStringLiteral("color:%1;")
+                  .arg(ThemeManager::instance().css(QStringLiteral("muted")))
+            : QStringLiteral("color:#f0883e;"));
 
     const QJsonArray workers = workersArray();
     sysWorkers_->setRowCount(workers.size());
@@ -2816,7 +2849,8 @@ void MainWindow::updateListenUi() {
     if (statusDot_ != nullptr) {
         statusDot_->setStyleSheet(
             QStringLiteral("background: %1; border-radius: 3px;")
-                .arg(running ? "#3fb950" : "#4a5568"));
+                .arg(running ? QStringLiteral("#3fb950")
+                             : ThemeManager::instance().css(QStringLiteral("line"))));
     }
     if (statusText_ != nullptr) {
         statusText_->setText(running ? QStringLiteral("监听中")
@@ -2824,7 +2858,8 @@ void MainWindow::updateListenUi() {
         statusText_->setStyleSheet(
             running ? QStringLiteral("color:#3fb950; font-size:11px;"
                                      " font-weight:600;")
-                    : QStringLiteral("color:#8b949e; font-size:11px;"));
+                    : QStringLiteral("color:%1; font-size:11px;")
+                          .arg(ThemeManager::instance().css(QStringLiteral("muted"))));
     }
     if (listenButton_ != nullptr) {
         listenButton_->setText(running ? QStringLiteral("停止监听")
@@ -2930,7 +2965,9 @@ void MainWindow::refreshVoiceUi() {
         }
     }
     if (options.backend == VoiceBackend::Hotkey) {
-        setVoiceStatus(voice_->statusText(), QStringLiteral("#9ec1ff"), true);
+        setVoiceStatus(voice_->statusText(),
+                       ThemeManager::instance().css(QStringLiteral("accent.text")),
+                       true);
         if (voiceFoot_ != nullptr) {
             voiceFoot_->setText(QString::fromUtf8("0 模型 · 跟随前台场景转发"));
         }
@@ -2938,7 +2975,7 @@ void MainWindow::refreshVoiceUi() {
         // 云端路线没有「拖模型包」这个动作，配置入口走语音设置。
         const bool ready = voice_->modelReady();
         setVoiceStatus(voice_->statusText(),
-                       ready ? QStringLiteral("#c9d1d9")
+                       ready ? ThemeManager::instance().css(QStringLiteral("text.dim"))
                              : QStringLiteral("#d29922"),
                        true);
         if (voiceFoot_ != nullptr) {
@@ -2949,7 +2986,9 @@ void MainWindow::refreshVoiceUi() {
         const bool ready = voice_->modelReady();
         if (ready) {
             voiceState_->setStyleSheet(QString());
-            setVoiceStatus(voice_->statusText(), QStringLiteral("#c9d1d9"), true);
+            setVoiceStatus(voice_->statusText(),
+                           ThemeManager::instance().css(QStringLiteral("text.dim")),
+                           true);
             if (voiceFoot_ != nullptr) {
                 voiceFoot_->setText(QString::fromUtf8("本地转写 · 音频不出本机"));
             }
@@ -2959,7 +2998,8 @@ void MainWindow::refreshVoiceUi() {
             voiceState_->setStyleSheet(QStringLiteral(
                 "QLabel#voiceBox { border: 1px dashed rgba(120,170,255,150);"
                 " border-radius: 10px; background: rgba(79,140,255,18);"
-                " color: #9ec1ff; padding: 8px; }"));
+                " color: %1; padding: 8px; }")
+                .arg(ThemeManager::instance().css(QStringLiteral("accent.text"))));
             voiceState_->setText(
                 QString::fromUtf8("⇣  把模型包（.zip）拖到这里导入"));
             voiceState_->setToolTip(
@@ -3090,8 +3130,9 @@ void MainWindow::setVoiceStatus(const QString &detail, const QString &color,
         if (text.size() > 40) {
             text = text.left(40) + QString::fromUtf8("…");
         }
-        html += QStringLiteral("<br><span style=\"color:#e6edf3;\">%1</span>")
-                    .arg(text.toHtmlEscaped());
+        html += QStringLiteral("<br><span style=\"color:%1;\">%2</span>")
+                    .arg(ThemeManager::instance().css(QStringLiteral("text")),
+                         text.toHtmlEscaped());
         voiceState_->setToolTip(lastTranscript_);
     } else {
         voiceState_->setToolTip(QString());
@@ -3111,11 +3152,13 @@ void MainWindow::onVoiceState(const QString &state, const QString &detail) {
                 : detail;
         setVoiceStatus(shown,
                        warn ? QStringLiteral("#d29922")
-                            : QStringLiteral("#c9d1d9"),
+                            : ThemeManager::instance().css(QStringLiteral("text.dim")),
                        true);
     } else {
         lastTranscript_.clear();
-        setVoiceStatus(detail, QStringLiteral("#7c9cff"), false);
+        setVoiceStatus(detail,
+                       ThemeManager::instance().css(QStringLiteral("accent.text")),
+                       false);
     }
     if (voiceTest_ != nullptr) {
         voiceTest_->setEnabled(voice_->options().backend != VoiceBackend::Hotkey);
@@ -3193,7 +3236,8 @@ void MainWindow::onEngineRunning(bool running, const QString &message) {
     if (remoteDot_ != nullptr) {
         remoteDot_->setStyleSheet(
             running ? QStringLiteral("background:#3fb950; border-radius:3px;")
-                    : QStringLiteral("background:#4a5568; border-radius:3px;"));
+                    : QStringLiteral("background:%1; border-radius:3px;")
+                          .arg(ThemeManager::instance().css(QStringLiteral("line"))));
     }
     if (remoteState_ != nullptr) {
         remoteState_->setText(
@@ -3227,13 +3271,13 @@ void MainWindow::appendEvent(const QString &kind, const QString &name,
         text += detail.isEmpty() ? name : detail;
     }
     auto *item = new QListWidgetItem(text, logList_);
-    QColor color("#c9d1d9");
+    QColor color = ThemeManager::instance().color(QStringLiteral("text.dim"));
     if (kind == "error") {
         color = QColor("#f85149");
     } else if (kind == "voice") {
         color = QColor("#3fb950");
     } else if (kind == "status") {
-        color = QColor("#8b949e");
+        color = ThemeManager::instance().color(QStringLiteral("muted"));
     }
     item->setForeground(color);
     logList_->addItem(item);
@@ -3406,19 +3450,26 @@ void MainWindow::showUpdateDialog(const UpdateInfo &info) {
     QDialog dialog(this);
     dialog.setWindowFlags(Qt::Dialog | Qt::FramelessWindowHint);
     dialog.setFixedWidth(560);
+    const auto tk = [](const char *token) {
+        return ThemeManager::instance().css(QString::fromLatin1(token));
+    };
     dialog.setStyleSheet(QStringLiteral(
-        "QDialog { background: #0f141d; border: 1px solid rgba(255,255,255,24);"
+        "QDialog { background: %1; border: 1px solid %2;"
         " border-radius: 12px; }"
-        "QLabel { color: #c9d1d9; font-size: 12px; }"
-        "QLabel#newVer { color: #e6edf3; font-size: 15px; font-weight: 600; }"
-        "QCheckBox { color: #8b949e; font-size: 11px; }"
-        "QPushButton { color: #c9d1d9; background: rgba(255,255,255,8);"
-        " border: 1px solid rgba(255,255,255,20); border-radius: 8px;"
+        "QLabel { color: %3; font-size: 12px; }"
+        "QLabel#newVer { color: %4; font-size: 15px; font-weight: 600; }"
+        "QCheckBox { color: %5; font-size: 11px; }"
+        "QPushButton { color: %3; background: %6;"
+        " border: 1px solid %7; border-radius: 8px;"
         " padding: 5px 12px; }"
-        "QPushButton:hover { background: rgba(255,255,255,14); }"
-        "QPushButton#primary { background: #4f8cff; color: #ffffff;"
+        "QPushButton:hover { background: %8; }"
+        "QPushButton#primary { background: %9; color: %10;"
         " border: none; }"
-        "QPushButton#primary:hover { background: #6ba0ff; }"));
+        "QPushButton#primary:hover { background: %11; }")
+        .arg(tk("dialog.bg"), tk("w24"), tk("text.dim"))
+        .arg(tk("text"), tk("muted"), tk("w8"))
+        .arg(tk("w20"), tk("w14"), tk("accent"))
+        .arg(tk("on.accent")).arg(tk("accent.hover")));
 
     auto *lay = new QVBoxLayout(&dialog);
     lay->setContentsMargins(20, 16, 20, 16);
@@ -3437,7 +3488,9 @@ void MainWindow::showUpdateDialog(const UpdateInfo &info) {
 
     if (!info.title.isEmpty()) {
         auto *headline = new QLabel(info.title);
-        headline->setStyleSheet(QStringLiteral("color:#e6edf3;"));
+        headline->setStyleSheet(QStringLiteral("color:%1;")
+                                    .arg(ThemeManager::instance().css(
+                                        QStringLiteral("text"))));
         headline->setWordWrap(true);
         lay->addWidget(headline);
     }

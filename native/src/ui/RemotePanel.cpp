@@ -1,6 +1,7 @@
 #include "RemotePanel.h"
 
 #include "KeyIcon.h"
+#include "core/ThemeManager.h"
 
 #include <QDateTime>
 #include <QFontMetrics>
@@ -173,10 +174,12 @@ void RemotePanel::paintEvent(QPaintEvent *event) {
             painter.setBrush(QColor(79, 140, 255, 42));
             painter.drawRoundedRect(row, 6, 6);
         }
-        const QColor rowColor = entry.infrared
-                                    ? QColor(90, 100, 114)
-                                    : (lit ? QColor(230, 237, 243)
-                                           : QColor(160, 172, 186));
+        // 描述行画在卡片上（不是遥控器深色本体），字色要跟浅色/深色主题走。
+        const QColor rowColor =
+            entry.infrared
+                ? ThemeManager::instance().color(QStringLiteral("muted.2"))
+                : (lit ? ThemeManager::instance().color(QStringLiteral("text"))
+                       : ThemeManager::instance().color(QStringLiteral("text.body")));
         KeyIcon::Glyph glyph = KeyIcon::glyphForVk(entry.vk);
         if (entry.label == QString::fromUtf8("电源")) {
             glyph = KeyIcon::Glyph::Power;
@@ -184,7 +187,9 @@ void RemotePanel::paintEvent(QPaintEvent *event) {
             glyph = KeyIcon::Glyph::Volume;
         }
         KeyIcon::paintGlyph(painter, QRectF(120.75, rowY + 3.75, 10.5, 10.5),
-                            glyph, lit ? QColor(230, 237, 243) : rowColor);
+                            glyph,
+                            lit ? ThemeManager::instance().color(QStringLiteral("text"))
+                                : rowColor);
         painter.setPen(rowColor);
         const QString text = metrics.elidedText(
             entry.action, Qt::ElideRight, 110);

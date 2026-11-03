@@ -139,8 +139,9 @@ public:
                    const QString &backend) {
         status_->setText(
             QStringLiteral("<span style=\"color:%1;\">●</span> %2 · "
-                           "<span style=\"color:#8b949e;\">%3</span>")
-                .arg(color, state, backend));
+                           "<span style=\"color:%3;\">%4</span>")
+                .arg(color, state,
+                     ThemeManager::instance().css(QStringLiteral("muted")), backend));
     }
 
     void setDetail(const QString &text) { detail_->setText(text); }
@@ -178,8 +179,8 @@ protected:
         QPainter painter(this);
         painter.setRenderHint(QPainter::Antialiasing, true);
         const QRectF box = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
-        painter.setPen(QPen(QColor(255, 255, 255, 26), 1.0));
-        painter.setBrush(QColor(15, 20, 29));
+        painter.setPen(QPen(ThemeManager::instance().color(QStringLiteral("w26")), 1.0));
+        painter.setBrush(ThemeManager::instance().color(QStringLiteral("dialog.bg")));
         painter.drawRoundedRect(box, 12, 12);
     }
 
@@ -233,8 +234,8 @@ protected:
         QPainter painter(this);
         painter.setRenderHint(QPainter::Antialiasing, true);
         const QRectF box = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
-        painter.setPen(QPen(QColor(255, 255, 255, 30), 1.0));
-        painter.setBrush(QColor(15, 20, 29, 242));
+        painter.setPen(QPen(ThemeManager::instance().color(QStringLiteral("w30")), 1.0));
+        painter.setBrush(ThemeManager::instance().color(QStringLiteral("bubble.bg")));
         painter.drawRoundedRect(box, 10, 10);
         QLabel::paintEvent(event);
     }
@@ -1187,7 +1188,7 @@ void VoicePet::refreshState() {
         color = QStringLiteral("#4f8cff");
     } else {
         state = QString::fromUtf8("未监听");
-        color = QStringLiteral("#8b949e");
+        color = ThemeManager::instance().css(QStringLiteral("muted"));
     }
     const QString backend = voiceBackendLabel(options.backend);
     setToolTip(QStringLiteral("%1 · %2\n悬停展开 · 右键菜单 · 拖到屏幕边缘贴边")

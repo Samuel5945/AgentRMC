@@ -14,6 +14,8 @@
 #include <QJsonObject>
 #include <QProcess>
 #include <QRegularExpression>
+#include <QSettings>
+#include <QTimer>
 
 #include <algorithm>
 
@@ -154,6 +156,55 @@ QHash<QString, QString> ThemeManager::classicPalette() {
     m_.insert(QStringLiteral("w8"), QStringLiteral("rgba(255, 255, 255, 8)"));
     m_.insert(QStringLiteral("warn"), QStringLiteral("#d29922"));
     return m_;
+}
+
+QHash<QString, QString> ThemeManager::classicLightPalette() {
+    QHash<QString, QString> m_ = classicPalette();
+    // 底与卡片：深底翻成浅灰底 + 白卡，弹层/气泡用白。
+    m_.insert(QStringLiteral("bg"), QStringLiteral("#f3f5f8"));
+    m_.insert(QStringLiteral("dialog.bg"), QStringLiteral("#f3f5f8"));
+    m_.insert(QStringLiteral("card.bg"), QStringLiteral("#ffffff"));
+    m_.insert(QStringLiteral("card.bg2"), QStringLiteral("#eef1f5"));
+    m_.insert(QStringLiteral("raised"), QStringLiteral("#ffffff"));
+    m_.insert(QStringLiteral("msgbox.bg"), QStringLiteral("#ffffff"));
+    m_.insert(QStringLiteral("bubble.bg"),
+              QStringLiteral("rgba(255, 255, 255, 245)"));
+    m_.insert(QStringLiteral("guide.image.bg"), QStringLiteral("#e7ebf0"));
+    // 字色：浅底深字，主次层级与深色版一一对应（text 最重、body 最轻）。
+    m_.insert(QStringLiteral("text"), QStringLiteral("#171e2a"));
+    m_.insert(QStringLiteral("text.soft"), QStringLiteral("#232b3a"));
+    m_.insert(QStringLiteral("text.dim"), QStringLiteral("#3a4453"));
+    m_.insert(QStringLiteral("text.body"), QStringLiteral("#55606e"));
+    m_.insert(QStringLiteral("muted"), QStringLiteral("#5f6b7a"));
+    m_.insert(QStringLiteral("muted.2"), QStringLiteral("#77828f"));
+    m_.insert(QStringLiteral("faint"), QStringLiteral("#aeb6c0"));
+    m_.insert(QStringLiteral("faint.2"), QStringLiteral("#c2c9d2"));
+    m_.insert(QStringLiteral("line"), QStringLiteral("#c9d0d9"));
+    // 浅底上的蓝色文字要压深才读得出；主按钮仍是蓝底白字，accent 本身不动。
+    m_.insert(QStringLiteral("accent.text"), QStringLiteral("#2f6bdb"));
+    m_.insert(QStringLiteral("accent.link"), QStringLiteral("#2f6bdb"));
+    // 白色透明阶梯在浅底上改成深色透明阶梯（表面/描边/滚动条）；透明度翻倍，
+    // 不然白底上描边几乎看不见。蓝色 a 阶梯不动——选中高亮两种底都成立。
+    const QList<int> alphas = {4,  6,  7,  8,  10, 11, 12, 14,
+                               16, 18, 20, 22, 24, 26, 30, 40};
+    for (int a : alphas) {
+        m_.insert(QStringLiteral("w%1").arg(a),
+                  QStringLiteral("rgba(15, 23, 42, %1)").arg(qMin(255, a * 2)));
+    }
+    return m_;
+}
+
+bool ThemeManager::systemPrefersLight() {
+#ifdef Q_OS_WIN
+    QSettings settings(
+        QStringLiteral("HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\"
+                       "CurrentVersion\\Themes\\Personalize"),
+        QSettings::NativeFormat);
+    // 读不到按深色兜底：classic 历来就是深色，别因缺键突然变浅。
+    return settings.value(QStringLiteral("AppsUseLightTheme"), 0).toInt() != 0;
+#else
+    return false;
+#endif
 }
 
 QHash<QString, QString> ThemeManager::mergePalette(
@@ -322,19 +373,101 @@ Theme ThemeManager::parseThemeBody(const ThemeInfo &info) {
     return theme;
 }
 
-Theme ThemeManager::loadTheme(const QString &id) const {
-    for (const ThemeInfo &info : infos_) {
-        if (info.id != id || !info.valid) {
-            continue;
-        }
-        return parseThemeBody(info);
-    }
-    // classic 永远内置兜底；主题不存在/损坏也回落到它。
+Theme ThemeManager::buildClassicTheme() const {
     Theme theme;
     theme.id = QStringLiteral("classic");
     theme.displayName = QStringLiteral("经典");
-    theme.palette = classicPalette();
+    const bool light =
+        scheme_ == QStringLiteral("light") ||
+        (scheme_ == QStringLiteral("auto") && systemPrefersLight());
+    theme.palette = light ? classicLightPalette() : classicPalette();
     return theme;
+}
+
+Theme ThemeManager::loadTheme(const QString &id) const {
+    // classic 是代码内置主题，不读 themes/classic 的清单（那儿通常没有 theme.json）。
+    // 若也走 parseThemeBody，读不到清单会返回空 palette：渲染出的 QSS 里 @token@
+    // 一个都没替换，被 Qt 整张拒收，界面退回系统浅色，而内联的深色字色全看不见。
+    if (id != QStringLiteral("classic")) {
+        for (const ThemeInfo &info : infos_) {
+            if (info.id != id || !info.valid) {
+                continue;
+            }
+            return parseThemeBody(info);
+        }
+    }
+    // classic 永远内置兜底；主题不存在/损坏也回落到它。浅色/深色由配色模式决定。
+    return buildClassicTheme();
+}
+
+QColor ThemeManager::color(const QString &token) const {
+    return parsePaletteColor(current_.palette.value(token));
+}
+
+QString ThemeManager::css(const QString &token) const {
+    return current_.palette.value(token);
+}
+
+bool ThemeManager::isClassicLight() const {
+    if (current_.id != QStringLiteral("classic")) {
+        return false;
+    }
+    return scheme_ == QStringLiteral("light") ||
+           (scheme_ == QStringLiteral("auto") && systemPrefersLight());
+}
+
+void ThemeManager::setScheme(const QString &scheme) {
+    QString s = scheme;
+    if (s != QStringLiteral("light") && s != QStringLiteral("dark")) {
+        s = QStringLiteral("auto");
+    }
+    if (s == scheme_) {
+        return;
+    }
+    scheme_ = s;
+    if (store_ != nullptr) {
+        store_->setUiString(QStringLiteral("color_scheme"), s);
+    }
+    // 只有 classic 吃配色模式；自定义主题自带配色，选中时只记下偏好。
+    if (current_.id == QStringLiteral("classic")) {
+        current_ = buildClassicTheme();
+        applyQss();
+        emit themeChanged(current_);
+    }
+}
+
+bool ThemeManager::nativeEventFilter(const QByteArray &eventType, void *message,
+                                     qintptr *result) {
+    Q_UNUSED(eventType);
+    Q_UNUSED(result);
+#ifdef Q_OS_WIN
+    if (scheme_ == QStringLiteral("auto") &&
+        current_.id == QStringLiteral("classic")) {
+        const MSG *msg = static_cast<const MSG *>(message);
+        // 系统深浅色切换广播 WM_SETTINGCHANGE，lParam 是 "ImmersiveColorSet"。
+        if (msg->message == WM_SETTINGCHANGE && msg->lParam != 0) {
+            const QString area = QString::fromWCharArray(
+                reinterpret_cast<const wchar_t *>(msg->lParam));
+            if (area == QStringLiteral("ImmersiveColorSet")) {
+                // 延后一拍：别在系统消息回调里直接 setStyleSheet 重刷整窗。
+                QTimer::singleShot(0, this, [this] {
+                    if (scheme_ != QStringLiteral("auto") ||
+                        current_.id != QStringLiteral("classic")) {
+                        return;
+                    }
+                    const Theme rebuilt = buildClassicTheme();
+                    if (rebuilt.palette.value(QStringLiteral("bg")) !=
+                        current_.palette.value(QStringLiteral("bg"))) {
+                        current_ = rebuilt;
+                        applyQss();
+                        emit themeChanged(current_);
+                    }
+                });
+            }
+        }
+    }
+#endif
+    return false;
 }
 
 void ThemeManager::applyQss() {
@@ -438,6 +571,14 @@ void ThemeManager::resetAppearance() {
 void ThemeManager::init(ProfileStore *store) {
     store_ = store;
     rescan();
+    if (store_ != nullptr) {
+        const QString scheme =
+            store_->uiString(QStringLiteral("color_scheme"));
+        scheme_ = (scheme == QStringLiteral("light") ||
+                   scheme == QStringLiteral("dark"))
+                      ? scheme
+                      : QStringLiteral("auto");
+    }
     const QString id =
         store_ != nullptr ? store_->uiString(QStringLiteral("theme"),
                                             QStringLiteral("classic"))
@@ -454,6 +595,11 @@ void ThemeManager::init(ProfileStore *store) {
         }
     }
     applyQss();
+    // 跟随系统要用：收到 WM_SETTINGCHANGE 才能在系统切深浅色时即时跟上。
+    if (!nativeFilterInstalled_ && qApp != nullptr) {
+        qApp->installNativeEventFilter(this);
+        nativeFilterInstalled_ = true;
+    }
 }
 
 void ThemeManager::setTheme(const QString &id) {

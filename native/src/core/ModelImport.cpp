@@ -1,5 +1,6 @@
 #include "ModelImport.h"
 
+#include "core/ThemeManager.h"
 #include "core/VoiceSettings.h"
 
 #include <QApplication>
@@ -87,11 +88,16 @@ ModelImportResult importModelPackage(QWidget *parent, const QString &file) {
     progress.setCancelButton(nullptr);
     progress.setAutoClose(false);
     progress.setStyleSheet(QStringLiteral(
-        "QProgressDialog { background: #0f141d; }"
-        "QProgressDialog QLabel { color: #e6edf3; font-size: 12px; }"
-        "QProgressBar { border: 1px solid rgba(255,255,255,24);"
-        " border-radius: 6px; background: rgba(255,255,255,7); height: 6px; }"
-        "QProgressBar::chunk { background: #4f8cff; border-radius: 5px; }"));
+        "QProgressDialog { background: %1; }"
+        "QProgressDialog QLabel { color: %2; font-size: 12px; }"
+        "QProgressBar { border: 1px solid %3;"
+        " border-radius: 6px; background: %4; height: 6px; }"
+        "QProgressBar::chunk { background: %5; border-radius: 5px; }")
+        .arg(ThemeManager::instance().css(QStringLiteral("dialog.bg")),
+             ThemeManager::instance().css(QStringLiteral("text")),
+             ThemeManager::instance().css(QStringLiteral("w24")),
+             ThemeManager::instance().css(QStringLiteral("w7")),
+             ThemeManager::instance().css(QStringLiteral("accent"))));
     progress.show();
     QApplication::setOverrideCursor(Qt::BusyCursor);
     while (!tar.waitForFinished(200)) {

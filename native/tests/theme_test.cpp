@@ -118,6 +118,51 @@ int main(int argc, char *argv[]) {
     check(!plain.contains(QStringLiteral("background-image")),
           "no background rule without image");
 
+    // 回归：classic 是代码内置主题，themes/classic 下没有 theme.json 也必须给出
+    // 完整调色板。曾经 loadTheme 把 classic 也送进 parseThemeBody，读不到清单返回
+    // 空 palette，QSS 里 @token@ 全没替换被 Qt 整张拒收，界面退回系统浅色。
+    ThemeManager &tm = ThemeManager::instance();
+    tm.rescan();
+    // 显式钉成深色：默认 auto 会跟随构建机的系统深浅色，断言就不能写死。
+    tm.setScheme(QStringLiteral("dark"));
+    const Theme classicTheme = tm.themeById(QStringLiteral("classic"));
+    check(classicTheme.palette.size() >= 50,
+          "classic via themeById keeps full palette without a manifest");
+    check(classicTheme.palette.value(QStringLiteral("bg")) ==
+              QStringLiteral("#0b0e14"),
+          "classic via themeById keeps original bg");
+    const QString classicRendered = ThemeManager::renderQss(
+        QStringLiteral("QWidget#root { background: @bg@; color: @text@; }"),
+        classicTheme.palette, QString());
+    check(!classicRendered.contains(QStringLiteral("@")),
+          "classic themeById palette renders QSS with no leftover tokens");
+
+    // 浅色版：token 集和深色版一一对应，浅底深字，渲染同样不留 @token@。
+    const auto lightPal = ThemeManager::classicLightPalette();
+    check(lightPal.size() == classic.size(),
+          "light palette covers exactly the same tokens as dark");
+    check(lightPal.value(QStringLiteral("bg")) == QStringLiteral("#f3f5f8"),
+          "light palette uses a light background");
+    check(lightPal.value(QStringLiteral("text")) == QStringLiteral("#171e2a"),
+          "light palette uses dark text");
+    const QString lightRendered = ThemeManager::renderQss(
+        QStringLiteral("QWidget#root { background: @bg@; color: @text@;"
+                       " border: 1px solid @w18@; }"),
+        lightPal, QString());
+    check(!lightRendered.contains(QStringLiteral("@")),
+          "light palette renders QSS with no leftover tokens");
+
+    // 配色模式开关：classic 随 light/dark 解析到对应调色板。
+    tm.setScheme(QStringLiteral("light"));
+    check(tm.scheme() == QStringLiteral("light"), "setScheme light recorded");
+    check(tm.themeById(QStringLiteral("classic")).palette.value(QStringLiteral("bg")) ==
+              QStringLiteral("#f3f5f8"),
+          "scheme light makes classic resolve to the light palette");
+    tm.setScheme(QStringLiteral("dark"));
+    check(tm.themeById(QStringLiteral("classic")).palette.value(QStringLiteral("bg")) ==
+              QStringLiteral("#0b0e14"),
+          "scheme dark makes classic resolve to the dark palette");
+
     // —— 主题包导入：用系统 tar 造 zip（Windows 10+ 自带 bsdtar）。 ——
     const QString pkgRoot = dir.filePath(QStringLiteral("pkgsrc"));
     QDir().mkpath(pkgRoot + QStringLiteral("/goodtheme/pet"));

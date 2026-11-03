@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QAbstractNativeEventFilter>
 #include <QHash>
 #include <QImage>
 #include <QObject>
@@ -52,7 +53,7 @@ public:
 
 // 主题系统入口：扫描 exeDir/themes/、渲染 QSS、切换与广播。
 // classic 是代码内置的零美术主题（= 原配色 + 圆球桌宠），永远存在且兜底。
-class ThemeManager final : public QObject {
+class ThemeManager final : public QObject, public QAbstractNativeEventFilter {
     Q_OBJECT
 
 public:
@@ -82,6 +83,22 @@ public:
     // "rgba(8, 12, 20, 55)" / "#121722" / 命名色 → QColor；解析不了返回无效色。
     static QColor parsePaletteColor(const QString &value);
 
+    // —— 配色模式：浅色 / 深色（夜间）/ 跟随系统。只作用于内置 classic；
+    // 自定义主题包自带配色，不受这个开关影响。——
+    QString scheme() const { return scheme_; }
+    void setScheme(const QString &scheme);
+    // 当前生效的 classic 是不是浅色（自定义主题恒 false）。
+    bool isClassicLight() const;
+    // 按 token 取当前已应用调色板里的颜色：内联样式 / 自绘控件用，
+    // 这样它们跟全局 QSS 一起随浅色/深色切换，不会各画各的。
+    QColor color(const QString &token) const;
+    QString css(const QString &token) const;
+
+    // 跟随系统：Windows 切换深浅色会广播 WM_SETTINGCHANGE，这里收到后
+    // 若当前是 classic + auto 就重算调色板并刷新。
+    bool nativeEventFilter(const QByteArray &eventType, void *message,
+                           qintptr *result) override;
+
 public slots:
     // 持久化 ui.theme + 立即应用 + 广播 themeChanged。
     void setTheme(const QString &id);
@@ -101,6 +118,10 @@ public:
 public:
     // —— 纯函数，测试直接调用 ——
     static QHash<QString, QString> classicPalette();
+    // classic 的浅色版：同一套 token，浅底深字；夜间深色版就是 classicPalette。
+    static QHash<QString, QString> classicLightPalette();
+    // 系统（Windows）当前偏好浅色还是深色；读不到时按深色兜底。
+    static bool systemPrefersLight();
     static QHash<QString, QString> mergePalette(
         const QHash<QString, QString> &overrides);
     static ThemeInfo parseThemeDir(const QString &dir, QString *error);
@@ -113,11 +134,16 @@ public:
 
 private:
     Theme loadTheme(const QString &id) const;
+    // 按当前配色模式（浅色/深色/跟随系统）组装内置 classic。
+    Theme buildClassicTheme() const;
     void applyQss();
 
     ProfileStore *store_ = nullptr;
     QList<ThemeInfo> infos_;
     Theme current_;
+    // light / dark / auto；auto = 跟随系统。持久化在 ui.color_scheme。
+    QString scheme_ = QStringLiteral("auto");
+    bool nativeFilterInstalled_ = false;
     // -1 = 跟随主题。用户拖过滑块才有值。
     int cardAlpha_ = -1;
     qreal backdropDim_ = -1.0;

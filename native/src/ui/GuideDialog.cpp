@@ -1,6 +1,7 @@
 #include "GuideDialog.h"
 
 #include "core/ModelImport.h"
+#include "core/ThemeManager.h"
 
 #include <QAbstractButton>
 #include <QDesktopServices>
@@ -508,7 +509,9 @@ QWidget *GuideDialog::buildKeyTestPage() {
 
     keyStatus_ = new QLabel(QString::fromUtf8("还没收到按键"));
     keyStatus_->setObjectName("guideKeyStatus");
-    keyStatus_->setStyleSheet(QStringLiteral("color:#8b949e; font-size:16px;"));
+    keyStatus_->setStyleSheet(QStringLiteral("color:%1; font-size:16px;")
+                                  .arg(ThemeManager::instance().css(
+                                      QStringLiteral("muted"))));
     lay->addWidget(keyStatus_);
 
     lay->addStretch(1);

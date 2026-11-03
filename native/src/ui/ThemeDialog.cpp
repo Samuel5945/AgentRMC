@@ -138,6 +138,37 @@ ThemeDialog::ThemeDialog(ProfileStore *store, QWidget *parent)
             });
     root->addWidget(themes_);
 
+    // 配色模式：浅色 / 深色（夜间）/ 跟随系统。只作用于内置 classic；
+    // 自定义主题包自带配色，选中时这三颗置灰。
+    auto *schemeLabel = new QLabel(QString::fromUtf8("配色模式"));
+    schemeLabel->setObjectName("mapHead");
+    root->addWidget(schemeLabel);
+    auto *schemeRow = new QHBoxLayout;
+    schemeRow->setSpacing(8);
+    const auto makeSchemeBtn = [this, schemeRow](const QString &text,
+                                                 QPushButton **out) {
+        auto *btn = new QPushButton(text);
+        btn->setObjectName("schemeOption");
+        btn->setCheckable(true);
+        btn->setCursor(Qt::PointingHandCursor);
+        schemeRow->addWidget(btn, 1);
+        *out = btn;
+    };
+    makeSchemeBtn(QString::fromUtf8("浅色"), &schemeLight_);
+    makeSchemeBtn(QString::fromUtf8("深色 · 夜间"), &schemeDark_);
+    makeSchemeBtn(QString::fromUtf8("跟随系统"), &schemeAuto_);
+    root->addLayout(schemeRow);
+    schemeAuto_->setToolTip(QString::fromUtf8(
+        "跟随 Windows 的深浅色设置，系统切换时自动跟上"));
+    connect(schemeLight_, &QPushButton::clicked, this,
+            [this] { ThemeManager::instance().setScheme(QStringLiteral("light")); });
+    connect(schemeDark_, &QPushButton::clicked, this,
+            [this] { ThemeManager::instance().setScheme(QStringLiteral("dark")); });
+    connect(schemeAuto_, &QPushButton::clicked, this,
+            [this] { ThemeManager::instance().setScheme(QStringLiteral("auto")); });
+    connect(&ThemeManager::instance(), &ThemeManager::themeChanged, this,
+            [this](const Theme &) { reloadScheme(); });
+
     auto *sep = new QFrame;
     sep->setObjectName("mapHair");
     sep->setFixedHeight(1);
@@ -216,6 +247,7 @@ ThemeDialog::ThemeDialog(ProfileStore *store, QWidget *parent)
     });
 
     reloadThemes();
+    reloadScheme();
     reloadSliders();
 }
 
@@ -244,6 +276,19 @@ void ThemeDialog::reloadThemes() {
     const int count = themes_->count();
     const int rows = qMax(1, (count + 3) / 4);
     themes_->setFixedHeight(rows * (kPreviewH + 34) + 8);
+}
+
+void ThemeDialog::reloadScheme() {
+    const bool classic =
+        ThemeManager::instance().currentId() == QStringLiteral("classic");
+    const QString scheme = ThemeManager::instance().scheme();
+    schemeLight_->setChecked(scheme == QStringLiteral("light"));
+    schemeDark_->setChecked(scheme == QStringLiteral("dark"));
+    schemeAuto_->setChecked(scheme == QStringLiteral("auto"));
+    // 自定义主题不吃配色模式：置灰但保留选中态，回到 classic 时按这套生效。
+    schemeLight_->setEnabled(classic);
+    schemeDark_->setEnabled(classic);
+    schemeAuto_->setEnabled(classic);
 }
 
 void ThemeDialog::reloadSliders() {

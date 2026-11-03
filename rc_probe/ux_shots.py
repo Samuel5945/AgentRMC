@@ -3,6 +3,8 @@ current color scheme, for theme/size regression checks. PMv2 DPI aware.
 """
 import ctypes
 ctypes.windll.shcore.SetProcessDpiAwareness(2)
+import json
+import subprocess
 import sys
 import time
 import pathlib
@@ -21,6 +23,26 @@ from qoder_ctrl_n_focus import pids_for, user32  # noqa: E402
 TAG = sys.argv[1] if len(sys.argv) > 1 else "shot"
 ui = comtypes.client.CreateObject(CUIAutomation, interface=IUIAutomation)
 pids = set(pids_for("AgentRMCNative.exe"))
+
+
+def relaunch_voice_mode():
+    # 独立页入口收进托盘/桌宠后，截图走启动路径：voice_mode=True 直接开面板。
+    global pids
+    subprocess.run(["taskkill", "/IM", "AgentRMCNative.exe", "/F"],
+                   capture_output=True)
+    time.sleep(0.8)
+    cfg_path = pathlib.Path(r"D:\apps\AgentRMC\config.json")
+    cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+    cfg["ui"]["voice_mode"] = True
+    cfg_path.write_text(json.dumps(cfg, ensure_ascii=False, indent=4),
+                        encoding="utf-8")
+    subprocess.run(["powershell", "-NoProfile", "-Command",
+                    "(Invoke-CimMethod -ClassName Win32_Process -MethodName "
+                    "Create -Arguments @{ CommandLine = '\"%s\"' }).ProcessId"
+                    % r"D:\apps\AgentRMC\AgentRMCNative.exe"],
+                   capture_output=True)
+    time.sleep(4)
+    pids = set(pids_for("AgentRMCNative.exe"))
 
 
 def windows():
@@ -88,10 +110,9 @@ time.sleep(0.5)
 if click_name(hwnd, "语音"):
     print("switched to voice page")
 shot(hwnd, "embedded")
-if click_name(hwnd, "语音主界面"):
-    time.sleep(0.8)
-    panels = [h for h, t in windows() if t == "AgentRMC 语音"]
-    print("standalone=%s" % bool(panels))
-    if panels:
-        shot(panels[0], "standalone")
+relaunch_voice_mode()
+panels = [h for h, t in windows() if t == "AgentRMC 语音"]
+print("standalone=%s" % bool(panels))
+if panels:
+    shot(panels[0], "standalone")
 print("DONE")

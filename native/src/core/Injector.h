@@ -19,6 +19,13 @@ public:
     virtual bool pasteText(const QString &text, bool autoEnter) {
         Q_UNUSED(text); Q_UNUSED(autoEnter); return false;
     }
+    // 发一个组合键（如 Ctrl+N），逐键校验 SendInput 是否真的注入成功。
+    virtual bool sendHotkey(const QStringList &mods, int vk) {
+        Q_UNUSED(mods); Q_UNUSED(vk); return false;
+    }
+    // 把物理上仍按住的 Ctrl/Alt/Shift/Win 全部松开：热键说话后用户可能
+    // 还按着修饰键，不清掉的话 Ctrl+V 会变成 Ctrl+Alt+V 之类的组合。
+    virtual void releaseModifiers() {}
 };
 
 class WinInjector final : public Injector {
@@ -34,9 +41,11 @@ public:
     bool launch(const QString &appId) override;
     bool copyText(const QString &text) override;
     bool pasteText(const QString &text, bool autoEnter) override;
+    bool sendHotkey(const QStringList &mods, int vk) override;
+    void releaseModifiers() override;
 
 private:
-    void sendKey(int vk, bool up);
+    bool sendKey(int vk, bool up);
     void *brightnessMonitor();
     void *dxva2_ = nullptr;
     void *monitor_ = nullptr;

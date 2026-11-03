@@ -40,4 +40,9 @@ bool present(const QString &preferred = QString());
 // exeName 为空时退回 ZCode.exe，兼容老手写 hook。找不到窗口就静默返回。
 void raise(const QString &exeName);
 
+// 派活时先把焦点落到聊天输入框的组合键（如 "ctrl+n"）。拉到前台≠焦点在输入框：
+// Electron 宿主内部焦点可能停在编辑器/别的元素，直接 Ctrl+V 会粘错地方或丢弃。
+// 返回空 = 该宿主没有已知聚焦键，调用方退回「等焦点稳定后直接粘贴」。
+QString chatFocusCombo(const QString &exe);
+
 }  // namespace AgentWindow

@@ -208,7 +208,11 @@ function hostFreeEnv(extra) {
 }
 
 function dryRun(scriptPath, event, stdinJson) {
-  const env = hostFreeEnv({ AGENTRMC_DRY_RUN: '1' });
+  // spool 指到临时目录：脚本会在里面记 asked-question.json，别写到真实 %APPDATA%。
+  const env = hostFreeEnv({
+    AGENTRMC_DRY_RUN: '1',
+    AGENTRMC_SPOOL_DIR: path.join(tmp, 'spool'),
+  });
   const out = execFileSync(
     process.execPath,
     [scriptPath, event],
@@ -318,14 +322,95 @@ check('e2e-permission 文案: AskUserQuestion 走 PermissionRequest 时也念「
 //    见 hooks-qoder/hooks.json 的 matcher。原生端只对 stop/permission 出声，
 //    所以 question 必须映射成 permission 发出去。
 check('question→permission: 选方案提醒按 permission 发出，宿主各认各家', () => {
-  const intl = dryRun(installInto('.qoder'), 'question', JSON.stringify({ tool_name: 'AskUserQuestion' }));
+  const intl = dryRun(installInto('.qoder'), 'question',
+    JSON.stringify({ session_id: 'q1', tool_name: 'AskUserQuestion' }));
   assert.strictEqual(intl.payload.event, 'permission');
   assert.strictEqual(intl.payload.message, '等你选方案');
   assert.strictEqual(intl.payload.title, 'Qoder');
   assert.strictEqual(intl.payload.raise, 'Qoder.exe');
-  const cn = dryRun(installInto('.qoder-cn'), 'question', JSON.stringify({ tool_name: 'AskUserQuestion' }));
+  const cn = dryRun(installInto('.qoder-cn'), 'question',
+    JSON.stringify({ session_id: 'q2', tool_name: 'AskUserQuestion' }));
   assert.strictEqual(cn.payload.title, 'Qoder CN');
   assert.strictEqual(cn.payload.raise, 'Qoder CN.exe');
+});
+
+// —— WorkBuddy 的准点信号：Notification(permission_prompt) 在弹窗出现那一刻派发。
+//    同一件事它的 PreToolUse 要等用户答完才跑（实测 11:24:38 弹出、11:30:19 才 spawn），
+//    所以 prompt 先喊，迟到的 question 必须被 asked-question.json 挡掉。
+check('prompt: 弹窗出现就喊「等你选方案」，迟到的 PreToolUse 不再喊第二遍', () => {
+  const s = installInto('.workbuddy-ai');
+  const early = dryRun(s, 'prompt', JSON.stringify({
+    session_id: 'w1',
+    notification_type: 'permission_prompt',
+    message: 'needs your permission to use AskUserQuestion',
+  }));
+  assert.strictEqual(early.payload.event, 'permission');
+  assert.strictEqual(early.payload.message, '等你选方案');
+  assert.strictEqual(early.payload.title, 'WorkBuddy AI');
+  assert.strictEqual(early.payload.raise, 'WorkBuddyAI.exe');
+  const late = dryRun(s, 'question',
+    JSON.stringify({ session_id: 'w1', tool_name: 'AskUserQuestion' }));
+  assert.strictEqual(late, null, '同一个弹窗的迟到提醒不该再喊一遍');
+  // 普通工具授权已由 PermissionRequest hook 在弹窗前报过，prompt 通道不重复。
+  assert.strictEqual(dryRun(s, 'prompt', JSON.stringify({
+    session_id: 'w2',
+    notification_type: 'permission_prompt',
+    message: 'needs your permission to use Bash',
+  })), null);
+  // idle_prompt 之类的其它通知一律不管。
+  assert.strictEqual(dryRun(s, 'prompt', JSON.stringify({
+    session_id: 'w3',
+    notification_type: 'idle_prompt',
+    message: 'waiting for your input',
+  })), null);
+});
+
+// —— 老宿主不带 session_id 时，去重键退回「宿主身份 + 项目目录」。
+//    曾经的键是 `pid${process.ppid}`：hook 的父进程是宿主每次新起的 bash.exe，
+//    两条信号的 pid 天生不同，去重从来没生效过（2026-11-03 实测复现）。
+check('去重键兜底: 没 session_id 时按宿主+项目认，大小写与斜杠归一', () => {
+  const s = installInto('.workbuddy-ai');
+  const early = dryRun(s, 'prompt', JSON.stringify({
+    notification_type: 'permission_prompt',
+    message: 'needs your permission to use AskUserQuestion',
+    cwd: 'D:\\Repo\\Proj-NoSess\\',
+  }));
+  assert.strictEqual(early.payload.message, '等你选方案');
+  // 同一次弹窗的迟到信号：斜杠方向、大小写、尾斜杠都不一样，仍要认成同一件事。
+  const late = dryRun(s, 'question', JSON.stringify({
+    tool_name: 'AskUserQuestion',
+    cwd: 'd:/repo/proj-nosess',
+  }));
+  assert.strictEqual(late, null, '同一宿主同一项目：迟到的 question 不该再喊');
+  // 换一个项目就是另一件事，不能被上一条的记账吞掉。
+  const other = dryRun(s, 'question', JSON.stringify({
+    tool_name: 'AskUserQuestion',
+    cwd: 'D:/repo/another',
+  }));
+  assert.strictEqual(other.payload.message, '等你选方案');
+  // 有的宿主会把路径写成 D:\\a\\b（字面双反斜杠），归一后也得算同一个项目。
+  const dbl = dryRun(s, 'prompt', JSON.stringify({
+    notification_type: 'permission_prompt',
+    message: 'AskUserQuestion',
+    cwd: 'D:\\\\Repo\\\\Proj-Dbl',
+  }));
+  assert.strictEqual(dbl.payload.message, '等你选方案');
+  assert.strictEqual(dryRun(s, 'question', JSON.stringify({
+    tool_name: 'AskUserQuestion',
+    cwd: 'd:/repo/proj-dbl',
+  })), null, '双反斜杠路径应归一成同一个项目');
+  // 连 cwd 都不给的宿主本来就没法区分会话，只能退化成宿主级键，与带 cwd 的
+  // question 对不上——按「宁可多喊一次也别漏」接受这一次重复。
+  const noCwd = dryRun(s, 'prompt', JSON.stringify({
+    notification_type: 'permission_prompt',
+    message: 'AskUserQuestion',
+  }));
+  assert.strictEqual(noCwd.payload.message, '等你选方案');
+  const afterNoCwd = dryRun(s, 'question', JSON.stringify({
+    tool_name: 'AskUserQuestion',
+    cwd: 'D:/repo/third',
+  }));
+  assert.notStrictEqual(afterNoCwd, null, '给不出 cwd 的宿主只许多喊一声，不能静默漏掉');
 });
 
 // 语音和气泡要念/显示两回事：「等你确认 Bash：D:\path」看着有用，念出来是噪音；
@@ -338,7 +423,7 @@ check('speech 与 message 分开: 语音短文案带宿主名，气泡留工具�
   assert.strictEqual(r.payload.message, '等你确认 Bash：ls D:/tmp');
   assert.strictEqual(r.payload.speech, 'Qoder 在等你点确认');
   const q = dryRun(installInto('.qoder-cn'), 'question',
-    JSON.stringify({ tool_name: 'AskUserQuestion' }));
+    JSON.stringify({ session_id: 'q-speech', tool_name: 'AskUserQuestion' }));
   assert.strictEqual(q.payload.speech, 'Qoder CN 在等你选方案');
   const stop = dryRun(installInto('.qoder'), 'stop', JSON.stringify({}));
   assert.strictEqual(stop.payload.speech, undefined,

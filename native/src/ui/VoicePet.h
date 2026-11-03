@@ -133,8 +133,17 @@ private:
     // 这句话该交给哪个宿主：显式指定 > 说话时前台的那个 > 最近发通知的那个 > 探测。
     // 返回空 = 一个 Agent 都不在。
     QString onlineAgentExe() const;
-    // 把话交给宿主 Agent：拉窗口 → 等焦点切过去 → 粘贴 + 回车。
+    // 把话交给宿主 Agent：拉窗口 → 轮询等前台切过去 → 聚焦聊天输入框 → 粘贴 + 回车。
     bool handOffToAgent(const QString &text, const QString &exe);
+    // 轮询等目标宿主真正到前台（Electron 切焦点不是瞬时的）；到位后先按
+    // 聚焦键再粘贴。attempts 用完还没到位 → 剪贴板兜底，绝不硬注入别的窗口。
+    void handOffPollForeground(const QString &text, const QString &exe,
+                               const QString &shortName,
+                               const QStringList &focusMods, int focusVk,
+                               bool hasFocus, int attempts);
+    // 前台与输入框都就绪后的最后一粘：再验一次前台，注入失败诚实回落剪贴板。
+    void handOffPaste(const QString &text, const QString &exe,
+                      const QString &shortName);
     void openLlmSettings();
     void tick();
     QString chatPersona() const;  // llm_api.system → 主题人设 → 内置默认

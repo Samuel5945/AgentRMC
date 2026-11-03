@@ -37,6 +37,9 @@ public:
     // 把一句话直接粘到当前前台窗口（桌宠「交给 Agent」用，不做前台判断）。
     // 调用方负责先把目标窗口拉到前台。
     bool injectText(const QString &text, bool autoEnter = true);
+    // 向前台窗口发一个组合键（派活时先按宿主的「聚焦聊天输入框」键）。
+    // SendInput 被拦时返回 false，调用方据此回落剪贴板。
+    bool sendHotkey(const QStringList &mods, int vk);
 
 public slots:
     void voiceDown();

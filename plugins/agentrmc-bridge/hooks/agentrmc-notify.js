@@ -5,6 +5,10 @@
 //   node agentrmc-notify.js question   [Agent名] [窗口进程名]   ← AskUserQuestion 等选方案
 //        （Qoder 把 AskUserQuestion 走 PreToolUse 而非 PermissionRequest，所以单独
 //          一个事件名，payload 里仍按 permission 发——原生只对 stop/permission 出声）
+//   node agentrmc-notify.js prompt     [Agent名] [窗口进程名]   ← 弹窗刚出现（准点）
+//        （WorkBuddy 的 Notification + matcher:"permission_prompt"：这是唯一在
+//          「题目弹出那一刻」就派发的信号；同一件事它的 PreToolUse 要等用户答完
+//          才跑，只能当兜底，靠 asked-question.json 记一笔避免重复喊）
 //   node agentrmc-notify.js stop       [Agent名] [窗口进程名]   ← 一轮结束
 // 后两个参数**现在一般不用传**：宿主名和要拉前台的进程映像名由 lib/host.js 自检
 // （脚本装在哪个配置家就是哪个宿主，Qoder 国际版 → Qoder.exe，Qoder CN →
@@ -110,6 +114,75 @@ function lastAssistantText(hook) {
   return '';
 }
 
+// —— 「等你选方案」只喊一次 ——
+// 同一个弹窗会被两个 hook 看到：Notification(permission_prompt) 在弹出时（准），
+// PreToolUse 在用户答完后（晚）。准的那条先喊，晚的那条不该再喊一遍——用户等了
+// 5 分钟才答，原生端 180 秒的迟到去重兜不住，只能在这里记一笔。
+const ASKED_FILE = path.join(SPOOL_DIR, 'asked-question.json');
+const ASKED_TTL_MS = 30 * 60 * 1000;
+
+// 项目目录：两条 hook 可能给得不一样（大小写、斜杠方向、尾斜杠），归一再比。
+// 报给原生端的 project 仍用原样，只有去重键走归一化后的形式。
+function projectRaw(hook) {
+  return String(
+    hook.cwd ||
+      hook.workspace ||
+      hook.project_dir ||
+      hook.projectDir ||
+      process.env.CLAUDE_PROJECT_DIR ||
+      process.env.CODEBUDDY_PROJECT_DIR ||
+      '',
+  ).trim();
+}
+
+function projectOf(hook) {
+  return projectRaw(hook)
+    .replace(/\\/g, '/')
+    .replace(/\/{2,}/g, '/')  // 宿主把路径写成 D:\\a\\b 时别算成两个项目
+    .replace(/\/+$/, '')
+    .toLowerCase();
+}
+
+function askedKey(hook) {
+  const sid = String(hook.session_id || hook.sessionId || '').trim();
+  if (sid) return sid;
+  // 没有 session（老宿主）：按「宿主身份 + 项目目录」认，宁可多喊一次也别漏。
+  // 这里**不能用 process.ppid**：hook 的父进程是宿主每次新起的 bash.exe，
+  // pid 天生唯一，两条信号永远对不上，去重形同虚设（2026-11-03 实测复现）。
+  // 宿主自己的 pid 也拿不到（中间隔了一层 bash），所以用稳定的宿主标识代替。
+  return `host:${(raise || agent || 'agent').toLowerCase()}|${projectOf(hook)}`;
+}
+
+function rememberAsked(hook) {
+  try {
+    fs.mkdirSync(SPOOL_DIR, { recursive: true });
+    let all = {};
+    try {
+      all = JSON.parse(fs.readFileSync(ASKED_FILE, 'utf8')) || {};
+    } catch {
+      all = {};
+    }
+    const now = Date.now();
+    for (const k of Object.keys(all)) {
+      if (!(now - Number(all[k]) < ASKED_TTL_MS)) delete all[k];
+    }
+    all[askedKey(hook)] = now;
+    fs.writeFileSync(ASKED_FILE, JSON.stringify(all));
+  } catch {
+    // 记不住就记不住：最多多喊一声，不能挡会话。
+  }
+}
+
+function alreadyAsked(hook) {
+  try {
+    const all = JSON.parse(fs.readFileSync(ASKED_FILE, 'utf8')) || {};
+    const at = Number(all[askedKey(hook)] || 0);
+    return at > 0 && Date.now() - at < ASKED_TTL_MS;
+  } catch {
+    return false;
+  }
+}
+
 let raw = '';
 process.stdin.setEncoding('utf8');
 process.stdin.on('data', (chunk) => {
@@ -135,7 +208,21 @@ process.stdin.on('end', () => {
   // （MainWindow.cpp 的 notify 分支），其它 kind 只冒气泡。所以 question 复用
   // permission 通道，别在原生端加新类型。
   let outEvent = event;
-  if (event === 'stop') {
+  if (event === 'prompt') {
+    // 「弹窗出现的那一刻」——WorkBuddy 的 Notification(permission_prompt) hook。
+    // 这是唯一准时的信号：同一件事它的 PreToolUse 要等用户答完才派发
+    // （实测问题 11:24:38 弹出、11:30:19 才 spawn question hook）。
+    // 只管 AskUserQuestion：普通授权已经由 PermissionRequest hook 在弹窗前报过，
+    // 这里再报就重复了。
+    const type = String(hook.notification_type || hook.notificationType || '');
+    if (type && type !== 'permission_prompt') process.exit(0);
+    const note = String(hook.message || '');
+    if (!/AskUserQuestion/i.test(note)) process.exit(0);
+    outEvent = 'permission';
+    message = '等你选方案';
+    speech = `${agent} 在等你选方案`;
+    rememberAsked(hook);
+  } else if (event === 'stop') {
     // 优先念 Agent 的最终回复（transcript 最后一条 assistant），
     // 拿不到才退回通用文案——宿主不给 transcript 也照样能用。
     const said = lastAssistantText(hook);
@@ -147,9 +234,13 @@ process.stdin.on('end', () => {
     // matcher 万一不被宿主执行，这里再判一次 tool_name 兜底——PreToolUse 每个工具
     // 都会触发，认不出来就静默，绝不能把授权提醒刷成屏。
     if (tool !== 'AskUserQuestion') process.exit(0);
+    // 弹出那一刻 Notification hook 已经喊过了（WorkBuddy 走这条），
+    // 这里只给没有 Notification hook 的宿主兜底，别把同一件事喊两遍。
+    if (alreadyAsked(hook)) process.exit(0);
     outEvent = 'permission';
     message = '等你选方案';
     speech = `${agent} 在等你选方案`;
+    rememberAsked(hook);
   } else if (event === 'permission') {
     const detail = String(input.file_path || input.path || input.command || input.url || '');
     const short = detail.length > 60 ? detail.slice(0, 57) + '…' : detail;
@@ -172,15 +263,7 @@ process.stdin.on('end', () => {
   const sessionId = String(
     hook.session_id || hook.sessionId || '',
   ).trim();
-  const project = String(
-    hook.cwd ||
-      hook.workspace ||
-      hook.project_dir ||
-      hook.projectDir ||
-      process.env.CLAUDE_PROJECT_DIR ||
-      process.env.CODEBUDDY_PROJECT_DIR ||
-      '',
-  ).trim();
+  const project = projectRaw(hook);
   const eventId = String(hook.tool_use_id || hook.toolUseId || '').trim();
 
   const payloadObj = { event: outEvent, title: agent, message };

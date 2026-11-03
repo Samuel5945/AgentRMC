@@ -77,6 +77,10 @@ QString voiceBackendKey(VoiceBackend backend);
 QString voiceBackendLabel(VoiceBackend backend);
 QString voiceProfileLabel(const QString &profileName);
 QString voiceComboText(const QStringList &mods, int vk);
+// voiceComboText 的逆操作：解析 "ctrl+n" / "Ctrl+Shift+L" / "alt+f5" 这类
+// 配置串。恰好一个主键（字母/数字/F1-F12），其余必须是修饰键；解不出返回
+// false（派活聚焦键配错时宁可不发，不能乱按键）。
+bool voiceParseCombo(const QString &text, QStringList *mods, int *vk);
 
 VoiceOptions resolveVoiceOptions(const QJsonObject &config,
                                  const QJsonObject &profileVoice,

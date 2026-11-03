@@ -652,52 +652,100 @@ QString VoicePet::onlineAgentExe() const {
 
 bool VoicePet::handOffToAgent(const QString &text, const QString &exe) {
     const QString shortName = AgentWindow::displayName(exe);
-    // 目标窗口已经在前台就别折腾：省掉 raise + 180ms 等待，说完立刻落字。
+    // 聚焦键：用户覆盖（ui.chat_focus_<exe>，"none" = 禁用）> 宿主默认。
+    // 拉到前台 ≠ 焦点在聊天输入框：不先聚焦就 Ctrl+V，字会粘进编辑器或
+    // 直接丢给没聚焦的元素——这正是「只拉起前台、话没送进去」的根因。
+    QString combo = store_ != nullptr
+                        ? store_->uiString(QStringLiteral("chat_focus_") + exe)
+                        : QString();
+    if (combo.trimmed().isEmpty()) {
+        combo = AgentWindow::chatFocusCombo(exe);
+    }
+    QStringList focusMods;
+    int focusVk = 0;
+    const bool hasFocus = combo.trimmed() != QStringLiteral("none") &&
+                          voiceParseCombo(combo, &focusMods, &focusVk);
+    // 目标窗口已经在前台就别折腾 raise：省掉抢前台的等待，稍等焦点稳定即注入。
     if (AgentWindow::foregroundAgentExe().compare(exe, Qt::CaseInsensitive) == 0) {
-        if (voice_ == nullptr || !voice_->injectText(text, true)) {
-            QApplication::clipboard()->setText(text);
-            bubbleOnly(QString::fromUtf8("没贴上，已复制，手动发一下"), 4200,
-                       exe);
-            return true;
-        }
-        bubbleOnly(QString::fromUtf8("已交给 %1").arg(shortName), 4200, exe);
-        // 记下这次派活目标：下次没有前台/通知线索时优先还给它，而不是
-        // 按白名单顺序固定偏向某个宿主。
-        if (store_ != nullptr) {
-            store_->setUiString(QStringLiteral("agent_last_used"), exe);
-        }
-        emit workHandedOff(exe, text);
+        handOffPollForeground(text, exe, shortName, focusMods, focusVk,
+                              hasFocus, 1);
         return true;
     }
     // 先把宿主窗口拉到前台：直接粘会落进用户原本待着的窗口里。
     AgentWindow::raise(exe);
-    // 焦点切换不是瞬时的，等一拍再粘，否则粘贴打到旧窗口上。
-    QTimer::singleShot(180, this, [this, text, exe, shortName] {
-        // raise 之后前台必须真的切到目标宿主才注入：宿主收在托盘 / 完全
-        // 退出时 raise 找不到窗口，硬注入会把这句话打进用户正待着的窗口。
-        if (AgentWindow::foregroundAgentExe().compare(exe,
-                                                      Qt::CaseInsensitive) != 0) {
-            QApplication::clipboard()->setText(text);
-            bubbleOnly(
-                QString::fromUtf8("%1 没抢到前台，已复制，切过去粘贴")
-                    .arg(shortName),
-                4600, exe);
-            return;
-        }
-        if (voice_ == nullptr || !voice_->injectText(text, true)) {
-            // 注入被拦（UIPI/宿主不吃模拟按键）：退回复制，至少这句话不丢。
-            QApplication::clipboard()->setText(text);
-            bubbleOnly(QString::fromUtf8("没贴上，已复制，手动发一下"), 4200,
-                       exe);
-            return;
-        }
-        bubbleOnly(QString::fromUtf8("已交给 %1").arg(shortName), 4200, exe);
-        if (store_ != nullptr) {
-            store_->setUiString(QStringLiteral("agent_last_used"), exe);
-        }
-        emit workHandedOff(exe, text);
-    });
+    // 焦点切换不是瞬时的：轮询等前台真的切过去（60ms × 30 ≈ 1.8s），
+    // 而不是赌一个固定延时——慢机器上 Electron 恢复焦点可能要几百毫秒。
+    handOffPollForeground(text, exe, shortName, focusMods, focusVk, hasFocus, 30);
     return true;
+}
+
+void VoicePet::handOffPollForeground(const QString &text, const QString &exe,
+                                     const QString &shortName,
+                                     const QStringList &focusMods, int focusVk,
+                                     bool hasFocus, int attempts) {
+    if (AgentWindow::foregroundAgentExe().compare(exe, Qt::CaseInsensitive) == 0) {
+        // 前台已到位：再给 Electron 一拍恢复内部焦点，然后聚焦输入框 + 粘贴。
+        QTimer::singleShot(150, this, [this, text, exe, shortName, focusMods,
+                                       focusVk, hasFocus] {
+            if (AgentWindow::foregroundAgentExe().compare(
+                    exe, Qt::CaseInsensitive) != 0) {
+                QApplication::clipboard()->setText(text);
+                bubbleOnly(QString::fromUtf8("%1 没抢到前台，已复制，切过去粘贴")
+                               .arg(shortName),
+                           4600, exe);
+                return;
+            }
+            if (hasFocus && voice_ != nullptr &&
+                voice_->sendHotkey(focusMods, focusVk)) {
+                // 等聊天输入页打开并聚焦再粘（Qoder 的 Ctrl+N 开新任务输入页）。
+                QTimer::singleShot(300, this, [this, text, exe, shortName] {
+                    handOffPaste(text, exe, shortName);
+                });
+                return;
+            }
+            handOffPaste(text, exe, shortName);
+        });
+        return;
+    }
+    if (attempts <= 0) {
+        // raise 找不到窗口 / 宿主收在托盘：硬注入会打进用户正待着的窗口，
+        // 只写剪贴板兜底，至少这句话不丢。
+        QApplication::clipboard()->setText(text);
+        bubbleOnly(QString::fromUtf8("%1 没抢到前台，已复制，切过去粘贴")
+                       .arg(shortName),
+                   4600, exe);
+        return;
+    }
+    QTimer::singleShot(60, this, [this, text, exe, shortName, focusMods, focusVk,
+                                  hasFocus, attempts] {
+        handOffPollForeground(text, exe, shortName, focusMods, focusVk,
+                              hasFocus, attempts - 1);
+    });
+}
+
+void VoicePet::handOffPaste(const QString &text, const QString &exe,
+                            const QString &shortName) {
+    // 粘贴前最后验一次前台：聚焦等待这几百毫秒里窗口可能被切走。
+    if (AgentWindow::foregroundAgentExe().compare(exe, Qt::CaseInsensitive) != 0) {
+        QApplication::clipboard()->setText(text);
+        bubbleOnly(QString::fromUtf8("%1 不在前台了，已复制，切过去粘贴")
+                       .arg(shortName),
+                   4600, exe);
+        return;
+    }
+    if (voice_ == nullptr || !voice_->injectText(text, true)) {
+        // 注入被拦（UIPI/宿主不吃模拟按键）：退回复制，至少这句话不丢。
+        QApplication::clipboard()->setText(text);
+        bubbleOnly(QString::fromUtf8("没贴上，已复制，手动发一下"), 4200, exe);
+        return;
+    }
+    bubbleOnly(QString::fromUtf8("已交给 %1").arg(shortName), 4200, exe);
+    // 记下这次派活目标：下次没有前台/通知线索时优先还给它，而不是
+    // 按白名单顺序固定偏向某个宿主。
+    if (store_ != nullptr) {
+        store_->setUiString(QStringLiteral("agent_last_used"), exe);
+    }
+    emit workHandedOff(exe, text);
 }
 
 void VoicePet::handleUtterance(const QString &text) {

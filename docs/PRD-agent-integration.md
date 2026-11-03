@@ -679,11 +679,28 @@ Agent 宿主
 > **要人动手就必须喊到**：凡是需要用户手动操作的事件（等授权、等选方案、卡住等人、
 > 做完等验收）一律出声；只有纯状态更新（`progress`）才允许静默。
 >
-> **「等你选方案」会迟到**（2026-11-02 实测）：WorkBuddy 对 `AskUserQuestion` 的
-> `PreToolUse` hook 在**用户答完之后**才派发（问题 17:24 弹出、通知 17:27 才到），
-> 靠它喊就成了「选完才听到」。两条对策：①插件 skill 要求 Agent 在提问**之前**先
-> `pet_work_update stage=blocked` 喊一声；②原生端对 180 秒内已经喊过的同一
-> 「等你选方案」做去重，避免迟到那条再喊一遍。
+> **「等你选方案」为什么曾经迟到**（2026-11-02 发现，11-03 修）：WorkBuddy 的
+> `PreToolUse` hook 是在 **tool start** 才跑的，而 `AskUserQuestion` 的 tool start
+> 发生在**用户答完之后**（11-03 实测：11:24:38 弹窗、11:30:19 才 spawn hook，差 5 分 41 秒）。
+>
+> **准点信号已找到**：`Notification` hook + `matcher:"permission_prompt"`。宿主在
+> 「弹窗已经推给用户、正在等你回答」那一刻派发它（日志
+> `[HandleInterruptions] Approval dialog shown for tool: ...`），比 `PreToolUse` 早整整
+> 一个思考时长。`hooks-workbuddy/hooks.json` 因此挂两条：
+> `Notification(permission_prompt)` → `agentrmc-notify.js prompt`（准，主路），
+> `PreToolUse(AskUserQuestion)` → `... question`（兜底，只给没有 Notification 的宿主）。
+> 两条都喊同一件事，所以脚本在 spool 目录写 `asked-question.json`（按 session，
+> 30 分钟有效；老宿主不给 session_id 时退回「宿主身份 + 归一化后的项目目录」——
+> 早先用的 `process.ppid` 是每次新起的 bash.exe，两条信号永远对不上，等于没去重）：
+> 准的那条先记账，迟的那条看到账本直接静默——原生端 180 秒的
+> 迟到去重兜不住「用户想了 5 分钟」这种情况。
+>
+> 附带结论：WorkBuddy 桌面自己也有一个 `TaskStatusNotifier`（daemon 里跟会话
+> `status: working→pending` + `pendingInputKind=question`，经 `desktopHost:taskPendingNotification`
+> 到主进程，用 `@ban-dal/os-bridge` 发 AUMID `WorkBuddy.WorkBuddyAI` 的 Windows toast，
+> 标题「任务等待确认，请处理」）。它准点，但走的是 `\\.\pipe\wbipc-*` 内部协议，
+> 第三方插件订阅不到；`workbuddy.db` 的 `sessions.status` 虽然同步落了 `pending`，
+> 但轮询数据库属于外部依赖，先不做——`Notification` hook 已经够用。
 
 文案规范：
 

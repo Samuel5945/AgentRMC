@@ -8,6 +8,7 @@
 #include <QDragEnterEvent>
 #include <QDropEvent>
 #include <QHBoxLayout>
+#include <QImage>
 #include <QKeyEvent>
 #include <QLabel>
 #include <QMouseEvent>
@@ -77,36 +78,60 @@ public:
     }
 };
 
-// 原图按控件物理尺寸一次缩放：先缩成逻辑像素再交给 QLabel，高 DPI 屏会二次放大糊掉细线。
+// 引导插图：透明底 + alpha 描边，描边颜色取调色板。
+// 把底板色交给 QSS（guide.image.bg）、描边色交给 text.dim，两套配色才都读得清，
+// 图与控件比例不一致时也不会露出一圈异色边。
+// 缩放放在 paintEvent 里按控件物理尺寸一次算好：先缩成逻辑像素再交给 QLabel，
+// 高 DPI 屏会二次放大糊掉细线。
 class GuideImage final : public QLabel {
 public:
     explicit GuideImage(const QString &path, QWidget *parent = nullptr)
-        : QLabel(parent), pixmap_(path) {
+        : QLabel(parent), art_(path) {
         setObjectName("guideImage");
         setAlignment(Qt::AlignCenter);
+        connect(&ThemeManager::instance(), &ThemeManager::themeChanged, this,
+                [this](const Theme &) {
+                    tinted_ = QPixmap();
+                    update();
+                });
     }
 
 protected:
     void paintEvent(QPaintEvent *event) override {
-        QLabel::paintEvent(event);
-        if (pixmap_.isNull()) {
+        QLabel::paintEvent(event);  // 底板：guide.image.bg + 圆角描边
+        if (art_.isNull()) {
             return;
         }
         const QRect area = rect().adjusted(7, 7, -7, -7);
         if (area.width() <= 0 || area.height() <= 0) {
             return;
         }
-        const QSize size =
-            pixmap_.size().scaled(area.size(), Qt::KeepAspectRatio);
+        if (tinted_.isNull()) {
+            const QColor ink =
+                ThemeManager::instance().color(QStringLiteral("text.dim"));
+            tinted_ = tintArt(ink.isValid() ? ink : QColor(0xc9, 0xd1, 0xd9));
+        }
+        const QSize size = art_.size().scaled(area.size(), Qt::KeepAspectRatio);
         const QPoint at(area.x() + (area.width() - size.width()) / 2,
                         area.y() + (area.height() - size.height()) / 2);
         QPainter painter(this);
         painter.setRenderHint(QPainter::SmoothPixmapTransform);
-        painter.drawPixmap(QRect(at, size), pixmap_);
+        painter.drawPixmap(QRect(at, size), tinted_);
     }
 
 private:
-    QPixmap pixmap_;
+    QPixmap tintArt(const QColor &ink) const {
+        QImage image =
+            art_.convertToFormat(QImage::Format_ARGB32_Premultiplied);
+        QPainter painter(&image);
+        painter.setCompositionMode(QPainter::CompositionMode_SourceIn);
+        painter.fillRect(image.rect(), ink);
+        painter.end();
+        return QPixmap::fromImage(image);
+    }
+
+    QImage art_;
+    QPixmap tinted_;
 };
 
 }  // namespace

@@ -66,7 +66,7 @@ bool isExtended(int vk) {
 
 }  // namespace
 
-void WinInjector::sendKey(int vk, bool up) {
+bool WinInjector::sendKey(int vk, bool up) {
     INPUT input{};
     input.type = kInputKeyboard;
     input.ki.wVk = WORD(vk);
@@ -78,7 +78,8 @@ void WinInjector::sendKey(int vk, bool up) {
     if (up) {
         input.ki.dwFlags |= kKeyUp;
     }
-    SendInput(1, &input, sizeof(INPUT));
+    // 返回 0 = 被拦（UIPI/权限不一致等），调用方必须知道，不能装成功。
+    return SendInput(1, &input, sizeof(INPUT)) == 1;
 }
 
 void WinInjector::key(const QStringList &mods, int vk, int repeat) {
@@ -158,19 +159,55 @@ bool WinInjector::pasteText(const QString &text, bool autoEnter) {
     if (text.isEmpty() || !copyText(text)) {
         return false;
     }
+    releaseModifiers();
     QThread::msleep(50);
-    sendKey(VK_CONTROL, false);
-    sendKey('V', false);
+    bool ok = sendKey(VK_CONTROL, false);
+    ok = sendKey('V', false) && ok;
     QThread::msleep(20);
-    sendKey('V', true);
-    sendKey(VK_CONTROL, true);
+    ok = sendKey('V', true) && ok;
+    ok = sendKey(VK_CONTROL, true) && ok;
     if (autoEnter) {
         QThread::msleep(80);
-        sendKey(VK_RETURN, false);
+        ok = sendKey(VK_RETURN, false) && ok;
         QThread::msleep(20);
-        sendKey(VK_RETURN, true);
+        ok = sendKey(VK_RETURN, true) && ok;
     }
-    return true;
+    return ok;
+}
+
+void WinInjector::releaseModifiers() {
+    // 只松真的还按着的键，避免凭空发 keyup 干扰宿主自己的快捷键状态。
+    const int mods[] = {VK_CONTROL, VK_MENU, VK_SHIFT, VK_LWIN, VK_RWIN};
+    for (const int vk : mods) {
+        if (GetAsyncKeyState(vk) & 0x8000) {
+            sendKey(vk, true);
+        }
+    }
+}
+
+bool WinInjector::sendHotkey(const QStringList &mods, int vk) {
+    if (vk == 0) {
+        return false;
+    }
+    releaseModifiers();
+    QThread::msleep(30);
+    bool ok = true;
+    for (const QString &mod : mods) {
+        const int mv = modVk(mod);
+        if (mv) {
+            ok = sendKey(mv, false) && ok;
+        }
+    }
+    ok = sendKey(vk, false) && ok;
+    QThread::msleep(30);
+    ok = sendKey(vk, true) && ok;
+    for (auto it = mods.crbegin(); it != mods.crend(); ++it) {
+        const int mv = modVk(*it);
+        if (mv) {
+            ok = sendKey(mv, true) && ok;
+        }
+    }
+    return ok;
 }
 
 void WinInjector::scroll(int delta) {

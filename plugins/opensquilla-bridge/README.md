@@ -26,6 +26,7 @@ AgentBridge :45915  →  气泡 + TTS + 把 OpenSquilla 窗口拉回前台
 | `opensquilla-pet-bridge.mjs` | 常驻桥。订阅事件 → 发 `/notify`。零依赖（Node 22+ 内置 WebSocket/fetch） |
 | `startup-bridge.vbs` | 开机自启，隐藏窗口 |
 | `ensure-bridge.ps1` | 看门狗：桥不在就拉起来，并在 `%TEMP%\pet-bridge-watchdog.log` 留一行 `DOWN/UP`，用来查它是什么时候死的 |
+| `ensure-bridge-hidden.vbs` | 看门狗的零闪窗壳：计划任务跑它（wscript 是 GUI 子系统，不建控制台），它再隐藏执行同目录的 `ensure-bridge.ps1`，退出码透传给任务 |
 | `voice-reminder.ps1` | 立即说一句（不走事件），`/state` 验活 → `/speak` 或 `/notify` |
 
 ## 安装
@@ -44,9 +45,10 @@ Copy-Item plugins\opensquilla-bridge\startup-bridge.vbs `
   "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup\OpenSquillaPetBridge.vbs"
 
 # 4) 每 5 分钟补位（强烈建议装；开机自启只救登录，救不了半路被杀）
-$wd = "$env:USERPROFILE\.agents\skills\agentrmc-voice-reminder\scripts\ensure-bridge.ps1"
-schtasks /Create /F /TN OpenSquillaPetBridgeWatchdog /SC MINUTE /MO 5 /TR `
-  "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$wd`""
+#    必须走 wscript 隐藏壳：任务直接跑 powershell 的话，-WindowStyle Hidden 是
+#    「先建控制台再隐藏」，桌面上每 5 分钟闪一下黑窗口（2026-11-03 已修）。
+$wd = "$env:USERPROFILE\.agents\skills\agentrmc-voice-reminder\scripts\ensure-bridge-hidden.vbs"
+schtasks /Create /F /TN OpenSquillaPetBridgeWatchdog /SC MINUTE /MO 5 /TR "wscript.exe //B `"$wd`""
 ```
 
 > **别在 agent 的 tool call 里直接起桥。** 这台机器上从工具调用派生的进程活不过那次

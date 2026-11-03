@@ -169,7 +169,7 @@ QHash<QString, QString> ThemeManager::classicLightPalette() {
     m_.insert(QStringLiteral("msgbox.bg"), QStringLiteral("#ffffff"));
     m_.insert(QStringLiteral("bubble.bg"),
               QStringLiteral("rgba(255, 255, 255, 245)"));
-    m_.insert(QStringLiteral("guide.image.bg"), QStringLiteral("#e7ebf0"));
+    m_.insert(QStringLiteral("guide.image.bg"), QStringLiteral("#ffffff"));
     // 字色：浅底深字，主次层级与深色版一一对应（text 最重、body 最轻）。
     m_.insert(QStringLiteral("text"), QStringLiteral("#171e2a"));
     m_.insert(QStringLiteral("text.soft"), QStringLiteral("#232b3a"));

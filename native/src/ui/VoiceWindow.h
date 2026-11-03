@@ -49,6 +49,7 @@ private:
     void copyText(const QString &text);
     void pushHistory(const QString &text, int costMs);
     void refreshHint();
+    void refreshStatusDot();
     void refreshAgentTarget();
 
     VoiceController *voice_ = nullptr;

@@ -151,6 +151,51 @@ QString voiceComboText(const QStringList &mods, int vk) {
     return parts.join('+');
 }
 
+bool voiceParseCombo(const QString &text, QStringList *mods, int *vk) {
+    if (mods == nullptr || vk == nullptr) {
+        return false;
+    }
+    mods->clear();
+    *vk = 0;
+    const QStringList parts = text.trimmed().toLower().split(
+        '+', Qt::SkipEmptyParts);
+    int keyVk = 0;
+    for (const QString &raw : parts) {
+        const QString part = raw.trimmed();
+        if (part == QStringLiteral("ctrl") || part == QStringLiteral("alt") ||
+            part == QStringLiteral("shift") || part == QStringLiteral("win")) {
+            if (!mods->contains(part)) {
+                mods->append(part);
+            }
+            continue;
+        }
+        if (keyVk != 0) {
+            return false;  // 两个主键，不是合法组合键
+        }
+        if (part.size() == 1) {
+            const QChar c = part.at(0);
+            if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')) {
+                keyVk = c.toUpper().toLatin1();
+                continue;
+            }
+        }
+        if (part.startsWith('f') && part.size() >= 2) {
+            bool ok = false;
+            const int n = part.mid(1).toInt(&ok);
+            if (ok && n >= 1 && n <= 12) {
+                keyVk = 0x70 + n - 1;
+                continue;
+            }
+        }
+        return false;
+    }
+    if (keyVk == 0) {
+        return false;
+    }
+    *vk = keyVk;
+    return true;
+}
+
 VoiceOptions resolveVoiceOptions(const QJsonObject &config,
                                  const QJsonObject &profileVoice,
                                  const QString &appDir) {

@@ -209,6 +209,38 @@ int main() {
     }
 
     {
+        // 派活聚焦键解析：voiceComboText 的逆操作，配置串写错宁可不发。
+        QStringList mods;
+        int vk = 0;
+        check(voiceParseCombo("ctrl+n", &mods, &vk), "parse ctrl+n");
+        check(mods == QStringList({"ctrl"}) && vk == 'N', "parse ctrl+n values");
+        check(voiceParseCombo(" Ctrl + Shift + L ", &mods, &vk),
+              "parse mixed case + spaces");
+        check(mods == QStringList({"ctrl", "shift"}) && vk == 'L',
+              "parse ctrl+shift+l values");
+        check(voiceParseCombo("alt+f5", &mods, &vk) && vk == 0x74,
+              "parse function key");
+        check(voiceParseCombo("win+ctrl+alt+shift+9", &mods, &vk) &&
+                  mods.size() == 4 && vk == '9',
+              "parse all mods + digit");
+        check(voiceParseCombo("ctrl+ctrl+n", &mods, &vk) && mods.size() == 1,
+              "duplicate mod deduped");
+        check(!voiceParseCombo("", &mods, &vk), "reject empty");
+        check(!voiceParseCombo("ctrl", &mods, &vk), "reject mod only");
+        check(!voiceParseCombo("ctrl+n+p", &mods, &vk), "reject two keys");
+        check(!voiceParseCombo("ctrl+f13", &mods, &vk), "reject bad f-key");
+        check(!voiceParseCombo("ctrl+enter", &mods, &vk), "reject named key");
+        check(voiceParseCombo("n+ctrl", &mods, &vk) && vk == 'N' &&
+                  mods == QStringList({"ctrl"}),
+              "key first still parses");
+        // 与 voiceComboText 往返一致。
+        check(voiceParseCombo(voiceComboText({"ctrl", "alt"}, 0x56).toLower(),
+                              &mods, &vk) &&
+                  mods == QStringList({"ctrl", "alt"}) && vk == 0x56,
+              "combo roundtrip");
+    }
+
+    {
         const QString dir = appDir + "/sv";
         QDir().mkpath(dir);
         touch(dir + "/model.int8.onnx");

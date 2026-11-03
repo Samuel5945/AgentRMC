@@ -1,5 +1,7 @@
 #include "Toast.h"
 
+#include "core/ThemeManager.h"
+
 #include <QCursor>
 #include <QGuiApplication>
 #include <QPainter>
@@ -53,8 +55,13 @@ void Toast::paintEvent(QPaintEvent *event) {
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing, true);
     const QRectF box = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
-    painter.setPen(QPen(QColor(255, 255, 255, 32), 1.0));
-    painter.setBrush(QColor(15, 20, 29, 238));
+    // 气泡底与描边走调色板：正文颜色由 QSS 给（浅色模式是深字），
+    // 气泡再写死深色就没人读得出。
+    const QColor bubble =
+        ThemeManager::instance().color(QStringLiteral("bubble.bg"));
+    const QColor edge = ThemeManager::instance().color(QStringLiteral("w30"));
+    painter.setPen(QPen(edge.isValid() ? edge : QColor(255, 255, 255, 32), 1.0));
+    painter.setBrush(bubble.isValid() ? bubble : QColor(15, 20, 29, 238));
     painter.drawRoundedRect(box, 12, 12);
     QLabel::paintEvent(event);
 }

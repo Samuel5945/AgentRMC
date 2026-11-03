@@ -32,8 +32,9 @@ description: 与 AgentRMC 桌宠交互：汇报任务阶段进度、让桌宠出
   并把宿主窗口拉到前台。三者都不要再用 pet_notify / pet_speak 重复发。
 - 明确卡在用户身上（缺凭据、要拍板）时，用 `pet_work_update stage=blocked` 就够——
   它自己会冒泡 + 语音；再补一条 pet_notify 就是同一件事说两遍。
-- **要用户回答之前先喊一声**：WorkBuddy 对 `AskUserQuestion` 的 hook 是**用户答完
-  之后**才派发的，只靠它就会出现「我都选完了才听到语音」。所以在调用
+- **要用户回答之前先喊一声**：WorkBuddy 已改挂 `Notification(permission_prompt)`
+  ——题目弹出那一刻就喊，不用你操心；但 Qoder 之类的宿主还是**用户答完之后**才
+  派发 hook，只靠它就会出现「我都选完了才听到语音」。所以在调用
   `AskUserQuestion`（或其它会阻塞等人的工具）**之前**，先 `pet_work_update
-  stage=blocked` 或 `pet_speak` 说一句，让人抬头；宿主迟到的那条提醒会被去重，
+  stage=blocked` 或 `pet_speak` 说一句，让人抬头；宿主随后那条会被去重，
   不会喊两遍。

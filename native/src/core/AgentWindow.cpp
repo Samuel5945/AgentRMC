@@ -203,4 +203,16 @@ void raise(const QString &exeName) {
     SetForegroundWindow(found);
 }
 
+QString chatFocusCombo(const QString &exe) {
+    // Qoder 新工作台：Ctrl+N = 「新任务」，打开新的 Chat 输入页，焦点必落在
+    // 输入框里——派活正好需要这个语义（一句话 = 一个新任务）。
+    // 来源：docs.qoder.com/qoder/keyboard-shortcuts（2026-11-03 核对）。
+    // 用户改过键位时用 ui.chat_focus_<exe> 覆盖；填 "none" 显式禁用。
+    if (exe.compare(QStringLiteral("Qoder.exe"), Qt::CaseInsensitive) == 0 ||
+        exe.compare(QStringLiteral("Qoder CN.exe"), Qt::CaseInsensitive) == 0) {
+        return QStringLiteral("ctrl+n");
+    }
+    return QString();
+}
+
 }  // namespace AgentWindow

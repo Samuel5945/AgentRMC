@@ -25,6 +25,14 @@
 
 namespace {
 
+// 自绘控件也必须走调色板：写死深色的话，classic 浅色下会露出黑底，
+// 而子控件（QSS 令牌）已经翻成浅底深字，两边叠在一起谁都读不出。
+// token 缺失/解析不了才回落到深色原值，别画成透明。
+QColor paletteColor(const QString &token, const QColor &fallback) {
+    const QColor color = ThemeManager::instance().color(token);
+    return color.isValid() ? color : fallback;
+}
+
 // 大圆麦克风按钮：Idle 蓝环 + 麦克风图形，录音变绿环（随电平加粗）+ 停止方块。
 class MicButton final : public QPushButton {
 public:
@@ -60,7 +68,10 @@ protected:
         const QPointF center = area.center();
 
         // 外环：录音时随电平加粗，给出「听到你了」的反馈。
-        QPen ring(recording_ ? QColor(0x3f, 0xb9, 0x50) : QColor(79, 140, 255));
+        QPen ring(recording_
+                      ? QColor(0x3f, 0xb9, 0x50)
+                      : paletteColor(QStringLiteral("accent"),
+                                     QColor(79, 140, 255)));
         ring.setWidth(recording_ ? int(3 + level_ * 5) : 4);
         painter.setPen(ring);
         painter.setBrush(Qt::NoBrush);
@@ -68,7 +79,8 @@ protected:
         painter.drawEllipse(center, radius, radius);
 
         painter.setPen(Qt::NoPen);
-        painter.setBrush(QColor(0x12, 0x17, 0x22));
+        painter.setBrush(paletteColor(QStringLiteral("card.bg"),
+                                      QColor(0x12, 0x17, 0x22)));
         painter.drawEllipse(center, 44, 44);
 
         if (recording_) {
@@ -79,10 +91,12 @@ protected:
         }
 
         // 麦克风：胶囊 + 拾音弧 + 底座。
-        QPen pen(QColor(0xc9, 0xd1, 0xd9));
+        const QColor glyph =
+            paletteColor(QStringLiteral("text.dim"), QColor(0xc9, 0xd1, 0xd9));
+        QPen pen(glyph);
         pen.setWidth(3);
         painter.setPen(pen);
-        painter.setBrush(QColor(0xc9, 0xd1, 0xd9));
+        painter.setBrush(glyph);
         painter.drawRoundedRect(QRectF(center.x() - 9, center.y() - 22, 18,
                                        30), 9, 9);
         painter.setBrush(Qt::NoBrush);
@@ -143,7 +157,7 @@ VoiceWindow::VoiceWindow(VoiceController *voice, ProfileStore *store,
     head->setSpacing(8);
     statusDot_ = new QLabel;
     statusDot_->setFixedSize(6, 6);
-    statusDot_->setStyleSheet(QStringLiteral("background:#4f8cff;"));
+    refreshStatusDot();
     auto *title = new QLabel(QString::fromUtf8("语音"));
     title->setObjectName("brand");
     auto *full = new QPushButton(QString::fromUtf8("完整界面"));
@@ -368,9 +382,7 @@ VoiceWindow::VoiceWindow(VoiceController *voice, ProfileStore *store,
             [this](const QString &state, const QString &detail) {
                 recording_ = state == QStringLiteral("recording");
                 static_cast<MicButton *>(mic_)->setRecording(recording_);
-                statusDot_->setStyleSheet(recording_
-                                              ? QStringLiteral("background:#3fb950;")
-                                              : QStringLiteral("background:#4f8cff;"));
+                refreshStatusDot();
                 if (state == QStringLiteral("idle")) {
                     const bool warn =
                         detail.contains(QString::fromUtf8("太短")) ||
@@ -404,7 +416,13 @@ VoiceWindow::VoiceWindow(VoiceController *voice, ProfileStore *store,
         refreshHint();
     });
     connect(&ThemeManager::instance(), &ThemeManager::themeChanged, this,
-            [this](const Theme &) { update(); });
+            [this](const Theme &) {
+                // 面板底/麦克风/Toast 是自绘的，不吃 QSS：换配色模式要自己重画。
+                refreshStatusDot();
+                mic_->update();
+                toast_->update();
+                update();
+            });
     connect(voice_, &VoiceController::eventReady, this,
             [this](const QString &kind, const QString &text) {
                 if (kind == QStringLiteral("error")) {
@@ -432,6 +450,14 @@ void VoiceWindow::refreshHint() {
     }
     hintLabel_->setText(hint);
     hintLabel_->setVisible(!hint.isEmpty());
+}
+
+void VoiceWindow::refreshStatusDot() {
+    statusDot_->setStyleSheet(
+        QStringLiteral("background:%1;")
+            .arg(recording_
+                     ? QStringLiteral("#3fb950")
+                     : ThemeManager::instance().css(QStringLiteral("accent"))));
 }
 
 void VoiceWindow::refreshAgentTarget() {
@@ -546,9 +572,13 @@ void VoiceWindow::paintEvent(QPaintEvent *event) {
     // 主题带面板背景就先铺图再压暗，保住文字可读；classic 走纯色底。
     const Theme &theme = ThemeManager::instance().current();
     const QImage art = ThemeManager::cachedImage(theme.panelBackground);
+    const QColor base =
+        paletteColor(QStringLiteral("bg"), QColor(0x0b, 0x0e, 0x14));
+    const QColor edge =
+        paletteColor(QStringLiteral("w22"), QColor(255, 255, 255, 22));
     if (!art.isNull()) {
         painter.setPen(Qt::NoPen);
-        painter.setBrush(QColor(0x0b, 0x0e, 0x14));
+        painter.setBrush(base);
         painter.drawRoundedRect(box, 12, 12);
         painter.save();
         QPainterPath clip;
@@ -561,18 +591,20 @@ void VoiceWindow::paintEvent(QPaintEvent *event) {
                   (height() - scaled.height()) / 2, scaled.width(),
                   scaled.height()),
             scaled);
+        // 压暗遮罩照主窗 backdropDim 一样恒深：它的职责就是把背景图压到能读字，
+        // 跟着浅色主题的 bg 走会把背景图提亮，反而糊掉文字。
         painter.setOpacity(theme.dim);
         painter.setBrush(QColor(0x0b, 0x0e, 0x14));
         painter.drawRoundedRect(box, 12, 12);
         painter.restore();
         painter.setOpacity(1.0);
     } else {
-        painter.setPen(QPen(QColor(255, 255, 255, 22), 1.0));
-        painter.setBrush(QColor(0x0b, 0x0e, 0x14));
+        painter.setPen(QPen(edge, 1.0));
+        painter.setBrush(base);
         painter.drawRoundedRect(box, 12, 12);
         return;
     }
-    painter.setPen(QPen(QColor(255, 255, 255, 22), 1.0));
+    painter.setPen(QPen(edge, 1.0));
     painter.setBrush(Qt::NoBrush);
     painter.drawRoundedRect(box, 12, 12);
 }

@@ -37,9 +37,11 @@ class GuideDialog;
 class AgentBridgeDialog;
 class RemotePanel;
 class Toast;
+class DispatchPicker;
 class VoiceController;
 class VoicePet;
 class VoiceWindow;
+class WaveformButton;
 
 class MainWindow final : public QMainWindow {
     Q_OBJECT
@@ -123,6 +125,7 @@ private:
     // 直接跳到「使用引导 → 接入 AI Agent」那一节（弹窗里的「详细说明」）。
     void openPluginGuide();
     void toggleListening();
+    void refreshVoiceKey();
     void updateListenUi();
     void registerVoiceHotkey();
     void unregisterVoiceHotkey();
@@ -179,7 +182,9 @@ private:
     QWidget *guideAgentSection_ = nullptr;
     QLabel *statusDot_ = nullptr;
     QLabel *statusText_ = nullptr;
-    QPushButton *listenButton_ = nullptr;
+    WaveformButton *voiceKey_ = nullptr;
+    bool voiceRecording_ = false;
+    QTimer *voiceLevelTimer_ = nullptr;
     QPushButton *updateButton_ = nullptr;
     QListWidget *logList_ = nullptr;
     QLabel *logCount_ = nullptr;
@@ -218,6 +223,8 @@ private:
     VoiceWindow *voiceWindow_ = nullptr;
     VoiceWindow *embeddedVoice_ = nullptr;
     QStackedWidget *leftStack_ = nullptr;
+    QWidget *voiceCard_ = nullptr;
+    DispatchPicker *cardPicker_ = nullptr;
     VoicePet *voicePet_ = nullptr;
     QLabel *dropHint_ = nullptr;
     QAction *showAction_ = nullptr;

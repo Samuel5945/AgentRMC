@@ -11,9 +11,11 @@ class QCloseEvent;
 class QEvent;
 class QMouseEvent;
 class QShowEvent;
+class DispatchPicker;
 class ProfileStore;
 class Toast;
 class VoiceController;
+class WaveformButton;
 
 // 语音主界面：无遥控器的简洁窗口。大麦克风按钮一键开始/结束，
 // 转写结果大字展示 + 最近历史（点击复制），底部引擎切换与模型设置。
@@ -58,8 +60,8 @@ private:
     void copyText(const QString &text);
     void pushHistory(const QString &text, int costMs);
     void refreshHint();
+    void refreshHistoryEmpty();
     void refreshStatusDot();
-    void refreshAgentTarget();
     void submitTyped();
 
     VoiceController *voice_ = nullptr;
@@ -67,14 +69,15 @@ private:
     Toast *toast_ = nullptr;
 
     QLabel *statusDot_ = nullptr;
-    QPushButton *mic_ = nullptr;
+    WaveformButton *mic_ = nullptr;
+    QPushButton *testBtn_ = nullptr;
     QLabel *stateLabel_ = nullptr;
     QLabel *hintLabel_ = nullptr;
     QLabel *transcript_ = nullptr;
     QListWidget *history_ = nullptr;
+    QLabel *historyEmpty_ = nullptr;
     QComboBox *backend_ = nullptr;
-    QComboBox *agentTarget_ = nullptr;
-    QComboBox *dispatchMode_ = nullptr;
+    DispatchPicker *picker_ = nullptr;
     QLineEdit *typed_ = nullptr;
     QPushButton *readLast_ = nullptr;
     QTimer *levelTimer_ = nullptr;
@@ -83,4 +86,6 @@ private:
     bool listening_ = false;
     bool recording_ = false;
     bool embedded_ = false;
+    // 操作说明只给首次使用的人看；用过一次收掉，悬浮提示兜底。
+    bool hintSeen_ = false;
 };

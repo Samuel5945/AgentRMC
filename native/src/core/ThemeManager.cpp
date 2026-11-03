@@ -400,6 +400,29 @@ Theme ThemeManager::loadTheme(const QString &id) const {
     return buildClassicTheme();
 }
 
+Theme ThemeManager::composeCharacter(Theme base) const {
+    if (characterId_.isEmpty()) {
+        return base;
+    }
+    // 形象只管桌宠帧/人设/音色；两张插画背景永远跟主题。
+    if (characterId_ == QStringLiteral("none")) {
+        base.characterName.clear();
+        base.persona.clear();
+        base.petStates.clear();
+        base.voiceName.clear();
+        base.voiceStyle.clear();
+        return base;
+    }
+    const Theme art = loadTheme(characterId_);
+    base.characterName = art.characterName;
+    base.persona = art.persona;
+    base.petStates = art.petStates;
+    base.ring = art.ring;
+    base.voiceName = art.voiceName;
+    base.voiceStyle = art.voiceStyle;
+    return base;
+}
+
 QColor ThemeManager::color(const QString &token) const {
     return parsePaletteColor(current_.palette.value(token));
 }
@@ -430,7 +453,7 @@ void ThemeManager::setScheme(const QString &scheme) {
     }
     // 只有 classic 吃配色模式；自定义主题自带配色，选中时只记下偏好。
     if (current_.id == QStringLiteral("classic")) {
-        current_ = buildClassicTheme();
+        current_ = composeCharacter(buildClassicTheme());
         applyQss();
         emit themeChanged(current_);
     }
@@ -458,7 +481,7 @@ bool ThemeManager::nativeEventFilter(const QByteArray &eventType, void *message,
                     const Theme rebuilt = buildClassicTheme();
                     if (rebuilt.palette.value(QStringLiteral("bg")) !=
                         current_.palette.value(QStringLiteral("bg"))) {
-                        current_ = rebuilt;
+                        current_ = composeCharacter(rebuilt);
                         applyQss();
                         emit themeChanged(current_);
                     }
@@ -579,11 +602,14 @@ void ThemeManager::init(ProfileStore *store) {
                       ? scheme
                       : QStringLiteral("auto");
     }
+    if (store_ != nullptr) {
+        characterId_ = store_->uiString(QStringLiteral("character"));
+    }
     const QString id =
         store_ != nullptr ? store_->uiString(QStringLiteral("theme"),
                                             QStringLiteral("classic"))
                           : QStringLiteral("classic");
-    current_ = loadTheme(id);
+    current_ = composeCharacter(loadTheme(id));
     if (store_ != nullptr) {
         const QString alpha = store_->uiString(QStringLiteral("card_alpha"));
         if (!alpha.isEmpty()) {
@@ -606,7 +632,20 @@ void ThemeManager::setTheme(const QString &id) {
     if (store_ != nullptr) {
         store_->setUiString(QStringLiteral("theme"), id);
     }
-    current_ = loadTheme(id);
+    current_ = composeCharacter(loadTheme(id));
+    applyQss();
+    emit themeChanged(current_);
+}
+
+void ThemeManager::setCharacter(const QString &id) {
+    if (id == characterId_) {
+        return;
+    }
+    characterId_ = id;
+    if (store_ != nullptr) {
+        store_->setUiString(QStringLiteral("character"), id);
+    }
+    current_ = composeCharacter(loadTheme(current_.id));
     applyQss();
     emit themeChanged(current_);
 }

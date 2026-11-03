@@ -102,6 +102,12 @@ public:
 public slots:
     // 持久化 ui.theme + 立即应用 + 广播 themeChanged。
     void setTheme(const QString &id);
+    // 形象与主题分离：ui.character 空 = 跟随主题，none = 无形象，
+    // 其余 = 主题包 id（只取它的桌宠帧/人设/音色；配色与插画背景仍跟主题）。
+    void setCharacter(const QString &id);
+
+public:
+    QString characterId() const { return characterId_; }
 
 signals:
     void themeChanged(const Theme &theme);
@@ -136,6 +142,8 @@ private:
     Theme loadTheme(const QString &id) const;
     // 按当前配色模式（浅色/深色/跟随系统）组装内置 classic。
     Theme buildClassicTheme() const;
+    // 配色来自主题、形象字段来自 characterId_ 指向的包（或清空）。
+    Theme composeCharacter(Theme base) const;
     void applyQss();
 
     ProfileStore *store_ = nullptr;
@@ -143,6 +151,8 @@ private:
     Theme current_;
     // light / dark / auto；auto = 跟随系统。持久化在 ui.color_scheme。
     QString scheme_ = QStringLiteral("auto");
+    // 空 = 跟随主题；none = 无形象；其余 = 形象包 id。持久化在 ui.character。
+    QString characterId_;
     bool nativeFilterInstalled_ = false;
     // -1 = 跟随主题。用户拖过滑块才有值。
     int cardAlpha_ = -1;

@@ -1,9 +1,11 @@
 #include "VoiceWindow.h"
 
+#include "DispatchPicker.h"
+#include "WaveformButton.h"
+
 #include "Toast.h"
 #include "TtsSettingsDialog.h"
 #include "VoiceSettingsDialog.h"
-#include "core/AgentWindow.h"
 #include "core/Profiles.h"
 #include "core/ThemeManager.h"
 #include "core/VoiceController.h"
@@ -32,94 +34,6 @@ QColor paletteColor(const QString &token, const QColor &fallback) {
     const QColor color = ThemeManager::instance().color(token);
     return color.isValid() ? color : fallback;
 }
-
-// 大圆麦克风按钮：Idle 蓝环 + 麦克风图形，录音变绿环（随电平加粗）+ 停止方块。
-class MicButton final : public QPushButton {
-public:
-    explicit MicButton(QWidget *parent = nullptr) : QPushButton(parent) {
-        setFixedSize(124, 124);
-        setCursor(Qt::PointingHandCursor);
-        setFocusPolicy(Qt::NoFocus);
-        setFlat(true);
-        setObjectName("micButton");
-        setAccessibleName(QString::fromUtf8("麦克风按钮"));
-    }
-
-    void setLevel(double level) {
-        level_ = qBound(0.0, level, 1.0);
-        update();
-    }
-
-    void setRecording(bool on) {
-        if (recording_ == on) {
-            return;
-        }
-        recording_ = on;
-        update();
-    }
-
-protected:
-    void paintEvent(QPaintEvent *event) override {
-        Q_UNUSED(event);
-        QPainter painter(this);
-        painter.setRenderHint(QPainter::Antialiasing);
-
-        const QRectF area = rect();
-        const QPointF center = area.center();
-        // 几何随控件尺寸缩放（嵌入 64 / 独立 124）：写死 124 的几何在小尺寸
-        // 上会把内盘裁成方块（2026-11-03 真机）。
-        const double side = qMin(area.width(), area.height());
-        // 环宽随尺寸缩放；内盘贴环内缘，不留背景色缝——留缝会看起来是
-        // 两个分离的圆而不是一个按钮（2026-11-03 用户反馈）。
-        const double ringW =
-            qMax(2.0, side * (recording_ ? 0.024 + level_ * 0.04 : 0.032));
-        QPen ring(recording_
-                      ? QColor(0x3f, 0xb9, 0x50)
-                      : paletteColor(QStringLiteral("accent"),
-                                     QColor(79, 140, 255)));
-        ring.setWidthF(ringW);
-        painter.setPen(ring);
-        painter.setBrush(Qt::NoBrush);
-        const double radius = side / 2.0 - ringW / 2.0;
-        painter.drawEllipse(center, radius, radius);
-
-        painter.setPen(Qt::NoPen);
-        painter.setBrush(paletteColor(QStringLiteral("card.bg"),
-                                      QColor(0x12, 0x17, 0x22)));
-        const double disc = radius - ringW / 2.0;
-        painter.drawEllipse(center, disc, disc);
-        // glyph 随内盘缩放，保持与盘面的比例不变。
-        const double k = disc / 44.0;
-
-        if (recording_) {
-            painter.setBrush(QColor(0xf8, 0x51, 0x49));
-            painter.drawRoundedRect(QRectF(center.x() - 13 * k, center.y() - 13 * k,
-                                           26 * k, 26 * k), 5 * k, 5 * k);
-            return;
-        }
-
-        // 麦克风：胶囊 + 拾音弧 + 底座。
-        const QColor glyph =
-            paletteColor(QStringLiteral("text.dim"), QColor(0xc9, 0xd1, 0xd9));
-        QPen pen(glyph);
-        pen.setWidthF(qMax(1.5, 3 * k));
-        painter.setPen(pen);
-        painter.setBrush(glyph);
-        painter.drawRoundedRect(QRectF(center.x() - 9 * k, center.y() - 22 * k,
-                                       18 * k, 30 * k), 9 * k, 9 * k);
-        painter.setBrush(Qt::NoBrush);
-        painter.drawArc(QRectF(center.x() - 17 * k, center.y() - 12 * k, 34 * k,
-                               26 * k), 180 * 16, 180 * 16);
-        painter.drawLine(QPointF(center.x(), center.y() + 8 * k),
-                         QPointF(center.x(), center.y() + 15 * k));
-        painter.drawLine(QPointF(center.x() - 9 * k, center.y() + 15 * k),
-                         QPointF(center.x() + 9 * k, center.y() + 15 * k));
-    }
-
-private:
-    double level_ = 0.0;
-    bool recording_ = false;
-};
 
 // 顶部拖拽条（同主窗 TitleBar 的做法）。
 class DragStrip final : public QWidget {
@@ -154,6 +68,7 @@ private:
 VoiceWindow::VoiceWindow(VoiceController *voice, ProfileStore *store,
                          QWidget *parent, bool embedded)
     : QWidget(parent), voice_(voice), store_(store), embedded_(embedded) {
+    hintSeen_ = store_->uiBool(QStringLiteral("voice_hint_seen"), false);
     setObjectName(embedded ? QStringLiteral("voiceWindowEmbedded")
                            : QStringLiteral("voiceWindow"));
     setWindowTitle(QString::fromUtf8("AgentRMC 语音"));
@@ -224,6 +139,16 @@ VoiceWindow::VoiceWindow(VoiceController *voice, ProfileStore *store,
         emit speakRequested(lastText_);
     });
     head->addWidget(readLast_);
+    // 主窗左栏精简后，「试一句」诊断收进语音界面页眉（两种形态都有）。
+    testBtn_ = new QPushButton(QString::fromUtf8("试一句"));
+    testBtn_->setObjectName("ghostText");
+    testBtn_->setCursor(Qt::PointingHandCursor);
+    testBtn_->setToolTip(QString::fromUtf8(
+        "录 3 秒并转写一次，用来确认本地模型是否正常"));
+    testBtn_->setEnabled(voice_->options().backend != VoiceBackend::Hotkey);
+    connect(testBtn_, &QPushButton::clicked, voice_,
+            &VoiceController::startTest);
+    head->addWidget(testBtn_);
     if (embedded_) {
         // 嵌入态：窗口按钮没意义；给一个切回遥控器卡的入口。
         full->hide();
@@ -248,26 +173,28 @@ VoiceWindow::VoiceWindow(VoiceController *voice, ProfileStore *store,
                              embedded_ ? 10 : 20, embedded_ ? 8 : 14);
     body->setSpacing(embedded_ ? 4 : 8);
 
-    mic_ = new MicButton;
-    // 与状态/提示同行后不再需要居中巨 mic：嵌入 56 / 独立 96。
-    mic_->setFixedSize(embedded_ ? 56 : 96, embedded_ ? 56 : 96);
+    // 整条长波形语音键：无文字，颜色表状态（绿录音/蓝待命/灰未监听）。
+    mic_ = new WaveformButton;
+    mic_->setFixedHeight(embedded_ ? 40 : 56);
+    mic_->setToolTip(QString::fromUtf8("语音键：点击说话，再点结束"));
     connect(mic_, &QPushButton::clicked, this, [this] {
         if (!listening_) {
             toast_->showText(QString::fromUtf8(
-                "还没开始监听：托盘菜单或主界面里点「开始监听」"));
+                "还没开始监听：点主界面右上角「未监听」胶囊开启"));
             return;
         }
         voice_->mediaToggle();
     });
-    // 麦克风与状态/提示同一行：能一行的不拆两行（用户 2026-11-03 19:32）。
-    auto *micRow = new QHBoxLayout;
-    micRow->setSpacing(embedded_ ? 8 : 12);
-    micRow->addWidget(mic_);
+    body->addWidget(mic_);
+    // 宿主/任务会话紧贴波形下面，中间不隔文字。
+    picker_ = new DispatchPicker(store_);
+    body->addWidget(picker_);
     auto *micText = new QVBoxLayout;
     micText->setSpacing(2);
     stateLabel_ = new QLabel(QString::fromUtf8("点击开始 · 再点结束"));
     stateLabel_->setObjectName("voiceStateLine");
     stateLabel_->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+    stateLabel_->setVisible(!hintSeen_);
     micText->addWidget(stateLabel_);
     hintLabel_ = new QLabel;
     hintLabel_->setObjectName("muted");
@@ -279,10 +206,7 @@ VoiceWindow::VoiceWindow(VoiceController *voice, ProfileStore *store,
         hintLabel_->hide();
     }
     micText->addWidget(hintLabel_);
-    micRow->addLayout(micText, 1);
-    // 文本块与麦克风垂直居中：顶对齐会在右侧留一大块空，失衡。
-    micRow->setAlignment(micText, Qt::AlignVCenter);
-    body->addLayout(micRow);
+    body->addLayout(micText);
 
     // 对话块：最新转写 + 历史。整面板不滚动，只有这一块内部滚（滚轮）。
     transcript_ = new QLabel(QString::fromUtf8("说了话会显示在这里，点击可复制"));
@@ -309,6 +233,23 @@ VoiceWindow::VoiceWindow(VoiceController *voice, ProfileStore *store,
     connect(history_, &QListWidget::itemClicked, this,
             [this](QListWidgetItem *item) { copyText(item->data(Qt::UserRole).toString()); });
     body->addWidget(history_, 1);
+    // 空态：嵌入态/无插画时中部别留死白；独立态有插画时中部是形象舞台，不放字。
+    historyEmpty_ = new QLabel(QString::fromUtf8("说完的话会攒在这里 · 点击复制"),
+                               history_->viewport());
+    historyEmpty_->setObjectName("emptyHint");
+    historyEmpty_->setAlignment(Qt::AlignCenter);
+    auto *emptyLay = new QVBoxLayout(history_->viewport());
+    emptyLay->setContentsMargins(0, 0, 0, 0);
+    emptyLay->addWidget(historyEmpty_);
+
+    // 底部控制区dock：独立态铺卡片底保住可读性，嵌入态透明（页面本身已是卡）。
+    auto *dockW = new QWidget;
+    dockW->setObjectName("voiceDock");
+    dockW->setAttribute(Qt::WA_StyledBackground);
+    auto *dock = new QVBoxLayout(dockW);
+    dock->setContentsMargins(embedded_ ? 0 : 10, embedded_ ? 0 : 8,
+                             embedded_ ? 0 : 10, embedded_ ? 0 : 8);
+    dock->setSpacing(embedded_ ? 4 : 6);
 
     // 打字对话：不想说话/环境吵时敲一句，路由与说话完全相同。
     auto *typedRow = new QHBoxLayout;
@@ -335,65 +276,21 @@ VoiceWindow::VoiceWindow(VoiceController *voice, ProfileStore *store,
     connect(send, &QPushButton::clicked, this, &VoiceWindow::submitTyped);
     typedRow->addWidget(typed_, 1);
     typedRow->addWidget(send);
-    body->addLayout(typedRow);
-
-    // 交给 + 派活合并一行（能一行的不拆两行）。
-    auto *pickRow = new QHBoxLayout;
-    pickRow->setSpacing(6);
-    auto *agentLabel = new QLabel(QString::fromUtf8("交给"));
-    agentLabel->setObjectName("muted");
-    agentTarget_ = new QComboBox;
-    agentTarget_->setToolTip(QString::fromUtf8(
-        "语音派活交给哪个 Agent；选定后说的话直接进它的会话（桌宠不再判断任务/"
-        "闲聊，也不走自带对话模型）。自动判断 = 前台优先 → 最近发通知的宿主 → "
-        "最近派活的宿主"));
-    connect(agentTarget_, &QComboBox::currentIndexChanged, this,
-            [this](int index) {
-                if (index < 0) {
-                    return;
-                }
-                store_->setUiString(QStringLiteral("agent_target"),
-                                    agentTarget_->itemData(index).toString());
-                refreshDispatchMode();
-            });
-    auto *modeLabel = new QLabel(QString::fromUtf8("派活"));
-    modeLabel->setObjectName("muted");
-    dispatchMode_ = new QComboBox;
-    dispatchMode_->addItem(QString::fromUtf8("续当前会话（默认）"),
-                           QString());
-    dispatchMode_->addItem(QString::fromUtf8("下次派活开新任务"),
-                           QStringLiteral("new"));
-    dispatchMode_->setToolTip(QString::fromUtf8(
-        "续当前会话 = 粘进当前打开的会话输入框，读回验证；"
-        "下次派活开新任务 = 一次性，交付后自动回到续当前会话"));
-    connect(dispatchMode_, &QComboBox::currentIndexChanged, this,
-            [this](int index) {
-                if (index < 0 || agentTarget_ == nullptr) {
-                    return;
-                }
-                const QString exe = agentTarget_->currentData().toString();
-                if (exe.isEmpty()) {
-                    return;
-                }
-                store_->setUiString(QStringLiteral("dispatch_mode_") + exe,
-                                    dispatchMode_->itemData(index).toString());
-            });
-    pickRow->addWidget(agentLabel);
-    pickRow->addWidget(agentTarget_, 1);
-    pickRow->addWidget(modeLabel);
-    pickRow->addWidget(dispatchMode_, 1);
-    body->addLayout(pickRow);
-    refreshAgentTarget();
+    dock->addLayout(typedRow);
 
     auto *footW = new QWidget;
-    auto *foot = new QHBoxLayout(footW);
-    foot->setContentsMargins(0, 0, 0, 0);
+    auto *footLay = new QVBoxLayout(footW);
+    footLay->setContentsMargins(0, 0, 0, 0);
+    footLay->setSpacing(6);
+    auto *foot = new QHBoxLayout;
     foot->setSpacing(6);
+    footLay->addLayout(foot);
     backend_ = new QComboBox;
+    // 与主窗语音卡同一套命名，两处别各叫各的。
     backend_->addItem(QString::fromUtf8("转发热键 · 0 模型"), "hotkey");
-    backend_->addItem(QString::fromUtf8("SenseVoice"), "sensevoice");
-    backend_->addItem(QString::fromUtf8("Qwen3-ASR"), "qwen3");
-    backend_->addItem(QString::fromUtf8("云端 ASR"), "api");
+    backend_->addItem(QString::fromUtf8("本地 SenseVoice"), "sensevoice");
+    backend_->addItem(QString::fromUtf8("本地 Qwen3-ASR"), "qwen3");
+    backend_->addItem(QString::fromUtf8("云端 ASR（需联网）"), "api");
     const QString backendKey = [&] {
         const QString value = store_->voiceConfig().value("backend").toString();
         return value.isEmpty() ? QStringLiteral("hotkey") : value;
@@ -451,7 +348,7 @@ VoiceWindow::VoiceWindow(VoiceController *voice, ProfileStore *store,
     chatMode->setChecked(store_->uiBool("pet_chat", false));
     chatMode->setCursor(Qt::PointingHandCursor);
     chatMode->setToolTip(QString::fromUtf8(
-        "桌宠对话模式：说话发给模型聊，回复用 TTS 念出来；"
+        "桌宠对话模式：说话发给模型聊，回复用 TTS 念出来\n"
         "模型在「模型设置 → 桌宠对话」里配"));
     connect(chatMode, &QPushButton::toggled, this, [this](bool on) {
         store_->setUiBool(QStringLiteral("pet_chat"), on);
@@ -468,32 +365,44 @@ VoiceWindow::VoiceWindow(VoiceController *voice, ProfileStore *store,
         chatMode->setChecked(on);
     });
     foot->addWidget(backend_, 1);
-    foot->addWidget(chatMode);
-    foot->addWidget(tts);
-    foot->addWidget(settings);
-    // 嵌入态：引擎/模型设置语音卡上已有，对话/语音反馈桌宠右键有，
-    // 这行藏掉省高度，也避免 286 宽里四个控件挤到截断。
     if (embedded_) {
-        footW->hide();
+        // 主窗左栏只剩波形键后，引擎/设置收进这里；286 宽一行放不下四控件，
+        // 引擎独占一行，功能按钮第二行。
+        auto *row2 = new QHBoxLayout;
+        row2->setSpacing(6);
+        row2->addWidget(chatMode);
+        row2->addWidget(tts);
+        row2->addWidget(settings);
+        footLay->addLayout(row2);
+    } else {
+        foot->addWidget(chatMode);
+        foot->addWidget(tts);
+        foot->addWidget(settings);
     }
-    body->addWidget(footW);
+    dock->addWidget(footW);
+    body->addWidget(dockW);
 
     root->addLayout(body, 1);
+    refreshHistoryEmpty();
 
     toast_ = new Toast(this);
 
     levelTimer_ = new QTimer(this);
     connect(levelTimer_, &QTimer::timeout, this, [this] {
-        static_cast<MicButton *>(mic_)->setLevel(recording_ ? voice_->micLevel()
-                                                            : 0.0);
+        mic_->setLevel(recording_ ? voice_->micLevel() : 0.0);
     });
     levelTimer_->start(50);
 
     connect(voice_, &VoiceController::stateChanged, this,
             [this](const QString &state, const QString &detail) {
                 recording_ = state == QStringLiteral("recording");
-                static_cast<MicButton *>(mic_)->setRecording(recording_);
+                mic_->setRecording(recording_);
                 refreshStatusDot();
+                if (recording_ && !hintSeen_) {
+                    hintSeen_ = true;
+                    store_->setUiBool(QStringLiteral("voice_hint_seen"), true);
+                    refreshHint();
+                }
                 if (state == QStringLiteral("idle")) {
                     const bool warn =
                         detail.contains(QString::fromUtf8("太短")) ||
@@ -501,10 +410,14 @@ VoiceWindow::VoiceWindow(VoiceController *voice, ProfileStore *store,
                     stateLabel_->setText(detail == QStringLiteral("就绪")
                                              ? QStringLiteral("点击开始 · 再点结束")
                                              : detail);
+                    // 就绪提醒只给首次使用的人；警告/实时状态照常上屏。
+                    stateLabel_->setVisible(
+                        !(hintSeen_ && detail == QStringLiteral("就绪")));
                     stateLabel_->setStyleSheet(warn
                                                    ? QStringLiteral("color:#d29922;")
                                                    : QString());
                 } else {
+                    stateLabel_->setVisible(true);
                     stateLabel_->setStyleSheet(QString());
                     // 这个界面没有「松手」：把主窗的文案换成贴切的说法。
                     stateLabel_->setText(
@@ -524,12 +437,14 @@ VoiceWindow::VoiceWindow(VoiceController *voice, ProfileStore *store,
         if (synced >= 0) {
             backend_->setCurrentIndex(synced);
         }
+        testBtn_->setEnabled(voice_->options().backend != VoiceBackend::Hotkey);
         refreshHint();
     });
     connect(&ThemeManager::instance(), &ThemeManager::themeChanged, this,
             [this](const Theme &) {
                 // 面板底/麦克风/Toast 是自绘的，不吃 QSS：换配色模式要自己重画。
                 refreshStatusDot();
+                refreshHistoryEmpty();
                 mic_->update();
                 toast_->update();
                 update();
@@ -544,23 +459,34 @@ VoiceWindow::VoiceWindow(VoiceController *voice, ProfileStore *store,
 
 void VoiceWindow::setListeningUi(bool listening) {
     listening_ = listening;
+    mic_->setListening(listening);
     refreshHint();
 }
 
 void VoiceWindow::refreshHint() {
     const VoiceOptions options = voice_->options();
-    QString hint;
+    QString hotkey;
     if (options.kbHotkeyEnabled) {
-        hint = QStringLiteral("热键 %1 也可以随时开始").arg(
+        hotkey = QStringLiteral("热键 %1 也可以随时开始").arg(
             voiceComboText(options.kbHotkeyMods, options.kbHotkeyVk));
     }
+    // 说明常态收进悬浮提示兜底；页面上只留给首次使用的人。
+    QString tip = QStringLiteral("语音键：点击说话，再点结束");
+    if (!hotkey.isEmpty()) {
+        tip += QStringLiteral("\n") + hotkey;
+    }
+    if (!listening_) {
+        tip += QStringLiteral("\n先点右上角「未监听」开启监听");
+    }
+    mic_->setToolTip(tip);
+    QString hint = hotkey;
     if (!listening_) {
         hint += hint.isEmpty() ? QString()
                                : QStringLiteral(" · ");
-        hint += QStringLiteral("先在托盘或主界面开始监听");
+        hint += QStringLiteral("先点右上角「未监听」开启监听");
     }
     hintLabel_->setText(hint);
-    hintLabel_->setVisible(!hint.isEmpty());
+    hintLabel_->setVisible(!hintSeen_ && !hint.isEmpty() && !embedded_);
 }
 
 void VoiceWindow::refreshStatusDot() {
@@ -571,79 +497,8 @@ void VoiceWindow::refreshStatusDot() {
                      : ThemeManager::instance().css(QStringLiteral("accent"))));
 }
 
-void VoiceWindow::refreshAgentTarget() {
-    if (agentTarget_ == nullptr) {
-        return;
-    }
-    const QSignalBlocker block(agentTarget_);
-    const QString pinned = store_->uiString(QStringLiteral("agent_target"));
-    agentTarget_->clear();
-    agentTarget_->addItem(QString::fromUtf8("自动判断"), QString());
-    bool anyAlive = false;
-    for (const QString &exe : AgentWindow::knownExes()) {
-        // 进程在跑就列出；窗口收进托盘的标注「窗口隐藏」——选它语音派活
-        // 不会硬注入（没有可交互窗口，粘了也是粘到别人窗口上）。
-        if (!AgentWindow::processAlive(exe)) {
-            continue;
-        }
-        anyAlive = true;
-        if (AgentWindow::alive(exe)) {
-            agentTarget_->addItem(AgentWindow::displayName(exe), exe);
-        } else {
-            agentTarget_->addItem(
-                QString::fromUtf8("%1（窗口隐藏）")
-                    .arg(AgentWindow::displayName(exe)),
-                exe);
-        }
-    }
-    if (!pinned.isEmpty() && !AgentWindow::processAlive(pinned)) {
-        agentTarget_->addItem(
-            QString::fromUtf8("%1（未运行）")
-                .arg(AgentWindow::displayName(pinned)),
-            pinned);
-    } else if (!pinned.isEmpty() && !AgentWindow::alive(pinned)) {
-        // 钉住的宿主进程在但窗口收起来了：也标出来，别让用户以为能直接派。
-        const int existing = agentTarget_->findData(pinned);
-        if (existing >= 0) {
-            agentTarget_->setItemText(
-                existing, QString::fromUtf8("%1（窗口隐藏）")
-                              .arg(AgentWindow::displayName(pinned)));
-        }
-    }
-    int index = agentTarget_->findData(pinned);
-    if (index < 0) {
-        index = 0;
-    }
-    agentTarget_->setCurrentIndex(index);
-    agentTarget_->setToolTip(
-        anyAlive || !pinned.isEmpty()
-            ? QString::fromUtf8("语音派活交给哪个 Agent；"
-                                "自动判断 = 前台优先 → 最近发通知的宿主")
-            : QString::fromUtf8("没检测到在跑的 Agent；"
-                                "语音会走自带 LLM 或提示先打开 Agent"));
-    refreshDispatchMode();
-}
-
 void VoiceWindow::refreshDispatchMode() {
-    if (dispatchMode_ == nullptr || agentTarget_ == nullptr) {
-        return;
-    }
-    const QSignalBlocker block(dispatchMode_);
-    const QString exe = agentTarget_->currentData().toString();
-    dispatchMode_->setEnabled(!exe.isEmpty());
-    const QString mode =
-        exe.isEmpty() ? QString()
-                      : store_->uiString(QStringLiteral("dispatch_mode_") + exe);
-    const int index = dispatchMode_->findData(mode);
-    dispatchMode_->setCurrentIndex(index >= 0 ? index : 0);
-    dispatchMode_->setToolTip(
-        exe.isEmpty()
-            ? QString::fromUtf8("先在「交给」里选定一个 Agent，再设它的派活模式")
-            : QString::fromUtf8(
-                  "续当前会话（默认）= 粘进当前打开的会话输入框，读回验证；"
-                  "下次派活开新任务 = 一次性：该句开新任务（Qoder 系 Ctrl+N、"
-                  "WorkBuddy 系 UIA），交付后自动回到续当前会话；"
-                  "没登记键位的宿主两种模式都粘当前焦点"));
+    picker_->refreshMode();
 }
 
 void VoiceWindow::copyText(const QString &text) {
@@ -669,6 +524,15 @@ void VoiceWindow::pushHistory(const QString &text, int costMs) {
     while (history_->count() > 30) {
         delete history_->takeItem(history_->count() - 1);
     }
+    refreshHistoryEmpty();
+}
+
+void VoiceWindow::refreshHistoryEmpty() {
+    // 独立态铺了插画时中部留给形象；其余空列表给一句空态提示。
+    const bool stage =
+        !embedded_ &&
+        !ThemeManager::instance().current().panelBackground.isEmpty();
+    historyEmpty_->setVisible(history_->count() == 0 && !stage);
 }
 
 bool VoiceWindow::eventFilter(QObject *watched, QEvent *event) {
@@ -692,7 +556,10 @@ void VoiceWindow::mousePressEvent(QMouseEvent *event) {
 }
 
 void VoiceWindow::showChatReply(const QString &text) {
-    transcript_->setText(QString::fromUtf8("鲸鱼娘：%1").arg(text));
+    const QString name = ThemeManager::instance().current().characterName;
+    transcript_->setText(name.isEmpty()
+                             ? text
+                             : QStringLiteral("%1：%2").arg(name, text));
     pushHistory(text, 0);
 }
 
@@ -732,9 +599,9 @@ void VoiceWindow::paintEvent(QPaintEvent *event) {
                   (height() - scaled.height()) / 2, scaled.width(),
                   scaled.height()),
             scaled);
-        // 压暗遮罩照主窗 backdropDim 一样恒深：它的职责就是把背景图压到能读字，
-        // 跟着浅色主题的 bg 走会把背景图提亮，反而糊掉文字。
-        painter.setOpacity(theme.dim);
+        // 压暗跟主窗同一套 backdropDim（含可读性下限）：主题自带的 dim 可能
+        // 很浅（鲸鱼娘 0.1），底部控制区会糊在亮插画上。
+        painter.setOpacity(ThemeManager::instance().backdropDim());
         painter.setBrush(QColor(0x0b, 0x0e, 0x14));
         painter.drawRoundedRect(box, 12, 12);
         painter.restore();
@@ -751,7 +618,7 @@ void VoiceWindow::paintEvent(QPaintEvent *event) {
 }
 
 void VoiceWindow::showEvent(QShowEvent *event) {
-    refreshAgentTarget();
+    picker_->refresh();
     QWidget::showEvent(event);
 }
 

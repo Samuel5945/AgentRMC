@@ -70,10 +70,14 @@ QLabel#cardTitle {
 
 /* ---------- 主界面：监听状态胶囊 / 待办页 ---------- */
 
-QWidget#statusPill {
+QPushButton#statusPill {
     background: @w6@;
     border: 1px solid @w14@;
     border-radius: 10px;
+}
+
+QPushButton#statusPill:hover {
+    background: @w10@;
 }
 
 QLabel#statusText {
@@ -768,13 +772,13 @@ QDialog#themeDialog QLabel {
     font-size: 11px;
 }
 
-QListWidget#themeList {
+QListWidget#themeList, QListWidget#characterList {
     background: transparent;
     border: none;
     outline: none;
 }
 
-QListWidget#themeList::item {
+QListWidget#themeList::item, QListWidget#characterList::item {
     color: @muted@;
     font-size: 10.5px;
     border: 1px solid transparent;
@@ -782,12 +786,12 @@ QListWidget#themeList::item {
     padding: 4px 2px;
 }
 
-QListWidget#themeList::item:hover {
+QListWidget#themeList::item:hover, QListWidget#characterList::item:hover {
     background: @w8@;
     color: @text.dim@;
 }
 
-QListWidget#themeList::item:selected {
+QListWidget#themeList::item:selected, QListWidget#characterList::item:selected {
     background: @a26@;
     border: 1px solid @a64@;
     color: @text@;
@@ -868,9 +872,18 @@ QWidget#voiceHeader {
     border-bottom: 1px solid @w18@;
 }
 
-QPushButton#micButton {
+/* 底部控制区：嵌入态页面本身已是卡片，dock 透明不套娃；
+   独立态铺同款卡片渐变，灰字/控件不直接坐在亮插画上。 */
+QWidget#voiceDock {
     background: transparent;
     border: none;
+}
+
+QWidget#voiceWindow QWidget#voiceDock {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                                stop:0 @card.bg@, stop:1 @card.bg2@);
+    border: 1px solid @w18@;
+    border-radius: 12px;
 }
 
 QLabel#voiceStateLine {

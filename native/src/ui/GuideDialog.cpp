@@ -382,9 +382,9 @@ QWidget *GuideDialog::buildVoiceOnlyPage() {
                           "被占用可在语音设置里换。"),
         88));
     ll->addWidget(guide::row(
-        QString::fromUtf8("大麦克风"),
-        QString::fromUtf8("语音主界面的大按钮：点开始、再点结束；"
-                          "停嘴 6 秒自动收尾。"),
+        QString::fromUtf8("波形键"),
+        QString::fromUtf8("长条波形按钮：点击说话、再点结束；绿色=录音中，"
+                          "蓝色=待命，灰色=未监听；停嘴 6 秒自动收尾。"),
         88));
     ll->addWidget(guide::row(
         QString::fromUtf8("耳机"),
@@ -486,8 +486,8 @@ QWidget *GuideDialog::buildVoiceOnlyPage() {
     pluginButton->setObjectName("ghostSmall");
     pluginButton->setCursor(Qt::PointingHandCursor);
     pluginButton->setToolTip(QString::fromUtf8(
-        "让 Agent 在等确认 / 等选方案 / 任务结束时提醒你：装法与「复制安装话术」在"
-        "「使用引导 → 接入 AI Agent」"));
+        "让 Agent 在等确认 / 等选方案 / 任务结束时提醒你\n"
+        "装法与「复制安装话术」在「使用引导 → 接入 AI Agent」"));
     connect(pluginButton, &QPushButton::clicked, this,
             [this] { emit pluginGuideRequested(); });
 

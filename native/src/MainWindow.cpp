@@ -9,7 +9,9 @@
 #include "ui/Toast.h"
 #include "ui/VoicePet.h"
 #include "ui/VoiceSettingsDialog.h"
+#include "ui/DispatchPicker.h"
 #include "ui/VoiceWindow.h"
+#include "ui/WaveformButton.h"
 
 #include "core/AgentBridge.h"
 #include "core/PluginUpgrade.h"
@@ -321,6 +323,13 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
     });
     connect(voice_, &VoiceController::stateChanged, this,
             &MainWindow::onVoiceState);
+    voiceLevelTimer_ = new QTimer(this);
+    connect(voiceLevelTimer_, &QTimer::timeout, this, [this] {
+        if (voiceKey_ != nullptr) {
+            voiceKey_->setLevel(voiceRecording_ ? voice_->micLevel() : 0.0);
+        }
+    });
+    voiceLevelTimer_->start(50);
     connect(voice_, &VoiceController::transcribed, this,
             &MainWindow::onVoiceTranscribed);
     connect(voice_, &VoiceController::eventReady, this,
@@ -374,6 +383,9 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
                         QStringLiteral("background:%1; border-radius:3px;").arg(dot));
                 }
                 refreshVoiceUi();
+                if (voiceKey_ != nullptr) {
+                    voiceKey_->update();
+                }
                 if (workList_ != nullptr) {
                     workList_->viewport()->update();
                 }
@@ -394,10 +406,14 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
     auto *leftLay = new QVBoxLayout(left);
     leftLay->setContentsMargins(0, 0, 0, 0);
     leftLay->setSpacing(12);
-    // 语音在上面：主操作「开始监听」和识别方式是一打开就要用的；
-    // 下面这块可切换：遥控器卡 ↔ 语音主界面（无遥控器偏好默认语音页，
-    // 有遥控器也能手动点切；选择持久化 ui.left_panel_voice）。
-    leftLay->addWidget(buildVoiceCard(), 0);
+    // 语音卡功能保留，只有大按钮换成波形语音键（监听开关在顶栏胶囊）。
+    // 下面这块可切换：遥控器卡 ↔ 语音主界面（选择持久化 ui.left_panel_voice）。
+    // 语音页自带波形和全套控件，切过去时上面这张卡连波形一起藏掉，
+    // 保证任何一种形态里同功能波形只出现一个。
+    voiceCard_ = buildVoiceCard();
+    // 遥控器形态：多余高度由语音卡里的状态/对话文本框吸收，
+    // 遥控器卡固定高、底边贴齐右栏底边（用户 2026-11-03）。
+    leftLay->addWidget(voiceCard_, 1);
     leftStack_ = new QStackedWidget;
     leftStack_->addWidget(buildRemoteCard());
     embeddedVoice_ = new VoiceWindow(voice_, store_.get(), this, true);
@@ -408,7 +424,7 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
             [this] { setLeftPanel(false); });
     connect(embeddedVoice_, &VoiceWindow::typedSubmitted, this,
             [this](const QString &text) { voice_->submitTyped(text); });
-    leftLay->addWidget(leftStack_, 1);
+    leftLay->addWidget(leftStack_, 0);
     setLeftPanel(store_->uiBool(QStringLiteral("voice_mode"), false) ||
                  store_->uiBool(QStringLiteral("left_panel_voice"), false));
     grid->addWidget(left);
@@ -561,7 +577,6 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
         appendEvent(QStringLiteral("status"), QString(), QString(),
                     QString::fromUtf8("语音桌宠已关闭；托盘菜单里可重新打开"), 0);
     });
-    // 桌宠/语音面板里切了识别方式时，主窗自己的控件也要跟上。
     connect(voice_, &VoiceController::optionsChanged, this, [this] {
         refreshVoiceUi();
         refreshRemoteCard();
@@ -659,10 +674,13 @@ QWidget *MainWindow::buildHeader() {
     lay->addWidget(brand);
     lay->addStretch(1);
 
-    // 监听状态做成一颗胶囊：整窗最该一眼看到的状态，不该是裸灰字。
-    auto *pill = new QWidget;
+    // 监听状态胶囊 = 监听开关：整窗最该一眼看到的状态，也顺手能点。
+    // 开始/停止监听从左栏大按钮上移到这里，左栏大按钮让位给语音键。
+    auto *pill = new QPushButton;
     pill->setObjectName("statusPill");
-    pill->setAttribute(Qt::WA_StyledBackground, true);
+    pill->setCursor(Qt::PointingHandCursor);
+    pill->setToolTip(QString::fromUtf8("监听开关：点击开始 / 停止监听"));
+    connect(pill, &QPushButton::clicked, this, &MainWindow::toggleListening);
     auto *pillLay = new QHBoxLayout(pill);
     pillLay->setContentsMargins(9, 3, 11, 3);
     pillLay->setSpacing(6);
@@ -671,10 +689,15 @@ QWidget *MainWindow::buildHeader() {
         QStringLiteral("background: %1; border-radius: 3px;")
             .arg(ThemeManager::instance().css(QStringLiteral("line"))));
     statusDot_->setFixedSize(6, 6);
+    statusDot_->setAttribute(Qt::WA_TransparentForMouseEvents);
     statusText_ = new QLabel(QString::fromUtf8("未监听"));
     statusText_->setObjectName("statusText");
+    statusText_->setAttribute(Qt::WA_TransparentForMouseEvents);
     pillLay->addWidget(statusDot_, 0, Qt::AlignVCenter);
     pillLay->addWidget(statusText_);
+    // QPushButton 的 sizeHint 不算子布局，不约束会把胶囊挤到截字。
+    pill->setFixedHeight(26);
+    pill->setMinimumWidth(pillLay->minimumSize().width());
     lay->addWidget(pill, 0, Qt::AlignVCenter);
     lay->addSpacing(4);
 
@@ -833,6 +856,7 @@ QWidget *MainWindow::buildVoiceCard() {
     head->addWidget(voiceBackend_, 0);
     lay->addLayout(head);
 
+    // 识别方式与模型设置之间的状态/对话文字框保留（模型就绪、最近转写）。
     voiceState_ = new QLabel;
     voiceState_->setObjectName("voiceBox");
     voiceState_->setWordWrap(true);
@@ -858,7 +882,7 @@ QWidget *MainWindow::buildVoiceCard() {
     voicePanel->setObjectName("ghostSmall");
     voicePanel->setCursor(Qt::PointingHandCursor);
     voicePanel->setToolTip(QString::fromUtf8(
-        "切到无遥控器的简洁语音界面：大按钮一键说话"));
+        "切到无遥控器的简洁语音界面：波形键一键说话"));
     connect(voicePanel, &QPushButton::clicked, this,
             &MainWindow::showVoicePanel);
     tools->addWidget(voiceTest_);
@@ -867,12 +891,24 @@ QWidget *MainWindow::buildVoiceCard() {
     tools->addStretch(1);
     lay->addLayout(tools);
 
-    listenButton_ = new QPushButton(QString::fromUtf8("开始监听"));
-    listenButton_->setObjectName("primary");
-    listenButton_->setCursor(Qt::PointingHandCursor);
-    connect(listenButton_, &QPushButton::clicked, this,
-            &MainWindow::toggleListening);
-    lay->addWidget(listenButton_);
+    // 原「开始监听」大按钮换成波形语音键：点击说话/再点结束，颜色表状态；
+    // 监听开关上移到顶栏胶囊。
+    voiceKey_ = new WaveformButton;
+    voiceKey_->setFixedHeight(40);
+    connect(voiceKey_, &QPushButton::clicked, this, [this] {
+        if (engine_ == nullptr || !engine_->isRunning()) {
+            toast_->showText(QString::fromUtf8(
+                "还没开始监听：点右上角「未监听」胶囊开启"));
+            return;
+        }
+        voice_->mediaToggle();
+    });
+    lay->addWidget(voiceKey_);
+    refreshVoiceKey();
+
+    // 宿主 + 任务会话放波形下面；卡中间不再留常态文字。
+    cardPicker_ = new DispatchPicker(store_.get());
+    lay->addWidget(cardPicker_);
 
     auto *foot = new QHBoxLayout;
     voiceFoot_ = new QLabel;
@@ -880,7 +916,6 @@ QWidget *MainWindow::buildVoiceCard() {
     foot->addWidget(voiceFoot_);
     foot->addStretch(1);
     lay->addLayout(foot);
-
 
     refreshVoiceUi();
     return card;
@@ -2422,7 +2457,7 @@ QWidget *MainWindow::buildGuidePage() {
     cl->addWidget(intro);
 
     addSection(QString::fromUtf8("没有遥控器也能用"),
-               {{"触发", "Ctrl+Alt+V 全局热键 / 语音主界面大麦克风 / "
+               {{"触发", "Ctrl+Alt+V 全局热键 / 波形语音键 / "
                          "耳机播放键 / 单击桌宠"},
                 {"识别", "转发热键（0 模型，交给 Qoder / WorkBuddy）或本地模型"
                          "（任何输入框都能出字）"},
@@ -2430,7 +2465,8 @@ QWidget *MainWindow::buildGuidePage() {
                          "干活的话交给前台 Agent"},
                 {"提醒", "装 agentrmc-bridge 插件：等授权、等选方案、任务完成时"
                          "桌宠气泡 + 语音"},
-                {"入口", "主界面左栏「语音主界面」/ 托盘「语音面板」/ 桌宠右键"},
+                {"入口", "遥控器形态左栏「语音主界面」/ 托盘「语音面板」/ "
+                         "桌宠右键；左上角波形键直接说话"},
                 {"模型", "把模型 zip 拖进窗口，或「语音面板 → 模型设置 → "
                          "导入模型包…」"}});
     addSection(QString::fromUtf8("有遥控器：第一次配对"),
@@ -2457,7 +2493,7 @@ QWidget *MainWindow::buildGuidePage() {
                                "实体键盘同名键也会按遥控器映射处理，"
                                "双击键的单击会有一段判定延迟"}});
     addSection(QString::fromUtf8("语音怎么用（有/无遥控器都适用）"),
-               {{"触发", "无遥控器：Ctrl+Alt+V / 语音主界面大麦克风 / "
+               {{"触发", "无遥控器：Ctrl+Alt+V / 波形语音键 / "
                          "耳机播放键 / 单击桌宠；有遥控器：按住语音键"},
                 {"转发", "默认，0 模型：把语音键转给当前应用自己的快捷键"
                          "（Qoder Ctrl+Shift+V / WorkBuddy Ctrl+D）"},
@@ -2885,10 +2921,7 @@ void MainWindow::updateListenUi() {
                     : QStringLiteral("color:%1; font-size:11px;")
                           .arg(ThemeManager::instance().css(QStringLiteral("muted"))));
     }
-    if (listenButton_ != nullptr) {
-        listenButton_->setText(running ? QStringLiteral("停止监听")
-                                       : QStringLiteral("开始监听"));
-    }
+    refreshVoiceKey();
     // 无遥控器的语音触发：监听开着才注册全局热键，停了就还给别人。
     if (running) {
         registerVoiceHotkey();
@@ -2898,10 +2931,127 @@ void MainWindow::updateListenUi() {
     if (voiceWindow_ != nullptr) {
         voiceWindow_->setListeningUi(running);
     }
+    if (embeddedVoice_ != nullptr) {
+        embeddedVoice_->setListeningUi(running);
+    }
     if (voicePet_ != nullptr) {
         voicePet_->setListening(running);
     }
     updateTrayState();
+}
+
+void MainWindow::refreshVoiceKey() {
+    if (voiceKey_ == nullptr) {
+        return;
+    }
+    const bool running = engine_ != nullptr && engine_->isRunning();
+    voiceKey_->setListening(running);
+    QString tip =
+        !running ? QString::fromUtf8("还没开始监听：点右上角「未监听」胶囊开启")
+                 : QString::fromUtf8("语音键：点击说话，再点结束");
+    const VoiceOptions options = voice_->options();
+    if (running && options.kbHotkeyEnabled) {
+        tip += QStringLiteral("\n热键 %1 也可以随时开始")
+                   .arg(voiceComboText(options.kbHotkeyMods, options.kbHotkeyVk));
+    }
+    voiceKey_->setToolTip(tip);
+}
+
+void MainWindow::refreshVoiceUi() {
+    if (voice_ == nullptr) {
+        return;
+    }
+    // 卡底assurance文案只给首次使用的人看；隐私/缺模型这类警告照常常驻。
+    const bool hintSeen =
+        store_->uiBool(QStringLiteral("voice_hint_seen"), false);
+    const VoiceOptions options = voice_->options();
+    if (voiceBackend_ != nullptr) {
+        const int index = voiceBackend_->findData(voiceBackendKey(options.backend));
+        if (index >= 0 && index != voiceBackend_->currentIndex()) {
+            const QSignalBlocker blocker(voiceBackend_);
+            voiceBackend_->setCurrentIndex(index);
+        }
+    }
+    if (options.backend == VoiceBackend::Hotkey) {
+        setVoiceStatus(voice_->statusText(),
+                       ThemeManager::instance().css(QStringLiteral("accent.text")),
+                       true);
+        if (voiceFoot_ != nullptr) {
+            voiceFoot_->setText(QString::fromUtf8("0 模型 · 跟随前台场景转发"));
+            voiceFoot_->setVisible(!hintSeen);
+        }
+    } else if (options.backend == VoiceBackend::CloudAsr) {
+        // 云端路线没有「拖模型包」这个动作，配置入口走语音设置。
+        const bool ready = voice_->modelReady();
+        setVoiceStatus(voice_->statusText(),
+                       ready ? ThemeManager::instance().css(QStringLiteral("text.dim"))
+                             : QStringLiteral("#d29922"),
+                       true);
+        if (voiceFoot_ != nullptr) {
+            voiceFoot_->setText(
+                QString::fromUtf8("云端转写 · 音频将上传到所填服务"));
+            voiceFoot_->setVisible(true);
+        }
+    } else {
+        const bool ready = voice_->modelReady();
+        if (ready) {
+            if (voiceState_ != nullptr) {
+                voiceState_->setStyleSheet(QString());
+            }
+            setVoiceStatus(voice_->statusText(),
+                           ThemeManager::instance().css(QStringLiteral("text.dim")),
+                           true);
+            if (voiceFoot_ != nullptr) {
+                voiceFoot_->setText(QString::fromUtf8("本地转写 · 音频不出本机"));
+                voiceFoot_->setVisible(!hintSeen);
+            }
+        } else {
+            if (voiceState_ != nullptr) {
+                voiceState_->setTextFormat(Qt::PlainText);
+                voiceState_->setStyleSheet(QStringLiteral(
+                    "QLabel#voiceBox { border: 1px dashed rgba(120,170,255,150);"
+                    " border-radius: 10px; background: rgba(79,140,255,18);"
+                    " color: %1; padding: 8px; }")
+                    .arg(ThemeManager::instance().css(QStringLiteral("accent.text"))));
+                voiceState_->setText(
+                    QString::fromUtf8("⇣  把模型包（.zip）拖到这里导入"));
+                voiceState_->setToolTip(
+                    QString::fromUtf8("也可以点「模型设置 → 导入模型包…」选择文件"));
+            }
+            if (voiceFoot_ != nullptr) {
+                voiceFoot_->setText(
+                    QString::fromUtf8("未安装模型 · 拖入模型包，或点「模型设置」"));
+                voiceFoot_->setVisible(true);
+            }
+        }
+    }
+    if (voiceTest_ != nullptr) {
+        // 只随识别方式变；录音中不再闪烁变灰（那会让人以为按钮被按了）。
+        voiceTest_->setEnabled(options.backend != VoiceBackend::Hotkey);
+    }
+}
+
+void MainWindow::setVoiceStatus(const QString &detail, const QString &color,
+                                 bool showTranscript) {
+    if (voiceState_ == nullptr) {
+        return;
+    }
+    QString html = QStringLiteral("<span style=\"color:%1;\">%2</span>")
+                       .arg(color, detail.toHtmlEscaped());
+    if (showTranscript && !lastTranscript_.isEmpty()) {
+        QString text = lastTranscript_;
+        if (text.size() > 40) {
+            text = text.left(40) + QString::fromUtf8("…");
+        }
+        html += QStringLiteral("<br><span style=\"color:%1;\">%2</span>")
+                    .arg(ThemeManager::instance().css(QStringLiteral("text")),
+                         text.toHtmlEscaped());
+        voiceState_->setToolTip(lastTranscript_);
+    } else {
+        voiceState_->setToolTip(QString());
+    }
+    voiceState_->setTextFormat(Qt::RichText);
+    voiceState_->setText(html);
 }
 
 void MainWindow::registerVoiceHotkey() {
@@ -2946,6 +3096,23 @@ void MainWindow::setLeftPanel(bool voicePage) {
         return;
     }
     leftStack_->setCurrentIndex(voicePage ? 1 : 0);
+    if (voiceCard_ != nullptr) {
+        voiceCard_->setVisible(!voicePage);
+        // 语音页自己要吃满高度（历史区伸缩）；遥控器形态让语音卡吃多余高度。
+        if (auto *lay = qobject_cast<QVBoxLayout *>(
+                voiceCard_->parentWidget()->layout())) {
+            lay->setStretchFactor(voiceCard_, voicePage ? 0 : 1);
+            lay->setStretchFactor(leftStack_, voicePage ? 1 : 0);
+        }
+        // stack 的 sizeHint 取两页最大值，嵌入页会把它撑高；
+        // 遥控器形态限到遥控器卡自身高度，底边才能贴齐。
+        leftStack_->setMaximumHeight(
+            voicePage ? QWIDGETSIZE_MAX
+                      : leftStack_->widget(0)->maximumHeight());
+    }
+    if (!voicePage && cardPicker_ != nullptr) {
+        cardPicker_->refresh();
+    }
     store_->setUiBool(QStringLiteral("left_panel_voice"), voicePage);
 }
 
@@ -2985,70 +3152,6 @@ void MainWindow::showVoicePanel() {
     voiceWindow_->show();
     voiceWindow_->raise();
     voiceWindow_->activateWindow();
-}
-
-void MainWindow::refreshVoiceUi() {
-    if (voice_ == nullptr || voiceState_ == nullptr) {
-        return;
-    }
-    const VoiceOptions options = voice_->options();
-    if (voiceBackend_ != nullptr) {
-        const int index = voiceBackend_->findData(voiceBackendKey(options.backend));
-        if (index >= 0 && index != voiceBackend_->currentIndex()) {
-            const QSignalBlocker blocker(voiceBackend_);
-            voiceBackend_->setCurrentIndex(index);
-        }
-    }
-    if (options.backend == VoiceBackend::Hotkey) {
-        setVoiceStatus(voice_->statusText(),
-                       ThemeManager::instance().css(QStringLiteral("accent.text")),
-                       true);
-        if (voiceFoot_ != nullptr) {
-            voiceFoot_->setText(QString::fromUtf8("0 模型 · 跟随前台场景转发"));
-        }
-    } else if (options.backend == VoiceBackend::CloudAsr) {
-        // 云端路线没有「拖模型包」这个动作，配置入口走语音设置。
-        const bool ready = voice_->modelReady();
-        setVoiceStatus(voice_->statusText(),
-                       ready ? ThemeManager::instance().css(QStringLiteral("text.dim"))
-                             : QStringLiteral("#d29922"),
-                       true);
-        if (voiceFoot_ != nullptr) {
-            voiceFoot_->setText(
-                QString::fromUtf8("云端转写 · 音频将上传到所填服务"));
-        }
-    } else {
-        const bool ready = voice_->modelReady();
-        if (ready) {
-            voiceState_->setStyleSheet(QString());
-            setVoiceStatus(voice_->statusText(),
-                           ThemeManager::instance().css(QStringLiteral("text.dim")),
-                           true);
-            if (voiceFoot_ != nullptr) {
-                voiceFoot_->setText(QString::fromUtf8("本地转写 · 音频不出本机"));
-            }
-        } else {
-            // 没装模型时，状态框本身就是拖拽区。
-            voiceState_->setTextFormat(Qt::PlainText);
-            voiceState_->setStyleSheet(QStringLiteral(
-                "QLabel#voiceBox { border: 1px dashed rgba(120,170,255,150);"
-                " border-radius: 10px; background: rgba(79,140,255,18);"
-                " color: %1; padding: 8px; }")
-                .arg(ThemeManager::instance().css(QStringLiteral("accent.text"))));
-            voiceState_->setText(
-                QString::fromUtf8("⇣  把模型包（.zip）拖到这里导入"));
-            voiceState_->setToolTip(
-                QString::fromUtf8("也可以点「模型设置 → 导入模型包…」选择文件"));
-            if (voiceFoot_ != nullptr) {
-                voiceFoot_->setText(
-                    QString::fromUtf8("未安装模型 · 拖入模型包，或点「模型设置」"));
-            }
-        }
-    }
-    if (voiceTest_ != nullptr) {
-        // 只随识别方式变；录音中不再闪烁变灰（那会让人以为按钮被按了）。
-        voiceTest_->setEnabled(options.backend != VoiceBackend::Hotkey);
-    }
 }
 
 void MainWindow::refreshRemoteCard() {
@@ -3153,30 +3256,17 @@ void MainWindow::openVoiceSettings() {
     dialog->deleteLater();
 }
 
-void MainWindow::setVoiceStatus(const QString &detail, const QString &color,
-                                 bool showTranscript) {
-    if (voiceState_ == nullptr) {
-        return;
-    }
-    QString html = QStringLiteral("<span style=\"color:%1;\">%2</span>")
-                       .arg(color, detail.toHtmlEscaped());
-    if (showTranscript && !lastTranscript_.isEmpty()) {
-        QString text = lastTranscript_;
-        if (text.size() > 40) {
-            text = text.left(40) + QString::fromUtf8("…");
-        }
-        html += QStringLiteral("<br><span style=\"color:%1;\">%2</span>")
-                    .arg(ThemeManager::instance().css(QStringLiteral("text")),
-                         text.toHtmlEscaped());
-        voiceState_->setToolTip(lastTranscript_);
-    } else {
-        voiceState_->setToolTip(QString());
-    }
-    voiceState_->setTextFormat(Qt::RichText);
-    voiceState_->setText(html);
-}
-
 void MainWindow::onVoiceState(const QString &state, const QString &detail) {
+    voiceRecording_ = state == QStringLiteral("recording");
+    if (voiceKey_ != nullptr) {
+        voiceKey_->setRecording(voiceRecording_);
+    }
+    if (voiceRecording_ &&
+        !store_->uiBool(QStringLiteral("voice_hint_seen"), false)) {
+        store_->setUiBool(QStringLiteral("voice_hint_seen"), true);
+        refreshVoiceUi();
+    }
+    refreshVoiceKey();
     if (state == QStringLiteral("idle")) {
         const bool warn = detail.contains(QString::fromUtf8("太短")) ||
                           detail.contains(QString::fromUtf8("未"));

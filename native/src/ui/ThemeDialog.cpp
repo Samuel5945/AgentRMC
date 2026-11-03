@@ -50,32 +50,54 @@ QPixmap swatch(const Theme &theme) {
     return pm;
 }
 
+QPixmap roundedThumb(const QPixmap &raw,
+                     Qt::AspectRatioMode mode = Qt::KeepAspectRatioByExpanding) {
+    QPixmap pm(kPreviewW, kPreviewH);
+    pm.fill(Qt::transparent);
+    QPainter painter(&pm);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    QPainterPath clip;
+    clip.addRoundedRect(QRectF(0, 0, kPreviewW, kPreviewH), 7, 7);
+    painter.setClipPath(clip);
+    const QPixmap scaled = raw.scaled(kPreviewW, kPreviewH, mode,
+                                      Qt::SmoothTransformation);
+    painter.drawPixmap((kPreviewW - scaled.width()) / 2,
+                       (kPreviewH - scaled.height()) / 2, scaled);
+    painter.setClipping(false);
+    painter.setPen(QPen(QColor(255, 255, 255, 34), 1.0));
+    painter.setBrush(Qt::NoBrush);
+    painter.drawRoundedRect(QRectF(0.5, 0.5, kPreviewW - 1.0, kPreviewH - 1.0),
+                            7, 7);
+    return pm;
+}
+
 QPixmap themePixmap(const ThemeInfo &info) {
     if (!info.preview.isEmpty()) {
         const QPixmap raw(info.preview);
         if (!raw.isNull()) {
-            QPixmap pm(kPreviewW, kPreviewH);
-            pm.fill(Qt::transparent);
-            QPainter painter(&pm);
-            painter.setRenderHint(QPainter::Antialiasing, true);
-            QPainterPath clip;
-            clip.addRoundedRect(QRectF(0, 0, kPreviewW, kPreviewH), 7, 7);
-            painter.setClipPath(clip);
-            const QPixmap scaled = raw.scaled(
-                kPreviewW, kPreviewH, Qt::KeepAspectRatioByExpanding,
-                Qt::SmoothTransformation);
-            painter.drawPixmap((kPreviewW - scaled.width()) / 2,
-                               (kPreviewH - scaled.height()) / 2, scaled);
-            painter.setClipping(false);
-            painter.setPen(QPen(QColor(255, 255, 255, 34), 1.0));
-            painter.setBrush(Qt::NoBrush);
-            painter.drawRoundedRect(QRectF(0.5, 0.5, kPreviewW - 1.0,
-                                           kPreviewH - 1.0),
-                                    7, 7);
-            return pm;
+            return roundedThumb(raw);
         }
     }
     return swatch(ThemeManager::instance().themeById(info.id));
+}
+
+// 形象缩略图优先用 idle 帧（角色本体），完整 fit 不裁头脚。
+QPixmap characterThumb(const ThemeInfo &info, const Theme &art) {
+    QString path;
+    const auto idle = art.petStates.constFind(QStringLiteral("idle"));
+    if (idle != art.petStates.constEnd() && !idle->frames.isEmpty()) {
+        path = idle->frames.first();
+    }
+    if (path.isEmpty()) {
+        path = info.preview;
+    }
+    if (!path.isEmpty()) {
+        const QPixmap raw(path);
+        if (!raw.isNull()) {
+            return roundedThumb(raw, Qt::KeepAspectRatio);
+        }
+    }
+    return swatch(art);
 }
 
 }  // namespace
@@ -138,6 +160,42 @@ ThemeDialog::ThemeDialog(ProfileStore *store, QWidget *parent)
             });
     root->addWidget(themes_);
 
+    // 形象与主题分离：主题管配色，形象管插画/桌宠帧/音色。
+    auto *charLabel = new QLabel(QString::fromUtf8("形象"));
+    charLabel->setObjectName("mapHead");
+    root->addWidget(charLabel);
+    characters_ = new QListWidget;
+    characters_->setObjectName("characterList");
+    characters_->setViewMode(QListView::IconMode);
+    characters_->setIconSize(QSize(kPreviewW, kPreviewH));
+    characters_->setGridSize(QSize(kPreviewW + 20, kPreviewH + 34));
+    characters_->setResizeMode(QListView::Adjust);
+    characters_->setMovement(QListView::Static);
+    characters_->setWrapping(true);
+    characters_->setUniformItemSizes(true);
+    characters_->setSelectionMode(QAbstractItemView::SingleSelection);
+    characters_->setFrameShape(QFrame::NoFrame);
+    characters_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    characters_->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    characters_->setCursor(Qt::PointingHandCursor);
+    connect(characters_, &QListWidget::currentItemChanged, this,
+            [this](QListWidgetItem *current, QListWidgetItem *) {
+                if (current == nullptr) {
+                    return;
+                }
+                const QString id = current->data(Qt::UserRole).toString();
+                if (id == ThemeManager::instance().characterId()) {
+                    return;
+                }
+                ThemeManager::instance().setCharacter(id);
+            });
+    root->addWidget(characters_);
+    auto *charNote = new QLabel(QString::fromUtf8(
+        "形象管桌宠帧和音色；配色与两张插画背景跟主题，两者可自由搭配。"));
+    charNote->setObjectName("emptyHint");
+    charNote->setWordWrap(true);
+    root->addWidget(charNote);
+
     // 配色模式：浅色 / 深色（夜间）/ 跟随系统。只作用于内置 classic；
     // 自定义主题包自带配色，选中时这三颗置灰。
     auto *schemeLabel = new QLabel(QString::fromUtf8("配色模式"));
@@ -167,7 +225,10 @@ ThemeDialog::ThemeDialog(ProfileStore *store, QWidget *parent)
     connect(schemeAuto_, &QPushButton::clicked, this,
             [this] { ThemeManager::instance().setScheme(QStringLiteral("auto")); });
     connect(&ThemeManager::instance(), &ThemeManager::themeChanged, this,
-            [this](const Theme &) { reloadScheme(); });
+            [this](const Theme &) {
+                reloadScheme();
+                reloadCharacters();  // 「跟随主题」的缩略图随当前主题变
+            });
 
     auto *sep = new QFrame;
     sep->setObjectName("mapHair");
@@ -247,8 +308,74 @@ ThemeDialog::ThemeDialog(ProfileStore *store, QWidget *parent)
     });
 
     reloadThemes();
+    reloadCharacters();
     reloadScheme();
     reloadSliders();
+}
+
+void ThemeDialog::reloadCharacters() {
+    const QSignalBlocker block(characters_);
+    characters_->clear();
+    const QString current = ThemeManager::instance().characterId();
+    const auto add = [this, current](const QString &id, const QString &text,
+                                     const QPixmap &pm, const QString &tip) {
+        auto *item = new QListWidgetItem(characters_);
+        item->setIcon(QIcon(pm));
+        item->setText(text);
+        item->setData(Qt::UserRole, id);
+        item->setTextAlignment(Qt::AlignHCenter);
+        item->setToolTip(tip);
+        if (id == current) {
+            characters_->setCurrentItem(item);
+        }
+    };
+
+    const QString themeId = ThemeManager::instance().currentId();
+    QPixmap followPm;
+    for (const ThemeInfo &info : ThemeManager::instance().themes()) {
+        if (info.id == themeId) {
+            followPm = themePixmap(info);
+            break;
+        }
+    }
+    if (followPm.isNull()) {
+        followPm = swatch(ThemeManager::instance().current());
+    }
+    add(QString(), QString::fromUtf8("跟随主题"), followPm,
+        QString::fromUtf8("桌宠帧和音色随当前主题包"));
+
+    QPixmap nonePm(kPreviewW, kPreviewH);
+    nonePm.fill(Qt::transparent);
+    {
+        QPainter painter(&nonePm);
+        painter.setRenderHint(QPainter::Antialiasing, true);
+        painter.setPen(QPen(QColor(255, 255, 255, 30), 1.0));
+        painter.setBrush(QColor(0x12, 0x17, 0x22));
+        painter.drawRoundedRect(QRectF(0.5, 0.5, kPreviewW - 1.0, kPreviewH - 1.0),
+                                7, 7);
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(QColor(0x8b, 0x94, 0x9e));
+        painter.drawEllipse(QPointF(kPreviewW / 2.0, kPreviewH / 2.0), 12, 12);
+    }
+    add(QStringLiteral("none"), QString::fromUtf8("无形象"), nonePm,
+        QString::fromUtf8("圆球桌宠 + 默认音色；插画背景仍跟主题"));
+
+    for (const ThemeInfo &info : ThemeManager::instance().themes()) {
+        if (!info.valid || info.id == QStringLiteral("classic")) {
+            continue;
+        }
+        const Theme art = ThemeManager::instance().themeById(info.id);
+        if (!art.hasPetSprite() && art.voiceName.isEmpty()) {
+            continue;
+        }
+        add(info.id,
+            art.characterName.isEmpty() ? info.displayName : art.characterName,
+            characterThumb(info, art),
+            QString::fromUtf8("只用它的桌宠帧和音色，配色与插画背景仍跟主题"));
+    }
+    const int count = characters_->count();
+    const int rows = qMax(1, (count + 3) / 4);
+    characters_->setFixedHeight(rows * (kPreviewH + 34) + 8);
 }
 
 void ThemeDialog::reloadThemes() {

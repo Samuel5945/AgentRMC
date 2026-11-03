@@ -107,6 +107,10 @@ qt_add_executable(AgentRMCNative
     src/ui/PetSprite.h
     src/ui/VoiceWindow.cpp
     src/ui/VoiceWindow.h
+    src/ui/WaveformButton.cpp
+    src/ui/WaveformButton.h
+    src/ui/DispatchPicker.cpp
+    src/ui/DispatchPicker.h
     resources/app.qrc
 )
 

@@ -20,6 +20,7 @@ public:
 
 private:
     void reloadThemes();
+    void reloadCharacters();
     void reloadSliders();
     // 配色模式三选一的选中态 / 可用性：只有 classic 吃这套，自定义主题置灰。
     void reloadScheme();
@@ -29,6 +30,7 @@ private:
 
     ProfileStore *store_ = nullptr;
     QListWidget *themes_ = nullptr;
+    QListWidget *characters_ = nullptr;
     QPushButton *schemeLight_ = nullptr;
     QPushButton *schemeDark_ = nullptr;
     QPushButton *schemeAuto_ = nullptr;

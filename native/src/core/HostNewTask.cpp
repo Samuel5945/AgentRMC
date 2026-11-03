@@ -438,4 +438,9 @@ bool focusComposer(const QString &exe) {
     return ok;
 }
 
+bool measuredChatHost(const QString &exe) {
+    return !controlNames(exe).isEmpty() ||
+           !AgentWindow::chatFocusCombo(exe).isEmpty();
+}
+
 }  // namespace HostNewTask

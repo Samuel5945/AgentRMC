@@ -288,11 +288,10 @@ VoiceWindow::VoiceWindow(VoiceController *voice, ProfileStore *store,
     auto *modeLabel = new QLabel(QString::fromUtf8("派活"));
     modeLabel->setObjectName("muted");
     dispatchMode_ = new QComboBox;
-    dispatchMode_->addItem(QString::fromUtf8("跟随宿主默认"), QString());
+    dispatchMode_->addItem(QString::fromUtf8("续当前会话（默认）"),
+                           QString());
     dispatchMode_->addItem(QString::fromUtf8("每次新任务"),
                            QStringLiteral("new"));
-    dispatchMode_->addItem(QString::fromUtf8("续当前会话"),
-                           QStringLiteral("current"));
     connect(dispatchMode_, &QComboBox::currentIndexChanged, this,
             [this](int index) {
                 if (index < 0 || agentTarget_ == nullptr) {
@@ -558,8 +557,9 @@ void VoiceWindow::refreshDispatchMode() {
         exe.isEmpty()
             ? QString::fromUtf8("先在「交给」里选定一个 Agent，再设它的派活模式")
             : QString::fromUtf8(
-                  "续当前会话 = 粘进它当前打开的会话输入框（读回验证）；"
-                  "每次新任务/跟随默认 = Qoder 系 Ctrl+N、WorkBuddy 系 UIA 新建任务"));
+                  "续当前会话（默认）= 粘进当前打开的会话输入框，读回验证；"
+                  "每次新任务 = Qoder 系 Ctrl+N、WorkBuddy 系 UIA 新建任务；"
+                  "没登记键位的宿主两种模式都粘当前焦点"));
 }
 
 void VoiceWindow::copyText(const QString &text) {

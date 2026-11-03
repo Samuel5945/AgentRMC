@@ -654,34 +654,37 @@ QString VoicePet::onlineAgentExe() const {
 
 bool VoicePet::handOffToAgent(const QString &text, const QString &exe) {
     const QString shortName = AgentWindow::displayName(exe);
-    // 聚焦键：用户覆盖（ui.chat_focus_<exe>，"none" = 禁用）> 宿主默认。
-    // 拉到前台 ≠ 焦点在聊天输入框：不先聚焦就 Ctrl+V，字会粘进编辑器或
-    // 直接丢给没聚焦的元素——这正是「只拉起前台、话没送进去」的根因。
-    QString combo = store_ != nullptr
-                        ? store_->uiString(QStringLiteral("chat_focus_") + exe)
-                        : QString();
-    if (combo.trimmed().isEmpty()) {
-        combo = AgentWindow::chatFocusCombo(exe);
-    }
-    QStringList focusMods;
-    int focusVk = 0;
-    const bool hasFocus = combo.trimmed() != QStringLiteral("none") &&
-                          voiceParseCombo(combo, &focusMods, &focusVk);
-    // 没有聚焦键的宿主（WorkBuddy 系：Ctrl+N 是「新建文件」）改走 UIA 按名
-    // 激活「新建任务」。用户把这条键位设成 "none" 就一并禁用——不留第二个开关。
-    const QStringList newTaskNames =
-        hasFocus || combo.trimmed() == QStringLiteral("none")
-            ? QStringList()
-            : HostNewTask::controlNames(exe);
-    // 每宿主派活模式（ui.dispatch_mode_<exe>，语音面板「派活」下拉）：
-    // current = 续当前会话（UIA 定位当前输入框 + 两段读回），不新建任务；
-    // new / 空 = 宿主默认（Qoder 系 ctrl+n、WorkBuddy 系 UIA 新建任务）。
+    // 派活模式（ui.dispatch_mode_<exe>，语音面板「派活」下拉）：
+    // 默认（空 / 旧值 current）= 续当前会话，粘进宿主正在跑的对话；
+    // new = 每次新任务（Qoder 系 ctrl+n、WorkBuddy 系 UIA 新建任务）。
     const QString mode =
         store_ != nullptr
             ? store_->uiString(QStringLiteral("dispatch_mode_") + exe)
             : QString();
+    const bool newTask = mode.compare(QStringLiteral("new"),
+                                      Qt::CaseInsensitive) == 0;
+    // 用户覆盖 ui.chat_focus_<exe>："none" = 不碰焦点直粘（两种模式都尊重）。
+    const QString override =
+        store_ != nullptr
+            ? store_->uiString(QStringLiteral("chat_focus_") + exe)
+            : QString();
+    const bool noFocus = override.trimmed() == QStringLiteral("none");
+    QString combo = override.trimmed().isEmpty()
+                        ? AgentWindow::chatFocusCombo(exe)
+                        : override;
+    QStringList focusMods;
+    int focusVk = 0;
+    const bool hasFocus =
+        !noFocus && newTask && voiceParseCombo(combo, &focusMods, &focusVk);
+    // 没有聚焦键的宿主（WorkBuddy 系：Ctrl+N 是「新建文件」）改走 UIA 按名
+    // 激活「新建任务」；只在 new 模式启用。
+    const QStringList newTaskNames =
+        (!newTask || noFocus || hasFocus) ? QStringList()
+                                          : HostNewTask::controlNames(exe);
+    // 续当前会话只对实测过聊天输入框的宿主走 UIA 定位 + 读回验证；
+    // 未实测的宿主保持直粘当前焦点的老行为——别拿猜的输入框糊上去。
     const bool currentSession =
-        mode.compare(QStringLiteral("current"), Qt::CaseInsensitive) == 0;
+        !newTask && !noFocus && HostNewTask::measuredChatHost(exe);
     // 目标窗口已经在前台就别折腾 raise：省掉抢前台的等待，稍等焦点稳定即注入。
     if (AgentWindow::foregroundAgentExe().compare(exe, Qt::CaseInsensitive) == 0) {
         handOffPollForeground(text, exe, shortName, focusMods, focusVk,

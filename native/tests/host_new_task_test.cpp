@@ -106,6 +106,23 @@ int main() {
     check(!HostNewTask::focusComposer(QString()),
           "focusComposer false for empty exe");
 
+    // 8) 续聊默认只认实测登记过的宿主；IDE 类没登记的不猜输入框
+    for (const QString &exe : {QStringLiteral("WorkBuddy.exe"),
+                               QStringLiteral("WorkBuddyAI.exe"),
+                               QStringLiteral("Qoder.exe"),
+                               QStringLiteral("Qoder CN.exe")}) {
+        check(HostNewTask::measuredChatHost(exe),
+              "measured chat host registered");
+    }
+    for (const QString &exe : {QStringLiteral("ZCode.exe"),
+                               QStringLiteral("CodeBuddy.exe"),
+                               QStringLiteral("OpenSquilla.exe"),
+                               QStringLiteral("DeepSeek Harness.exe"),
+                               QString()}) {
+        check(!HostNewTask::measuredChatHost(exe),
+              "unmeasured host not registered for composer focus");
+    }
+
     if (failures == 0) {
         std::puts("PASS native host new-task: routing / ctrl+n exclusion / "
                   "failure readings / readback safe defaults");

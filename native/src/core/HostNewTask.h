@@ -47,4 +47,9 @@ bool treeHasText(const QString &exe, const QString &text);
 // 剪贴板，不赌焦点。与「新建任务」路互斥，由 ui.dispatch_mode_<exe> 选择。
 bool focusComposer(const QString &exe);
 
+// 聊天输入框/新任务键位实测登记过的宿主（WorkBuddy 系、Qoder 系）。
+// 只有这些宿主的默认派活才走 UIA 定位当前输入框；没实测过的不猜输入框
+// （IDE 类宿主的第一个 Edit 可能是代码编辑器，粘进去就是污染）。
+bool measuredChatHost(const QString &exe);
+
 }  // namespace HostNewTask

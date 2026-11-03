@@ -57,10 +57,9 @@ int main() {
           "qoder cn ctrl+n intact");
 
     // 4) 没实测过的宿主一律留空——不把未验证的键位/控件名当默认值
+    // （OpenSquilla/DSH 已于 P2 实测登记，见用例 9；ZCode 逐项目按钮不登记）
     for (const QString &exe : {QStringLiteral("ZCode.exe"),
-                               QStringLiteral("CodeBuddy.exe"),
-                               QStringLiteral("OpenSquilla.exe"),
-                               QStringLiteral("DeepSeek Harness.exe")}) {
+                               QStringLiteral("CodeBuddy.exe")}) {
         check(HostNewTask::controlNames(exe).isEmpty(),
               "unmeasured host has no control name");
     }
@@ -122,6 +121,20 @@ int main() {
         check(!HostNewTask::measuredChatHost(exe),
               "unmeasured host not registered for composer focus");
     }
+
+    // 9) P2 登记：新任务按钮与续聊白名单解耦
+    check(HostNewTask::controlNames(QStringLiteral("DeepSeek Harness.exe")) ==
+              QStringList{QStringLiteral("新建会话")},
+          "dsh new-session control registered");
+    check(HostNewTask::controlNames(QStringLiteral("OpenSquilla.exe")) ==
+              QStringList{QStringLiteral("新建任务")},
+          "opensquilla new-task control registered");
+    check(!HostNewTask::measuredChatHost(QStringLiteral("OpenSquilla.exe")) &&
+              !HostNewTask::controlNames(QStringLiteral("OpenSquilla.exe"))
+                   .isEmpty(),
+          "new-task registration does not enable composer focus");
+    check(HostNewTask::controlNames(QStringLiteral("ZCode.exe")).isEmpty(),
+          "zcode per-project buttons not registered as single primitive");
 
     if (failures == 0) {
         std::puts("PASS native host new-task: routing / ctrl+n exclusion / "

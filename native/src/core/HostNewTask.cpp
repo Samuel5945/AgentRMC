@@ -169,11 +169,18 @@ void fillFocus(IUIAutomation *ui, HostNewTask::Attempt *attempt) {
 namespace HostNewTask {
 
 QStringList controlNames(const QString &exe) {
-    // WorkBuddy 两版共用同一个控件名（实测 vAI 与经典版都叫「新建任务」，
-    // UIA control type 50019）。其它宿主一律留空：没实测过就不塞默认值。
+    // 实测登记（2026-11-03 P2）：WorkBuddy 两版共用「新建任务」（TabItem，
+    // SetFocus+Enter）；DSH「新建会话」、OpenSquilla「新建任务」为 Button，
+    // 同样 SetFocus+Enter 落空输入框实测通过。其它宿主一律留空：没实测过
+    // 就不塞默认值（ZCode 的新任务是逐项目行按钮，无单前项目入口，见文档）。
     if (exe.compare(QStringLiteral("WorkBuddy.exe"), Qt::CaseInsensitive) == 0 ||
-        exe.compare(QStringLiteral("WorkBuddyAI.exe"), Qt::CaseInsensitive) == 0) {
+        exe.compare(QStringLiteral("WorkBuddyAI.exe"), Qt::CaseInsensitive) == 0 ||
+        exe.compare(QStringLiteral("OpenSquilla.exe"), Qt::CaseInsensitive) == 0) {
         return {QStringLiteral("新建任务")};
+    }
+    if (exe.compare(QStringLiteral("DeepSeek Harness.exe"),
+                    Qt::CaseInsensitive) == 0) {
+        return {QStringLiteral("新建会话")};
     }
     return {};
 }
@@ -439,8 +446,13 @@ bool focusComposer(const QString &exe) {
 }
 
 bool measuredChatHost(const QString &exe) {
-    return !controlNames(exe).isEmpty() ||
-           !AgentWindow::chatFocusCombo(exe).isEmpty();
+    // 显式白名单：当前会话输入框定位（focusComposer）实测过的宿主才走默认
+    // 续聊。不能由 controlNames 推导——登记了新任务按钮不代表输入框定位
+    // 实测过（IDE 类第一个 Edit 可能是代码编辑器）。
+    return exe.compare(QStringLiteral("WorkBuddy.exe"), Qt::CaseInsensitive) == 0 ||
+           exe.compare(QStringLiteral("WorkBuddyAI.exe"), Qt::CaseInsensitive) == 0 ||
+           exe.compare(QStringLiteral("Qoder.exe"), Qt::CaseInsensitive) == 0 ||
+           exe.compare(QStringLiteral("Qoder CN.exe"), Qt::CaseInsensitive) == 0;
 }
 
 }  // namespace HostNewTask

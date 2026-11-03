@@ -673,10 +673,19 @@ bool VoicePet::handOffToAgent(const QString &text, const QString &exe) {
         hasFocus || combo.trimmed() == QStringLiteral("none")
             ? QStringList()
             : HostNewTask::controlNames(exe);
+    // 每宿主派活模式（ui.dispatch_mode_<exe>，语音面板「派活」下拉）：
+    // current = 续当前会话（UIA 定位当前输入框 + 两段读回），不新建任务；
+    // new / 空 = 宿主默认（Qoder 系 ctrl+n、WorkBuddy 系 UIA 新建任务）。
+    const QString mode =
+        store_ != nullptr
+            ? store_->uiString(QStringLiteral("dispatch_mode_") + exe)
+            : QString();
+    const bool currentSession =
+        mode.compare(QStringLiteral("current"), Qt::CaseInsensitive) == 0;
     // 目标窗口已经在前台就别折腾 raise：省掉抢前台的等待，稍等焦点稳定即注入。
     if (AgentWindow::foregroundAgentExe().compare(exe, Qt::CaseInsensitive) == 0) {
         handOffPollForeground(text, exe, shortName, focusMods, focusVk,
-                              hasFocus, newTaskNames, 1);
+                              hasFocus, newTaskNames, currentSession, 1);
         return true;
     }
     // 先把宿主窗口拉到前台：直接粘会落进用户原本待着的窗口里。
@@ -684,7 +693,7 @@ bool VoicePet::handOffToAgent(const QString &text, const QString &exe) {
     // 焦点切换不是瞬时的：轮询等前台真的切过去（60ms × 30 ≈ 1.8s），
     // 而不是赌一个固定延时——慢机器上 Electron 恢复焦点可能要几百毫秒。
     handOffPollForeground(text, exe, shortName, focusMods, focusVk, hasFocus,
-                          newTaskNames, 30);
+                          newTaskNames, currentSession, 30);
     return true;
 }
 
@@ -693,17 +702,41 @@ void VoicePet::handOffPollForeground(const QString &text, const QString &exe,
                                      const QStringList &focusMods, int focusVk,
                                      bool hasFocus,
                                      const QStringList &newTaskNames,
-                                     int attempts) {
+                                     bool currentSession, int attempts) {
     if (AgentWindow::foregroundAgentExe().compare(exe, Qt::CaseInsensitive) == 0) {
         // 前台已到位：再给 Electron 一拍恢复内部焦点，然后聚焦输入框 + 粘贴。
         QTimer::singleShot(150, this, [this, text, exe, shortName, focusMods,
-                                       focusVk, hasFocus, newTaskNames] {
+                                       focusVk, hasFocus, newTaskNames,
+                                       currentSession] {
             if (AgentWindow::foregroundAgentExe().compare(
                     exe, Qt::CaseInsensitive) != 0) {
                 QApplication::clipboard()->setText(text);
                 bubbleOnly(QString::fromUtf8("%1 没抢到前台，已复制，切过去粘贴")
                                .arg(shortName),
                            4600, exe);
+                return;
+            }
+            if (currentSession) {
+                // 续聊：焦点交给当前会话输入框并复查落稳，再走两段读回粘贴。
+                // raise 后的激活过渡里单次 SetFocus 可能落不稳（真机 15:45 轮
+                // 败过一次）：重试几拍再判失败。落不稳不赌：回落剪贴板。
+                bool focused = false;
+                for (int i = 0; i < 6 && !focused; ++i) {
+                    focused = HostNewTask::focusComposer(exe);
+                    if (!focused) {
+                        QThread::msleep(150);
+                    }
+                }
+                if (focused) {
+                    handOffVerifiedPaste(text, exe, shortName);
+                } else {
+                    QApplication::clipboard()->setText(text);
+                    bubbleOnly(
+                        QString::fromUtf8(
+                            "%1 当前会话输入框没找到/焦点没落稳，已复制")
+                            .arg(shortName),
+                        5200, exe);
+                }
                 return;
             }
             if (!newTaskNames.isEmpty()) {
@@ -732,9 +765,11 @@ void VoicePet::handOffPollForeground(const QString &text, const QString &exe,
         return;
     }
     QTimer::singleShot(60, this, [this, text, exe, shortName, focusMods, focusVk,
-                                  hasFocus, newTaskNames, attempts] {
+                                  hasFocus, newTaskNames, currentSession,
+                                  attempts] {
         handOffPollForeground(text, exe, shortName, focusMods, focusVk,
-                              hasFocus, newTaskNames, attempts - 1);
+                              hasFocus, newTaskNames, currentSession,
+                              attempts - 1);
     });
 }
 

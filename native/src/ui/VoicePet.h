@@ -142,7 +142,7 @@ private:
                                const QString &shortName,
                                const QStringList &focusMods, int focusVk,
                                bool hasFocus, const QStringList &newTaskNames,
-                               int attempts);
+                               bool currentSession, int attempts);
     // 没有聚焦键的宿主：UIA 把焦点交给「新建任务」→ 回车 → 验焦点落进输入框
     // → 验证粘贴。任一环节不满足就不粘那一步（见 .cpp 里的兜底）。
     void handOffNewTask(const QString &text, const QString &exe,

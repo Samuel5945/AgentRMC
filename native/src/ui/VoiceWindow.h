@@ -51,6 +51,7 @@ private:
     void refreshHint();
     void refreshStatusDot();
     void refreshAgentTarget();
+    void refreshDispatchMode();
 
     VoiceController *voice_ = nullptr;
     ProfileStore *store_ = nullptr;
@@ -64,6 +65,7 @@ private:
     QListWidget *history_ = nullptr;
     QComboBox *backend_ = nullptr;
     QComboBox *agentTarget_ = nullptr;
+    QComboBox *dispatchMode_ = nullptr;
     QPushButton *readLast_ = nullptr;
     QTimer *levelTimer_ = nullptr;
     QString lastText_;

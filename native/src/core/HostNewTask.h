@@ -42,4 +42,9 @@ QString composerValue(const QString &exe);
 // 与 composerValue 合起来证明「真发送」：输入框不再含这句话且树里出现了它。
 bool treeHasText(const QString &exe, const QString &text);
 
+// 续当前会话模式：把焦点交给该宿主主窗里第一个可见 Edit（当前会话输入框），
+// 并复查焦点真落在宿主进程内的 Edit 上。找不到/落不稳 = false，调用方回落
+// 剪贴板，不赌焦点。与「新建任务」路互斥，由 ui.dispatch_mode_<exe> 选择。
+bool focusComposer(const QString &exe);
+
 }  // namespace HostNewTask

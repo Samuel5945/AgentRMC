@@ -381,4 +381,61 @@ bool treeHasText(const QString &exe, const QString &text) {
     return hit;
 }
 
+bool focusComposer(const QString &exe) {
+    HWND hwnd = static_cast<HWND>(AgentWindow::mainWindow(exe));
+    if (hwnd == nullptr) {
+        return false;
+    }
+    DWORD windowPid = 0;
+    GetWindowThreadProcessId(hwnd, &windowPid);
+    IUIAutomation *ui = automation();
+    if (ui == nullptr) {
+        return false;
+    }
+    IUIAutomationElement *root = nullptr;
+    if (FAILED(ui->ElementFromHandle(hwnd, &root)) || root == nullptr) {
+        return false;
+    }
+    IUIAutomationCondition *cond = nullptr;
+    VARIANT typeVar{};
+    VariantInit(&typeVar);
+    typeVar.vt = VT_I4;
+    typeVar.lVal = UIA_EditControlTypeId;
+    const HRESULT condHr =
+        ui->CreatePropertyCondition(UIA_ControlTypePropertyId, typeVar, &cond);
+    VariantClear(&typeVar);
+    IUIAutomationElement *el = nullptr;
+    if (SUCCEEDED(condHr) && cond != nullptr) {
+        root->FindFirst(TreeScope_Descendants, cond, &el);
+        cond->Release();
+    }
+    root->Release();
+    if (el == nullptr) {
+        return false;
+    }
+    tagRECT r{};
+    const bool visible = SUCCEEDED(el->get_CurrentBoundingRectangle(&r)) &&
+                         (r.right - r.left) >= 8 && (r.bottom - r.top) >= 8;
+    int elPid = 0;
+    el->get_CurrentProcessId(&elPid);
+    const HRESULT sf = visible && quint32(elPid) == windowPid
+                           ? el->SetFocus()
+                           : E_FAIL;
+    el->Release();
+    if (FAILED(sf)) {
+        return false;
+    }
+    // 复查：焦点真在宿主进程内的 Edit 上才算落稳（SetFocus 返回 S_OK 不算）。
+    IUIAutomationElement *focused = nullptr;
+    if (FAILED(ui->GetFocusedElement(&focused)) || focused == nullptr) {
+        return false;
+    }
+    int focusedPid = 0;
+    focused->get_CurrentProcessId(&focusedPid);
+    const bool ok = quint32(focusedPid) == windowPid &&
+                    controlTypeOf(focused) == UIA_EditControlTypeId;
+    focused->Release();
+    return ok;
+}
+
 }  // namespace HostNewTask

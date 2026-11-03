@@ -277,10 +277,37 @@ VoiceWindow::VoiceWindow(VoiceController *voice, ProfileStore *store,
                 }
                 store_->setUiString(QStringLiteral("agent_target"),
                                     agentTarget_->itemData(index).toString());
+                refreshDispatchMode();
             });
     agentRow->addWidget(agentLabel);
     agentRow->addWidget(agentTarget_, 1);
     body->addLayout(agentRow);
+
+    // 每宿主派活模式：跟着「交给」的 pin 走；没 pin 时禁用并提示先选宿主。
+    auto *modeRow = new QHBoxLayout;
+    auto *modeLabel = new QLabel(QString::fromUtf8("派活"));
+    modeLabel->setObjectName("muted");
+    dispatchMode_ = new QComboBox;
+    dispatchMode_->addItem(QString::fromUtf8("跟随宿主默认"), QString());
+    dispatchMode_->addItem(QString::fromUtf8("每次新任务"),
+                           QStringLiteral("new"));
+    dispatchMode_->addItem(QString::fromUtf8("续当前会话"),
+                           QStringLiteral("current"));
+    connect(dispatchMode_, &QComboBox::currentIndexChanged, this,
+            [this](int index) {
+                if (index < 0 || agentTarget_ == nullptr) {
+                    return;
+                }
+                const QString exe = agentTarget_->currentData().toString();
+                if (exe.isEmpty()) {
+                    return;
+                }
+                store_->setUiString(QStringLiteral("dispatch_mode_") + exe,
+                                    dispatchMode_->itemData(index).toString());
+            });
+    modeRow->addWidget(modeLabel);
+    modeRow->addWidget(dispatchMode_, 1);
+    body->addLayout(modeRow);
     refreshAgentTarget();
 
     auto *foot = new QHBoxLayout;
@@ -512,6 +539,27 @@ void VoiceWindow::refreshAgentTarget() {
                                 "自动判断 = 前台优先 → 最近发通知的宿主")
             : QString::fromUtf8("没检测到在跑的 Agent；"
                                 "语音会走自带 LLM 或提示先打开 Agent"));
+    refreshDispatchMode();
+}
+
+void VoiceWindow::refreshDispatchMode() {
+    if (dispatchMode_ == nullptr || agentTarget_ == nullptr) {
+        return;
+    }
+    const QSignalBlocker block(dispatchMode_);
+    const QString exe = agentTarget_->currentData().toString();
+    dispatchMode_->setEnabled(!exe.isEmpty());
+    const QString mode =
+        exe.isEmpty() ? QString()
+                      : store_->uiString(QStringLiteral("dispatch_mode_") + exe);
+    const int index = dispatchMode_->findData(mode);
+    dispatchMode_->setCurrentIndex(index >= 0 ? index : 0);
+    dispatchMode_->setToolTip(
+        exe.isEmpty()
+            ? QString::fromUtf8("先在「交给」里选定一个 Agent，再设它的派活模式")
+            : QString::fromUtf8(
+                  "续当前会话 = 粘进它当前打开的会话输入框（读回验证）；"
+                  "每次新任务/跟随默认 = Qoder 系 Ctrl+N、WorkBuddy 系 UIA 新建任务"));
 }
 
 void VoiceWindow::copyText(const QString &text) {

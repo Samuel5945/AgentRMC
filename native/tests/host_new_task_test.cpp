@@ -101,6 +101,10 @@ int main() {
           "treeHasText false without the host window");
     check(!HostNewTask::treeHasText(QStringLiteral("WorkBuddy.exe"), QString()),
           "treeHasText false for empty needle");
+    check(!HostNewTask::focusComposer(QStringLiteral("AgentRMCNoSuchHost.exe")),
+          "focusComposer false without the host window");
+    check(!HostNewTask::focusComposer(QString()),
+          "focusComposer false for empty exe");
 
     if (failures == 0) {
         std::puts("PASS native host new-task: routing / ctrl+n exclusion / "

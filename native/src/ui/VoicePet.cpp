@@ -628,7 +628,12 @@ QString VoicePet::onlineAgentExe() const {
     if (!remembered.isEmpty() && AgentWindow::alive(remembered)) {
         return remembered;
     }
-    return AgentWindow::detectAgentExe();
+    // 信息都缺时也别固定偏向某个宿主：优先用户上次语音派活的目标，
+    // 它还活着就接着用；真没有历史才落到 knownExes() 顺序。
+    const QString lastUsed =
+        store_ != nullptr ? store_->uiString(QStringLiteral("agent_last_used"))
+                          : QString();
+    return AgentWindow::detectAgentExe(lastUsed);
 }
 
 bool VoicePet::handOffToAgent(const QString &text, const QString &exe) {
@@ -642,6 +647,11 @@ bool VoicePet::handOffToAgent(const QString &text, const QString &exe) {
             return true;
         }
         bubbleOnly(QString::fromUtf8("已交给 %1").arg(shortName), 4200, exe);
+        // 记下这次派活目标：下次没有前台/通知线索时优先还给它，而不是
+        // 按白名单顺序固定偏向某个宿主。
+        if (store_ != nullptr) {
+            store_->setUiString(QStringLiteral("agent_last_used"), exe);
+        }
         emit workHandedOff(exe, text);
         return true;
     }
@@ -657,6 +667,9 @@ bool VoicePet::handOffToAgent(const QString &text, const QString &exe) {
             return;
         }
         bubbleOnly(QString::fromUtf8("已交给 %1").arg(shortName), 4200, exe);
+        if (store_ != nullptr) {
+            store_->setUiString(QStringLiteral("agent_last_used"), exe);
+        }
         emit workHandedOff(exe, text);
     });
     return true;

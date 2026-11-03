@@ -154,7 +154,8 @@ private:
 VoiceWindow::VoiceWindow(VoiceController *voice, ProfileStore *store,
                          QWidget *parent, bool embedded)
     : QWidget(parent), voice_(voice), store_(store), embedded_(embedded) {
-    setObjectName("voiceWindow");
+    setObjectName(embedded ? QStringLiteral("voiceWindowEmbedded")
+                           : QStringLiteral("voiceWindow"));
     setWindowTitle(QString::fromUtf8("AgentRMC 语音"));
     if (embedded_) {
         // 主窗左栏的一页：普通子控件、随栏宽伸缩，不要顶层窗口那套。
@@ -177,7 +178,8 @@ VoiceWindow::VoiceWindow(VoiceController *voice, ProfileStore *store,
     root->setSpacing(0);
 
     auto *header = new DragStrip(this, !embedded_);
-    header->setObjectName("voiceHeader");
+    header->setObjectName(embedded_ ? QStringLiteral("voiceHeaderEmbedded")
+                                    : QStringLiteral("voiceHeader"));
     header->setFixedHeight(embedded_ ? 36 : 44);
     auto *head = new QHBoxLayout(header);
     head->setContentsMargins(14, 0, 10, 0);
@@ -702,13 +704,9 @@ void VoiceWindow::paintEvent(QPaintEvent *event) {
     const QRectF box = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
 
     if (embedded_) {
-        // 嵌入页跟卡片体系走：card.bg + 细边圆角，与上方语音卡/遥控器卡
-        // 同一视觉语言，不再是一块孤立的平底（2026-11-03 用户反馈）。
-        painter.setPen(QPen(paletteColor(QStringLiteral("w18"),
-                                         QColor(255, 255, 255, 28)), 1.0));
-        painter.setBrush(paletteColor(QStringLiteral("card.bg"),
-                                      QColor(0x12, 0x17, 0x22)));
-        painter.drawRoundedRect(box, 12, 12);
+        // 嵌入页表面完全交给 QSS（与 QFrame#card 同一条渐变+细边+圆角）：
+        // 美术主题的 card.bg 是半透明 rgba，自绘或 #voiceWindow 的 @bg@
+        // 兜底都会把它变成死黑板（2026-11-03 鲸鱼娘主题真机）。
         return;
     }
 

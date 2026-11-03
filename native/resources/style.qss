@@ -849,6 +849,20 @@ QWidget#voiceWindow {
     background: @bg@;
 }
 
+/* 嵌入主窗左栏的语音页：与 QFrame#card 完全相同的表面（半透明渐变卡），
+   美术主题下透出背景图；页眉透明只留分隔线。 */
+QWidget#voiceWindowEmbedded {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                                stop:0 @card.bg@, stop:1 @card.bg2@);
+    border: 1px solid @w18@;
+    border-radius: 16px;
+}
+
+QWidget#voiceHeaderEmbedded {
+    background: transparent;
+    border-bottom: 1px solid @w18@;
+}
+
 QWidget#voiceHeader {
     background: @card.bg@;
     border-bottom: 1px solid @w18@;

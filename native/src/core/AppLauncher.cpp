@@ -428,6 +428,12 @@ QVector<AppEntry> buildBuiltinCatalog() {
           QStringLiteral("coder cn"), QStringLiteral("codercn"),
           QStringLiteral("qoder 中国版"), QStringLiteral("qoder 中文版")},
          {QStringLiteral("Qoder CN")}, QStringLiteral("com.qodercn.app")},
+        // WorkBuddy AI 排在旧版前面：aliasMatches 的前缀容错里
+        // 「workbuddy」是「workbuddyai」的前缀，AI 在前才不会被旧版抢走。
+        {QStringLiteral("workbuddyai"), QStringLiteral("WorkBuddy AI"),
+         {QStringLiteral("workbuddyai"), QStringLiteral("workbuddy ai"),
+          QStringLiteral("ai工作伙伴"), QStringLiteral("工作伙伴ai")},
+         {QStringLiteral("WorkBuddy AI")}, {}},
         {QStringLiteral("workbuddy"), QStringLiteral("WorkBuddy"),
          {QStringLiteral("workbuddy"), QStringLiteral("work buddy"),
           QStringLiteral("工作伙伴")},
@@ -751,6 +757,13 @@ AppVoiceMatch AppLauncher::matchVoice(const QString &text) {
                 }
             };
             for (const AppEntry &entry : catalog()) {
+                // WorkBuddy 与 WorkBuddy AI 的声母骨架完全一样（wrkbd），
+                // 两个条目同分参赛会把第二名 margin 吃光，「WOKBER」这类
+                // 听岔救回就全废了。模糊档只让旧版条目代表这一族出场；
+                // 只装 AI 时由 resolve 的前缀兜底开到 WorkBuddy AI 的 lnk。
+                if (entry.id == QStringLiteral("workbuddyai")) {
+                    continue;
+                }
                 double score = 0.0;
                 for (const QString &alias : entry.aliases) {
                     const QString flat = normalize(alias);

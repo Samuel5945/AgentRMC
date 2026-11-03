@@ -81,6 +81,16 @@ int main(int argc, char *argv[]) {
                 "workbuddy short verb");
     ok &= check(isApp(QStringLiteral("启动 work buddy"), QStringLiteral("workbuddy")),
                 "workbuddy spaced");
+    // WorkBuddy AI 的叫法：全名 / 无空格 / 中文（「AI 工作伙伴」）。注意
+    // 「打开AI」仍必须是 Illustrator——AI 条目的别名都比 "ai" 长。
+    ok &= check(isApp(QStringLiteral("打开workbuddyai"), QStringLiteral("workbuddyai")),
+                "workbuddy ai exact");
+    ok &= check(isApp(QStringLiteral("启动 work buddy ai"), QStringLiteral("workbuddyai")),
+                "workbuddy ai spaced");
+    ok &= check(isApp(QStringLiteral("打开ai工作伙伴"), QStringLiteral("workbuddyai")),
+                "workbuddy ai chinese alias");
+    ok &= check(isApp(QStringLiteral("打开AI"), QStringLiteral("illustrator")),
+                "bare AI still opens illustrator");
     ok &= check(isApp(QStringLiteral("打开deepseek"), QStringLiteral("deepseek")),
                 "deepseek");
     ok &= check(isApp(QStringLiteral("打开codex"), QStringLiteral("codex")),

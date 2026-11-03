@@ -40,6 +40,10 @@ public:
     // 向前台窗口发一个组合键（派活时先按宿主的「聚焦聊天输入框」键）。
     // SendInput 被拦时返回 false，调用方据此回落剪贴板。
     bool sendHotkey(const QStringList &mods, int vk);
+    // 打字对话（语音主界面输入框）：与对话模式下的说话同路由——
+    // transcribed 展示 + chatRequested 交桌宠判派活/对话；不走 deliver 的
+    // 「粘进前台」路（打字时前台往往就是自己这个窗口）。
+    void submitTyped(const QString &text);
 
 public slots:
     void voiceDown();

@@ -71,6 +71,7 @@
 #include <QStyledItemDelegate>
 #include <QSystemTrayIcon>
 #include <QTabWidget>
+#include <QStackedWidget>
 #include <QTableWidget>
 #include <QToolButton>
 #include <QUrl>
@@ -394,9 +395,28 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
     leftLay->setContentsMargins(0, 0, 0, 0);
     leftLay->setSpacing(12);
     // 语音在上面：主操作「开始监听」和识别方式是一打开就要用的；
-    // 遥控器是可选的次要设备，放到下面并吃掉剩余高度。
+    // 下面这块可切换：遥控器卡 ↔ 语音主界面（无遥控器偏好默认语音页，
+    // 有遥控器也能手动点切；选择持久化 ui.left_panel_voice）。
     leftLay->addWidget(buildVoiceCard(), 0);
-    leftLay->addWidget(buildRemoteCard(), 1);
+    leftStack_ = new QStackedWidget;
+    leftStack_->addWidget(buildRemoteCard());
+    embeddedVoice_ = new VoiceWindow(voice_, store_.get(), this, true);
+    // 滚动兜底：左栏高度不够时出滚动条，而不是把语音页控件压到重叠。
+    auto *voiceScroll = new QScrollArea;
+    voiceScroll->setFrameShape(QFrame::NoFrame);
+    voiceScroll->setWidgetResizable(true);
+    voiceScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    voiceScroll->viewport()->setStyleSheet(
+        QStringLiteral("background: transparent;"));
+    voiceScroll->setWidget(embeddedVoice_);
+    leftStack_->addWidget(voiceScroll);
+    connect(embeddedVoice_, &VoiceWindow::embedExitRequested, this,
+            [this] { setLeftPanel(false); });
+    connect(embeddedVoice_, &VoiceWindow::typedSubmitted, this,
+            [this](const QString &text) { voice_->submitTyped(text); });
+    leftLay->addWidget(leftStack_, 1);
+    setLeftPanel(store_->uiBool(QStringLiteral("voice_mode"), false) ||
+                 store_->uiBool(QStringLiteral("left_panel_voice"), false));
     grid->addWidget(left);
 
     tabs_ = new QTabWidget;
@@ -728,8 +748,14 @@ QWidget *MainWindow::buildRemoteCard() {
     title->setObjectName("cardTitle");
     remoteBadge_ = new QLabel(QString::fromUtf8("待机"));
     remoteBadge_->setObjectName("badge");
+    auto *toVoice = new QPushButton(QString::fromUtf8("语音"));
+    toVoice->setObjectName("ghostSmall");
+    toVoice->setCursor(Qt::PointingHandCursor);
+    toVoice->setToolTip(QString::fromUtf8("把这块换成语音主界面（打字/说话都行）"));
+    connect(toVoice, &QPushButton::clicked, this, [this] { setLeftPanel(true); });
     head->addWidget(title);
     head->addStretch(1);
+    head->addWidget(toVoice);
     head->addWidget(remoteBadge_);
     lay->addLayout(head);
 
@@ -2921,6 +2947,14 @@ void MainWindow::unregisterVoiceHotkey() {
     voiceHotkeyRegistered_ = false;
 }
 
+void MainWindow::setLeftPanel(bool voicePage) {
+    if (leftStack_ == nullptr) {
+        return;
+    }
+    leftStack_->setCurrentIndex(voicePage ? 1 : 0);
+    store_->setUiBool(QStringLiteral("left_panel_voice"), voicePage);
+}
+
 void MainWindow::showVoicePanel() {
     if (voiceWindow_ == nullptr) {
         voiceWindow_ = new VoiceWindow(voice_, store_.get());
@@ -2941,6 +2975,9 @@ void MainWindow::showVoicePanel() {
                         voicePet_->speak(text);
                     }
                 });
+        // 打字对话与说话同路由（桌宠判派活/对话）。
+        connect(voiceWindow_, &VoiceWindow::typedSubmitted, this,
+                [this](const QString &text) { voice_->submitTyped(text); });
     }
     store_->setUiBool("voice_mode", true);
     if (const QPoint cursor = QCursor::pos();

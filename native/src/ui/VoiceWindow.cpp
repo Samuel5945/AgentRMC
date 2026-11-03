@@ -116,10 +116,16 @@ private:
 // 顶部拖拽条（同主窗 TitleBar 的做法）。
 class DragStrip final : public QWidget {
 public:
-    explicit DragStrip(QWidget *parent) : QWidget(parent) {}
+    explicit DragStrip(QWidget *parent, bool movable = true)
+        : QWidget(parent), movable_(movable) {}
 
 protected:
     void mousePressEvent(QMouseEvent *event) override {
+        // 嵌入主窗时拖_header_会拖走整个主窗：嵌入态不启动系统移动。
+        if (!movable_) {
+            QWidget::mousePressEvent(event);
+            return;
+        }
         // 本控件是子控件，自己的 windowHandle() 是空的；必须从顶层窗口拿。
         if (event->button() == Qt::LeftButton) {
             if (auto *handle = window()->windowHandle()) {
@@ -130,28 +136,41 @@ protected:
         }
         QWidget::mousePressEvent(event);
     }
+
+private:
+    bool movable_ = true;
 };
 
 }  // namespace
 
 VoiceWindow::VoiceWindow(VoiceController *voice, ProfileStore *store,
-                         QWidget *parent)
-    : QWidget(parent), voice_(voice), store_(store) {
+                         QWidget *parent, bool embedded)
+    : QWidget(parent), voice_(voice), store_(store), embedded_(embedded) {
     setObjectName("voiceWindow");
     setWindowTitle(QString::fromUtf8("AgentRMC 语音"));
-    setWindowFlags(Qt::Window | Qt::FramelessWindowHint);
-    // qss 里给了 12px 圆角，透明背景才能圆出效果；plain QWidget 要显式开 StyledBackground。
-    setAttribute(Qt::WA_TranslucentBackground);
-    setAttribute(Qt::WA_StyledBackground);
-    setFixedSize(380, 560);
+    if (embedded_) {
+        // 主窗左栏的一页：普通子控件、随栏宽伸缩，不要顶层窗口那套。
+        setWindowFlags(Qt::Widget);
+        setAttribute(Qt::WA_StyledBackground);
+        // 不设显式 minimum：让布局 minimumSizeHint 传给外层 QScrollArea，
+        // 空间不够时出滚动条而不是把控件压到重叠（真机踩坑）。
+        setMaximumSize(QWIDGETSIZE_MAX, QWIDGETSIZE_MAX);
+        setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Expanding);
+    } else {
+        setWindowFlags(Qt::Window | Qt::FramelessWindowHint);
+        // qss 里给了 12px 圆角，透明背景才能圆出效果；plain QWidget 要显式开 StyledBackground。
+        setAttribute(Qt::WA_TranslucentBackground);
+        setAttribute(Qt::WA_StyledBackground);
+        setFixedSize(380, 560);
+    }
 
     auto *root = new QVBoxLayout(this);
     root->setContentsMargins(0, 0, 0, 0);
     root->setSpacing(0);
 
-    auto *header = new DragStrip(this);
+    auto *header = new DragStrip(this, !embedded_);
     header->setObjectName("voiceHeader");
-    header->setFixedHeight(44);
+    header->setFixedHeight(embedded_ ? 40 : 44);
     auto *head = new QHBoxLayout(header);
     head->setContentsMargins(14, 0, 10, 0);
     head->setSpacing(8);
@@ -181,16 +200,35 @@ VoiceWindow::VoiceWindow(VoiceController *voice, ProfileStore *store,
     head->addWidget(statusDot_);
     head->addWidget(title);
     head->addStretch(1);
-    head->addWidget(full);
-    head->addWidget(minBtn);
-    head->addWidget(closeBtn);
+    if (embedded_) {
+        // 嵌入态：窗口按钮没意义；给一个切回遥控器卡的入口。
+        full->hide();
+        minBtn->hide();
+        closeBtn->hide();
+        auto *back = new QPushButton(QString::fromUtf8("遥控器"));
+        back->setObjectName("ghostText");
+        back->setCursor(Qt::PointingHandCursor);
+        back->setToolTip(QString::fromUtf8("把左栏这块切回遥控器卡"));
+        connect(back, &QPushButton::clicked, this,
+                &VoiceWindow::embedExitRequested);
+        head->addWidget(back);
+    } else {
+        head->addWidget(full);
+        head->addWidget(minBtn);
+        head->addWidget(closeBtn);
+    }
     root->addWidget(header);
 
     auto *body = new QVBoxLayout;
-    body->setContentsMargins(20, 10, 20, 14);
-    body->setSpacing(8);
+    body->setContentsMargins(embedded_ ? 12 : 20, embedded_ ? 8 : 10,
+                             embedded_ ? 12 : 20, embedded_ ? 10 : 14);
+    body->setSpacing(embedded_ ? 6 : 8);
 
     mic_ = new MicButton;
+    if (embedded_) {
+        // 左栏只有 286 宽、高度还要和语音卡分：紧凑版麦克风。
+        mic_->setFixedSize(72, 72);
+    }
     connect(mic_, &QPushButton::clicked, this, [this] {
         if (!listening_) {
             toast_->showText(QString::fromUtf8(
@@ -214,15 +252,35 @@ VoiceWindow::VoiceWindow(VoiceController *voice, ProfileStore *store,
     hintLabel_->setObjectName("muted");
     hintLabel_->setAlignment(Qt::AlignHCenter);
     refreshHint();
+    // 嵌入态高度金贵：热键提示在引导/语音卡 tooltip 里有，这里不占行。
+    if (embedded_) {
+        hintLabel_->hide();
+    }
     body->addWidget(hintLabel_);
 
     transcript_ = new QLabel(QString::fromUtf8("说了话会显示在这里，点击可复制"));
     transcript_->setObjectName("voiceTranscript");
     transcript_->setWordWrap(true);
-    transcript_->setMinimumHeight(64);
+    transcript_->setMinimumHeight(embedded_ ? 40 : 64);
     transcript_->setCursor(Qt::PointingHandCursor);
     transcript_->installEventFilter(this);
     body->addWidget(transcript_);
+
+    // 打字对话：不想说话/环境吵时敲一句，路由与说话完全相同。
+    auto *typedRow = new QHBoxLayout;
+    typedRow->setSpacing(6);
+    typed_ = new QLineEdit;
+    typed_->setObjectName("voiceTyped");
+    typed_->setPlaceholderText(QString::fromUtf8("打字说一句话，Enter 发送"));
+    typed_->setClearButtonEnabled(true);
+    connect(typed_, &QLineEdit::returnPressed, this, &VoiceWindow::submitTyped);
+    auto *send = new QPushButton(QString::fromUtf8("发送"));
+    send->setObjectName("ghostSmall");
+    send->setCursor(Qt::PointingHandCursor);
+    connect(send, &QPushButton::clicked, this, &VoiceWindow::submitTyped);
+    typedRow->addWidget(typed_, 1);
+    typedRow->addWidget(send);
+    body->addLayout(typedRow);
 
     auto *historyRow = new QHBoxLayout;
     auto *historyTitle = new QLabel(QString::fromUtf8("最近"));
@@ -309,7 +367,9 @@ VoiceWindow::VoiceWindow(VoiceController *voice, ProfileStore *store,
     body->addLayout(modeRow);
     refreshAgentTarget();
 
-    auto *foot = new QHBoxLayout;
+    auto *footW = new QWidget;
+    auto *foot = new QHBoxLayout(footW);
+    foot->setContentsMargins(0, 0, 0, 0);
     foot->setSpacing(6);
     backend_ = new QComboBox;
     backend_->addItem(QString::fromUtf8("转发热键 · 0 模型"), "hotkey");
@@ -393,7 +453,12 @@ VoiceWindow::VoiceWindow(VoiceController *voice, ProfileStore *store,
     foot->addWidget(chatMode);
     foot->addWidget(tts);
     foot->addWidget(settings);
-    body->addLayout(foot);
+    // 嵌入态：引擎/模型设置语音卡上已有，对话/语音反馈桌宠右键有，
+    // 这行藏掉省高度，也避免 286 宽里四个控件挤到截断。
+    if (embedded_) {
+        footW->hide();
+    }
+    body->addWidget(footW);
 
     root->addLayout(body, 1);
 
@@ -666,8 +731,28 @@ void VoiceWindow::showEvent(QShowEvent *event) {
 }
 
 void VoiceWindow::closeEvent(QCloseEvent *event) {
+    if (embedded_) {
+        // 嵌入页没有「回托盘」语义：交回主窗切回遥控器卡。
+        event->ignore();
+        emit embedExitRequested();
+        return;
+    }
     // ✕ 的语义是回托盘，不是退出；真退出走托盘菜单。
     event->ignore();
     hide();
     emit panelHidden();
+}
+
+void VoiceWindow::submitTyped() {
+    if (typed_ == nullptr) {
+        return;
+    }
+    const QString text = typed_->text().trimmed();
+    if (text.isEmpty()) {
+        return;
+    }
+    typed_->clear();
+    transcript_->setText(text);
+    pushHistory(text, 0);
+    emit typedSubmitted(text);
 }

@@ -2,6 +2,7 @@
 
 #include <QComboBox>
 #include <QLabel>
+#include <QLineEdit>
 #include <QListWidget>
 #include <QPushButton>
 #include <QTimer>
@@ -20,13 +21,19 @@ class VoiceWindow final : public QWidget {
     Q_OBJECT
 
 public:
+    // embedded = 嵌进主窗左栏（无遥控器/手动切换时的「语音主界面」页）：
+    // 不再是顶层窗口，✕/切换按钮改发 embedExitRequested 交回主窗处理。
     explicit VoiceWindow(VoiceController *voice, ProfileStore *store,
-                         QWidget *parent = nullptr);
+                         QWidget *parent = nullptr, bool embedded = false);
 
     // 跟随引擎监听状态；没在监听时麦克风按钮给出提示而不是空转。
     void setListeningUi(bool listening);
 
 signals:
+    // 打字对话：与说话同路由（转写展示 + 桌宠派活/对话判断）。
+    void typedSubmitted(const QString &text);
+    // 嵌入页的「遥控器」/✕：主窗把左栏切回遥控器卡。
+    void embedExitRequested();
     // 用户点了「完整界面」：主窗负责把自己 wake 回来。
     void fullUiRequested();
     // 面板被收起（✕）：主窗负责把桌宠叫出来。
@@ -53,6 +60,7 @@ private:
     void refreshHint();
     void refreshStatusDot();
     void refreshAgentTarget();
+    void submitTyped();
 
     VoiceController *voice_ = nullptr;
     ProfileStore *store_ = nullptr;
@@ -67,10 +75,12 @@ private:
     QComboBox *backend_ = nullptr;
     QComboBox *agentTarget_ = nullptr;
     QComboBox *dispatchMode_ = nullptr;
+    QLineEdit *typed_ = nullptr;
     QPushButton *readLast_ = nullptr;
     QTimer *levelTimer_ = nullptr;
     QString lastText_;
 
     bool listening_ = false;
     bool recording_ = false;
+    bool embedded_ = false;
 };

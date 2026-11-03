@@ -23,6 +23,7 @@ class QLabel;
 class QListWidget;
 class QPushButton;
 class QScrollArea;
+class QStackedWidget;
 class QSystemTrayIcon;
 class QTabWidget;
 class QTableWidget;
@@ -64,6 +65,8 @@ private:
     QWidget *buildHeader();
     QWidget *buildRemoteCard();
     QWidget *buildVoiceCard();
+    // 左栏下块切换：遥控器卡 ↔ 嵌入语音主界面；选择持久化 left_panel_voice。
+    void setLeftPanel(bool voicePage);
     QWidget *buildWorkPage();
     QWidget *buildLogPage();
     QWidget *buildSystemPage();
@@ -213,6 +216,8 @@ private:
     GuideDialog *guide_ = nullptr;
     AgentBridgeDialog *agentDialog_ = nullptr;
     VoiceWindow *voiceWindow_ = nullptr;
+    VoiceWindow *embeddedVoice_ = nullptr;
+    QStackedWidget *leftStack_ = nullptr;
     VoicePet *voicePet_ = nullptr;
     QLabel *dropHint_ = nullptr;
     QAction *showAction_ = nullptr;

@@ -616,6 +616,15 @@ bool VoiceController::sendHotkey(const QStringList &mods, int vk) {
     return injector_.sendHotkey(mods, vk);
 }
 
+void VoiceController::submitTyped(const QString &text) {
+    const QString trimmed = text.trimmed();
+    if (trimmed.isEmpty()) {
+        return;
+    }
+    emit transcribed(trimmed, 0);
+    emit chatRequested(trimmed);
+}
+
 void VoiceController::setState(State state, const QString &detail) {
     state_ = state;
     const QString name = state == State::Recording

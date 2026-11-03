@@ -5,7 +5,9 @@ set "NSIS=C:\Program Files (x86)\NSIS\makensis.exe"
 
 rem One-shot packaging: build + windeployqt + NSIS installer.
 rem Output: dist\AgentRMC-Setup.exe
-rem Optional arg "lean" skips local speech models (same as build.bat).
+rem Optional arg "lean" DISABLES the sherpa-onnx local ASR backend at compile
+rem time (build.bat sets AGENTRMC_ENABLE_SHERPA=OFF); models are never packaged
+rem either way. Local speech needs a build WITHOUT lean (see AGENTS.md).
 
 if not exist "%NSIS%" (
     echo [!] NSIS not found: "%NSIS%"

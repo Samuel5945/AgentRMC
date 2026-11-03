@@ -22,7 +22,12 @@
   PowerShell 里 `Start-Process 'D:\apps\AgentRMC\AgentRMCNative.exe'`。
 - curl 验证要带 `--noproxy '*'`：本机开着代理，不带的话 127.0.0.1 也会被拦成
   `upstream connect failed`，看起来像应用没起来。
-- 可带参数 `lean` 跳过本地语音模型（同 build.bat）。
+- 可带参数 `lean`，但**它的真实语义是关闭 sherpa-onnx 编译**（build.bat 把
+  `AGENTRMC_ENABLE_SHERPA` 设 OFF）：装出来的包本地转写不可用，语音页报
+  「当前构建未包含 sherpa-onnx 运行库」。模型本就不随包（安装目录 models/
+  由下载脚本/用户自备），所以「lean 只跳模型」的说法是错的（2026-11-03 踩坑：
+  连续 lean 出包把用户本地语音弄坏）。**本机交付一律不带 lean**；lean 只用于
+  明确不需要本地语音的临时构建。
 - 打包链路依赖：VS 自带 CMake、Qt 6.8.3（`native\.qt\`）、
   NSIS（`C:\Program Files (x86)\NSIS\makensis.exe`）。
 - 临时验证用的 exe 不要留在 `native\build\Release`：installer.nsi 只按名字

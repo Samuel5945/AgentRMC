@@ -69,23 +69,27 @@ protected:
         // 几何随控件尺寸缩放（嵌入 64 / 独立 124）：写死 124 的几何在小尺寸
         // 上会把内盘裁成方块（2026-11-03 真机）。
         const double side = qMin(area.width(), area.height());
-        const double k = side / 124.0;
-
-        // 外环：录音时随电平加粗，给出「听到你了」的反馈。
+        // 环宽随尺寸缩放；内盘贴环内缘，不留背景色缝——留缝会看起来是
+        // 两个分离的圆而不是一个按钮（2026-11-03 用户反馈）。
+        const double ringW =
+            qMax(2.0, side * (recording_ ? 0.024 + level_ * 0.04 : 0.032));
         QPen ring(recording_
                       ? QColor(0x3f, 0xb9, 0x50)
                       : paletteColor(QStringLiteral("accent"),
                                      QColor(79, 140, 255)));
-        ring.setWidth(qMax(2, int((recording_ ? 3 + level_ * 5 : 4) * k)));
+        ring.setWidthF(ringW);
         painter.setPen(ring);
         painter.setBrush(Qt::NoBrush);
-        const double radius = side / 2.0 - ring.width();
+        const double radius = side / 2.0 - ringW / 2.0;
         painter.drawEllipse(center, radius, radius);
 
         painter.setPen(Qt::NoPen);
         painter.setBrush(paletteColor(QStringLiteral("card.bg"),
                                       QColor(0x12, 0x17, 0x22)));
-        painter.drawEllipse(center, 44 * k, 44 * k);
+        const double disc = radius - ringW / 2.0;
+        painter.drawEllipse(center, disc, disc);
+        // glyph 随内盘缩放，保持与盘面的比例不变。
+        const double k = disc / 44.0;
 
         if (recording_) {
             painter.setBrush(QColor(0xf8, 0x51, 0x49));
@@ -273,8 +277,9 @@ VoiceWindow::VoiceWindow(VoiceController *voice, ProfileStore *store,
         hintLabel_->hide();
     }
     micText->addWidget(hintLabel_);
-    micText->addStretch(1);
     micRow->addLayout(micText, 1);
+    // 文本块与麦克风垂直居中：顶对齐会在右侧留一大块空，失衡。
+    micRow->setAlignment(micText, Qt::AlignVCenter);
     body->addLayout(micRow);
 
     // 对话块：最新转写 + 历史。整面板不滚动，只有这一块内部滚（滚轮）。

@@ -87,7 +87,7 @@ int main() {
         check(options.senseVoiceDir.endsWith("models/sensevoice"),
               "default sensevoice dir");
         check(voiceComboText(options.hotkeyMods, options.hotkeyVk) ==
-                  "CTRL+SHIFT+V",
+                  "Ctrl+Shift+V",
               "combo text");
         // 无遥控器的全局键盘热键：默认开、Ctrl+Alt+V，可关可换。
         check(options.kbHotkeyEnabled, "kb hotkey default on");

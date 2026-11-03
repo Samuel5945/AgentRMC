@@ -138,7 +138,9 @@ QString voiceProfileLabel(const QString &profileName) {
 QString voiceComboText(const QStringList &mods, int vk) {
     QStringList parts;
     for (const QString &mod : mods) {
-        parts.append(mod.toUpper());
+        // 标题 case（Ctrl/Alt/Shift/Win）：与引导/文档写法一致，
+        // 全大写（CTRL+ALT+V）不符合键位标注规范（2026-11-03）。
+        parts.append(mod.left(1).toUpper() + mod.mid(1));
     }
     if (vk >= 0x30 && vk <= 0x5A) {
         parts.append(QChar(vk));

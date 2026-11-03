@@ -33,6 +33,7 @@
 #include <QStringList>
 #include <QRegularExpression>
 #include <QTimer>
+#include <QThread>
 #include <QVBoxLayout>
 #include <QVector>
 
@@ -767,8 +768,58 @@ void VoicePet::handOffNewTask(const QString &text, const QString &exe,
                        5200, exe);
             return;
         }
-        handOffPaste(text, exe, shortName);
+        handOffVerifiedPaste(text, exe, shortName);
     });
+}
+
+void VoicePet::handOffVerifiedPaste(const QString &text, const QString &exe,
+                                    const QString &shortName) {
+    // WorkBuddy 系：协议唤醒/新建任务导航后视图可能还在切换，paste+Enter 会被
+    // 整段吞掉（2026-11-03 真机：最小化唤醒轮字丢、工单空挂；主窗态同 timing
+    // 却成功）。改两段读回：先粘不带 Enter，证明字进了输入框；再 Enter，证明
+    // 输入框不再含这句话且它出现在消息树里。任一段证明不了就重试一轮，仍不行
+    // 回落剪贴板——宁可喊人手动发，不报假成功。
+    constexpr int kVkReturn = 0x0D;  // 不引 windows.h，值就是 VK_RETURN
+    for (int round = 0; round < 2; ++round) {
+        if (voice_ == nullptr || !voice_->injectText(text, false)) {
+            break;
+        }
+        bool landed = false;
+        for (int i = 0; i < 9 && !landed; ++i) {
+            QThread::msleep(100);
+            landed = HostNewTask::composerValue(exe).contains(text);
+        }
+        if (!landed) {
+            continue;  // 字被导航抹掉：下一轮重粘
+        }
+        if (!voice_->sendHotkey(QStringList(), kVkReturn)) {
+            break;
+        }
+        for (int i = 0; i < 12; ++i) {
+            QThread::msleep(100);
+            if (!HostNewTask::composerValue(exe).contains(text) &&
+                HostNewTask::treeHasText(exe, text)) {
+                handOffDelivered(text, exe, shortName);
+                return;
+            }
+        }
+        // Enter 被吞或粘后又被抹：再来一轮（最多两轮）
+    }
+    QApplication::clipboard()->setText(text);
+    bubbleOnly(QString::fromUtf8("%1 没证明发送成功，已复制，切过去手动发")
+                   .arg(shortName),
+               5200, exe);
+}
+
+void VoicePet::handOffDelivered(const QString &text, const QString &exe,
+                                const QString &shortName) {
+    bubbleOnly(QString::fromUtf8("已交给 %1").arg(shortName), 4200, exe);
+    // 记下这次派活目标：下次没有前台/通知线索时优先还给它，而不是
+    // 按白名单顺序固定偏向某个宿主。
+    if (store_ != nullptr) {
+        store_->setUiString(QStringLiteral("agent_last_used"), exe);
+    }
+    emit workHandedOff(exe, text);
 }
 
 void VoicePet::handOffPaste(const QString &text, const QString &exe,
@@ -787,13 +838,7 @@ void VoicePet::handOffPaste(const QString &text, const QString &exe,
         bubbleOnly(QString::fromUtf8("没贴上，已复制，手动发一下"), 4200, exe);
         return;
     }
-    bubbleOnly(QString::fromUtf8("已交给 %1").arg(shortName), 4200, exe);
-    // 记下这次派活目标：下次没有前台/通知线索时优先还给它，而不是
-    // 按白名单顺序固定偏向某个宿主。
-    if (store_ != nullptr) {
-        store_->setUiString(QStringLiteral("agent_last_used"), exe);
-    }
-    emit workHandedOff(exe, text);
+    handOffDelivered(text, exe, shortName);
 }
 
 void VoicePet::handleUtterance(const QString &text) {

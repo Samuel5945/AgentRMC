@@ -35,7 +35,10 @@ cond = ui.CreatePropertyCondition(30005, MARKER)
 el = root.FindFirst(4, cond)
 print("MARKER_IN_TREE=%s" % (el is not None))
 if el is not None:
-    print("MARKER_CTL=%s name=%r" % (el.CurrentControlType, el.CurrentName))
+    try:
+        print("MARKER_CTL=%s name=%r" % (el.CurrentControlType, el.CurrentName))
+    except Exception as e:
+        print("MARKER_CTL_READ_ERR=%s (hit itself already proven)" % e)
 # composer value via focused element if it is the editor
 f = ui.GetFocusedElement()
 try:

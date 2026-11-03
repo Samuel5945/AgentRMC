@@ -144,9 +144,16 @@ private:
                                bool hasFocus, const QStringList &newTaskNames,
                                int attempts);
     // 没有聚焦键的宿主：UIA 把焦点交给「新建任务」→ 回车 → 验焦点落进输入框
-    // → 粘贴。任一环节不满足就不粘那一步（见 .cpp 里的两条兜底）。
+    // → 验证粘贴。任一环节不满足就不粘那一步（见 .cpp 里的兜底）。
     void handOffNewTask(const QString &text, const QString &exe,
                         const QString &shortName, const QStringList &names);
+    // 两段读回粘贴：粘不带 Enter 读回证明字进输入框 → Enter 读回证明真发送；
+    // 证明不了重试一轮再回落剪贴板。WorkBuddy 系唤醒后视图切换会吞键的对策。
+    void handOffVerifiedPaste(const QString &text, const QString &exe,
+                              const QString &shortName);
+    // 交付收尾：气泡 + 记 last_used + 落 working 工单（粘贴路与验证路共用）。
+    void handOffDelivered(const QString &text, const QString &exe,
+                          const QString &shortName);
     // 前台与输入框都就绪后的最后一粘：再验一次前台，注入失败诚实回落剪贴板。
     void handOffPaste(const QString &text, const QString &exe,
                       const QString &shortName);

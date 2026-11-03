@@ -298,4 +298,87 @@ bool focusIsEditable(const QString &exe) {
     return quint32(focusedPid) == windowPid && focusedType == UIA_EditControlTypeId;
 }
 
+QString composerValue(const QString &exe) {
+    HWND hwnd = static_cast<HWND>(AgentWindow::mainWindow(exe));
+    if (hwnd == nullptr) {
+        return QString();
+    }
+    IUIAutomation *ui = automation();
+    if (ui == nullptr) {
+        return QString();
+    }
+    IUIAutomationElement *root = nullptr;
+    if (FAILED(ui->ElementFromHandle(hwnd, &root)) || root == nullptr) {
+        return QString();
+    }
+    IUIAutomationCondition *cond = nullptr;
+    QString out;
+    VARIANT typeVar{};
+    VariantInit(&typeVar);
+    typeVar.vt = VT_I4;
+    typeVar.lVal = UIA_EditControlTypeId;
+    if (SUCCEEDED(ui->CreatePropertyCondition(UIA_ControlTypePropertyId,
+                                              typeVar, &cond)) &&
+        cond != nullptr) {
+        IUIAutomationElement *el = nullptr;
+        if (SUCCEEDED(root->FindFirst(TreeScope_Descendants, cond, &el)) &&
+            el != nullptr) {
+            IUIAutomationValuePattern *vp = nullptr;
+            if (SUCCEEDED(el->GetCurrentPatternAs(UIA_ValuePatternId,
+                                                  IID_PPV_ARGS(&vp))) &&
+                vp != nullptr) {
+                BSTR raw = nullptr;
+                if (SUCCEEDED(vp->get_CurrentValue(&raw)) && raw != nullptr) {
+                    out = QString::fromWCharArray(raw);
+                    SysFreeString(raw);
+                }
+                vp->Release();
+            }
+            el->Release();
+        }
+        cond->Release();
+    }
+    root->Release();
+    return out;
+}
+
+bool treeHasText(const QString &exe, const QString &text) {
+    if (text.isEmpty()) {
+        return false;
+    }
+    HWND hwnd = static_cast<HWND>(AgentWindow::mainWindow(exe));
+    if (hwnd == nullptr) {
+        return false;
+    }
+    IUIAutomation *ui = automation();
+    if (ui == nullptr) {
+        return false;
+    }
+    IUIAutomationElement *root = nullptr;
+    if (FAILED(ui->ElementFromHandle(hwnd, &root)) || root == nullptr) {
+        return false;
+    }
+    IUIAutomationCondition *cond = nullptr;
+    bool hit = false;
+    const std::wstring wide = text.toStdWString();
+    VARIANT nameVar{};
+    VariantInit(&nameVar);
+    nameVar.vt = VT_BSTR;
+    nameVar.bstrVal = SysAllocString(wide.c_str());
+    const HRESULT condHr = ui->CreatePropertyCondition(UIA_NamePropertyId,
+                                                       nameVar, &cond);
+    VariantClear(&nameVar);
+    if (SUCCEEDED(condHr) && cond != nullptr) {
+        IUIAutomationElement *el = nullptr;
+        hit = SUCCEEDED(root->FindFirst(TreeScope_Descendants, cond, &el)) &&
+              el != nullptr;
+        if (el != nullptr) {
+            el->Release();
+        }
+        cond->Release();
+    }
+    root->Release();
+    return hit;
+}
+
 }  // namespace HostNewTask

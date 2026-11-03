@@ -90,9 +90,21 @@ int main() {
     check(AgentWindow::mainWindow(QString()) == nullptr,
           "mainWindow null for empty exe");
 
+    // 7) 读回函数在找不到宿主时给安全空读数（验证粘贴靠它判假成功）
+    check(HostNewTask::composerValue(QStringLiteral("AgentRMCNoSuchHost.exe"))
+              .isEmpty(),
+          "composerValue empty without the host window");
+    check(HostNewTask::composerValue(QString()).isEmpty(),
+          "composerValue empty for empty exe");
+    check(!HostNewTask::treeHasText(QStringLiteral("AgentRMCNoSuchHost.exe"),
+                                   QStringLiteral("anything")),
+          "treeHasText false without the host window");
+    check(!HostNewTask::treeHasText(QStringLiteral("WorkBuddy.exe"), QString()),
+          "treeHasText false for empty needle");
+
     if (failures == 0) {
         std::puts("PASS native host new-task: routing / ctrl+n exclusion / "
-                  "failure readings");
+                  "failure readings / readback safe defaults");
         return 0;
     }
     std::fprintf(stderr, "%d failure(s)\n", failures);

@@ -34,4 +34,12 @@ Attempt focusControl(const QString &exe, const QStringList &names,
 // 必须按进程限定——焦点还留在自己 App 里也算「可编辑」的话就是假成功。
 bool focusIsEditable(const QString &exe);
 
+// 输入框当前文本（第一个 Edit 的 Value pattern）。读不到 = 空串。
+// 派活「粘贴后读回」用：字真进了输入框才算粘贴成功，SendInput 返回 1 不算。
+QString composerValue(const QString &exe);
+
+// 消息树里有没有名字恰为 text 的节点（已发送气泡/会话标题）。
+// 与 composerValue 合起来证明「真发送」：输入框不再含这句话且树里出现了它。
+bool treeHasText(const QString &exe, const QString &text);
+
 }  // namespace HostNewTask

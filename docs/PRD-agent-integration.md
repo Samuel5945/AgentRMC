@@ -449,6 +449,18 @@ Agent 宿主
 | DSH 插件测试 | `node plugins\deepseek-harness\test\plugin.test.js` **19/19 PASS** | 改 DSH 必跑（AGENTS.md 约定） |
 | 仓库未跟踪项 | `_video_agentrmc_039/`（宣传视频工程）、`analysis`（BGM 分析 JSON） | 非源码；前者应进 `.git/info/exclude` |
 
+### 2.16 P1 落地后的读数（2026-11-03，版本仍 0.3.9）
+
+| 读数 | 值 | 说明 |
+|---|---|---|
+| 提交 | FR-04 `b1d1112` / FR-05 `90da209` / FR-06 `c023fae` | 均不含升版 |
+| `dist\AgentRMC-Setup.exe` | 20,155,416 B → FR-06 后再出包 | `package.bat` + 静默装机 + `/state` 验活 |
+| `--match` 探针 | `打开workbuddyai`→AI、`打开 workbuddy`→旧版、`WOKBER`→旧版救回、`打开AI`→Illustrator | FR-05 全部命中 |
+| `GET /state` → `agents` | 托盘态 WorkBuddy AI `{process:true, window:false}` | FR-06 分层读数 |
+| `GET /workers` | WorkBuddy AI 在表内（`window:false`），ZCode / Qoder CN / OpenSquilla 同表 | 托盘宿主不再从 Worker 表消失 |
+| 幽灵 raise 冒泡 | `raise=GhostApp.exe` stop 通知 204，应用无恙 | FR-02 最后一项验收 |
+| native 测试 | 11 个目标全绿 | App/Store/Theme/Plugin/WorkItem/ChatText/Router/Takeover/Audio/Voice/Bridge |
+
 ---
 
 ## 3. 用户与场景
@@ -539,7 +551,10 @@ Agent 宿主
   （实测：`raise=WorkBuddy.exe` → 前台 WorkBuddy；`raise=WorkBuddyAI.exe` → 前台 WorkBuddy AI）
 - [x] 从旧版触发 stop，气泡点击后拉起旧版，不拉起 AI。
   （实测：stop 气泡点击后前台从 WorkBuddy AI 切到 WorkBuddy）
-- [ ] 宿主完全退出后点击气泡，无错误弹窗、无其它 app 被拉起。
+- [x] 宿主完全退出后点击气泡，无错误弹窗、无其它 app 被拉起。
+  （气泡点击的后半段就是 `AgentWindow::raise`：目标进程不存在时 `windowFor`
+  返回空直接静默 return，无弹窗路径；实测幽灵 `raise=GhostApp.exe` 的 stop
+  通知 204 冒泡、应用无恙。FR-06 后语音侧同路径再兜一层前台校验。）
 
 #### FR-03 插件版本一致性与升级
 
@@ -585,7 +600,8 @@ Agent 宿主
 
 验收标准（只列未达标部分）：
 
-- [ ] 兜底不再固定选中 AI：两个都在跑且无前台 / 无记忆时，按最近使用或明确提示用户选。
+- [x] 兜底不再固定选中 AI：派活成功记 `ui.agent_last_used`，兜底先试它
+  （还活着就接着用），真没历史才落白名单顺序。（`VoicePet::onlineAgentExe` 第 4 级）
 - [x] 菜单中两个 WorkBuddy 都显示为独立选项，且是产品名（`WorkBuddy` / `WorkBuddy AI`）而非裸 exe——已由语音面板「交给」下拉的 `AgentWindow::displayName()` 落地（§0.2）。
 
 #### FR-05 语音启动别名
@@ -598,8 +614,15 @@ Agent 宿主
 
 验收标准：
 
-- [ ] 双装时「打开 WorkBuddy」和「打开 WorkBuddy AI」分别打开对应版本。
-- [ ] 单装时两个叫法都能打开已安装版本。
+- [x] 双装时「打开 WorkBuddy」和「打开 WorkBuddy AI」分别打开对应版本。
+  （AppTest 探针实测：`打开workbuddyai` / `打开ai工作伙伴` → workbuddyai，
+  `打开 workbuddy` → workbuddy；`打开AI` 仍是 Illustrator）
+- [x] 单装时两个叫法都能打开已安装版本。（未加限定的 `workbuddy` 由
+  resolve 的开始菜单前缀兜底——`workbuddyai.lnk` 以 `workbuddy` 为前缀；
+  AI 条目排在旧版前，前缀容错不被旧版抢走。「应用」页两个独立条目
+  各自显示装没装。）
+- [x] WorkBuddy AI 的三种叫法不进模糊档同分竞争（声母骨架与旧版全同，
+  双条目参赛会吃光 margin，「WOKBER」救回不回归）。
 
 #### FR-06 宿主在线判定分层
 
@@ -610,8 +633,13 @@ Agent 宿主
 
 验收标准：
 
-- [ ] WorkBuddy AI 在托盘运行时，右键菜单仍显示为「运行中（窗口隐藏）」而非完全消失。
-- [ ] 语音分流不会把内容送进隐藏窗口导致丢失。
+- [x] WorkBuddy AI 在托盘运行时，「交给」下拉 / Worker 表 / 系统页仍显示它，
+  标注「窗口隐藏」而非消失。（真机实测：托盘态 `/state.agents` =
+  `{process:true, window:false}`，`/workers` 含 `window:false` 行）
+- [x] 语音分流不会把内容送进隐藏窗口导致丢失。（`handOffToAgent` raise 后
+  注入前校验前台确实切到目标宿主，没抢到就复制 + 气泡提示，不硬注入）
+- [x] `/state` 新增 `agents` 字段：逐家报 `process` / `window`，排查
+  「为什么没送过去」不用再猜。
 
 ### 5.3 P2（可选）
 
@@ -681,9 +709,11 @@ Agent 宿主
 交给 Agent 的动作：
 
 1. 目标窗口已在前台：立即粘贴 + 回车。
-2. 否则：raise → 等待焦点切换 → 粘贴 + 回车。
-3. 注入失败：复制原文到剪贴板，气泡「没贴上，已复制，手动发一下」。
-4. 成功：气泡「已交给 <宿主名>」。
+2. 否则：raise → 等待焦点切换 → **校验前台确实切到了目标宿主**（没切到
+   说明目标收在托盘 / 已退出，硬注入会打进别的窗口）→ 粘贴 + 回车。
+3. 注入失败或前台没切到：复制原文到剪贴板，气泡「没抢到前台，已复制，
+   切过去粘贴」/「没贴上，已复制，手动发一下」。
+4. 成功：气泡「已交给 <宿主名>」，并记 `ui.agent_last_used` 供下次兜底。
 
 ### 6.3 目标选择菜单
 
@@ -697,8 +727,9 @@ Agent 宿主
 
 | 键 | 含义 | 写入方 |
 |---|---|---|
-| `ui.agent_target` | 用户显式指定的宿主进程名；空 = 自动 | 右键菜单 |
+| `ui.agent_target` | 用户显式指定的宿主进程名；空 = 自动 | 语音面板「交给」下拉 |
 | `ui.agent_exe` | 最近一次发通知的宿主进程名 | `/notify` 处理 |
+| `ui.agent_last_used` | 最近一次语音派活成功的宿主进程名（兜底第 4 级优先它） | `VoicePet::handOffToAgent` |
 
 ---
 
@@ -766,6 +797,7 @@ Agent 宿主
 | `ui.pet_chat` | `false` | 对话模式 |
 | `ui.agent_target` | 空 | 显式指定的宿主进程名 |
 | `ui.agent_exe` | 空 | 最近通知宿主进程名（自动写入） |
+| `ui.agent_last_used` | 空 | 最近语音派活成功的宿主进程名（自动写入，兜底优先） |
 | `voice.llm_api.*` | 空 | 自带 LLM 配置 |
 
 ### 10.2 插件环境
@@ -821,6 +853,7 @@ resolveHost(argv, scriptDir, env):
 | Plugin 0.3.6（已出包） | 根 hooks / Qoder hooks 注册 `UserPromptSubmit`；新对话自动归档旧 review | `dist\agentrmc-bridge-0.3.6.zip`（24,182 B）；两套 WorkBuddy 缓存已更新到 0.3.6 |
 | Plugin 0.3.9（同号同步，已出包） | 版本规则改为与 Native 同号；`pet_work_update`（blocked/ready 出声、progress 静默）、「等你选方案」迟到去重、skill「提问前先喊」 | `dist\agentrmc-bridge-0.3.9.zip` + qoder 变体（29,989 B）；五家宿主 installed 均 0.3.9 |
 | Native 0.3.9 追加（DSH 接入，版本不变） | `plugins/deepseek-harness`（approval/asked 持久事件 + pet_* 原生工具）、`plugins/opensquilla-bridge`、`knownExes`/`displayName` 加 DSH 与 OpenSquilla、系统页对账 DSH bundle、「接入 Agent」一键弹窗、引导重排 | 提交 `dadc017`（README 重定位 `b7305d1`）；`dist\AgentRMC-Setup.exe`（20,135,684 B，11-02 19:33）；DSH 测试 19/19 |
+| Native 0.3.9 追加（P1 收尾，版本不变） | FR-04 兜底最近使用优先（`ui.agent_last_used`）、FR-05 WorkBuddy AI 启动别名 + 双版本区分、FR-06 在线判定分层（`processAlive` / `/state.agents` / `/workers.window` / 不送隐藏窗口） | 提交 `b1d1112` `90da209` `c023fae`；出包 + 静默装机验活（见 §2.16） |
 
 ### 待排期
 
@@ -829,7 +862,7 @@ resolveHost(argv, scriptDir, env):
 | GitHub release / tag | 补 `v0.3.9`：tag + release + Setup / 插件 zip 附件（随创建命令一起传，先建后补会 422） | 已排入本轮；对外仓库 Samuel5945/AgentRMC |
 | 网盘包体对账 | **暂缓**（用户 11-02 决定）；恢复发布时按「文件名 + 体积 + 上传时间」做账 | — |
 | v0.2.0 补发 | **暂缓**（用户 11-02 决定），GitHub 从 0.3.9 起算 | — |
-| Native 后续 | FR-04 兜底顺序（最近使用优先）、FR-05 语音启动别名、FR-06 在线判定分层 | 攒批出包；升版等用户明确说「升版」 |
+| 下一批次 | P1（FR-04 / FR-05 / FR-06）已在 0.3.9 内落地（§2.16）；P2 可选项（模式开关、多窗口标题匹配、粘贴延迟自适应、免打扰时段）攒批 | 升版等用户明确说「升版」 |
 
 发布检查清单：
 
@@ -859,7 +892,7 @@ resolveHost(argv, scriptDir, env):
 | Work Item | `AgentRMCWorkItemTest`：建单、同 event id 去重、不同 tool id 新建、stop 结束 needs-me、ack、重载、清空、无 event id 8 秒去重；voice → permission → stop 同卡、progress 更新 working |
 | Worker | `GET /workers` 实测：alive / foreground / open_items / needs_me / review / working |
 | 对话文本 | `AgentRMCChatTextTest`：XML/JSON tool-call 检测、正常对话不误判、markdown/emoji 清理 |
-| Native | `knownExes()` 包含两个 WorkBuddy；`AgentWindow` 目标选择顺序（可注入窗口枚举）——待 P1 |
+| Native | `knownExes()` 包含两个 WorkBuddy / DSH / OpenSquilla；`AppTest` 覆盖 workbuddyai 三种叫法、「打开AI」不串 Illustrator、WOKBER 模糊救回；`processAlive` 分层（真机 /state.agents 读数见 §2.16） |
 | 版本一致性 | `check-version.ps1`：CMake / NSIS / exe FileVersion / ProductVersion 四处相等（已实现并接入 package.bat） |
 | 回归 | `host.test.js` 32/32 PASS；DSH `plugin.test.js` 19/19；native 11 个测试目标全绿 |
 
@@ -899,7 +932,7 @@ resolveHost(argv, scriptDir, env):
 
 ### 13.2 开放问题（需要产品决策）
 
-1. **默认宿主**：双装且无前台 / 无通知记忆时，默认 AI 还是旧版？当前代码默认 AI；是否改为「最近使用」？
+1. **默认宿主**：双装且无前台 / 无通知记忆时，默认 AI 还是旧版？当前代码默认 AI；是否改为「最近使用」？**→ 已落地（2026-11-03，FR-04）：兜底优先 `ui.agent_last_used`，白名单顺序只是最后一层。**
 2. **语音启动别名**：无修饰的「WorkBuddy」应该打开旧版（向后兼容）还是 AI（当前主力）？
 3. **旧版支持级别**：WorkBuddy 5.9.3 是「正式支持」还是「尽力兼容」？
 4. **托盘恢复**：宿主隐藏到托盘时，是否允许通过进程 / 托盘图标强制唤出？还是只提示用户手动打开？

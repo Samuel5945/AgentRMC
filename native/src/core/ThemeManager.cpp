@@ -433,6 +433,7 @@ Theme ThemeManager::parseThemeBody(const ThemeInfo &info) {
     const QString decor = absolutePath(
         info.dir, bubbleObj.value("decor").toString());
     theme.bubbleDecor = QFile::exists(decor) ? decor : QString();
+    theme.bubbleTail = bubbleObj.value(QStringLiteral("tail")).toString();
     const QJsonObject voiceObj = root.value("voice").toObject();
     theme.voiceName = voiceObj.value("name").toString().trimmed();
     theme.voiceStyle = voiceObj.value("style").toString().trimmed();

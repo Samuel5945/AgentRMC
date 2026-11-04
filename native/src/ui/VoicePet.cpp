@@ -19,6 +19,7 @@
 #include <QContextMenuEvent>
 #include <QCursor>
 #include <QEnterEvent>
+#include <QFontMetrics>
 #include <QGuiApplication>
 #include <QHBoxLayout>
 #include <QHideEvent>
@@ -49,11 +50,14 @@ constexpr int kPeek = 20;       // 贴边藏起来后露出的边条宽度
 constexpr int kSnapDist = 80;   // 拖到离屏幕边多近算贴边
 constexpr int kCardWidth = 244;
 constexpr int kBubbleWidth = 220;  // 说话气泡箱体固定宽
-constexpr int kTailSpace = 12;     // 气泡尾巴侧预留高度（鲸鱼尾画在这里面）
-constexpr qreal kDecorSize = 24.0;  // 装饰贴纸绘制边长（固定，不随箱体高度缩）
-constexpr int kDecorPadTop = 9;     // 有贴纸时箱体上方的预留（贴纸露头空间）
-constexpr int kDecorPadRight = 15;  // 有贴纸时箱体右侧的预留
-constexpr int kDecorInset = 3;      // 贴纸离窗角的内缩
+constexpr int kTailSpace = 12;     // 气泡尾巴侧预留高度（尾巴画在这里面）
+constexpr int kTextPadX = 12;      // 文字离箱体左右边的内边距
+constexpr int kTextPadY = 9;       // 文字离箱体上下边的内边距
+constexpr qreal kDecorSize = 34.0;  // 装饰贴纸绘制边长（固定，不随箱体高度缩）
+constexpr int kDecorPadLeft = 16;   // 有贴纸时箱体左侧的预留（贴纸坐箱左下角）
+constexpr int kDecorPadBottom = 22; // 有贴纸时箱体下方的预留（=贴纸边长-咬进深度）
+constexpr int kDecorInset = 8;      // 贴纸离窗左缘的内缩（重心压向箱角）
+constexpr int kDecorOverlap = 12;   // 贴纸顶边压进箱底的深度（文字下边距会让它，不碰字）
 // 对话模式的默认人设：回复要被念出来，所以要求口语化、短。
 constexpr const char *kDefaultChatSystem =
     "你是 AgentRMC 的语音桌宠，一个待在屏幕边上的小助手。用户在用语音和你聊天："
@@ -185,13 +189,23 @@ public:
 protected:
     void paintEvent(QPaintEvent *event) override {
         Q_UNUSED(event);
-        // 顶层透明窗口的 QSS 背景不可靠，照 Toast 的办法自己画。
+        // 顶层透明窗口的 QSS 背景不可靠，照 Toast/PetBubble 的办法自己画。
+        // 表面与说话气泡同组（bubble.bg→bubble.bg2 渐变）：浮窗和气泡一样漂在
+        // 任意桌面上，得用近不透明的鲸鱼渐变才读得清；面板那组 card.bg 在美术
+        // 主题下只有 ~22% 不透明（坐在固定星空底上才成立），浮窗用它会透成玻璃。
+        // 旧版 dialog.bg 不透明但无色族，美术主题下是死黑板。
         QPainter painter(this);
         painter.setRenderHint(QPainter::Antialiasing, true);
         const QRectF box = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
-        painter.setPen(QPen(ThemeManager::instance().color(QStringLiteral("w26")), 1.0));
-        painter.setBrush(ThemeManager::instance().color(QStringLiteral("dialog.bg")));
-        painter.drawRoundedRect(box, 12, 12);
+        const auto &tm = ThemeManager::instance();
+        const QColor bg = tm.color(QStringLiteral("bubble.bg"));
+        const QColor bg2 = tm.color(QStringLiteral("bubble.bg2"));
+        QLinearGradient gradient(box.topLeft(), box.bottomLeft());
+        gradient.setColorAt(0.0, bg);
+        gradient.setColorAt(1.0, bg2.isValid() ? bg2 : bg);
+        painter.setPen(QPen(tm.color(QStringLiteral("bubble.border")), 1.0));
+        painter.setBrush(gradient);
+        painter.drawRoundedRect(box, 16, 16);
     }
 
     void enterEvent(QEnterEvent *event) override {
@@ -231,24 +245,34 @@ public:
                        Qt::WindowStaysOnTopHint | Qt::NoDropShadowWindowHint);
         setAttribute(Qt::WA_TranslucentBackground);
         setAttribute(Qt::WA_ShowWithoutActivating);
-        setAlignment(Qt::AlignCenter);
-        setWordWrap(true);
         setFixedWidth(kBubbleWidth);
         hide();
     }
 
-    // 在 adjustSize() 之前设置：尾巴那侧留 margin，QLabel 的 sizeHint 会把
-    // margin 算进高度，文字仍垂直居中落在箱体里。主题带装饰贴纸时再给
-    // 右上角留一角（贴纸半悬在箱体外），并加宽窗口保持箱体宽不变。
+    // 在 setText() 之后、show() 之前调用。尺寸全部自己算：QLabel 挂上 QSS 后
+    // contentsMargins 不再参与 sizeHint 和文字布局（QSS box model 接管），
+    // 靠 adjustSize/margins 留边会被忽略——换行文字会溢出箱体。
+    // 窗口宽 = 箱体宽 + 左右文字边距 + 贴纸左侧预留；窗口高 = 换行文字高 +
+    // 上下文字边距 + 尾巴/贴纸预留（同侧时取大者，碗和尾巴一左一右不挤）。
+    // 文字由 paintEvent 画进箱体内部。
     void setTailDirection(Tail tail) {
         tail_ = tail;
         const bool decor =
             !ThemeManager::instance().current().bubbleDecor.isEmpty();
-        setFixedWidth(kBubbleWidth + (decor ? kDecorPadRight : 0));
-        setContentsMargins(0, (decor ? kDecorPadTop : 0) +
-                                   (tail == Tail::Up ? kTailSpace : 0),
-                           decor ? kDecorPadRight : 0,
-                           tail == Tail::Down ? kTailSpace : 0);
+        setFixedWidth(kBubbleWidth + kTextPadX * 2 +
+                      (decor ? kDecorPadLeft : 0));
+        ensurePolished();  // font() 要拿到 QSS 里的字号再量文字
+        const QFontMetrics fm(font());
+        const QRect textBounds = fm.boundingRect(
+            QRect(0, 0, kBubbleWidth, 100000),
+            Qt::AlignCenter | Qt::TextWordWrap, text());
+        const int top = kTextPadY + (tail == Tail::Up ? kTailSpace : 0);
+        // 碗咬进箱底比文字下边距深时，下边距让到碗顶，字不会压到碗上。
+        const int padBottom = decor ? qMax(kTextPadY, kDecorOverlap) : kTextPadY;
+        const int bottom =
+            padBottom + qMax(tail == Tail::Down ? kTailSpace : 0,
+                             decor ? kDecorPadBottom : 0);
+        setFixedHeight(textBounds.height() + top + bottom);
     }
 
     // 空 handler = 气泡只展示不响应（没 raise 目标时的默认状态）。
@@ -259,25 +283,24 @@ public:
     }
 
 protected:
-    void paintEvent(QPaintEvent *event) override {
+    void paintEvent(QPaintEvent *) override {
         QPainter painter(this);
         painter.setRenderHint(QPainter::Antialiasing, true);
         const ThemeManager &theme = ThemeManager::instance();
 
-        // 箱体 = 整个 rect 去掉贴纸预留角与尾巴侧 margin，与 contents rect
-        // （文字区）对齐；margin 与 setTailDirection 保持同一套条件。
+        // 箱体 = 整个 rect 去掉贴纸预留角（左下）与尾巴侧预留；条件与
+        // setTailDirection 同一套。文字内边距在箱体内部另收。
         const bool decor =
             !theme.current().bubbleDecor.isEmpty();
         QRectF box = QRectF(rect());
         if (decor) {
-            box.setTop(box.top() + kDecorPadTop);
-            box.setRight(box.right() - kDecorPadRight);
+            box.setLeft(box.left() + kDecorPadLeft);
         }
-        if (tail_ == Tail::Down) {
-            box.setBottom(box.bottom() - kTailSpace);
-        } else {
-            box.setTop(box.top() + kTailSpace);
-        }
+        const int topReserve = tail_ == Tail::Up ? kTailSpace : 0;
+        const int bottomReserve = qMax(tail_ == Tail::Down ? kTailSpace : 0,
+                                       decor ? kDecorPadBottom : 0);
+        box.setTop(box.top() + topReserve);
+        box.setBottom(box.bottom() - bottomReserve);
         box.adjust(0.5, 0.5, -0.5, -0.5);
 
         const QColor bg = theme.color(QStringLiteral("bubble.bg"));
@@ -287,17 +310,28 @@ protected:
             border = theme.color(QStringLiteral("bubble.accent"));
         }
 
+        // 箱体和尾巴并成一条路径再填色描边：接缝处不会留下一道横线，
+        // 渐变也自然延续到尾巴尖。
+        QPainterPath boxPath;
+        boxPath.addRoundedRect(box, 14, 14);
+        const QPainterPath shape = boxPath.united(tailPath(box));
+
         QLinearGradient gradient(box.topLeft(), box.bottomLeft());
         gradient.setColorAt(0.0, bg);
         gradient.setColorAt(1.0, bg2.isValid() ? bg2 : bg);
         painter.setPen(QPen(border, 1.0));
         painter.setBrush(gradient);
-        painter.drawRoundedRect(box, 14, 14);
+        painter.drawPath(shape);
 
-        drawTail(painter, box, border);
-        drawDecor(painter);
+        drawDecor(painter, box);
 
-        QLabel::paintEvent(event);
+        // 文字自己画进箱体内部（QLabel 自带布局不认 contentsMargins，见
+        // setTailDirection 注释）：textRect = 箱体四边各收 kTextPad。
+        const int padBottom = decor ? qMax(kTextPadY, kDecorOverlap) : kTextPadY;
+        const QRectF textRect =
+            box.adjusted(kTextPadX, kTextPadY, -kTextPadX, -padBottom);
+        painter.setPen(theme.color(QStringLiteral("text")));
+        painter.drawText(textRect, Qt::AlignCenter | Qt::TextWordWrap, text());
     }
 
     void mouseReleaseEvent(QMouseEvent *event) override {
@@ -310,43 +344,50 @@ protected:
     }
 
 private:
-    // 鲸鱼尾双鳍：从箱体边中央收窄再分叉成两瓣，指向桌宠方向。
-    void drawTail(QPainter &painter, const QRectF &box, const QColor &border) {
-        // 尾巴接在渐变的那一端：朝下接箱底（渐变第二停）、朝上接箱顶（第一停），
-        // 接缝两侧同色才看得出箱体和尾巴是一体的。
-        const QColor bg = theme().color(QStringLiteral("bubble.bg"));
-        const QColor bg2 = theme().color(QStringLiteral("bubble.bg2"));
-        const QColor fill =
-            tail_ == Tail::Down ? (bg2.isValid() ? bg2 : bg) : bg;
-        const qreal cx = box.center().x();
+    // 尾巴路径：与箱体 united 后一次描边。主题 bubble.tail == "whale" 画
+    // 鲸鱼双鳍（收窄再分叉两瓣），否则画普通对话气泡的圆尖尾。
+    QPainterPath tailPath(const QRectF &box) const {
+        // 尾巴统一靠右（箱体 75% 宽处）：和左下角的碗对角呼应，
+        // classic 与美术主题位置一致。
+        const qreal cx = box.left() + box.width() * 0.75;
         const qreal base = tail_ == Tail::Down ? box.bottom() : box.top();
         const int dir = tail_ == Tail::Down ? 1 : -1;
         const qreal tip = base + dir * (kTailSpace - 1.5);
 
         QPainterPath tail;
-        tail.moveTo(cx - 3.0, base);
-        tail.cubicTo(cx - 5.0, base + dir * 4.0,
-                     cx - 9.5, base + dir * 6.0,
-                     cx - 9.0, tip);
-        tail.cubicTo(cx - 6.0, base + dir * 6.5,
-                     cx - 4.0, base + dir * 5.0,
-                     cx, base + dir * 4.0);
-        tail.cubicTo(cx + 4.0, base + dir * 5.0,
-                     cx + 6.0, base + dir * 6.5,
-                     cx + 9.0, tip);
-        tail.cubicTo(cx + 9.5, base + dir * 6.0,
-                     cx + 5.0, base + dir * 4.0,
-                     cx + 3.0, base);
+        if (theme().current().bubbleTail == QStringLiteral("whale")) {
+            // 根部埋进箱体 1px，united 才能把接缝横线消掉。
+            tail.moveTo(cx - 3.0, base - dir * 1.0);
+            tail.cubicTo(cx - 5.0, base + dir * 4.0,
+                         cx - 9.5, base + dir * 6.0,
+                         cx - 9.0, tip);
+            tail.cubicTo(cx - 6.0, base + dir * 6.5,
+                         cx - 4.0, base + dir * 5.0,
+                         cx, base + dir * 4.0);
+            tail.cubicTo(cx + 4.0, base + dir * 5.0,
+                         cx + 6.0, base + dir * 6.5,
+                         cx + 9.0, tip);
+            tail.cubicTo(cx + 9.5, base + dir * 6.0,
+                         cx + 5.0, base + dir * 4.0,
+                         cx + 3.0, base - dir * 1.0);
+        } else {
+            // 经典尖尾：两侧弧线收到一个圆点，底边埋进箱体保证并集连通。
+            tail.moveTo(cx - 8.0, base - dir * 1.0);
+            tail.cubicTo(cx - 4.0, base + dir * 3.0,
+                         cx - 2.0, base + dir * 7.0,
+                         cx, tip);
+            tail.cubicTo(cx + 2.0, base + dir * 7.0,
+                         cx + 4.0, base + dir * 3.0,
+                         cx + 8.0, base - dir * 1.0);
+        }
         tail.closeSubpath();
-        painter.setPen(QPen(border, 1.0));
-        painter.setBrush(fill);
-        painter.drawPath(tail);
+        return tail;
     }
 
-    // 主题装饰贴纸：半透明小气泡素材固定 24px 贴窗右上角（右上角预留边距由
-    // setTailDirection/paintEvent 同步留出），约一半露在箱体外——像泡泡从
-    // 气泡角上冒出来。不透明度压到一半多点：箱体上可见、压到字也只是水印。
-    void drawDecor(QPainter &painter) {
+    // 主题装饰贴纸（鲸鱼娘 = 一碗大米饭）：固定 kDecorSize 见方、全不透明，
+    // 坐在箱体左下角——顶边压进箱底 kDecorOverlap，像把碗搁在气泡角上。
+    // 预留边距由 setTailDirection/paintEvent 同步留出，不遮文字。
+    void drawDecor(QPainter &painter, const QRectF &box) {
         const QString decor = ThemeManager::instance().current().bubbleDecor;
         if (decor.isEmpty()) {
             return;
@@ -360,12 +401,9 @@ private:
                                  kDecorSize / image.height());
         const qreal w = image.width() * scale;
         const qreal h = image.height() * scale;
-        painter.save();
-        painter.setOpacity(0.55);
         painter.drawImage(
-            QRectF(rect().right() - kDecorInset - w, kDecorInset, w, h),
+            QRectF(kDecorInset, box.bottom() + kDecorPadBottom - h, w, h),
             image);
-        painter.restore();
     }
 
     static ThemeManager &theme() { return ThemeManager::instance(); }
@@ -661,13 +699,12 @@ void VoicePet::bubbleOnly(const QString &text, int durationMs,
     }
     ensureBubble();
     bubble_->setText(text);
-    // 尾巴方向决定哪侧留 margin，必须在 adjustSize() 前设置：
+    // 尾巴方向决定哪侧留预留，setTailDirection 里按文字量好宽高：
     // 贴上边时气泡冒在球下面（尾朝上），其它情况冒在球上面（尾朝下）。
     if (auto *pet = static_cast<PetBubble *>(bubble_)) {
         pet->setTailDirection(dock_ == Dock::Top ? PetBubble::Tail::Up
                                                  : PetBubble::Tail::Down);
     }
-    bubble_->adjustSize();
     // 有 raise 目标才可点：点了收起气泡并把宿主窗口拉回前台。
     pendingRaise_ = raiseExe;
     if (auto *pet = static_cast<PetBubble *>(bubble_)) {

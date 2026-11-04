@@ -50,7 +50,8 @@ public:
         return !paletteLight.isEmpty() || !mainBackgroundLight.isEmpty() ||
                !panelBackgroundLight.isEmpty();
     }
-    QString bubbleDecor;               // 桌宠气泡装饰贴纸（半透明小气泡），空 = 没有
+    QString bubbleDecor;               // 桌宠气泡装饰贴纸（如大米饭），空 = 没有
+    QString bubbleTail;                // 尾巴造型："whale" = 鲸鱼双鳍，空 = 普通气泡尖尾
     qreal dim = 0.55;                  // 背景上的压暗遮罩，保文字可读
     qreal dimLight = 0.08;             // 浅色插画上的白纱（保文字可读），默认很淡
     QString voiceName;                 // 主题音色名（TTS 的 audio.voice 参数）；空 = Chloe

@@ -80,7 +80,7 @@ int main(int argc, char *argv[]) {
         },
         "backgrounds": {"main": "backgrounds/main.png", "dim": 0.7,
             "light": {"main": "backgrounds/main.light.png", "dim": 0.12}},
-        "bubble": {"decor": "bubble/decor.png"},
+        "bubble": {"decor": "bubble/decor.png", "tail": "whale"},
         "voice": {"name": "冰糖", "style": "软软糯糯的少女音"}
     })json");
     writeFile(themeDir + QStringLiteral("/theme.json"), manifest);
@@ -110,6 +110,8 @@ int main(int argc, char *argv[]) {
     // bubble.bg 留 classic 默认值。
     check(body.bubbleDecor.endsWith(QStringLiteral("bubble/decor.png")),
           "bubble.decor resolved to absolute path");
+    check(body.bubbleTail == QStringLiteral("whale"),
+          "bubble.tail parsed into bubbleTail");
     check(body.palette.value(QStringLiteral("bubble.bg2")) ==
               QStringLiteral("rgba(30, 44, 66, 246)"),
           "bubble.bg2 palette override applies");

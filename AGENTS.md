@@ -52,6 +52,23 @@
   半透明 rgba）；自绘或 @bg@ 兜底会在美术主题下变成死黑板。相邻元素垂直居中、
   环/盘不留背景缝、键位标注标题 case（Ctrl+Alt+V）。
 
+## 主题分发：安装包只带「经典 + 鲸鱼娘」，新主题走导入包
+
+（用户 2026-11-04 定）
+
+- 随安装包走的主题**只有两个**：`classic`（经典，代码内置调色板，不占松散目录）和
+  `themes/xiaoai-whale`（鲸鱼娘）。`build.bat` 只 robocopy `themes/`（`/E`，不镜像删除），
+  installer 把 `build/Release/themes` 整个铺进安装目录——所以**新主题别往 `themes/` 里放**。
+- 新主题一律出**导入包**：一个 zip，`theme.json`（清单+配色+人设+音色）放根目录或套一层
+  文件夹皆可（取最浅的那个），素材同目录带着；用户走「主题 → 导入主题包…」或即拖即用，
+  **同名主题 = 更新**。解压用的是 Win10 自带 `tar -xf`，所以只保证 zip。
+- 候选/未交付的主题放 `themes-candidate/`（不在打包范围），正好当导入包的原料目录。
+- 这条的直接原因是体积：鲸鱼娘 `backgrounds/main.png` 已经 3.3MB → **7.4MB**
+  （本轮用户明确**不压图**，安装包估算 38.7MB → 约 42MB）。素材随包线性涨，所以素材
+  增量以后走导入，不再进包。
+- 坑（改之前想清楚留谁）：卸载段有 `RMDir /r "$INSTDIR\themes"`，而
+  `ThemeManager::themesRoot()` = exe 旁 `themes/`——**用户自己导入的主题会被卸载一起删掉**。
+
 ## Native 测试
 
 - **跑 build.bat / package.bat 前先 `unset https_proxy http_proxy`**：Git Bash 里

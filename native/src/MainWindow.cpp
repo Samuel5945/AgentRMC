@@ -16,6 +16,7 @@
 #include "core/AgentBridge.h"
 #include "core/PluginUpgrade.h"
 #include "core/AgentWindow.h"
+#include "core/HostRuntime.h"
 #include "core/AppLauncher.h"
 #include "core/InputEngine.h"
 #include "core/ModelImport.h"
@@ -2079,6 +2080,7 @@ void MainWindow::watchdogTick() {
     importSpool();
     trackPluginTransitions();
     refreshHealth();
+    HostRuntime::refreshHint();
 }
 
 int MainWindow::spoolPendingCount() const {

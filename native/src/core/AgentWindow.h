@@ -26,6 +26,10 @@ bool alive(const QString &exe);
 // 用它；语音分流和 raise 仍必须 alive()（没窗口的话注入会打进别的窗口）。
 bool processAlive(const QString &exe);
 
+// 该映像名正在运行的进程的完整路径（第一个命中，取不到返回空）。宿主的安装
+// 位置只在进程快照里拿得到——进程名本身不说明它装在哪个盘。
+QString imagePath(const QString &exe);
+
 // 前台窗口的进程映像名（取不到返回空）。
 QString foregroundExe();
 

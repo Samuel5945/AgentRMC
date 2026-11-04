@@ -32,6 +32,8 @@ qt_add_executable(AgentRMCNative
     src/core/AgentWindow.h
     src/core/HostNewTask.cpp
     src/core/HostNewTask.h
+    src/core/HostRuntime.cpp
+    src/core/HostRuntime.h
     src/core/Profiles.cpp
     src/core/Profiles.h
     src/core/Presets.cpp

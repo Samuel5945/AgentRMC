@@ -174,6 +174,42 @@ bool processAlive(const QString &exe) {
     return found;
 }
 
+QString imagePath(const QString &exe) {
+    if (exe.isEmpty()) {
+        return QString();
+    }
+    const std::wstring image = exe.toStdWString();
+    HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snapshot == INVALID_HANDLE_VALUE) {
+        return QString();
+    }
+    PROCESSENTRY32W entry{};
+    entry.dwSize = sizeof(entry);
+    QString found;
+    if (Process32FirstW(snapshot, &entry)) {
+        do {
+            if (_wcsicmp(entry.szExeFile, image.c_str()) != 0) {
+                continue;
+            }
+            HANDLE proc =
+                OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, entry.th32ProcessID);
+            if (proc == nullptr) {
+                continue;
+            }
+            wchar_t path[MAX_PATH] = {};
+            DWORD size = MAX_PATH;
+            const BOOL ok = QueryFullProcessImageNameW(proc, 0, path, &size);
+            CloseHandle(proc);
+            if (ok) {
+                found = QString::fromWCharArray(path);
+                break;
+            }
+        } while (Process32NextW(snapshot, &entry));
+    }
+    CloseHandle(snapshot);
+    return found;
+}
+
 QString foregroundExe() {
     const HWND fg = GetForegroundWindow();
     if (fg == nullptr) {

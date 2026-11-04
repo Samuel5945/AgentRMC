@@ -1,12 +1,16 @@
 # AgentRMC 🐋
 
+**RMC = Remote Mission Control（远程任务中控台）**：手里一台遥控器，桌上一排 Agent——
+谁在等你确认、谁做完等你验收、谁正在跑，中控台统一收进一处、统一喊人、统一回跳。
+
 **多 Agent 桌面助理 · 语音桌宠**：Qoder、Qoder CN、ZCode、WorkBuddy、WorkBuddy AI、
 DeepSeek Harness、OpenSquilla 七个宿主的等确认、等选方案、待验收、进行中收进一个
 「待我处理」收件箱；桌宠自动冒泡 + 语音，点一下回到对应 Agent。它同时也是语音助理
 和输入终端：说话就能对话、打开应用、朗读回复，本地离线转写；投影仪遥控器与蓝牙耳机
 都能当按键 / 语音输入。
 
-> **AgentRMC** — A multi-agent desktop companion and voice pet for Windows.
+> **AgentRMC** — Remote Mission Control for the agent desk: a multi-agent desktop
+> companion and voice pet for Windows.
 > A Pending inbox gathers approvals, option picks, reviews and in-progress work
 > from Qoder, Qoder CN, ZCode, WorkBuddy, WorkBuddy AI, DeepSeek Harness and
 > OpenSquilla; the pet bubbles and speaks when they need you and returns you to

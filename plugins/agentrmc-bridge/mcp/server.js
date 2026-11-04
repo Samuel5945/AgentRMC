@@ -8,7 +8,8 @@
 //   pet_work_update 主动汇报阶段    → 更新「待我处理」列表里的工单
 //                   （progress 正在干 / blocked 卡住等人 / ready 做完等验收；
 //                    progress 只落工单，blocked / ready 会冒气泡 + 语音提醒）
-// 等授权、等选方案、任务完成的提醒由本插件的 hook 自动完成，不要用 pet_notify 重复发。
+// 等授权、等选方案、等你回话（回复以问句收尾）、任务完成的提醒由本插件的 hook
+// 自动完成，不要用 pet_notify 重复发。
 "use strict";
 
 const http = require("http");
@@ -86,7 +87,8 @@ const TOOLS = [
     name: "pet_notify",
     description:
       "在 AgentRMC 桌宠上冒一条气泡提示（不出声）。适合长任务的阶段进度、" +
-      "中途发现的重要信息等非阻塞提醒；等授权、等选方案、任务完成的提醒由 hook 自动发，" +
+      "中途发现的重要信息等非阻塞提醒；等授权、等选方案、等你回话（回复以问句收尾）、" +
+      "任务完成的提醒由 hook 自动发，" +
       "不要用这个工具重复发。message 一句话以内，太长的信息用户来不及看。",
     inputSchema: {
       type: "object",

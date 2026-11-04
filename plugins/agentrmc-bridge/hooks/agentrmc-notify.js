@@ -10,6 +10,8 @@
 //          「题目弹出那一刻」就派发的信号；同一件事它的 PreToolUse 要等用户答完
 //          才跑，只能当兜底，靠 asked-question.json 记一笔避免重复喊）
 //   node agentrmc-notify.js stop       [Agent名] [窗口进程名]   ← 一轮结束
+//        （transcript 末句是问句 → 这轮其实没完，改按 permission 发
+//          「等你回话」：出声 + 拉前台 + 待我处理卡片；见 trailingQuestion）
 // 后两个参数**现在一般不用传**：宿主名和要拉前台的进程映像名由 lib/host.js 自检
 // （脚本装在哪个配置家就是哪个宿主，Qoder 国际版 → Qoder.exe，Qoder CN →
 // Qoder CN.exe，不传则按环境变量认 WorkBuddy / ZCode）。显式传了以传的为准，
@@ -52,9 +54,10 @@ const agent = host.agent;
 // 拉前台的进程映像名：Qoder 两个变体靠自检区分，别写死成其中一个。
 const raise = host.raise;
 
-// —— 念出 Agent 的最终回复 ——
+// —— 念出 Agent 的最终回复 / 判它是不是在等人回话 ——
 // Stop 事件里宿主要是给了 transcript_path，就从会话记录里取最后一条 assistant
-// 文本，压成一句话交给桌宠念。拿不到（老宿主/文件读不动/没有正文）返回空，
+// 的**原文**（不压句），交给 stop 分支做两件事：压成一句念出来、判收尾是不是问句。
+// 拿不到（老宿主/文件读不动/没有正文）返回空，
 // 调用方退回原来的「已完成任务」通用文案——这条通路坏掉不能影响提醒本身。
 function flattenText(content) {
   if (typeof content === 'string') return content;
@@ -65,18 +68,50 @@ function flattenText(content) {
     .join(' ');
 }
 
-function trimSentence(text) {
-  let t = String(text)
+function cleanText(content) {
+  return flattenText(content)
     .replace(/```[\s\S]*?```/g, ' ')  // 代码块不念
     .replace(/[#*`>_~|]+/g, ' ')  // markdown 记号
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+function trimSentence(text) {
+  let t = cleanText(text);
   if (!t) return '';
   // 只念第一句：整段念下来又长又吵。
   const first = t.match(/^[^。！？!?]{1,80}[。！？!?]?/);
   if (first) t = first[0].trim();
   if (t.length > 80) t = t.slice(0, 78) + '…';
   return t;
+}
+
+// 问号后面允许跟的东西：空白、markdown 强调、引号括号、破折号、省略号。
+// 只要还写了别的字（「…吗？我先按 A 做了」），就不算「以问句收尾」。
+const TRAILING_NOISE = /^[\s*_`"'’”」』)\]】…—-]*$/;
+
+// —— 这一轮到底是「说完了」还是「在等我回话」——
+// 正文提问没有选项卡片，宿主不会为它派发任何等待事件：Qoder CN 实测（2026-11-04）
+// 这种一轮只出一条 stop 工单，桌宠念的是回复的第一句、写成「这轮说完了」，
+// 球明明在人这边却喊不到人。能拿到的信号只有 transcript 的收尾文字，就按它判：
+// 末句以问号收尾 = 在等人回话。判宽了会把客套问句当成待答，念错比不念更烦，
+// 所以只认「最后一个问号后面再无正文」这一种。
+function trailingQuestion(text) {
+  const clean = cleanText(text);
+  if (!clean) return '';
+  const at = Math.max(clean.lastIndexOf('？'), clean.lastIndexOf('?'));
+  if (at < 0) return '';
+  if (!TRAILING_NOISE.test(clean.slice(at + 1))) return '';
+  const body = clean.slice(0, at);
+  // 取问号所在的最后一句：从最近的句末标点之后开始。英文句点要**后面跟空白**
+  // 才算句末，否则「0.4.0 出包吗？」会被小数点拦腰截断。
+  const term = /[。；！!？?]|\.(?=\s)/g;
+  let cut = 0;  // 命中句末标点就推进到它后面；一个都没命中 = 整段就是这一问
+  let m;
+  while ((m = term.exec(body)) !== null) cut = m.index + m[0].length;
+  const q = body.slice(cut).trim() + clean[at];
+  if (q.length < 3) return '';
+  return q.length > 48 ? q.slice(0, 45) + '…' : q;
 }
 
 function lastAssistantText(hook) {
@@ -108,8 +143,8 @@ function lastAssistantText(hook) {
     const msg = obj.message || obj;
     const role = (msg && msg.role) || obj.type || '';
     if (role !== 'assistant') continue;
-    const text = trimSentence(flattenText(msg && msg.content));
-    if (text) return text;
+    const text = flattenText(msg && msg.content);
+    if (cleanText(text)) return text;
   }
   return '';
 }
@@ -231,7 +266,20 @@ process.stdin.on('end', () => {
     // 优先念 Agent 的最终回复（transcript 最后一条 assistant），
     // 拿不到才退回通用文案——宿主不给 transcript 也照样能用。
     const said = lastAssistantText(hook);
-    message = said ? `${agent}：${said}` : `${agent} 做完了，等你回来看`;
+    const ask = trailingQuestion(said);
+    if (ask) {
+      // 用问句收尾的一轮没结束：球在人这边，走「要人动手」那条通道
+      // （permission = 出声 + 拉前台 + 待我处理卡片），别报成「这轮说完了」。
+      // 复用 permission 而不是 question：原生端对 question 语义的文案套 180s
+      // 迟到去重（那是给「同一弹窗两条信号」准备的），正文提问套上去会被吞。
+      // 文案也不能写「等你选方案」——原生按这个前缀判是不是选方案，这里没有选项卡片。
+      outEvent = 'permission';
+      message = `等你回话：${ask}`;
+      speech = `${agent} 在等你回话`;
+    } else {
+      const one = trimSentence(said);
+      message = one ? `${agent}：${one}` : `${agent} 做完了，等你回来看`;
+    }
   } else if (event === 'question') {
     // 「等你选方案」：实测 Qoder 把 AskUserQuestion 当**普通工具**走 PreToolUse
     // （hook.started 只有 source=runtime 的 SDK 记录，PermissionRequest 根本没发），

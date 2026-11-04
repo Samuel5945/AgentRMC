@@ -494,6 +494,63 @@ check('stop 念出最终回复: transcript 最后一条 assistant 压成一句',
   assert.ok(r.payload.message.length <= 90);  // 一句话，别整段念
 });
 
+// —— 用问句收尾的一轮没结束：球在人这边 ——
+// 正文提问没有选项卡片，宿主不为它派发任何等待事件（2026-11-04 Qoder CN 实测：
+// 这种一轮只落一条 stop 工单，念的是第一句、写成「这轮说完了」，喊不到人）。
+// 所以 stop 分支从 transcript 判收尾：问句 → 改走 permission 通道喊「等你回话」。
+function transcriptFile(dir, text) {
+  const file = path.join(dir, 't-' + Math.random().toString(36).slice(2) + '.jsonl');
+  fs.writeFileSync(
+    file,
+    JSON.stringify({
+      type: 'assistant',
+      message: { role: 'assistant', content: [{ type: 'text', text }] },
+    }) + '\n',
+  );
+  return file;
+}
+
+check('stop 问句收尾: 升级成 permission 的「等你回话」，语音只说短文案', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentrmc-trq-'));
+  const s = installInto('.qoder');
+  const asked = dryRun(s, 'stop', JSON.stringify({
+    session_id: 'tq1',
+    transcript_path: transcriptFile(dir, '两条路都试了。**要不要顺手把 docs 也改了？**'),
+  }));
+  assert.strictEqual(asked.payload.event, 'permission');
+  assert.strictEqual(asked.payload.message, '等你回话：要不要顺手把 docs 也改了？');
+  assert.strictEqual(asked.payload.speech, 'Qoder 在等你回话');
+  // 原生端靠「等你选方案」前缀判是不是选方案（套 180s 迟到去重），这里不能撞上。
+  assert.doesNotMatch(asked.payload.message, /^等你选方案/);
+  // 问号所在的最后一句，不是第一句：前面汇报过的内容别再念一遍。
+  const second = dryRun(s, 'stop', JSON.stringify({
+    session_id: 'tq2',
+    transcript_path: transcriptFile(dir, '先说结论：测试全绿。再说一句：装不装？'),
+  }));
+  assert.strictEqual(second.payload.message, '等你回话：再说一句：装不装？');
+  assert.doesNotMatch(second.payload.message, /测试全绿/);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+check('stop 不误判: 陈述句、问号后还有正文、URL 收尾都仍按完成念', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentrmc-trn-'));
+  const s = installInto('.qoder');
+  for (const text of [
+    '改好了，测试全绿，已经装机验证。',
+    '要不要我改？我先按 A 方案做了，测试全绿。',  // 问句在中间，收尾是陈述
+    '参数说明看这里 https://example.com/docs?tab=env',  // URL 里的问号不算提问
+    '？',  // 光一个问号，没有可念的问题
+  ]) {
+    const r = dryRun(s, 'stop', JSON.stringify({
+      session_id: 'tq-' + text.length,
+      transcript_path: transcriptFile(dir, text),
+    }));
+    assert.strictEqual(r.payload.event, 'stop', JSON.stringify(text) + ' 不该升级成待答');
+    assert.strictEqual(r.payload.speech, undefined);
+  }
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
 check('stop 兜底: transcript 不存在时仍发通用文案', () => {
   const r = dryRun(
     installInto('.qoder'),
@@ -502,7 +559,6 @@ check('stop 兜底: transcript 不存在时仍发通用文案', () => {
   );
   assert.match(r.payload.message, /做完了/);
 });
-
 check('hooks-qoder 注册了 PreToolUse + matcher=AskUserQuestion', () => {
   const h = JSON.parse(fs.readFileSync(path.join(PLUGIN_ROOT, 'hooks-qoder', 'hooks.json'), 'utf8'));
   const group = h.hooks.PreToolUse[0];

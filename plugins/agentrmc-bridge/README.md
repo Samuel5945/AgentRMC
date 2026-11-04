@@ -2,13 +2,15 @@
 
 把 [AgentRMC](https://github.com/AgentRMC/Agentrmc) 桌宠接进你的 Agent：
 
-- **自动提醒（hooks）**：三类提醒都出声，等确认 / 等选方案时直接把该 Agent 主
-  窗口拉到前台——等工具授权（`PermissionRequest`，念「等你确认 Bash：命令…」）、
+- **自动提醒（hooks）**：四类提醒都出声，等确认 / 等选方案 / 等回话时直接把该 Agent
+  主窗口拉到前台——等工具授权（`PermissionRequest`，念「等你确认 Bash：命令…」）、
   等选方案（念「等你选方案」；Qoder 和 WorkBuddy 里走 `PreToolUse` +
-  `matcher:"AskUserQuestion"`，见下）、一轮回答结束（`Stop`，念「X：<最终回复>」，
-  取不到 transcript 时退回「X 已完成任务，等你回来验收」）。完成提醒**不自动抢
-  前台**，但气泡可点，点一下把 Agent 窗口叫回来。AgentRMC 没开就静默跳过（<100ms），
-  不拖慢会话。
+  `matcher:"AskUserQuestion"`，见下）、**等你回话**（`Stop` 时回复以问句收尾 →
+  念「X 在等你回话」，气泡带那句问话；正文提问没有选项卡片，宿主不为它发任何等待
+  事件，只能从 transcript 判，见 `trailingQuestion`）、一轮回答结束（`Stop`，
+  念「X：<最终回复>」，取不到 transcript 时退回「X 已完成任务，等你回来验收」）。
+  完成提醒**不自动抢前台**，但气泡可点，点一下把 Agent 窗口叫回来。AgentRMC 没开就
+  静默跳过（<100ms），不拖慢会话。
 - **主动交互（MCP）**：四个工具——`pet_notify`（阶段进度气泡）、`pet_speak`
   （让桌宠 TTS 说一句话）、`pet_state`（查桌宠状态）、`pet_work_update`
   （主动汇报 `progress` / `blocked` / `ready`，把「待我处理」里的工单往前推；

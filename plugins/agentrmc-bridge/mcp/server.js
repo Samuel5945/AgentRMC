@@ -157,12 +157,18 @@ async function callTool(name, args) {
       title: AGENT,
       message,
     });
+    if (res.status >= 400) {
+      return { isError: true, text: `AgentRMC 拒绝了这条提示（HTTP ${res.status}）：${res.body}` };
+    }
     return { text: `已发送（HTTP ${res.status}）` };
   }
   if (name === "pet_speak") {
     const message = String(args?.message || "").trim();
     if (!message) return { isError: true, text: "message 不能为空" };
     const res = await callBridge("/speak", { message });
+    if (res.status >= 400) {
+      return { isError: true, text: `AgentRMC 拒绝了这句话（HTTP ${res.status}）：${res.body}` };
+    }
     return { text: `已让桌宠说（HTTP ${res.status}）` };
   }
   if (name === "pet_state") {

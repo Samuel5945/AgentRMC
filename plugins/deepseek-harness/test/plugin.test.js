@@ -383,6 +383,25 @@ await check('离线落盘与原版同址同格式: pending-events.jsonl 一行�
   assert.strictEqual(path.dirname(SPOOL_FILE), SPOOL_DIR);
 });
 
+await check('spool 上限守卫: 超 1MB 丢最旧留最新，新事件仍在尾部', async () => {
+  clearSpool();
+  fs.mkdirSync(SPOOL_DIR, { recursive: true });
+  const filler = JSON.stringify({ event: 'stop', title: 'filler', message: 'x'.repeat(300) });
+  // ~350B/行 × 4000 行 ≈ 1.4MB，超过 1MB 上限
+  fs.writeFileSync(SPOOL_FILE, Array(4000).fill(filler).join('\n') + '\n');
+  emit('agent/turn-stopping', { agent: { id: 'sess-cap', session: { id: 'sess-cap' } }, turn: 1 });
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline) {
+    const lines = spooled();
+    if (lines.length && lines[lines.length - 1].session_id === 'sess-cap') break;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  const lines = spooled();
+  assert.ok(lines.length <= 501, '裁剪后应 ≤501 行，实际 ' + lines.length);
+  assert.strictEqual(lines[lines.length - 1].session_id, 'sess-cap', '新事件必须在尾部');
+  assert.ok(fs.statSync(SPOOL_FILE).size < 1024 * 1024, '裁剪后应远小于上限');
+});
+
 await check('插件入口可读: cordis.patch.yml 的 name 与 package.json 对得上', () => {
   const manifest = JSON.parse(
     fs.readFileSync(path.join(PLUGIN_ROOT, 'package.json'), 'utf8'),

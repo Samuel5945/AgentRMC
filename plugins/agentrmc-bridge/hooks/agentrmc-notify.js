@@ -167,7 +167,12 @@ function rememberAsked(hook) {
       if (!(now - Number(all[k]) < ASKED_TTL_MS)) delete all[k];
     }
     all[askedKey(hook)] = now;
-    fs.writeFileSync(ASKED_FILE, JSON.stringify(all));
+    // 原子替换：先写 pid 后缀的临时文件再 rename。两条 hook 并发时读者
+    // 不会看到半截 JSON（直接 writeFileSync 写到一半被读走，解析失败按
+    // 「没问过」处理，会重复喊）。并发写最坏后写覆盖先写，多喊一声而已。
+    const tmp = `${ASKED_FILE}.${process.pid}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify(all));
+    fs.renameSync(tmp, ASKED_FILE);
   } catch {
     // 记不住就记不住：最多多喊一声，不能挡会话。
   }
@@ -279,9 +284,22 @@ process.stdin.on('end', () => {
     console.log(JSON.stringify({ dry_run: true, source: host.source, payload: payloadObj }));
     process.exit(0);
   }
+// 上限守卫：原生端一直不开时别把文件养到几百 MB。超 1MB 丢最旧留最新
+// （按行裁，保 JSONL 完整）。hook 可能并发跑，读-改-写没加锁：最坏丢几条
+// 旧通知，提醒场景可接受；裁不动就照常追加，不能挡通知。
+const SPOOL_CAP_BYTES = 1024 * 1024;
+function trimSpool() {
+  try {
+    if (fs.statSync(SPOOL_FILE).size <= SPOOL_CAP_BYTES) return;
+    const lines = fs.readFileSync(SPOOL_FILE, 'utf8').split('\n').filter(Boolean);
+    fs.writeFileSync(SPOOL_FILE, lines.slice(-500).join('\n') + '\n');
+  } catch { /* 裁不动就照常追加 */ }
+}
+
 function spool(payload) {
   try {
     fs.mkdirSync(SPOOL_DIR, { recursive: true });
+    trimSpool();
     fs.appendFileSync(SPOOL_FILE, payload + '\n');
   } catch {
     // 落盘也失败就彻底放弃：通知不能挡会话。

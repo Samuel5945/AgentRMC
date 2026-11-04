@@ -86,10 +86,16 @@ export function createBridge(options) {
   function spool(payload) {
     try {
       fs.mkdirSync(spoolDir, { recursive: true });
-      fs.appendFileSync(
-        path.join(spoolDir, 'pending-events.jsonl'),
-        JSON.stringify(payload) + '\n',
-      );
+      const file = path.join(spoolDir, 'pending-events.jsonl');
+      // 上限守卫：原生端一直不开时别把文件养到几百 MB。超 1MB 丢最旧留最新
+      // （按行裁，保 JSONL 完整）；裁不动就照常追加，不能挡通知。
+      try {
+        if (fs.statSync(file).size > 1024 * 1024) {
+          const lines = fs.readFileSync(file, 'utf8').split('\n').filter(Boolean);
+          fs.writeFileSync(file, lines.slice(-500).join('\n') + '\n');
+        }
+      } catch { /* 裁不动就照常追加 */ }
+      fs.appendFileSync(file, JSON.stringify(payload) + '\n');
       return true;
     } catch (error) {
       log('spool failed: ' + (error && error.message));

@@ -312,6 +312,29 @@ check('AgentRMC 未开时写 spool: 连接失败不丢通知', () => {
   fs.rmSync(spoolDir, { recursive: true, force: true });
 });
 
+check('spool 上限守卫: 超 1MB 丢最旧留最新，新事件仍在尾部', () => {
+  const spoolDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentrmc-spoolcap-'));
+  const file = path.join(spoolDir, 'pending-events.jsonl');
+  const filler = JSON.stringify({ event: 'stop', title: 'filler', message: 'x'.repeat(300) });
+  // ~350B/行 × 4000 行 ≈ 1.4MB，超过 1MB 上限
+  fs.writeFileSync(file, Array(4000).fill(filler).join('\n') + '\n');
+  const script = installInto('.workbuddy-ai');
+  execFileSync(process.execPath, [script, 'stop'], {
+    input: JSON.stringify({ session_id: 's-cap' }),
+    env: hostFreeEnv({
+      AGENTRMC_PORT: '1',
+      AGENTRMC_SPOOL_DIR: spoolDir,
+    }),
+    encoding: 'utf8',
+    timeout: 8000,
+  });
+  const lines = fs.readFileSync(file, 'utf8').trim().split(/\r?\n/);
+  assert.ok(lines.length <= 501, '裁剪后应 ≤501 行，实际 ' + lines.length);
+  assert.strictEqual(JSON.parse(lines[lines.length - 1]).session_id, 's-cap', '新事件必须在尾部');
+  assert.ok(fs.statSync(file).size < 1024 * 1024, '裁剪后应远小于上限');
+  fs.rmSync(spoolDir, { recursive: true, force: true });
+});
+
 check('e2e-permission 文案: AskUserQuestion 走 PermissionRequest 时也念「等你选方案」', () => {
   const r = dryRun(installInto('.qoder'), 'permission', JSON.stringify({ tool_name: 'AskUserQuestion' }));
   assert.strictEqual(r.payload.message, '等你选方案');

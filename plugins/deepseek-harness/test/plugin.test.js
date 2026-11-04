@@ -16,7 +16,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { apply, name as pluginName, inject } from '../index.js';
-import { trimSentence, flattenText } from '../lib/text.js';
+import { trimSentence, flattenText, trailingQuestion } from '../lib/text.js';
 
 const PLUGIN_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 let passed = 0;
@@ -63,6 +63,25 @@ await check('flattenText: 只取 text 块', () => {
     ]),
     '甲 乙',
   );
+});
+
+// —— 问句收尾判定：与 bridge 版 trailingQuestion 同一套规则，两条路行为要一致 ——
+await check('trailingQuestion: 问句收尾返回那句问话', () => {
+  assert.strictEqual(trailingQuestion('两条路都试了。要不要顺手把 docs 也改了？'), '要不要顺手把 docs 也改了？');
+  assert.strictEqual(trailingQuestion('先说结论：测试全绿。再说一句：装不装？'), '再说一句：装不装？');
+  assert.strictEqual(trailingQuestion('Both paths work now. Should I mirror this into DSH?'), 'Should I mirror this into DSH?');
+});
+
+await check('trailingQuestion: 陈述/问号后还有正文/URL/光问号 都返回空', () => {
+  assert.strictEqual(trailingQuestion('改好了，测试全绿。'), '');
+  assert.strictEqual(trailingQuestion('要不要我改？我先按 A 做了。'), '');
+  assert.strictEqual(trailingQuestion('看这里 https://example.com/docs?tab=env'), '');
+  assert.strictEqual(trailingQuestion('？'), '');
+  assert.strictEqual(trailingQuestion(''), '');
+});
+
+await check('trailingQuestion: 版本号小数点不拦腰截断', () => {
+  assert.strictEqual(trailingQuestion('那 0.4.0 要不要现在出包？'), '那 0.4.0 要不要现在出包？');
 });
 
 // ------------------------------------------------------- B) 假 ctx 跑真插件
@@ -259,6 +278,44 @@ await check('turn-stopping 兜底: 没有正文时用通用文案', async () => 
   const lines = await waitForSpool(1);
   assert.strictEqual(lines[0].message, 'DeepSeek Harness 做完了，等你回来看');
   assert.strictEqual(lines[0].speech, undefined);
+});
+
+await check('turn-stopping 问句收尾: 改发 permission 的「等你回话」', async () => {
+  clearSpool();
+  const agent = { id: 'sess-q', session: { id: 'sess-q' } };
+  emit('agent/assistant-stream', {
+    agent,
+    frame: { type: 'start', attemptId: 'a1', revision: 0, turn: 1, step: 1 },
+  });
+  emit('agent/assistant-stream', {
+    agent,
+    frame: {
+      type: 'chunk',
+      attemptId: 'a1',
+      revision: 0,
+      index: 0,
+      time: 1,
+      chunk: { type: 'text-delta', index: 0, text: '测试全绿。**要不要现在出包？**' },
+    },
+  });
+  emit('agent/assistant-stream', {
+    agent,
+    frame: {
+      type: 'end',
+      attemptId: 'a1',
+      revision: 0,
+      index: 1,
+      outcome: { kind: 'committed', eventType: 'assistant/message', seq: 7 },
+    },
+  });
+  emit('agent/turn-stopping', { agent, turn: 1, signal: new AbortController().signal });
+  const lines = await waitForSpool(1);
+  const payload = lines[0];
+  assert.strictEqual(payload.event, 'permission');
+  assert.strictEqual(payload.message, '等你回话：要不要现在出包？');
+  assert.strictEqual(payload.speech, 'DeepSeek Harness 在等你回话');
+  // 不能撞「等你选方案」前缀，否则原生端套 180s 迟到去重把它吞掉。
+  assert.doesNotMatch(payload.message, /^等你选方案/);
 });
 
 await check('工具注册: 四个 pet_* 都有合法的 schema 与文本渲染', () => {

@@ -27,9 +27,13 @@ description: 与 AgentRMC 桌宠交互：汇报任务阶段进度、让桌宠出
 - 一句话以内；长内容用户来不及看，也念不完。
 - 一次任务最多几条提示，别连续调用刷屏；进度更新用 pet_notify（要人当场看见）
   或 pet_work_update（把状态留在列表里），收尾才用 pet_speak。
-- 等工具授权、等选方案（`ask_user_question`）和一轮结束的提醒都由本插件自动发：
-  桌宠会念一句「DeepSeek Harness 等你点确认／等你选方案／已完成…」，等授权和
-  等选方案还会把宿主窗口拉到前台。这三类都不要再拿 pet_notify / pet_speak 重发。
+- 等工具授权、等选方案（`ask_user_question`）、**等你回话**（一轮回答以问句收尾）
+  和一轮结束的提醒都由本插件自动发：桌宠会念一句「DeepSeek Harness 等你点确认／
+  在等你选方案／在等你回话／已完成…」，等授权、等选方案、等回话还会把宿主窗口拉到
+  前台。这四类都不要再拿 pet_notify / pet_speak 重发。
+- 「等你回话」判的是**最后一句带问号**：把要问的话写在回复末尾就行，不用再补
+  `pet_work_update stage=blocked`（blocked 是给「回合还没结束就先卡住」用的，
+  比如缺凭据、要你拍板方向）；两边都发就是同一件事念两遍。
 - 明确卡在用户身上（缺凭据、要拍板）时，用 `pet_work_update stage=blocked` 就够——
   它自己会冒泡 + 语音；再补一条 pet_notify 就是同一件事说两遍。
 - 桌宠会在你调用 `ask_user_question` 时立刻出声（插件监听的是提问**之前**的

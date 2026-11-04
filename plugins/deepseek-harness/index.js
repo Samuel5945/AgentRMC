@@ -24,7 +24,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { createBridge, resolveSpoolDir } from './lib/bridge.js';
-import { trimSentence } from './lib/text.js';
+import { trimSentence, trailingQuestion } from './lib/text.js';
 
 const PACKAGE_ROOT = path.dirname(fileURLToPath(import.meta.url));
 
@@ -150,7 +150,8 @@ const SKILL_NAME = 'agentrmc-pet';
 const SKILL_DESCRIPTION =
   '与 AgentRMC 桌宠交互：汇报任务阶段进度、让桌宠出声说一句话、查询桌宠状态。' +
   '当用户要求「告诉桌宠 / 让桌宠说 / 汇报进度 / 桌宠在不在」，' +
-  '或长任务想在桌宠上留非阻塞提示时使用。注意：等授权、等选方案、一轮结束三类提醒' +
+  '或长任务想在桌宠上留非阻塞提示时使用。注意：等授权、等选方案、等你回话' +
+  '（回复以问句收尾）、一轮结束四类提醒' +
   '由插件自动完成，不要用工具重复发。';
 
 /** 读 skill 正文：去掉 SKILL.md 的 YAML frontmatter（元数据已经在 description 里）。 */
@@ -381,16 +382,31 @@ export function apply(ctx, rawConfig) {
     );
 
     // 一轮结束：念最终回复，并把气泡留着（原生端 stop 分支不抢前台，气泡可点）。
+    // 例外：回复以问句收尾 = 这轮没结束，球在人这边 → 改发「等你回话」走 permission
+    // （出声 + 抢前台 + 待我处理卡）。正文提问没有选项卡片，宿主不会为它派发任何
+    // 等待事件，只能从攒下来的回复文字判——和 bridge 版 Stop 分支同一套规则。
     ctx.on(
       'agent/turn-stopping',
       (payload) => {
         try {
           const agent = payload && payload.agent;
           if (!agent || !agent.id || !config.notifyStop) return;
-          const said = config.speakFinalReply
-            ? trimSentence(lastReply.get(agent.id) || '')
-            : '';
+          const raw = lastReply.get(agent.id) || '';
           lastReply.delete(agent.id);
+          const ask = config.speakFinalReply ? trailingQuestion(raw) : '';
+          if (ask) {
+            send({
+              event: 'permission',
+              // 不能写「等你选方案」开头：原生端按这个前缀判是不是选方案，套 180s
+              // 迟到去重，这里没有选项卡片，被吞掉就白喊了。
+              message: '等你回话：' + ask,
+              speech: config.agentName + ' 在等你回话',
+              sessionId: agent.id,
+              project: projectOf(agent),
+            });
+            return;
+          }
+          const said = config.speakFinalReply ? trimSentence(raw) : '';
           send({
             event: 'stop',
             message: said ? config.agentName + '：' + said : config.agentName + ' 做完了，等你回来看',
@@ -438,7 +454,8 @@ export function apply(ctx, rawConfig) {
       name: 'pet_notify',
       description:
         '在 AgentRMC 桌宠上冒一条气泡提示（不出声）。适合长任务的阶段进度、' +
-        '中途发现的重要信息等非阻塞提醒；等授权、等选方案、一轮结束的提醒由插件自动发，' +
+        '中途发现的重要信息等非阻塞提醒；等授权、等选方案、等你回话（回复以问句收尾）、' +
+        '一轮结束的提醒由插件自动发，' +
         '不要用这个工具重复发。message 一句话以内，太长的信息用户来不及看。',
       properties: {
         message: { type: 'string', description: '气泡文案，一句话以内' },

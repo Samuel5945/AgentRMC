@@ -22,7 +22,19 @@ AgentBridge :45915  →  气泡 + TTS + 把 OpenSquilla 窗口拉回前台
 > **session_id 必须带**：原生端靠它把同一会话的旧「待验收」归档、把新事件并进
 > 同一张工单。不带的话每个会话每跑完一轮就多一条重复待办（2026-11-03 踩过：
 > 同一个 WebChat 会话攒了 3 条一模一样的「待验收」）。`turn_committed` 发的
-> turn-start 则是「人已经回来开新轮」的静默归档信号，不出声、不建卡。
+> turn-start 则是「人已经回来开新轮」的静默归档信号，不出声、不建卡，也不吃
+> 15s 去重——连开两轮时第二轮的归档必须照发，不然旧验收卡多挂一轮。
+
+> **离线补投**：AgentRMC 没开时通知不丢——落盘到与 hooks/DSH 同址同格式的
+> `%APPDATA%\LIG\AgentRMCNative\pending-events.jsonl`（`AGENTRMC_SPOOL_DIR`
+> 可改），原生端启动/每 5 秒补投，补投只落工单不出声、不抢前台。文件超 1MB
+> 丢最旧留最新（三条插件线同一套守卫）。`--selftest` 是探针，失败不落盘。
+
+> **假活自愈**：网关半开（睡眠/网络抖后 TCP 不断、`onclose` 不来）时进程看着
+> 活却收不到事件。桥每轮 `sessions.list` 就是探针：连续 3 次失败强制换新连接；
+> 握手限时（默认 20s）兜底连 101 都不回的 TCP 黑洞。心跳文件
+> `%TEMP%\pet-bridge.heartbeat` 每 30s 写一拍，**网关断了也照写**——看门狗靠它
+> 区分「活着但网关断了」（不杀）和「事件循环卡死」（超 3 分钟没更新，杀掉重启）。
 
 ## 文件
 
@@ -30,7 +42,7 @@ AgentBridge :45915  →  气泡 + TTS + 把 OpenSquilla 窗口拉回前台
 |---|---|
 | `opensquilla-pet-bridge.mjs` | 常驻桥。订阅事件 → 发 `/notify`。零依赖（Node 22+ 内置 WebSocket/fetch） |
 | `startup-bridge.vbs` | 开机自启，隐藏窗口 |
-| `ensure-bridge.ps1` | 看门狗：桥不在就拉起来，并在 `%TEMP%\pet-bridge-watchdog.log` 留一行 `DOWN/UP`，用来查它是什么时候死的 |
+| `ensure-bridge.ps1` | 看门狗：桥不在就拉起来；进程在但心跳超 3 分钟没更新判卡死，杀掉重启。日志在 `%TEMP%\pet-bridge-watchdog.log`（`DOWN/UP/WEDGED`）。路径按 `$PSScriptRoot` 取，整目录拷走就能用 |
 | `ensure-bridge-hidden.vbs` | 看门狗的零闪窗壳：计划任务跑它（wscript 是 GUI 子系统，不建控制台），它再隐藏执行同目录的 `ensure-bridge.ps1`，退出码透传给任务 |
 | `voice-reminder.ps1` | 立即说一句（不走事件），`/state` 验活 → `/speak` 或 `/notify` |
 
@@ -77,6 +89,8 @@ schtasks /Create /F /TN OpenSquillaPetBridgeWatchdog /SC MINUTE /MO 5 /TR "wscri
 | `--msg-stop/--msg-permission/--msg-plan` | 文案模板，支持 `{session}` `{text}` |
 | `--relay` | 把回复正文前 80 字也带进气泡（默认只报「这轮跑完了」） |
 | `--log <path>` | 落日志；默认不写 |
+| `--heartbeat-file <path>` | 心跳文件位置，默认 `%TEMP%\pet-bridge.heartbeat`（看门狗读同一个） |
+| `--refresh <ms>` / `--call-timeout <ms>` / `--hello-timeout <ms>` | 探针周期 / 单次调用超时 / 握手限时，默认 30000 / 15000 / 20000 |
 | `--selftest` | 只发一条测试通知就退出 |
 
 免打扰：`New-Item "$env:TEMP\opensquilla-pet-bridge.pause"`，恢复就删掉它。

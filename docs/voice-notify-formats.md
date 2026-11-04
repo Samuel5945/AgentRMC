@@ -28,7 +28,8 @@ Cordis bundle）、OpenSquilla（`plugins/opensquilla-bridge` 外部 WebSocket �
 
 | 事件 | agentrmc-bridge 系（Qoder / Qoder CN / ZCode / WorkBuddy 两家） | DeepSeek Harness | OpenSquilla 桥 | ZCode 手工旧脚本 |
 |---|---|---|---|---|
-| **回合结束 stop** | 气泡+念：`{宿主}：{最终回复第一句≤80字}`；取不到回复 → `{宿主} 做完了，等你回来看` | 气泡+念：`DeepSeek Harness：{最终回复第一句≤80字}`；兜底同左 | 气泡+念：`「{会话}」这轮跑完了，回来看看`（`--msg-stop` 可改，**不念回复正文**） | 气泡+念：`ZCode 已完成任务 {项目}，等你回来验收`（无项目时省略项目名） |
+| **回合结束 stop** | 气泡+念：`{宿主}：{最终回复第一句≤80字}`；取不到回复 → `{宿主} 做完了，等你回来看`；**末句是问句则改走下面「等回话」** | 气泡+念：`DeepSeek Harness：{最终回复第一句≤80字}`；兜底同左；**末句问句同样改走「等回话」** | 气泡+念：`「{会话}」这轮跑完了，回来看看`（`--msg-stop` 可改，**不念回复正文**） | 气泡+念：`ZCode 已完成任务 {项目}，等你回来验收`（无项目时省略项目名） |
+| **等回话（正文提问收尾）** | 气泡：`等你回话：{末句问话≤48字}`；念：`{宿主} 在等你回话`；按 `permission` 发出（出声 + 抢前台 + 待我处理卡）。正文提问没有选项卡片，宿主不为它派发任何等待事件，只能从回复收尾文字判 | 同款（判据在 `lib/text.js` 的 `trailingQuestion`，攒到的 assistant 正文直接判；气泡同文案，念 `DeepSeek Harness 在等你回话`） | 无（按模板念会话标题，判不了正文） | 无（不读 transcript） |
 | **等授权 permission** | 气泡：`等你确认 {工具}：{路径/命令≤60字}`；念：`{宿主} 在等你点确认` | 气泡：`等你确认 {工具名}`（**不带路径细节**，无工具名时 `等你确认工具授权`）；念：`DeepSeek Harness 在等你点确认` | 气泡+念：`有个操作在等你确认`（`--msg-permission` 可改） | 气泡+念：`等你确认 {工具}：{细节}【{项目}】` |
 | **等选方案** | 气泡：`等你选方案`；念：`{宿主} 在等你选方案` | 气泡：`等你选方案`；念：`DeepSeek Harness 在等你选方案` | 气泡+念：`「{会话}」方案出来了，等你选一个`（`--msg-plan` 可改） | 气泡+念：`等你选方案【{项目}】` |
 | **新轮开始 turn-start** | 空文案，只归档旧验收，不出声 | 同左 | `新一轮对话开始`（同样只归档不出声） | 无此事件 |
@@ -40,6 +41,13 @@ Cordis bundle）、OpenSquilla（`plugins/opensquilla-bridge` 外部 WebSocket �
   去 markdown 记号、压空白，只取第一句，超 80 字截到 78 字加 `…`。
   bridge 系从 transcript 取最后一条 assistant 文本；DSH 从 assistant-stream 攒正文，
   `speakFinalReply` 配置可关（默认开）。
+- **问句收尾判定**（bridge 系 `hooks/agentrmc-notify.js` 与 DSH `lib/text.js` 各有一份
+  同名 `trailingQuestion`，2026-11-04）：净化后的回复**最后一个**问号后面只剩装饰符号
+  （空白/`*`/引号括号/破折号/省略号）才算待答；气泡取该问号所在的**最后一句**（不是
+  第一句——问句前面往往已经汇报过一轮），边界认 `。；！!？?` 和「点后接空白」的英文
+  句点（所以 `0.4.0` 不会被拦腰截断），≤48 字；语音仍是短的 `{宿主} 在等你回话`。
+  问号后面还写了正文（「要不要我改？我先按 A 做了」）、URL 查询串、光一个问号——
+  一律仍按 stop 念：判宽了会把客套问句当成待答，念错比不念更烦。
 - **permission 细节**（bridge 系 / 旧脚本）：取 `file_path || path || command || url`，
   超 60 字截到 57 字加 `…`；工具名 / 细节为空时对应部分省略。
 - **OpenSquilla 模板变量**：`{会话}` = 会话标题缓存，取不到用会话 key 末段（≤24 字），
@@ -63,6 +71,8 @@ Cordis bundle）、OpenSquilla（`plugins/opensquilla-bridge` 外部 WebSocket �
   准时信号是 Notification(permission_prompt)。两条信号靠 asked-question.json 去重（见下）。
 - OpenSquilla 默认不订阅 `cron:` 会话（`--include-cron` 打开）；pause-file 存在时
   免打扰（turn-start 归档信号照发）。
+- **等回话不新增钩子**：还是 Stop 那一条，hook 内部按 transcript 收尾把事件改发成
+  `permission`。原生端一个字没改，所以这条能力只随插件走，不用出安装包。
 
 ## 三、去重机制汇总
 
@@ -70,6 +80,7 @@ Cordis bundle）、OpenSquilla（`plugins/opensquilla-bridge` 外部 WebSocket �
 |---|---|---|---|
 | asked-question.json | bridge hook（spool 目录） | 30 分钟 | Notification 先喊过，PreToolUse 晚到的同一弹窗不再喊 |
 | 「等你选方案」迟到去重 | 原生 announceWork | 180 秒 | `question` 类事件 **或** message 以「等你选方案」开头，且近期喊过 → 跳过 |
+| 等回话不参与迟到去重 | 原生 announceWork（planChoice=false） | — | 「等你回话」发的是 permission 且不带「等你选方案」前缀，180 秒窗口吞不到它；一轮最多一条，本身不刷屏 |
 | blocked 连报去重 | 原生 reportWorkItem | 120 秒 | 同会话连报 blocked 只喊一次 |
 | ready 压 stop | 原生 announceWork | 90 秒 | pet_work_update(ready) 喊过后，紧接着的 hook stop 不念第二遍 |
 | 同 turn 去重 | DSH inbox/claimed | 同一 turn | 一轮多条消息只报一次 turn-start |
@@ -99,8 +110,24 @@ Cordis bundle）、OpenSquilla（`plugins/opensquilla-bridge` 外部 WebSocket �
    OpenSquilla 和旧脚本没有 speech 字段，气泡全文照念（旧脚本会把路径念出来）。
 4. **stop 念什么**：bridge 系 / DSH 念最终回复第一句；OpenSquilla 念会话标题模板；
    旧脚本念固定句。
-5. **选方案触发时机**：Qoder 的 PreToolUse 在用户答完后才派发（常迟到，靠原生端
-   180 秒去重兜底）；WorkBuddy 有 Notification 准时信号；ZCode 插件没有 question 钩子。
+5. **选方案触发时机**：Qoder CN 的 PreToolUse(question) 在**弹窗那一刻**就派发
+   （2026-11-04 实测：提问 12:07:06 弹出、hook 12:07:06 起跑，另有一条 12:07:37 的
+   迟到信号带着**另一个 session_id**，于是同一件事立了两张「等你选方案」卡，
+   asked-question.json 也因 session 对不上而没拦住——这条待查）；WorkBuddy 相反，
+   PreToolUse 要等用户答完，靠 Notification 准时信号；ZCode 插件没有 question 钩子。
+6. **等回话覆盖 bridge 系 / DSH**（2026-11-04 新增）：两家都从「Agent 这轮最后说了
+   什么」判（bridge 读 transcript，DSH 用 assistant-stream 攒的正文）。OpenSquilla 桥
+   按模板念会话标题、ZCode 手工旧脚本不读 transcript，手里没有可判的正文，要补得先
+   接通素材。
+7. **blocked 的工单会被随后的 permission 提醒合并改写**：`WorkItemStore::upsert` 在
+   1800 秒窗口内把同 Agent 的活跃卡更新成新事件（实测 12:06:52 报的 blocked 自定义
+   文案，被 12:07:06 的「等你选方案」覆盖）。一张卡只表达最新那件要人动手的事，
+   所以 `pet_work_update` 报完之后别指望原文还在。
+8. **残留缺口：先报 ready 再用问句收尾会喊两遍**。`ready` 的 90 秒「压 stop」只挡
+   stop 事件，等回话发的是 permission，`announceWork` 里那条 `readyAnnounced_.take()`
+   根本走不到。后果是念完「做完了，等你验收」再念一句「在等你回话」，并且多抢一次
+   前台。hook 与 MCP 是两个进程，要彻底修得让它们共享「这轮已经喊过」的记账；
+   当前先在 skill 里约束模型：**用问句收尾就别补 blocked / ready**。
 
 ## 六、文案出处
 

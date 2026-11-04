@@ -67,18 +67,22 @@ Electron），没 node 也不再静默失联。联动插件与 Native 同号。
   <img src="assets/screenshots/agentrmc-inbox.jpg" alt="AgentRMC「待我处理」：Qoder、Qoder CN、ZCode、WorkBuddy、DeepSeek Harness、OpenSquilla 等七个 Agent 的待办收进一张列表" width="100%">
 </p>
 <p align="center">
+  <img src="assets/screenshots/agentrmc-theme-whale-light.jpg" alt="AgentRMC 鲸鱼娘主题浅色：语音主界面与「待我处理」并排，美术背景透过卡片表面" width="49%">
+  <img src="assets/screenshots/agentrmc-theme-whale-dark.jpg" alt="AgentRMC 鲸鱼娘主题深色：同一套布局的暗色配色" width="49%">
+</p>
+<p align="center">
   <img src="assets/screenshots/agentrmc-system.jpg" alt="AgentRMC 系统页：桥接状态、运行时长、离线待补与七个 Worker 的在线状态" width="49%">
-  <img src="assets/screenshots/agentrmc-keymap.jpg" alt="AgentRMC 按键映射页：单击 / 双击 / 长按直接改动作" width="49%">
+  <img src="assets/screenshots/agentrmc-keymap.jpg" alt="AgentRMC 遥控器形态：13 键 BLE 遥控器逐键映射，语音 / 待机双模式与当前转写引擎" width="49%">
 </p>
 <p align="center">
   <img src="assets/screenshots/agentrmc-apps.jpg" alt="AgentRMC 应用页：本机应用与来源，说「打开剪映」就启动" width="49%">
   <img src="assets/screenshots/agentrmc-guide.jpg" alt="AgentRMC 使用引导：有遥控器 / 没有遥控器两条路线" width="49%">
 </p>
 <p align="center">
-  <img src="assets/screenshots/agentrmc-desktop.jpg" alt="AgentRMC 桌宠在 Windows 桌面右下角冒泡：ZCode 任务完成提醒" width="100%">
+  <img src="assets/screenshots/agentrmc-desktop.jpg" alt="AgentRMC 桌宠 hover 浮窗：监听状态、转写结果、当前宿主与派活模式，热键 Ctrl+Alt+V 也能开始" width="100%">
 </p>
 
-*真机截图（0.3.9）：七路 Agent 待办、系统健康、按键映射、应用页、使用引导；最后一张是桌宠在桌面右下角冒泡。*
+*真机截图（0.4.0）：七路 Agent 待办、鲸鱼娘主题明暗两版、遥控器逐键映射；最后一张是桌宠 hover 浮窗。系统 / 应用 / 使用引导三张仍为 0.3.9，待重截。*
 
 ```
 遥控器 → HID → Raw Input ─┬→ 按键 → 场景 Profile → 动作（按键/滚动/鼠标/模式/启动程序）

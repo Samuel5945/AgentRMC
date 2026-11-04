@@ -11,11 +11,13 @@
 #include "core/VoiceController.h"
 #include "core/VoiceSettings.h"
 #include "ui/LlmSettingsDialog.h"
+#include "ui/DispatchPicker.h"
 #include "ui/PetSprite.h"
 
 #include <QApplication>
 #include <QClipboard>
 #include <QColor>
+#include <QComboBox>
 #include <QContextMenuEvent>
 #include <QCursor>
 #include <QEnterEvent>
@@ -33,6 +35,7 @@
 #include <QPushButton>
 #include <QScreen>
 #include <QShowEvent>
+#include <QSignalBlocker>
 #include <QStringList>
 #include <QRegularExpression>
 #include <QTimer>
@@ -48,7 +51,7 @@ namespace {
 constexpr int kPetSize = 84;    // 桌宠球体直径
 constexpr int kPeek = 20;       // 贴边藏起来后露出的边条宽度
 constexpr int kSnapDist = 80;   // 拖到离屏幕边多近算贴边
-constexpr int kCardWidth = 244;
+constexpr int kCardWidth = 280;  // 顶行模型下拉 + 中部宿主/会话两下拉需要比旧按钮排更宽
 constexpr int kBubbleWidth = 220;  // 说话气泡箱体固定宽
 constexpr int kTailSpace = 12;     // 气泡尾巴侧预留高度（尾巴画在这里面）
 constexpr int kTextPadX = 12;      // 文字离箱体左右边的内边距
@@ -89,39 +92,42 @@ public:
         root->setContentsMargins(12, 11, 12, 11);
         root->setSpacing(7);
 
+        // 顶行：监听状态 + 识别模型下拉。模型选择移到最顶部（同语音页），
+        // 不再占中部一整排按钮。
+        auto *top = new QHBoxLayout;
+        top->setSpacing(6);
         status_ = new QLabel(this);
         status_->setObjectName("petStatus");
-        root->addWidget(status_);
+        top->addWidget(status_, 1);
+        backendCombo_ = new QComboBox(this);
+        backendCombo_->setObjectName("petBackend");
+        backendCombo_->setFocusPolicy(Qt::NoFocus);
+        backendCombo_->setCursor(Qt::PointingHandCursor);
+        backendCombo_->addItem(QString::fromUtf8("转发热键"));
+        backendCombo_->addItem(QString::fromUtf8("本地 SenseVoice"));
+        backendCombo_->addItem(QString::fromUtf8("本地 Qwen3-ASR"));
+        backendCombo_->addItem(QString::fromUtf8("云端 ASR"));
+        connect(backendCombo_, &QComboBox::currentIndexChanged, this,
+                [this](int index) { pet_->setBackend(index); });
+        top->addWidget(backendCombo_);
+        root->addLayout(top);
 
         detail_ = new QLabel(this);
         detail_->setObjectName("petDetail");
         detail_->setWordWrap(true);
+        detail_->hide();  // 空时不占行，否则顶行与派任务行之间留一条大缝
         root->addWidget(detail_);
 
-        auto *modes = new QHBoxLayout;
-        modes->setSpacing(4);
-        const QStringList names = {QString::fromUtf8("转发"),
-                                   QStringLiteral("SenseVoice"),
-                                   QStringLiteral("Qwen3"),
-                                   QString::fromUtf8("云端")};
-        for (int i = 0; i < names.size(); ++i) {
-            auto *button = new QPushButton(names.at(i), this);
-            button->setObjectName("petMode");
-            button->setCheckable(true);
-            button->setCursor(Qt::PointingHandCursor);
-            button->setFocusPolicy(Qt::NoFocus);
-            connect(button, &QPushButton::clicked, button,
-                    [this, i] { pet_->setBackend(i); });
-            modeButtons_.append(button);
-            modes->addWidget(button, 1);
-        }
-        root->addLayout(modes);
+        // 中部原识别模型按钮排改为「宿主派任务」（宿主+会话两下拉），
+        // 与语音页底部那行共用 DispatchPicker，选择同样持久化。
+        dispatch_ = new DispatchPicker(pet_->store_, this);
+        root->addWidget(dispatch_);
 
         transcript_ = new QLabel(QString::fromUtf8("说了话会显示在这里，点击复制"), this);
         transcript_->setObjectName("petTranscript");
         transcript_->setWordWrap(true);
-        transcript_->setMinimumHeight(44);
-        transcript_->setMaximumHeight(60);
+        transcript_->setMinimumHeight(64);
+        transcript_->setMaximumHeight(120);
         transcript_->setCursor(Qt::PointingHandCursor);
         transcript_->installEventFilter(this);
         root->addWidget(transcript_);
@@ -151,20 +157,22 @@ public:
 
     void setStatus(const QString &state, const QString &color,
                    const QString &backend) {
-        status_->setText(
-            QStringLiteral("<span style=\"color:%1;\">●</span> %2 · "
-                           "<span style=\"color:%3;\">%4</span>")
-                .arg(color, state,
-                     ThemeManager::instance().css(QStringLiteral("muted")), backend));
+        Q_UNUSED(backend);  // 模型名改由顶行下拉显示，状态行只留监听态
+        status_->setText(QStringLiteral("<span style=\"color:%1;\">●</span> %2")
+                             .arg(color, state));
     }
 
-    void setDetail(const QString &text) { detail_->setText(text); }
+    void setDetail(const QString &text) {
+        detail_->setText(text);
+        detail_->setVisible(!text.isEmpty());
+    }
 
     void setBackendChecked(int backend) {
-        for (int i = 0; i < modeButtons_.size(); ++i) {
-            modeButtons_.at(i)->setChecked(i == backend);
-        }
+        const QSignalBlocker block(backendCombo_);
+        backendCombo_->setCurrentIndex(backend);
     }
+
+    void refreshDispatch() { dispatch_->refresh(); }
 
     void setTranscript(const QString &text, int costMs) {
         text_ = text;
@@ -183,7 +191,8 @@ public:
     QLabel *detail_ = nullptr;
     QLabel *transcript_ = nullptr;
     QLabel *hint_ = nullptr;
-    QVector<QPushButton *> modeButtons_;
+    QComboBox *backendCombo_ = nullptr;
+    DispatchPicker *dispatch_ = nullptr;
     QString text_;
 
 protected:
@@ -1390,6 +1399,7 @@ void VoicePet::ensureBubble() {
 void VoicePet::expandCard() {
     ensureCard();
     refreshState();
+    card_->refreshDispatch();  // 宿主存活/窗口可见会变，展开时重建列表
     card_->adjustSize();
     QScreen *scr = screen();
     if (scr == nullptr) {

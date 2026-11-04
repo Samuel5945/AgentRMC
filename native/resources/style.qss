@@ -922,9 +922,10 @@ QListWidget#voiceHistory::item:pressed {
 /* ---------- 语音桌宠 ---------- */
 
 QWidget#petCard {
-    background: @dialog.bg@;
-    border: 1px solid @w26@;
-    border-radius: 12px;
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                                stop:0 @bubble.bg@, stop:1 @bubble.bg2@);
+    border: 1px solid @bubble.border@;
+    border-radius: 16px;
 }
 
 QLabel#petStatus {
@@ -940,19 +941,24 @@ QLabel#petDetail {
     font-size: 11px;
 }
 
-QPushButton#petMode {
+/* 卡内下拉（顶行识别模型 + 中部宿主/会话）统一紧凑圆角，跟卡片同族。 */
+#petCard QComboBox {
     background: @w8@;
     border: 1px solid @w16@;
     border-radius: 8px;
-    color: @muted@;
-    font-size: 11px;
-    padding: 4px 2px;
-}
-
-QPushButton#petMode:checked {
-    background: @a58@;
-    border: 1px solid @a130@;
     color: @text@;
+    font-size: 11px;
+    padding: 4px 6px;
+}
+#petCard QComboBox::drop-down {
+    border: none;
+    width: 16px;
+}
+#petCard QComboBox QAbstractItemView {
+    background: @dialog.bg@;
+    color: @text@;
+    selection-background-color: @a58@;
+    border: 1px solid @w16@;
 }
 
 QLabel#petTranscript {
@@ -969,9 +975,4 @@ QLabel#petTranscript {
 QLabel#petBubble {
     color: @text@;
     font-size: 12px;
-}
-
-QPushButton#petMode {
-    font-size: 10px;
-    padding: 4px 0;
 }

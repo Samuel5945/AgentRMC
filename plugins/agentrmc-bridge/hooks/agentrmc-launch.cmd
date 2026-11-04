@@ -26,13 +26,16 @@ goto collect
 :resolve
 set "RUNTIME="
 if defined AGENTRMC_NODE set "RUNTIME=%AGENTRMC_NODE%"
+call :usable
 if defined RUNTIME goto run
 if defined QODER_NODE_RUNTIME set "RUNTIME=%QODER_NODE_RUNTIME%"
+call :usable
 if defined RUNTIME goto run
 
 rem Runtime the desktop app resolved from the hosts it sees running.
 set "APPHINT=%LOCALAPPDATA%\AgentRMC\runtime\node.txt"
 if exist "%APPHINT%" for /f "usebackq delims=" %%R in ("%APPHINT%") do if not defined RUNTIME set "RUNTIME=%%R"
+call :usable
 if defined RUNTIME goto run
 
 rem Real node on PATH or in a well-known spot (hosts like WorkBuddy ship their own).
@@ -52,6 +55,7 @@ rem Last resort: the nearest non-shell ancestor is the host that spawned this ho
 set "PROBE=%HERE%agentrmc-runtime.ps1"
 if not exist "%PROBE%" goto done
 for /f "usebackq delims=" %%R in (`powershell -NoProfile -ExecutionPolicy Bypass -File "%PROBE%" 2^>nul`) do if not defined RUNTIME set "RUNTIME=%%R"
+call :usable
 if defined RUNTIME goto run
 goto done
 
@@ -70,3 +74,16 @@ exit /b %ERRORLEVEL%
 :done
 endlocal
 exit /b 0
+
+rem A candidate can name a file that is gone: the app's hint outlives the host it
+rem points at (nothing rewrites it while AgentRMC is closed), and an override can
+rem be stale. Drop it so the later fallbacks still get a turn instead of the hook
+rem dying on a missing exe. Bare names (AGENTRMC_NODE=node) resolve through PATH.
+:usable
+if not defined RUNTIME goto :eof
+if exist "%RUNTIME%" goto :eof
+set "FOUND="
+for %%N in ("%RUNTIME%") do set "FOUND=%%~$PATH:N"
+if not defined FOUND for %%N in ("%RUNTIME%.exe") do set "FOUND=%%~$PATH:N"
+set "RUNTIME=%FOUND%"
+goto :eof

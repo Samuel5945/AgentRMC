@@ -16,7 +16,8 @@ DeepSeek Harness、OpenSquilla 七个宿主的等确认、等选方案、待验�
 > OpenSquilla; the pet bubbles and speaks when they need you and returns you to
 > the right agent. It also does LLM chat, offline ASR (SenseVoice / Qwen3-ASR),
 > theme-aware TTS, and turns a BLE projector remote and headset into key / voice
-> input terminals. Qt 6 / C++, zero drivers.
+> input terminals. The bridge plugin needs no Node.js on the agent machine — it
+> finds a runtime on PATH or borrows the host's own Electron. Qt 6 / C++, zero drivers.
 
 **关键词**：多 Agent · AI Agent · Agent 待办 · 任务完成提醒 · 桌面助理 · 桌宠 ·
 桌面宠物 · 语音助手 · 语音交互 · 离线语音识别 · SenseVoice · Qwen3-ASR · TTS ·
@@ -37,7 +38,8 @@ Harness, OpenSquilla, BLE remote, Qt 6, C++, Windows
 - 🔔 **Agent 提醒**：任务完成、等确认时桌宠自动冒泡 + 语音；等确认 / 等选方案会把
   Agent 窗口拉回前台，完成提醒点一下气泡再回去（不抢你正在做的事）；MCP 四工具
   （pet_notify / pet_speak / pet_state / pet_work_update）让 Agent 汇报进度、
-  让桌宠出声、查桌宠状态
+  让桌宠出声、查桌宠状态。**装 Agent 的机器不必装 Node**：插件自己找运行时，
+  找不到就借宿主自带的 Electron
 - 🩺 **系统状态**：「系统」页显示桥接端口、运行时长、最近事件、离线待补、Worker 表
   与健康问题；端口被占用自动重试，AgentRMC 没开时通知先落盘、启动后补投
 - 🐋 **语音桌宠**：说话 → 转写 → LLM → 气泡 + 朗读的完整闭环，带多轮记忆；
@@ -54,10 +56,12 @@ Harness, OpenSquilla, BLE remote, Qt 6, C++, Windows
 实测机型为极米「快乐星球 O3」13 键 BLE 遥控器（VID `0x000D` / PID `0x3838`）；
 同款 HID 遥控器改 `config.json` 的 `device_mark` 即可复用。
 
-当前实现是 **C++/Qt 6 原生版**（`native/`，v0.3.9；按键映射不接 LLM，动作直接交给 Qoder / WorkBuddy 等前台 Agent；只有桌宠对话模式会调用你在「对话设置」里自配的 LLM）。
+当前实现是 **C++/Qt 6 原生版**（`native/`，v0.4.0；按键映射不接 LLM，动作直接交给 Qoder / WorkBuddy 等前台 Agent；只有桌宠对话模式会调用你在「对话设置」里自配的 LLM）。
 Python 版留在 `legacy-python` 分支，两版读写同一套 `config.json` / `profiles.json`。
 
-当前 0.3.9：新增「待我处理」多 Agent 收件箱、「系统」健康页与「接入 Agent」一键弹窗；联动插件与 Native 同号。
+当前 0.4.0：语音主界面重排到一屏放得下、桌宠形象与配色主题拆开各调各的、每台宿主的派活方式可单独设；
+**装 Agent 的那台机器不需要 Node**——联动插件自己找运行时（PATH 上的 node，找不到就借宿主自带的
+Electron），没 node 也不再静默失联。联动插件与 Native 同号。
 
 <p align="center">
   <img src="assets/screenshots/agentrmc-inbox.jpg" alt="AgentRMC「待我处理」：Qoder、Qoder CN、ZCode、WorkBuddy、DeepSeek Harness、OpenSquilla 等七个 Agent 的待办收进一张列表" width="100%">
@@ -600,7 +604,9 @@ WorkBuddy AI 走同一套 hooks：
 
 安装：走「系统」页 →「接入 Agent」一键装，或按宿主手动来——ZCode / WorkBuddy
 在市场里添加本仓库 `plugins/` 目录（或安装目录里的 `plugins\`），Qoder / Qoder CN
-上传 `agentrmc-bridge.zip`。前提：node 在 PATH、AgentRMC ≥ v0.3.4。
+上传 `agentrmc-bridge.zip`。前提：AgentRMC ≥ v0.3.4；**不需要装 Node**——hooks 经
+`hooks/agentrmc-launch.cmd` 启动，先找 PATH 上的 node，找不到就借宿主自带的 Electron
+（`ELECTRON_RUN_AS_NODE=1`），Qoder 的 MCP 走宿主的 `${QODER_NODE_RUNTIME}`。
 
 ### DeepSeek Harness 插件（0.3.9 起）
 

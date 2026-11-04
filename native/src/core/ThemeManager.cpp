@@ -537,8 +537,10 @@ void ThemeManager::setScheme(const QString &scheme) {
         store_->setUiString(QStringLiteral("color_scheme"), s);
     }
     // classic 与带浅色变体的主题吃配色模式；没变体的只记下偏好。
+    // 必须按 current_.id 重载：曾写死 buildClassicTheme()，鲸鱼娘一切
+    // 配色就被偷换成 classic（2026-11-04 用户实测）。
     if (current_.id == QStringLiteral("classic") || current_.hasLightVariant()) {
-        current_ = composeCharacter(buildClassicTheme());
+        current_ = composeCharacter(loadTheme(current_.id));
         applyQss();
         emit themeChanged(current_);
     }

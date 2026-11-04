@@ -2,7 +2,7 @@
 // 只测纯函数，不碰 QApplication / setStyleSheet。
 #include "core/ThemeManager.h"
 
-#include <QCoreApplication>
+#include <QApplication>
 #include <QDir>
 #include <QFile>
 #include <QJsonDocument>
@@ -31,7 +31,9 @@ void writeFile(const QString &path, const QString &content) {
 }  // namespace
 
 int main(int argc, char *argv[]) {
-    QCoreApplication app(argc, argv);
+    // setTheme/setScheme 会走 applyQss → qApp->setStyleSheet，需要真
+    // QApplication（QCoreApplication 下段错误）；不弹窗，仅测试实例行为。
+    QApplication app(argc, argv);
 
     const auto classic = ThemeManager::classicPalette();
     check(classic.size() >= 50, "classic palette has all tokens");
@@ -384,6 +386,63 @@ int main(int argc, char *argv[]) {
     const QString badId = ThemeManager::importThemePackageTo(
         dir.filePath(QStringLiteral("bad.zip")), themesDir, &badError);
     check(badId.isEmpty() && !badError.isEmpty(), "corrupt zip rejected");
+
+    // 回归：带浅色变体的主题切配色模式必须留在自己 id 上。曾把 setScheme
+    // 的重建写死 buildClassicTheme()，鲸鱼娘一切浅/深就被偷换成 classic。
+    // 造一个真主题放进 themesRoot()（exe 旁 themes/），用完删掉。
+    const QString liveDir =
+        ThemeManager::themesRoot() + QStringLiteral("/__scheme_probe");
+    QDir().mkpath(liveDir + QStringLiteral("/backgrounds"));
+    writeFile(liveDir + QStringLiteral("/theme.json"),
+              QStringLiteral(R"json({"displayName": "切色探针",
+                  "palette": {"light": {"card.bg": "rgba(255,255,255,200)"}},
+                  "backgrounds": {"main": "backgrounds/main.png", "dim": 0.4,
+                      "light": {"main": "backgrounds/main.light.png",
+                                "dim": 0.15}}})json"));
+    writeFile(liveDir + QStringLiteral("/backgrounds/main.png"),
+              QStringLiteral("x"));
+    writeFile(liveDir + QStringLiteral("/backgrounds/main.light.png"),
+              QStringLiteral("x"));
+    tm.rescan();
+    tm.setTheme(QStringLiteral("__scheme_probe"));
+    tm.setScheme(QStringLiteral("dark"));
+    check(tm.currentId() == QStringLiteral("__scheme_probe"),
+          "scheme switch keeps custom theme id (dark)");
+    check(tm.current().mainBackground.endsWith(QStringLiteral("/main.png")),
+          "dark scheme keeps dark background");
+    tm.setScheme(QStringLiteral("light"));
+    check(tm.currentId() == QStringLiteral("__scheme_probe"),
+          "scheme switch keeps custom theme id (light)");
+    check(tm.current().mainBackground.endsWith(QStringLiteral("/main.light.png")),
+          "light scheme swaps to light background");
+    check(tm.isLightActive(), "light scheme active on variant theme");
+    check(tm.current().palette.value(QStringLiteral("text")) ==
+              QStringLiteral("#171e2a"),
+          "light scheme applies light palette text");
+    tm.setScheme(QStringLiteral("dark"));
+    check(tm.currentId() == QStringLiteral("__scheme_probe") &&
+              !tm.isLightActive(),
+          "back to dark stays on theme and deactivates light");
+    // 没变体的主题切配色只记偏好，不换主题也不换外观。
+    tm.setTheme(QStringLiteral("__scheme_novariant"));
+    QDir().mkpath(ThemeManager::themesRoot() +
+                  QStringLiteral("/__scheme_novariant"));
+    writeFile(ThemeManager::themesRoot() +
+                  QStringLiteral("/__scheme_novariant/theme.json"),
+              QStringLiteral(R"({"displayName": "无变体"})"));
+    tm.rescan();
+    tm.setTheme(QStringLiteral("__scheme_novariant"));
+    tm.setScheme(QStringLiteral("light"));
+    check(tm.currentId() == QStringLiteral("__scheme_novariant") &&
+              !tm.isLightActive(),
+          "variant-less theme ignores scheme for appearance");
+    tm.setTheme(QStringLiteral("classic"));
+    tm.setScheme(QStringLiteral("dark"));
+    QDir(ThemeManager::themesRoot() + QStringLiteral("/__scheme_probe"))
+        .removeRecursively();
+    QDir(ThemeManager::themesRoot() + QStringLiteral("/__scheme_novariant"))
+        .removeRecursively();
+    tm.rescan();
 
     if (failures == 0) {
         std::printf("PASS native theme: palette / manifest / qss render\n");

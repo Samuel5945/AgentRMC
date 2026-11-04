@@ -616,7 +616,7 @@ check('hooks-qoder 注册了 PreToolUse + matcher=AskUserQuestion', () => {
   const group = h.hooks.PreToolUse[0];
   assert.strictEqual(group.matcher, 'AskUserQuestion');
   assert.strictEqual(group.async, true);
-  assert.deepStrictEqual(group.hooks[0].args, ['${QODER_PLUGIN_ROOT}/hooks/agentrmc-notify.js', 'question']);
+  assert.match(group.hooks[0].command, /agentrmc-launch\.cmd" question$/);
   assert.strictEqual(group.hooks[0].timeout, 3);
 });
 
@@ -628,10 +628,7 @@ check('hooks 注册 UserPromptSubmit: 新一轮对话清旧验收', () => {
   const qoder = JSON.parse(
     fs.readFileSync(path.join(PLUGIN_ROOT, 'hooks-qoder', 'hooks.json'), 'utf8'),
   );
-  assert.deepStrictEqual(qoder.hooks.UserPromptSubmit[0].hooks[0].args, [
-    '${QODER_PLUGIN_ROOT}/hooks/agentrmc-notify.js',
-    'turn-start',
-  ]);
+  assert.match(qoder.hooks.UserPromptSubmit[0].hooks[0].command, /agentrmc-launch\.cmd" turn-start$/);
 });
 
 check('turn-start DRY_RUN: 带 session 且不出声', () => {
@@ -650,7 +647,7 @@ check('hooks-workbuddy 注册了 PreToolUse + matcher=AskUserQuestion（清单�
   const h = JSON.parse(fs.readFileSync(path.join(PLUGIN_ROOT, 'hooks-workbuddy', 'hooks.json'), 'utf8'));
   const group = h.hooks.PreToolUse[0];
   assert.strictEqual(group.matcher, 'AskUserQuestion');
-  assert.strictEqual(group.hooks[0].command, 'node "${CLAUDE_PLUGIN_ROOT}/hooks/agentrmc-notify.js" question');
+  assert.match(group.hooks[0].command, /agentrmc-launch\.cmd" question$/);
   assert.strictEqual(group.hooks[0].timeout, 3);
   const manifest = JSON.parse(
     fs.readFileSync(path.join(PLUGIN_ROOT, '.codebuddy-plugin', 'plugin.json'), 'utf8'),

@@ -9,7 +9,7 @@
   "hooks": "./hooks",
   "mcpServers": {
     "agentrmc": {
-      "command": "node",
+      "command": "${CLAUDE_PLUGIN_ROOT}/hooks/agentrmc-launch.cmd",
       "args": [
         "${CLAUDE_PLUGIN_ROOT}/mcp/server.js"
       ]

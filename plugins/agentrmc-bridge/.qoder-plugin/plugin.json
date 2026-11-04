@@ -17,7 +17,7 @@
   "hooks": "./hooks-qoder/hooks.json",
   "mcpServers": {
     "agentrmc": {
-      "command": "node",
+      "command": "${QODER_NODE_RUNTIME}",
       "args": [
         "${QODER_PLUGIN_ROOT}/mcp/server.js"
       ]

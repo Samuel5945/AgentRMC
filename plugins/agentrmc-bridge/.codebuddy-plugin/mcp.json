@@ -1,7 +1,7 @@
 {
   "mcpServers": {
     "agentrmc": {
-      "command": "node",
+      "command": "${CODEBUDDY_PLUGIN_ROOT}/hooks/agentrmc-launch.cmd",
       "args": ["${CODEBUDDY_PLUGIN_ROOT}/mcp/server.js"]
     }
   }

@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/agentrmc-notify.js\" turn-start",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/agentrmc-launch.cmd\" turn-start",
             "timeout": 3
           }
         ]
@@ -16,7 +16,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/agentrmc-notify.js\" permission",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/agentrmc-launch.cmd\" permission",
             "timeout": 3
           }
         ]
@@ -27,7 +27,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/agentrmc-notify.js\" stop",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/agentrmc-launch.cmd\" stop",
             "timeout": 3
           }
         ]

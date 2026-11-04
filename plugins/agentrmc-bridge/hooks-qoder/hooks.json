@@ -6,11 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node",
-            "args": [
-              "${QODER_PLUGIN_ROOT}/hooks/agentrmc-notify.js",
-              "turn-start"
-            ],
+            "command": "\"${QODER_PLUGIN_ROOT}/hooks/agentrmc-launch.cmd\" turn-start",
             "name": "agentrmc-notify-turn-start",
             "timeout": 3
           }
@@ -23,11 +19,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node",
-            "args": [
-              "${QODER_PLUGIN_ROOT}/hooks/agentrmc-notify.js",
-              "permission"
-            ],
+            "command": "\"${QODER_PLUGIN_ROOT}/hooks/agentrmc-launch.cmd\" permission",
             "name": "agentrmc-notify-permission",
             "timeout": 3
           }
@@ -41,11 +33,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node",
-            "args": [
-              "${QODER_PLUGIN_ROOT}/hooks/agentrmc-notify.js",
-              "question"
-            ],
+            "command": "\"${QODER_PLUGIN_ROOT}/hooks/agentrmc-launch.cmd\" question",
             "name": "agentrmc-notify-question",
             "timeout": 3
           }
@@ -58,11 +46,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node",
-            "args": [
-              "${QODER_PLUGIN_ROOT}/hooks/agentrmc-notify.js",
-              "stop"
-            ],
+            "command": "\"${QODER_PLUGIN_ROOT}/hooks/agentrmc-launch.cmd\" stop",
             "name": "agentrmc-notify-stop",
             "timeout": 3
           }

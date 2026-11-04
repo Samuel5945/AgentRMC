@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/agentrmc-notify.js\" prompt",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/agentrmc-launch.cmd\" prompt",
             "timeout": 3
           }
         ]
@@ -18,7 +18,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/agentrmc-notify.js\" question",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/agentrmc-launch.cmd\" question",
             "timeout": 3
           }
         ]

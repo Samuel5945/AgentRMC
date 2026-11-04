@@ -75,7 +75,8 @@ Qoder CN 是两个独立配置家，装一家另一家不会自动有。
 
 宿主在**会话开始时**把 `${QODER_PLUGIN_ROOT}` 解析成带版本号的缓存目录，并把它烧进
 hook 命令行里。官方安装器装新版时会**删掉上一版目录**，于是那个还开着的会话每次触发
-hook 都是 `node <已经不存在的文件>`——静默失败，不冒气泡也不报错，看起来像「桌宠不提醒了」。
+hook 都是 `agentrmc-launch.cmd <已经不存在的文件>`——静默失败，不冒气泡也不报错，
+看起来像「桌宠不提醒了」。
 
 - 判据：App「系统」页那一家挂着「等新版上报」，收到任意一条 hook 就自己清掉；
 - 恢复：新开会话，或重启该宿主；
@@ -146,7 +147,15 @@ Qoder 同时导出 `${QODER_PLUGIN_ROOT}` 和 `${CLAUDE_PLUGIN_ROOT}`，也认 m
 - ZCode 或 Qoder（桌面版）+ 本插件；
 - AgentRMC 安装包需带 AgentBridge；**按 `raise` 拉前台要 2026-11-02 起的构建**，
   旧版只提醒不拉窗口；
-- `node` 在 PATH（hooks 与 MCP 都用 `node` 调起）。
+- **Node 运行时不用自己装**：hooks 与 MCP 都经 `hooks/agentrmc-launch.cmd` 启动，
+  按顺序找——`AGENTRMC_NODE` 显式覆盖 → 宿主注入的 `QODER_NODE_RUNTIME` →
+  App 询盘结果（`%LOCALAPPDATA%\AgentRMC\runtime\node.txt`，App 从运行中的宿主
+  进程里解析）→ PATH 上的 `node`（含 Program Files / Volta / scoop）→ 问 Windows
+  「谁启动了我」，把最近的宿主 exe 当 Node 用（`ELECTRON_RUN_AS_NODE=1`）。
+  全落空就静默 `exit /b 0`——提醒不发，但绝不卡住会话。宿主装在哪台机器、哪个盘
+  都不影响：清单里不再出现裸 `node`，也不写死任何安装目录。
+  Qoder 的 MCP 用清单里的 `${QODER_NODE_RUNTIME}`（Qoder 自己解析成内置 Node，
+  比包一层 cmd 更干净）。
 
 ## 安装
 

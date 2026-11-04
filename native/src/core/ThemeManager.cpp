@@ -118,6 +118,11 @@ QHash<QString, QString> ThemeManager::classicPalette() {
     m_.insert(QStringLiteral("accent2.hover"), QStringLiteral("#8d70ff"));
     m_.insert(QStringLiteral("bg"), QStringLiteral("#0b0e14"));
     m_.insert(QStringLiteral("bubble.bg"), QStringLiteral("rgba(15, 20, 29, 242)"));
+    // 气泡渐变第二停 / 描边 / 可点击描边：classic 默认与旧观感完全一致
+    // （渐变两停同色=平涂，描边与可点击态都用 w30 的旧值），美术主题单独覆盖。
+    m_.insert(QStringLiteral("bubble.bg2"), QStringLiteral("rgba(15, 20, 29, 242)"));
+    m_.insert(QStringLiteral("bubble.border"), QStringLiteral("rgba(255, 255, 255, 30)"));
+    m_.insert(QStringLiteral("bubble.accent"), QStringLiteral("rgba(255, 255, 255, 30)"));
     m_.insert(QStringLiteral("card.bg"), QStringLiteral("#121722"));
     // 卡片渐变第二停：主题想给卡片做半透明时单独改它；raised 还被
     // QMenu/QToolTip/下拉弹出层当顶层窗口底色用，不能跟着变透明。
@@ -169,6 +174,12 @@ QHash<QString, QString> ThemeManager::classicLightPalette() {
     m_.insert(QStringLiteral("msgbox.bg"), QStringLiteral("#ffffff"));
     m_.insert(QStringLiteral("bubble.bg"),
               QStringLiteral("rgba(255, 255, 255, 245)"));
+    m_.insert(QStringLiteral("bubble.bg2"),
+              QStringLiteral("rgba(255, 255, 255, 245)"));
+    m_.insert(QStringLiteral("bubble.border"),
+              QStringLiteral("rgba(15, 23, 42, 60)"));
+    m_.insert(QStringLiteral("bubble.accent"),
+              QStringLiteral("rgba(15, 23, 42, 60)"));
     m_.insert(QStringLiteral("guide.image.bg"), QStringLiteral("#ffffff"));
     // 字色：浅底深字，主次层级与深色版一一对应（text 最重、body 最轻）。
     m_.insert(QStringLiteral("text"), QStringLiteral("#171e2a"));
@@ -280,10 +291,30 @@ QImage ThemeManager::cachedImage(const QString &path) {
 
 QString ThemeManager::renderQss(const QString &qssTemplate,
                                 const QHash<QString, QString> &palette,
-                                const QString &rootBackgroundImage) {
+                                const QString &rootBackgroundImage,
+                                qreal fontScale) {
     QString out = qssTemplate;
     for (auto it = palette.begin(); it != palette.end(); ++it) {
         out.replace(QStringLiteral("@%1@").arg(it.key()), it.value());
+    }
+    if (!qFuzzyCompare(fontScale, 1.0)) {
+        // 字号倍率：把 QSS 里所有 font-size: Npx 等比缩放（取整到整像素，
+        // 子像素字号渲染发虚）。最小 7px 保底可读；行高/边距不动。
+        static const QRegularExpression re(
+            QStringLiteral("font-size\\s*:\\s*([0-9]+(?:\\.[0-9]+)?)px"));
+        QString scaled;
+        qsizetype pos = 0;
+        auto it = re.globalMatch(out);
+        while (it.hasNext()) {
+            const auto match = it.next();
+            scaled += out.mid(pos, match.capturedStart() - pos);
+            const qreal px = match.captured(1).toDouble();
+            scaled += QStringLiteral("font-size: %1px")
+                          .arg(qMax(7, qRound(px * fontScale)));
+            pos = match.capturedEnd();
+        }
+        scaled += out.mid(pos);
+        out = scaled;
     }
     if (!rootBackgroundImage.isEmpty()) {
         // 路径必须正斜杠：QSS 的 url() 里反斜杠会被当 CSS 转义序列吃掉。
@@ -367,6 +398,41 @@ Theme ThemeManager::parseThemeBody(const ThemeInfo &info) {
     theme.mainBackground = QFile::exists(mainBg) ? mainBg : QString();
     theme.panelBackground = QFile::exists(panelBg) ? panelBg : QString();
     theme.dim = qBound(0.0, backgrounds.value("dim").toDouble(0.55), 0.9);
+
+    // 浅色变体（可选）：主题带 backgrounds.light / palette.light 才吃配色
+    // 模式；缺文件、缺字段都按「没有变体」处理，浅色时整套沿用深色值。
+    const QJsonObject lightBg = backgrounds.value("light").toObject();
+    const QString mainBgLight = absolutePath(
+        info.dir, lightBg.value("main").toString());
+    const QString panelBgLight = absolutePath(
+        info.dir, lightBg.value("panel").toString());
+    theme.mainBackgroundLight = QFile::exists(mainBgLight) ? mainBgLight : QString();
+    theme.panelBackgroundLight = QFile::exists(panelBgLight) ? panelBgLight : QString();
+    theme.dimLight = qBound(0.0, lightBg.value("dim").toDouble(0.08), 0.9);
+    QHash<QString, QString> lightOverrides;
+    const QJsonObject lightPal = root.value("palette").toObject()
+                                     .value("light").toObject();
+    for (auto it = lightPal.begin(); it != lightPal.end(); ++it) {
+        lightOverrides.insert(it.key(), it.value().toString());
+    }
+    // 只有真给了浅色 token 或浅色插画才算有变体（空对象不激活浅色模式）。
+    if (!lightOverrides.isEmpty() || !theme.mainBackgroundLight.isEmpty() ||
+        !theme.panelBackgroundLight.isEmpty()) {
+        QHash<QString, QString> merged = classicLightPalette();
+        for (auto it = lightOverrides.begin(); it != lightOverrides.end(); ++it) {
+            if (!it.value().trimmed().isEmpty()) {
+                merged.insert(it.key(), it.value().trimmed());
+            }
+        }
+        theme.paletteLight = merged;
+    }
+
+    // 气泡装饰贴纸（可选）：桌宠说话气泡里的半透明小气泡素材；
+    // 缺文件/缺字段都清空，运行时自动退化为无装饰。
+    const QJsonObject bubbleObj = root.value("bubble").toObject();
+    const QString decor = absolutePath(
+        info.dir, bubbleObj.value("decor").toString());
+    theme.bubbleDecor = QFile::exists(decor) ? decor : QString();
     const QJsonObject voiceObj = root.value("voice").toObject();
     theme.voiceName = voiceObj.value("name").toString().trimmed();
     theme.voiceStyle = voiceObj.value("style").toString().trimmed();
@@ -393,7 +459,22 @@ Theme ThemeManager::loadTheme(const QString &id) const {
             if (info.id != id || !info.valid) {
                 continue;
             }
-            return parseThemeBody(info);
+            // 浅色模式：优先浅色插画（没带就用深色原图），配色同理。
+            // 形象字段在后面 composeCharacter 统一覆盖，这里只管外观。
+            Theme theme = parseThemeBody(info);
+            if (prefersLight() && theme.hasLightVariant()) {
+                if (!theme.mainBackgroundLight.isEmpty()) {
+                    theme.mainBackground = theme.mainBackgroundLight;
+                }
+                if (!theme.panelBackgroundLight.isEmpty()) {
+                    theme.panelBackground = theme.panelBackgroundLight;
+                }
+                if (!theme.paletteLight.isEmpty()) {
+                    theme.palette = theme.paletteLight;
+                }
+                theme.dim = theme.dimLight;
+            }
+            return theme;
         }
     }
     // classic 永远内置兜底；主题不存在/损坏也回落到它。浅色/深色由配色模式决定。
@@ -431,12 +512,16 @@ QString ThemeManager::css(const QString &token) const {
     return current_.palette.value(token);
 }
 
-bool ThemeManager::isClassicLight() const {
-    if (current_.id != QStringLiteral("classic")) {
-        return false;
-    }
+bool ThemeManager::prefersLight() const {
     return scheme_ == QStringLiteral("light") ||
            (scheme_ == QStringLiteral("auto") && systemPrefersLight());
+}
+
+bool ThemeManager::isLightActive() const {
+    if (!prefersLight()) {
+        return false;
+    }
+    return current_.id == QStringLiteral("classic") || current_.hasLightVariant();
 }
 
 void ThemeManager::setScheme(const QString &scheme) {
@@ -451,8 +536,8 @@ void ThemeManager::setScheme(const QString &scheme) {
     if (store_ != nullptr) {
         store_->setUiString(QStringLiteral("color_scheme"), s);
     }
-    // 只有 classic 吃配色模式；自定义主题自带配色，选中时只记下偏好。
-    if (current_.id == QStringLiteral("classic")) {
+    // classic 与带浅色变体的主题吃配色模式；没变体的只记下偏好。
+    if (current_.id == QStringLiteral("classic") || current_.hasLightVariant()) {
         current_ = composeCharacter(buildClassicTheme());
         applyQss();
         emit themeChanged(current_);
@@ -465,7 +550,7 @@ bool ThemeManager::nativeEventFilter(const QByteArray &eventType, void *message,
     Q_UNUSED(result);
 #ifdef Q_OS_WIN
     if (scheme_ == QStringLiteral("auto") &&
-        current_.id == QStringLiteral("classic")) {
+        (current_.id == QStringLiteral("classic") || current_.hasLightVariant())) {
         const MSG *msg = static_cast<const MSG *>(message);
         // 系统深浅色切换广播 WM_SETTINGCHANGE，lParam 是 "ImmersiveColorSet"。
         if (msg->message == WM_SETTINGCHANGE && msg->lParam != 0) {
@@ -475,13 +560,16 @@ bool ThemeManager::nativeEventFilter(const QByteArray &eventType, void *message,
                 // 延后一拍：别在系统消息回调里直接 setStyleSheet 重刷整窗。
                 QTimer::singleShot(0, this, [this] {
                     if (scheme_ != QStringLiteral("auto") ||
-                        current_.id != QStringLiteral("classic")) {
+                        (current_.id != QStringLiteral("classic") &&
+                         !current_.hasLightVariant())) {
                         return;
                     }
-                    const Theme rebuilt = buildClassicTheme();
+                    const Theme rebuilt = composeCharacter(loadTheme(current_.id));
                     if (rebuilt.palette.value(QStringLiteral("bg")) !=
-                        current_.palette.value(QStringLiteral("bg"))) {
-                        current_ = composeCharacter(rebuilt);
+                            current_.palette.value(QStringLiteral("bg")) ||
+                        rebuilt.mainBackground != current_.mainBackground ||
+                        rebuilt.panelBackground != current_.panelBackground) {
+                        current_ = rebuilt;
                         applyQss();
                         emit themeChanged(current_);
                     }
@@ -510,7 +598,7 @@ void ThemeManager::applyQss() {
         }
     }
     qApp->setStyleSheet(
-        renderQss(qss, palette, current_.mainBackground));
+        renderQss(qss, palette, current_.mainBackground, fontScale()));
 }
 
 QColor ThemeManager::parsePaletteColor(const QString &value) {
@@ -553,12 +641,24 @@ qreal ThemeManager::backdropDim() const {
     if (backdropDim_ >= 0) {
         return backdropDim_;
     }
+    // 浅色插画的遮罩是白纱：压暗下限不适用（主题作者自己调 dim.light）。
+    if (isLightActive() && !current_.mainBackground.isEmpty()) {
+        return qBound<qreal>(0.0, current_.dim, 0.9);
+    }
     // 主窗信息密度高：主题写的 dim 只当「想更暗」的加成，保底 0.38。
     return qBound<qreal>(0.38, current_.dim, 0.9);
 }
 
+qreal ThemeManager::fontScale() const {
+    return fontScale_ > 0 ? fontScale_ : 1.0;
+}
+
+int ThemeManager::scaledPx(qreal px) {
+    return qMax(7, qRound(px * instance().fontScale()));
+}
+
 bool ThemeManager::hasAppearanceOverride() const {
-    return cardAlpha_ >= 0 || backdropDim_ >= 0;
+    return cardAlpha_ >= 0 || backdropDim_ >= 0 || fontScale_ > 0;
 }
 
 void ThemeManager::setCardAlpha(int alpha) {
@@ -580,12 +680,28 @@ void ThemeManager::setBackdropDim(qreal dim) {
     emit themeChanged(current_);
 }
 
+void ThemeManager::setFontScale(qreal scale) {
+    const qreal clamped = qBound<qreal>(0.8, scale, 1.5);
+    if (qFuzzyCompare(clamped, fontScale_)) {
+        return;
+    }
+    fontScale_ = clamped;
+    if (store_ != nullptr) {
+        store_->setUiString(QStringLiteral("font_scale"),
+                            QString::number(qRound(fontScale_ * 100)));
+    }
+    applyQss();
+    emit themeChanged(current_);
+}
+
 void ThemeManager::resetAppearance() {
     cardAlpha_ = -1;
     backdropDim_ = -1.0;
+    fontScale_ = 0.0;
     if (store_ != nullptr) {
         store_->setUiString(QStringLiteral("card_alpha"), QString());
         store_->setUiString(QStringLiteral("backdrop_dim"), QString());
+        store_->setUiString(QStringLiteral("font_scale"), QString());
     }
     applyQss();
     emit themeChanged(current_);
@@ -618,6 +734,13 @@ void ThemeManager::init(ProfileStore *store) {
         const QString dim = store_->uiString(QStringLiteral("backdrop_dim"));
         if (!dim.isEmpty()) {
             backdropDim_ = qBound<qreal>(0.0, dim.toDouble() / 100.0, 1.0);
+        }
+        const QString fontScale = store_->uiString(QStringLiteral("font_scale"));
+        if (!fontScale.isEmpty()) {
+            const qreal value = fontScale.toDouble() / 100.0;
+            if (value > 0) {
+                fontScale_ = qBound<qreal>(0.8, value, 1.5);
+            }
         }
     }
     applyQss();

@@ -1,6 +1,7 @@
 #include "KeymapPage.h"
 
 #include "core/Presets.h"
+#include "core/ThemeManager.h"
 #include "core/VoiceSettings.h"
 
 #include "ui/ToggleSwitch.h"
@@ -157,6 +158,10 @@ KeymapPage::KeymapPage(ProfileStore *store, QWidget *parent)
     rebuildCombo();
     refreshAll();
 
+    // 换主题 / 拖字体滑块：内联样式的 px 和颜色重算一遍。
+    connect(&ThemeManager::instance(), &ThemeManager::themeChanged, this,
+            [this](const Theme &) { refreshInlineStyles(); });
+
     tick_ = new QTimer(this);
     tick_->setInterval(300);
     connect(tick_, &QTimer::timeout, this, [this] {
@@ -244,7 +249,8 @@ void KeymapPage::buildUi() {
     footHint_ = new QLabel(QStringLiteral("点击手势格改键 · 自动保存"));
     footHint_->setObjectName("mapFoot");
     footHint_->setStyleSheet(
-        "QLabel#mapFoot { color: #5b6472; font-size: 10px; }");
+        QStringLiteral("QLabel#mapFoot { color: #5b6472; font-size: %1px; }")
+            .arg(ThemeManager::scaledPx(10)));
     const QString takeoverTip = QStringLiteral(
         "打开后当前前台场景生效：吞掉映射键原生事件，再按映射注入\n"
         "实体键盘同名键也会按映射处理\n"
@@ -714,23 +720,36 @@ void KeymapPage::syncTakeoverUi() {
     const bool on = store_->uiBool("native_takeover", false);
     takeoverSwitch_->setChecked(on);
     takeoverLabel_->setStyleSheet(
-        QStringLiteral("QLabel#mapTakeover { color: %1; font-size: 10px; }")
+        QStringLiteral("QLabel#mapTakeover { color: %1; font-size: %2px; }")
             .arg(on ? QStringLiteral("#9ec1ff")
-                    : QStringLiteral("#6b7684")));
+                    : QStringLiteral("#6b7684"),
+                 QString::number(ThemeManager::scaledPx(10))));
 }
 
 void KeymapPage::flashHint(const QString &text, const QString &color) {
     footHint_->setText(text);
     footHint_->setStyleSheet(
-        QStringLiteral("QLabel#mapFoot { color: %1; font-size: 10px; }")
-            .arg(color));
+        QStringLiteral("QLabel#mapFoot { color: %1; font-size: %2px; }")
+            .arg(color, QString::number(ThemeManager::scaledPx(10))));
     hintTimer_->start(2600);
 }
 
 void KeymapPage::resetHint() {
     footHint_->setText(QStringLiteral("点击手势格改键 · 自动保存"));
     footHint_->setStyleSheet(
-        QStringLiteral("QLabel#mapFoot { color: #5b6472; font-size: 10px; }"));
+        QStringLiteral("QLabel#mapFoot { color: #5b6472; font-size: %1px; }")
+            .arg(ThemeManager::scaledPx(10)));
+}
+
+void KeymapPage::refreshInlineStyles() {
+    // 主题/字号广播后重算两处内联样式：接管标签和底部提示行的 px 都
+    // 写在样式串里，不重刷就会停在旧字号（旧颜色）上。
+    if (takeoverLabel_ != nullptr) {
+        syncTakeoverUi();
+    }
+    if (footHint_ != nullptr) {
+        resetHint();
+    }
 }
 
 void KeymapPage::openProfiles() {

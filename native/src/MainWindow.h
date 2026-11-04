@@ -28,6 +28,7 @@ class QSystemTrayIcon;
 class QTabWidget;
 class QTableWidget;
 class QTimer;
+class QToolButton;
 class QWidget;
 class AgentBridge;
 class InputEngine;
@@ -54,6 +55,8 @@ public:
     void showOnStartup(bool startHidden);
     // 把主界面叫回来（托盘点击、第二次启动、托盘菜单）。
     void wake();
+    // 标题栏最大化按钮 / 双击标题栏：最大化 ↔ 还原（全屏中先退全屏）。
+    void toggleMaximize();
 
 protected:
     void closeEvent(QCloseEvent *event) override;
@@ -62,6 +65,8 @@ protected:
                      qintptr *result) override;
     // 模型包直接拖进窗口就能装（窗口级拦截，落在哪个子控件上都行）。
     bool eventFilter(QObject *obj, QEvent *event) override;
+    // 窗口态（最大化/全屏）变化时同步标题栏按钮字形。
+    void changeEvent(QEvent *event) override;
 
 private:
     QWidget *buildHeader();
@@ -96,9 +101,11 @@ private:
     // 是要人动手的，走和 hook 同一条提醒通道（气泡 + 语音）。
     QJsonObject reportWorkItem(const QJsonObject &payload);
     // 只喊人、不写工单：事件流一行 + 记宿主 + 气泡/语音/抢前台。
+    // planChoice=「等选方案」类提醒，参与 180s 迟到去重；blocked 自带节流，传 false。
     void announceWork(const QString &kind, const QString &title,
                       const QString &message, const QString &spoken,
-                      const QString &raise, const QString &sessionId);
+                      const QString &raise, const QString &sessionId,
+                      bool planChoice);
     // 联动插件版本对账：{"bundled":内置版,"hosts":[每家 name/installed/loaded/
     // enabled/running/state],"bridges":[不走插件包的外部接入]}。loaded 是 hook
     // 报上来的「此刻真在跑的那版」，注册表只能说盘上装成哪版。需要动手的成因
@@ -183,6 +190,8 @@ private:
     QLabel *statusDot_ = nullptr;
     QLabel *statusText_ = nullptr;
     WaveformButton *voiceKey_ = nullptr;
+    // 标题栏最大化/还原图标：随窗口态在 □ / ❐ 之间切。
+    QToolButton *maximizeBtn_ = nullptr;
     bool voiceRecording_ = false;
     QTimer *voiceLevelTimer_ = nullptr;
     QPushButton *updateButton_ = nullptr;

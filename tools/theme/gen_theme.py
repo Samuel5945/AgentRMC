@@ -11,6 +11,7 @@
     python gen_theme.py ... candidates    # 默认：生成候选帧 + theme.json 脚手架 + 候选对比 preview.png
     python gen_theme.py ... pick          # 启发式代选每状态 2 帧，规整 512x512，拷入 themes/<id>/pet/
     python gen_theme.py ... backgrounds   # 文生图两张背景（压对比 + 暗角）拷入 themes/<id>/backgrounds/
+    python gen_theme.py ... bubble        # 桌宠气泡装饰贴纸（半透明小气泡集群）拷入 themes/<id>/bubble/
     python gen_theme.py ... preview       # 最终 pet 帧 + 背景拼 preview.png 存 themes/<id>/
     python gen_theme.py ... all           # 顺序执行以上全部
 
@@ -562,11 +563,91 @@ def mode_preview(args):
 
 
 # ---------------------------------------------------------------------------
+# 模式五：气泡装饰贴纸（桌宠说话气泡右上角的半透明小气泡集群）
+# ---------------------------------------------------------------------------
+DECOR_PROMPT = (
+    '两三个圆润可爱的半透明小气泡贴纸，大小错落聚成一小簇，'
+    '深蓝色带白色高光，卡通游戏UI装饰素材风格，简洁干净，边缘清晰锐利，'
+    '纯透明背景，背景完全透明，无背景，无文字，无人物，无水印，'
+    'RGBA透明PNG素材'
+)
+DECOR_SIZE = 256  # 32 的倍数；运行时按 ≤48px 高绘制，256 足够清晰
+
+
+def pick_decor(cand_paths):
+    """候选里挑一张：硬条件=有 alpha 且边缘干净；覆盖率越接近 15% 越好
+    （贴纸要轻盈，糊满画布的反而压字）。"""
+    scored = []
+    for p in cand_paths:
+        if not p.exists():
+            continue
+        ok, cov, edge_ok, _ = alpha_stats(Image.open(p))
+        strict = ok and edge_ok and 0.02 <= cov <= 0.60
+        score = -abs(cov - 0.15)
+        if not edge_ok:
+            score -= 1.0
+        if not ok:
+            score -= 5.0
+        scored.append({'file': p, 'strict': strict, 'cov': cov, 'score': score})
+    if not scored:
+        return None
+    strict = [c for c in scored if c['strict']]
+    pool = strict if strict else scored
+    pool.sort(key=lambda c: -c['score'])
+    return pool[0]
+
+
+def mode_bubble(args, comfy):
+    themes_dir = Path(args.themes_dir) if args.themes_dir else \
+        Path(args.out).parent.parent / 'themes'
+    bubble_dir = themes_dir / args.theme_id / 'bubble'
+    bubble_dir.mkdir(parents=True, exist_ok=True)
+    cands_dir = Path(args.out) / 'bubble'
+    cands_dir.mkdir(parents=True, exist_ok=True)
+
+    manifest = []
+    timings = []
+    for j in range(args.candidates):
+        seed = args.seed + 90000 + j
+        prefix = f'{args.theme_id}_bubble_c{j:02d}'
+        try:
+            data, dt = generate_one(comfy, DECOR_PROMPT, DECOR_SIZE,
+                                    DECOR_SIZE, seed, prefix)
+        except Exception as e:  # noqa: BLE001 — 失败继续下一张
+            print(f'  [bubble cand{j}] 失败: {e}')
+            continue
+        timings.append(dt)
+        path = cands_dir / f'cand_{j}.png'
+        path.write_bytes(data)
+        im = Image.open(path)
+        ok, cov, edge_ok, notes = alpha_stats(im)
+        manifest.append({'file': str(path), 'valid': ok and edge_ok,
+                         'coverage': round(cov, 4), 'edge_ok': edge_ok,
+                         'notes': notes, 'seconds': round(dt, 1)})
+        print(f'  [bubble cand{j}] {im.size} {im.mode} 覆盖{cov:.0%} '
+              f'边缘{"OK" if edge_ok else "脏"} {dt:.0f}s '
+              f'{"; ".join(notes) if notes else "合格"}')
+
+    if not manifest:
+        sys.exit('[bubble] 全部候选失败，未写入主题目录')
+    best = pick_decor([Path(e['file']) for e in manifest])
+    if best is None:
+        sys.exit('[bubble] 无合格候选，未写入主题目录')
+    normalize_512(best['file'], bubble_dir / 'decor.png', canvas=DECOR_SIZE,
+                  max_ratio=0.92)
+    tag = '严格合格' if best['strict'] else '放宽（无严格合格候选）'
+    print(f'[bubble] 选用 {best["file"].name}（覆盖{best["cov"]:.0%}，{tag}）'
+          f'→ {bubble_dir / "decor.png"}；'
+          f'平均 {sum(timings) / max(len(timings), 1):.0f}s/张')
+
+
+# ---------------------------------------------------------------------------
 def main():
     ap = argparse.ArgumentParser(
         description='桌宠主题资产生成管线（ComfyUI Qwen-Image 2.1 turbo）')
     ap.add_argument('mode', nargs='?', default='candidates',
-                    choices=['candidates', 'pick', 'backgrounds', 'preview', 'all'])
+                    choices=['candidates', 'pick', 'backgrounds', 'bubble',
+                             'preview', 'all'])
     ap.add_argument('--reference', help='角色参考图（挂 image_1 做参考引导）')
     ap.add_argument('--out', required=True, help='候选输出目录')
     ap.add_argument('--states', default='idle,listening,recording,transcribing,chat')
@@ -583,7 +664,7 @@ def main():
     if args.size % 32:
         sys.exit('--size 必须是 32 的倍数')
 
-    if args.mode in ('candidates', 'backgrounds', 'all'):
+    if args.mode in ('candidates', 'backgrounds', 'bubble', 'all'):
         comfy = Comfy(args.base_url)
     else:
         comfy = None
@@ -594,6 +675,8 @@ def main():
         mode_pick(args)
     if args.mode in ('backgrounds', 'all'):
         mode_backgrounds(args, comfy)
+    if args.mode in ('bubble', 'all'):
+        mode_bubble(args, comfy)
     if args.mode in ('preview', 'all'):
         mode_preview(args)
 

@@ -4,7 +4,7 @@
 // 调 AgentRMC 的 AgentBridge（127.0.0.1:45915）：
 //   session.event.done / chat.done            → POST /notify event=stop       （出声 + 拉窗口）
 //   session.event.approval_required           → POST /notify event=permission （出声 + 拉窗口）
-//   session.event.plan_presentation           → POST /notify event=permission （出声 + 拉窗口）
+//   session.event.plan_presentation           → POST /notify event=question   （出声 + 拉窗口）
 //   session.event.turn_committed              → POST /notify event=turn-start （静默：归档旧验收）
 //
 // 每条通知都带 session_id（网关的会话 key）：原生端靠它把同一会话的旧「待验收」
@@ -164,7 +164,8 @@ function eventKind(evName) {
     return { kind: "permission", tpl: CFG.msgPermission };
   }
   if (evName === "session.event.plan_presentation") {
-    return { kind: "permission", tpl: CFG.msgPlan };
+    // question 类：原生端按事件类型做「等选方案」迟到去重，自定义 --msg-plan 也不失配。
+    return { kind: "question", tpl: CFG.msgPlan };
   }
   if (evName === "session.event.turn_committed") {
     // 新一轮开始：只发归档信号，不出声、不建卡（免打扰时也照发——

@@ -20,6 +20,8 @@ class KeymapPage final : public QFrame {
 public:
     explicit KeymapPage(ProfileStore *store, QWidget *parent = nullptr);
     void refreshAll();
+    // 主题/字号广播后重算内联样式（px 写死在样式串里的那几处）。
+    void refreshInlineStyles();
     int selectedVk() const { return selectedVk_; }
 
 signals:

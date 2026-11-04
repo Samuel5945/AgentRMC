@@ -1,10 +1,12 @@
 #pragma once
 
 #include <QComboBox>
+#include <QImage>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
 #include <QPushButton>
+#include <QSize>
 #include <QTimer>
 
 class QCloseEvent;
@@ -88,4 +90,10 @@ private:
     bool embedded_ = false;
     // 操作说明只给首次使用的人看；用过一次收掉，悬浮提示兜底。
     bool hintSeen_ = false;
+
+    // 主题面板背景的缩放缓存（4K 源图每帧现缩太贵）：按 (路径, 窗口尺寸)
+    // 判失效，换主题换路径、拉窗口换尺寸才重算。
+    QImage artScaled_;
+    QString artScaledPath_;
+    QSize artScaledSize_;
 };

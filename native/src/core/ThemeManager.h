@@ -41,7 +41,18 @@ public:
     bool ring = true;                  // 精灵模式下是否保留状态环
     QString mainBackground;            // 绝对路径，空 = 没有背景图
     QString panelBackground;
+    // 浅色模式变体（theme.json 可选 backgrounds.light / palette.light）：
+    // 空 = 该主题不吃配色模式，浅色时整套沿用上面的深色值。
+    QString mainBackgroundLight;
+    QString panelBackgroundLight;
+    QHash<QString, QString> paletteLight;  // 已合并 classicLight 默认；空 = 无浅色变体
+    bool hasLightVariant() const {
+        return !paletteLight.isEmpty() || !mainBackgroundLight.isEmpty() ||
+               !panelBackgroundLight.isEmpty();
+    }
+    QString bubbleDecor;               // 桌宠气泡装饰贴纸（半透明小气泡），空 = 没有
     qreal dim = 0.55;                  // 背景上的压暗遮罩，保文字可读
+    qreal dimLight = 0.08;             // 浅色插画上的白纱（保文字可读），默认很淡
     QString voiceName;                 // 主题音色名（TTS 的 audio.voice 参数）；空 = Chloe
     QString voiceStyle;                // 主题音色描述；用户没自填音色描述时用
 
@@ -72,30 +83,38 @@ public:
     static QString themesRoot();
 
     // —— 外观覆盖：用户在「主题」面板里拖的滑块，持久化在 ui.card_alpha /
-    // ui.backdrop_dim；没设过就跟随主题自己的值。——
+    // ui.backdrop_dim / ui.font_scale；没设过就跟随主题自己的值。——
     int cardAlpha() const;             // 卡片不透明度 0-255
-    qreal backdropDim() const;         // 背景压暗 0-1（含主窗可读性下限）
+    qreal backdropDim() const;         // 背景压暗/白纱 0-1（主窗含可读性下限）
+    qreal fontScale() const;           // 全窗字号倍率 0.8-1.5（1.0 = 跟随默认）
     bool hasAppearanceOverride() const;
     void setCardAlpha(int alpha);      // 落盘 + 重刷 QSS + 广播
     void setBackdropDim(qreal dim);    // 落盘 + 广播（主窗自己重绘背景）
+    void setFontScale(qreal scale);    // 落盘 + 重刷 QSS + 广播
     void resetAppearance();            // 回到主题默认
+    // 代码内联样式 / 自绘控件的字号统一走这里：和 QSS 的 font-size 一起缩放，
+    // 不然全局缩了、这几处硬编码的还是老尺寸，一眼看出不齐。
+    static int scaledPx(qreal px);
 
     // "rgba(8, 12, 20, 55)" / "#121722" / 命名色 → QColor；解析不了返回无效色。
     static QColor parsePaletteColor(const QString &value);
 
-    // —— 配色模式：浅色 / 深色（夜间）/ 跟随系统。只作用于内置 classic；
-    // 自定义主题包自带配色，不受这个开关影响。——
+    // —— 配色模式：浅色 / 深色（夜间）/ 跟随系统。内置 classic 与带浅色
+    // 变体（backgrounds.light / palette.light）的主题都吃这个开关；
+    // 没带变体的自定义主题不受影响。——
     QString scheme() const { return scheme_; }
     void setScheme(const QString &scheme);
-    // 当前生效的 classic 是不是浅色（自定义主题恒 false）。
-    bool isClassicLight() const;
+    // 配色模式解析成浅色（不区分主题，读系统偏好）。
+    bool prefersLight() const;
+    // 当前主题 + 配色模式解析到浅色（classic 恒可用；自定义主题要有变体）。
+    bool isLightActive() const;
     // 按 token 取当前已应用调色板里的颜色：内联样式 / 自绘控件用，
     // 这样它们跟全局 QSS 一起随浅色/深色切换，不会各画各的。
     QColor color(const QString &token) const;
     QString css(const QString &token) const;
 
     // 跟随系统：Windows 切换深浅色会广播 WM_SETTINGCHANGE，这里收到后
-    // 若当前是 classic + auto 就重算调色板并刷新。
+    // 若当前是 auto 且主题吃配色模式就重算并刷新。
     bool nativeEventFilter(const QByteArray &eventType, void *message,
                            qintptr *result) override;
 
@@ -135,7 +154,8 @@ public:
     static Theme parseThemeBody(const ThemeInfo &info);
     static QString renderQss(const QString &qssTemplate,
                              const QHash<QString, QString> &palette,
-                             const QString &rootBackgroundImage);
+                             const QString &rootBackgroundImage,
+                             qreal fontScale = 1.0);
     static QImage cachedImage(const QString &path);
 
 private:
@@ -157,4 +177,6 @@ private:
     // -1 = 跟随主题。用户拖过滑块才有值。
     int cardAlpha_ = -1;
     qreal backdropDim_ = -1.0;
+    // 0 = 跟随默认 100%。持久化在 ui.font_scale（存百分比整数字符串）。
+    qreal fontScale_ = 0.0;
 };

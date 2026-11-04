@@ -89,7 +89,7 @@ ModelImportResult importModelPackage(QWidget *parent, const QString &file) {
     progress.setAutoClose(false);
     progress.setStyleSheet(QStringLiteral(
         "QProgressDialog { background: %1; }"
-        "QProgressDialog QLabel { color: %2; font-size: 12px; }"
+        "QProgressDialog QLabel { color: %2; font-size: %6px; }"
         "QProgressBar { border: 1px solid %3;"
         " border-radius: 6px; background: %4; height: 6px; }"
         "QProgressBar::chunk { background: %5; border-radius: 5px; }")
@@ -97,7 +97,8 @@ ModelImportResult importModelPackage(QWidget *parent, const QString &file) {
              ThemeManager::instance().css(QStringLiteral("text")),
              ThemeManager::instance().css(QStringLiteral("w24")),
              ThemeManager::instance().css(QStringLiteral("w7")),
-             ThemeManager::instance().css(QStringLiteral("accent"))));
+             ThemeManager::instance().css(QStringLiteral("accent")),
+             QString::number(ThemeManager::scaledPx(12))));
     progress.show();
     QApplication::setOverrideCursor(Qt::BusyCursor);
     while (!tar.waitForFinished(200)) {

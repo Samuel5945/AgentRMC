@@ -5,6 +5,7 @@
 #include "core/HostNewTask.h"
 #include "core/LlmClient.h"
 #include "core/Profiles.h"
+#include "core/SpeechText.h"
 #include "core/ThemeManager.h"
 #include "core/TtsClient.h"
 #include "core/VoiceController.h"
@@ -27,6 +28,7 @@
 #include <QMenu>
 #include <QMouseEvent>
 #include <QPainter>
+#include <QPainterPath>
 #include <QPushButton>
 #include <QScreen>
 #include <QShowEvent>
@@ -46,6 +48,12 @@ constexpr int kPetSize = 84;    // 桌宠球体直径
 constexpr int kPeek = 20;       // 贴边藏起来后露出的边条宽度
 constexpr int kSnapDist = 80;   // 拖到离屏幕边多近算贴边
 constexpr int kCardWidth = 244;
+constexpr int kBubbleWidth = 220;  // 说话气泡箱体固定宽
+constexpr int kTailSpace = 12;     // 气泡尾巴侧预留高度（鲸鱼尾画在这里面）
+constexpr qreal kDecorSize = 24.0;  // 装饰贴纸绘制边长（固定，不随箱体高度缩）
+constexpr int kDecorPadTop = 9;     // 有贴纸时箱体上方的预留（贴纸露头空间）
+constexpr int kDecorPadRight = 15;  // 有贴纸时箱体右侧的预留
+constexpr int kDecorInset = 3;      // 贴纸离窗角的内缩
 // 对话模式的默认人设：回复要被念出来，所以要求口语化、短。
 constexpr const char *kDefaultChatSystem =
     "你是 AgentRMC 的语音桌宠，一个待在屏幕边上的小助手。用户在用语音和你聊天："
@@ -209,10 +217,14 @@ private:
     VoicePet *pet_ = nullptr;
 };
 
-// 说话气泡：Toast 同款画法（自定义 paintEvent），保证半透明圆角底稳定渲染。
-// 带 raise 目标时气泡可点：点了把宿主窗口拉回前台，回调由 VoicePet 给。
+// 说话气泡：自定义 paintEvent 画鲸鱼风外观（渐变底 + 鲸鱼尾 + 主题装饰贴纸），
+// 保证半透明圆角底稳定渲染；classic 的 token 取旧值，观感与旧版一致只多尾巴。
+// 带 raise 目标时气泡可点：点了把宿主窗口拉回前台，描边换 accent 色提示。
 class PetBubble final : public QLabel {
 public:
+    // 尾巴指向桌宠：气泡在桌宠上方时朝下，贴顶停靠时朝上。
+    enum class Tail { Down, Up };
+
     explicit PetBubble(QWidget *parent) : QLabel(parent) {
         setObjectName("petBubble");
         setWindowFlags(Qt::Tool | Qt::FramelessWindowHint |
@@ -221,24 +233,70 @@ public:
         setAttribute(Qt::WA_ShowWithoutActivating);
         setAlignment(Qt::AlignCenter);
         setWordWrap(true);
-        setFixedWidth(220);
+        setFixedWidth(kBubbleWidth);
         hide();
+    }
+
+    // 在 adjustSize() 之前设置：尾巴那侧留 margin，QLabel 的 sizeHint 会把
+    // margin 算进高度，文字仍垂直居中落在箱体里。主题带装饰贴纸时再给
+    // 右上角留一角（贴纸半悬在箱体外），并加宽窗口保持箱体宽不变。
+    void setTailDirection(Tail tail) {
+        tail_ = tail;
+        const bool decor =
+            !ThemeManager::instance().current().bubbleDecor.isEmpty();
+        setFixedWidth(kBubbleWidth + (decor ? kDecorPadRight : 0));
+        setContentsMargins(0, (decor ? kDecorPadTop : 0) +
+                                   (tail == Tail::Up ? kTailSpace : 0),
+                           decor ? kDecorPadRight : 0,
+                           tail == Tail::Down ? kTailSpace : 0);
     }
 
     // 空 handler = 气泡只展示不响应（没 raise 目标时的默认状态）。
     void setClickHandler(std::function<void()> handler) {
         handler_ = std::move(handler);
         setCursor(handler_ ? Qt::PointingHandCursor : Qt::ArrowCursor);
+        update();  // 可点击态描边换 accent 色，handler 变化要重绘
     }
 
 protected:
     void paintEvent(QPaintEvent *event) override {
         QPainter painter(this);
         painter.setRenderHint(QPainter::Antialiasing, true);
-        const QRectF box = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
-        painter.setPen(QPen(ThemeManager::instance().color(QStringLiteral("w30")), 1.0));
-        painter.setBrush(ThemeManager::instance().color(QStringLiteral("bubble.bg")));
-        painter.drawRoundedRect(box, 10, 10);
+        const ThemeManager &theme = ThemeManager::instance();
+
+        // 箱体 = 整个 rect 去掉贴纸预留角与尾巴侧 margin，与 contents rect
+        // （文字区）对齐；margin 与 setTailDirection 保持同一套条件。
+        const bool decor =
+            !theme.current().bubbleDecor.isEmpty();
+        QRectF box = QRectF(rect());
+        if (decor) {
+            box.setTop(box.top() + kDecorPadTop);
+            box.setRight(box.right() - kDecorPadRight);
+        }
+        if (tail_ == Tail::Down) {
+            box.setBottom(box.bottom() - kTailSpace);
+        } else {
+            box.setTop(box.top() + kTailSpace);
+        }
+        box.adjust(0.5, 0.5, -0.5, -0.5);
+
+        const QColor bg = theme.color(QStringLiteral("bubble.bg"));
+        const QColor bg2 = theme.color(QStringLiteral("bubble.bg2"));
+        QColor border = theme.color(QStringLiteral("bubble.border"));
+        if (handler_ != nullptr) {
+            border = theme.color(QStringLiteral("bubble.accent"));
+        }
+
+        QLinearGradient gradient(box.topLeft(), box.bottomLeft());
+        gradient.setColorAt(0.0, bg);
+        gradient.setColorAt(1.0, bg2.isValid() ? bg2 : bg);
+        painter.setPen(QPen(border, 1.0));
+        painter.setBrush(gradient);
+        painter.drawRoundedRect(box, 14, 14);
+
+        drawTail(painter, box, border);
+        drawDecor(painter);
+
         QLabel::paintEvent(event);
     }
 
@@ -252,7 +310,68 @@ protected:
     }
 
 private:
+    // 鲸鱼尾双鳍：从箱体边中央收窄再分叉成两瓣，指向桌宠方向。
+    void drawTail(QPainter &painter, const QRectF &box, const QColor &border) {
+        // 尾巴接在渐变的那一端：朝下接箱底（渐变第二停）、朝上接箱顶（第一停），
+        // 接缝两侧同色才看得出箱体和尾巴是一体的。
+        const QColor bg = theme().color(QStringLiteral("bubble.bg"));
+        const QColor bg2 = theme().color(QStringLiteral("bubble.bg2"));
+        const QColor fill =
+            tail_ == Tail::Down ? (bg2.isValid() ? bg2 : bg) : bg;
+        const qreal cx = box.center().x();
+        const qreal base = tail_ == Tail::Down ? box.bottom() : box.top();
+        const int dir = tail_ == Tail::Down ? 1 : -1;
+        const qreal tip = base + dir * (kTailSpace - 1.5);
+
+        QPainterPath tail;
+        tail.moveTo(cx - 3.0, base);
+        tail.cubicTo(cx - 5.0, base + dir * 4.0,
+                     cx - 9.5, base + dir * 6.0,
+                     cx - 9.0, tip);
+        tail.cubicTo(cx - 6.0, base + dir * 6.5,
+                     cx - 4.0, base + dir * 5.0,
+                     cx, base + dir * 4.0);
+        tail.cubicTo(cx + 4.0, base + dir * 5.0,
+                     cx + 6.0, base + dir * 6.5,
+                     cx + 9.0, tip);
+        tail.cubicTo(cx + 9.5, base + dir * 6.0,
+                     cx + 5.0, base + dir * 4.0,
+                     cx + 3.0, base);
+        tail.closeSubpath();
+        painter.setPen(QPen(border, 1.0));
+        painter.setBrush(fill);
+        painter.drawPath(tail);
+    }
+
+    // 主题装饰贴纸：半透明小气泡素材固定 24px 贴窗右上角（右上角预留边距由
+    // setTailDirection/paintEvent 同步留出），约一半露在箱体外——像泡泡从
+    // 气泡角上冒出来。不透明度压到一半多点：箱体上可见、压到字也只是水印。
+    void drawDecor(QPainter &painter) {
+        const QString decor = ThemeManager::instance().current().bubbleDecor;
+        if (decor.isEmpty()) {
+            return;
+        }
+        const QImage image = ThemeManager::cachedImage(decor);
+        if (image.isNull() || image.width() <= 0 || image.height() <= 0) {
+            return;
+        }
+        // 等比装进 kDecorSize 见方（主题素材非正方形也不拉变形）。
+        const qreal scale = qMin(kDecorSize / image.width(),
+                                 kDecorSize / image.height());
+        const qreal w = image.width() * scale;
+        const qreal h = image.height() * scale;
+        painter.save();
+        painter.setOpacity(0.55);
+        painter.drawImage(
+            QRectF(rect().right() - kDecorInset - w, kDecorInset, w, h),
+            image);
+        painter.restore();
+    }
+
+    static ThemeManager &theme() { return ThemeManager::instance(); }
+
     std::function<void()> handler_;
+    Tail tail_ = Tail::Down;
 };
 
 VoicePet::VoicePet(ProfileStore *store, VoiceController *voice, QWidget *parent)
@@ -453,7 +572,11 @@ void VoicePet::speak(const QString &text, int durationMs,
         bubbleOnly(text, durationMs, raiseExe);
     }
     if (tts_ != nullptr && tts_->ready()) {
-        tts_->speak(text);
+        // 气泡保留原文（路径/标点可看），念出口转成口语（D:\foo.cpp → 「D盘 foo」）。
+        const QString spoken = SpeechText::friendly(text);
+        if (!spoken.isEmpty()) {
+            tts_->speak(spoken);
+        }
     }
 }
 
@@ -538,6 +661,12 @@ void VoicePet::bubbleOnly(const QString &text, int durationMs,
     }
     ensureBubble();
     bubble_->setText(text);
+    // 尾巴方向决定哪侧留 margin，必须在 adjustSize() 前设置：
+    // 贴上边时气泡冒在球下面（尾朝上），其它情况冒在球上面（尾朝下）。
+    if (auto *pet = static_cast<PetBubble *>(bubble_)) {
+        pet->setTailDirection(dock_ == Dock::Top ? PetBubble::Tail::Up
+                                                 : PetBubble::Tail::Down);
+    }
     bubble_->adjustSize();
     // 有 raise 目标才可点：点了收起气泡并把宿主窗口拉回前台。
     pendingRaise_ = raiseExe;

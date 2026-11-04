@@ -964,10 +964,9 @@ QLabel#petTranscript {
     padding: 6px 8px;
 }
 
+/* 气泡底/描边由 PetBubble::paintEvent 自绘（渐变+鲸鱼尾）；QSS 里再设 background
+   会把尾巴 margin 区也涂成方块底，只留字色字号。 */
 QLabel#petBubble {
-    background: @bubble.bg@;
-    border: 1px solid @w30@;
-    border-radius: 10px;
     color: @text@;
     font-size: 12px;
 }

@@ -39,6 +39,16 @@ int main(int argc, char *argv[]) {
           "classic bg keeps original value");
     check(classic.value("accent") == QStringLiteral("#4f8cff"),
           "classic accent keeps original value");
+    // 气泡新 token：classic 默认渐变平涂、描边/可点击态都沿用 w30 旧观感。
+    check(classic.value(QStringLiteral("bubble.bg2")) ==
+              classic.value(QStringLiteral("bubble.bg")),
+          "classic bubble gradient stays flat");
+    check(classic.value(QStringLiteral("bubble.border")) ==
+              classic.value(QStringLiteral("w30")),
+          "classic bubble border follows w30");
+    check(ThemeManager::classicLightPalette().value(QStringLiteral("bubble.border")) ==
+              ThemeManager::classicLightPalette().value(QStringLiteral("w30")),
+          "light bubble border follows light w30");
 
     // 合并：覆盖生效、未覆盖的留 classic 值。
     auto merged = ThemeManager::mergePalette(
@@ -52,12 +62,13 @@ int main(int argc, char *argv[]) {
     check(dir.isValid(), "temp dir ok");
     const QString themeDir = dir.filePath(QStringLiteral("xiaoai"));
     QDir().mkpath(themeDir + QStringLiteral("/pet"));
-    const QString manifest = QStringLiteral(R"({
+    // 注意：palette 值里有 rgba(...)，R"(...)" 会被 )" 提前终止，换 )json 定界。
+    const QString manifest = QStringLiteral(R"json({
         "id": "xiaoai-whale",
         "displayName": "小爱 · 鲸鱼娘",
         "author": "test",
         "character": {"name": "小爱", "persona": "你是小爱。"},
-        "palette": {"bg": "#0a0d13"},
+        "palette": {"bg": "#0a0d13", "bubble.bg2": "rgba(30, 44, 66, 246)"},
         "pet": {
             "ring": false,
             "states": {
@@ -65,14 +76,20 @@ int main(int argc, char *argv[]) {
                          "fps": 4, "bob": 2, "tilt": 3}
             }
         },
-        "backgrounds": {"main": "backgrounds/main.png", "dim": 0.7},
+        "backgrounds": {"main": "backgrounds/main.png", "dim": 0.7,
+            "light": {"main": "backgrounds/main.light.png", "dim": 0.12}},
+        "bubble": {"decor": "bubble/decor.png"},
         "voice": {"name": "冰糖", "style": "软软糯糯的少女音"}
-    })");
+    })json");
     writeFile(themeDir + QStringLiteral("/theme.json"), manifest);
     writeFile(themeDir + QStringLiteral("/pet/idle_0.png"),
               QStringLiteral("not a real png"));
     QDir().mkpath(themeDir + QStringLiteral("/backgrounds"));
     writeFile(themeDir + QStringLiteral("/backgrounds/main.png"), QStringLiteral("x"));
+    writeFile(themeDir + QStringLiteral("/backgrounds/main.light.png"),
+              QStringLiteral("x"));
+    QDir().mkpath(themeDir + QStringLiteral("/bubble"));
+    writeFile(themeDir + QStringLiteral("/bubble/decor.png"), QStringLiteral("x"));
 
     QString error;
     const ThemeInfo info = ThemeManager::parseThemeDir(themeDir, &error);
@@ -86,6 +103,82 @@ int main(int argc, char *argv[]) {
           "voice.name parsed into voiceName");
     check(body.voiceStyle == QStringLiteral("软软糯糯的少女音"),
           "voice.style parsed into voiceStyle");
+
+    // bubble 节点：装饰贴纸解析成绝对路径；palette 里 bubble.bg2 覆盖生效、
+    // bubble.bg 留 classic 默认值。
+    check(body.bubbleDecor.endsWith(QStringLiteral("bubble/decor.png")),
+          "bubble.decor resolved to absolute path");
+    check(body.palette.value(QStringLiteral("bubble.bg2")) ==
+              QStringLiteral("rgba(30, 44, 66, 246)"),
+          "bubble.bg2 palette override applies");
+    check(body.palette.value(QStringLiteral("bubble.bg")) ==
+              QStringLiteral("rgba(15, 20, 29, 242)"),
+          "bubble.bg keeps classic default unless overridden");
+
+    // 浅色变体：backgrounds.light 解析成绝对路径，dim 独立钳制；
+    // 没给 palette.light 时 paletteLight 留空（插画变体也算有变体）。
+    check(body.mainBackgroundLight.endsWith(QStringLiteral("backgrounds/main.light.png")),
+          "backgrounds.light.main resolved to absolute path");
+    check(body.panelBackgroundLight.isEmpty(),
+          "backgrounds.light.panel absent stays empty");
+    check(qFuzzyCompare(body.dimLight, 0.12), "backgrounds.light.dim parsed");
+    check(body.hasLightVariant(), "light background alone counts as variant");
+    check(body.paletteLight.value(QStringLiteral("bg")) ==
+              QStringLiteral("#f3f5f8"),
+          "background-only variant still gets classicLight palette defaults");
+
+    // palette.light：覆盖生效 + 未覆盖的 token 落 classicLight 默认；
+    // 深色 palette 不受浅色覆盖影响。
+    QDir().mkpath(dir.filePath(QStringLiteral("palLight")));
+    writeFile(dir.filePath(QStringLiteral("palLight/theme.json")),
+              QStringLiteral(R"json({"displayName": "浅变体",
+                  "palette": {"bg": "#0a0d13",
+                      "light": {"card.bg": "rgba(255, 255, 255, 200)"}}})json"));
+    const ThemeInfo palLightInfo = ThemeManager::parseThemeDir(
+        dir.filePath(QStringLiteral("palLight")), &error);
+    const Theme palLightBody = ThemeManager::parseThemeBody(palLightInfo);
+    check(palLightBody.hasLightVariant() && !palLightBody.paletteLight.isEmpty(),
+          "palette.light alone activates variant");
+    check(palLightBody.paletteLight.value(QStringLiteral("card.bg")) ==
+              QStringLiteral("rgba(255, 255, 255, 200)"),
+          "palette.light override applies");
+    check(palLightBody.paletteLight.value(QStringLiteral("bg")) ==
+              QStringLiteral("#f3f5f8"),
+          "palette.light falls back to classicLight defaults");
+    check(palLightBody.palette.value(QStringLiteral("bg")) ==
+              QStringLiteral("#0a0d13"),
+          "dark palette untouched by light overrides");
+    // 空 light 对象不算变体（主题没真给浅色内容）。
+    QDir().mkpath(dir.filePath(QStringLiteral("emptyLight")));
+    writeFile(dir.filePath(QStringLiteral("emptyLight/theme.json")),
+              QStringLiteral(R"({"displayName": "空变体",
+                  "palette": {"light": {}}, "backgrounds": {"light": {}}})"));
+    const Theme emptyLightBody = ThemeManager::parseThemeBody(
+        ThemeManager::parseThemeDir(dir.filePath(QStringLiteral("emptyLight")),
+                                    &error));
+    check(!emptyLightBody.hasLightVariant(), "empty light objects are no variant");
+    // 指向不存在文件的浅色背景必须清空（运行时回落深色图）。
+    QDir().mkpath(dir.filePath(QStringLiteral("missLight")));
+    writeFile(dir.filePath(QStringLiteral("missLight/theme.json")),
+              QStringLiteral(R"({"displayName": "缺浅图",
+                  "backgrounds": {"light": {"main": "backgrounds/nope.png"}}})"));
+    const Theme missLightBody = ThemeManager::parseThemeBody(
+        ThemeManager::parseThemeDir(dir.filePath(QStringLiteral("missLight")),
+                                    &error));
+    check(missLightBody.mainBackgroundLight.isEmpty() &&
+              !missLightBody.hasLightVariant(),
+          "missing light background file cleared");
+
+    // 指向不存在文件的 decor 必须清空（运行时退化为无装饰）。
+    QDir().mkpath(dir.filePath(QStringLiteral("nobubble")));
+    writeFile(dir.filePath(QStringLiteral("nobubble/theme.json")),
+              QStringLiteral(R"({"displayName": "没装饰",
+                  "bubble": {"decor": "bubble/missing.png"}})"));
+    const ThemeInfo noDecor =
+        ThemeManager::parseThemeDir(dir.filePath(QStringLiteral("nobubble")), &error);
+    const Theme noDecorBody = ThemeManager::parseThemeBody(noDecor);
+    check(noDecorBody.bubbleDecor.isEmpty(),
+          "missing bubble.decor file cleared");
 
     // 缺 displayName 的清单必须被判坏。
     QDir().mkpath(dir.filePath(QStringLiteral("broken")));
@@ -118,10 +211,50 @@ int main(int argc, char *argv[]) {
     check(!plain.contains(QStringLiteral("background-image")),
           "no background rule without image");
 
+    // 字号倍率：QSS 里所有 font-size: Npx 等比缩放、取整到整像素；
+    // 紧凑写法（font-size:8px 无空格）和小数（10.5px）都要吃得到。
+    const QString fsScaled = ThemeManager::renderQss(
+        QStringLiteral("A { font-size: 11px; } B { font-size:8px; }"
+                       " C { font-size: 10.5px; }"),
+        classic, QString(), 1.5);
+    check(fsScaled.contains(QStringLiteral("font-size: 17px")),
+          "font scale 1.5 rounds 11px to 17px");
+    check(fsScaled.contains(QStringLiteral("font-size: 12px")),
+          "font scale matches the no-space form");
+    check(fsScaled.contains(QStringLiteral("font-size: 16px")),
+          "font scale rounds fractional px (10.5*1.5=15.75 -> 16)");
+    check(!fsScaled.contains(QStringLiteral("11px")) &&
+              !fsScaled.contains(QStringLiteral("8px")),
+          "original sizes replaced when scaling");
+    // 不传倍率 = 1.0：字号原样保留（老调用方零感知）。
+    const QString fsKept = ThemeManager::renderQss(
+        QStringLiteral("A { font-size: 11px; }"), classic, QString());
+    check(fsKept.contains(QStringLiteral("font-size: 11px")),
+          "default renderQss keeps font sizes untouched");
+    // 最小 7px 保底：0.8 倍下 8px 会缩到 6，必须托回 7。
+    const QString fsMin = ThemeManager::renderQss(
+        QStringLiteral("A { font-size: 8px; }"), classic, QString(), 0.8);
+    check(fsMin.contains(QStringLiteral("font-size: 7px")),
+          "font scale clamps to a 7px floor");
+
+    // 实例侧：setFontScale 钳制 0.8-1.5，scaledPx 跟随，resetAppearance 归位。
+    // （实例句柄在这里先取；rescan/scheme 回归测试在后面复用同一个实例。）
+    ThemeManager &tm = ThemeManager::instance();
+    tm.setFontScale(1.5);
+    check(tm.fontScale() == 1.5, "setFontScale 1.5 recorded");
+    check(ThemeManager::scaledPx(10) == 15, "scaledPx follows font scale");
+    tm.setFontScale(9.9);
+    check(tm.fontScale() == 1.5, "font scale clamped to 1.5 ceiling");
+    tm.setFontScale(0.1);
+    check(tm.fontScale() == 0.8, "font scale clamped to 0.8 floor");
+    check(ThemeManager::scaledPx(8) == 7, "scaledPx keeps the 7px floor");
+    tm.resetAppearance();
+    check(tm.fontScale() == 1.0, "resetAppearance restores 100% scale");
+    check(ThemeManager::scaledPx(10) == 10, "scaledPx back to identity");
+
     // 回归：classic 是代码内置主题，themes/classic 下没有 theme.json 也必须给出
     // 完整调色板。曾经 loadTheme 把 classic 也送进 parseThemeBody，读不到清单返回
     // 空 palette，QSS 里 @token@ 全没替换被 Qt 整张拒收，界面退回系统浅色。
-    ThemeManager &tm = ThemeManager::instance();
     tm.rescan();
     // 显式钉成深色：默认 auto 会跟随构建机的系统深浅色，断言就不能写死。
     tm.setScheme(QStringLiteral("dark"));

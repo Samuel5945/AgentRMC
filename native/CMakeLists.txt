@@ -71,6 +71,8 @@ qt_add_executable(AgentRMCNative
     src/core/VoiceController.h
     src/core/TtsClient.cpp
     src/core/TtsClient.h
+    src/core/SpeechText.cpp
+    src/core/SpeechText.h
     src/core/ThemeManager.cpp
     src/core/ThemeManager.h
     src/ui/AppPage.cpp
@@ -285,6 +287,17 @@ add_executable(AgentRMCChatTextTest
 target_include_directories(AgentRMCChatTextTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(AgentRMCChatTextTest PRIVATE Qt6::Core)
 target_compile_options(AgentRMCChatTextTest PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
+
+add_executable(AgentRMCSpeechTest
+    tests/speech_text_test.cpp
+    src/core/SpeechText.cpp
+    src/core/SpeechText.h
+    src/core/ChatText.cpp
+    src/core/ChatText.h
+)
+target_include_directories(AgentRMCSpeechTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(AgentRMCSpeechTest PRIVATE Qt6::Core)
+target_compile_options(AgentRMCSpeechTest PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
 
 add_executable(AgentRMCAudioTest
     tests/m5_audio_cli.cpp

@@ -592,17 +592,26 @@ void VoiceWindow::paintEvent(QPaintEvent *event) {
         QPainterPath clip;
         clip.addRoundedRect(rect(), 12, 12);
         painter.setClipPath(clip);
-        QImage scaled = art.scaled(size(), Qt::KeepAspectRatioByExpanding,
-                                   Qt::SmoothTransformation);
+        // 缓存按 (路径, 尺寸) 判失效：4K 源图每帧 Smooth 现缩太贵。
+        if (artScaledPath_ != theme.panelBackground ||
+            artScaledSize_ != size()) {
+            artScaled_ = art.scaled(size(), Qt::KeepAspectRatioByExpanding,
+                                    Qt::SmoothTransformation);
+            artScaledPath_ = theme.panelBackground;
+            artScaledSize_ = size();
+        }
+        const QImage &scaled = artScaled_;
         painter.drawImage(
             QRect((width() - scaled.width()) / 2,
                   (height() - scaled.height()) / 2, scaled.width(),
                   scaled.height()),
             scaled);
-        // 压暗跟主窗同一套 backdropDim（含可读性下限）：主题自带的 dim 可能
-        // 很浅（鲸鱼娘 0.1），底部控制区会糊在亮插画上。
+        // 遮罩跟主窗同一套 backdropDim：深色模式压暗、浅色模式蒙白纱；
+        // 深色有可读性下限（鲸鱼娘 0.1 太浅），浅色白纱由主题 dim.light 自定。
         painter.setOpacity(ThemeManager::instance().backdropDim());
-        painter.setBrush(QColor(0x0b, 0x0e, 0x14));
+        painter.setBrush(ThemeManager::instance().isLightActive()
+                             ? QColor(255, 255, 255)
+                             : QColor(0x0b, 0x0e, 0x14));
         painter.drawRoundedRect(box, 12, 12);
         painter.restore();
         painter.setOpacity(1.0);

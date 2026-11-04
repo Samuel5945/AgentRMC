@@ -9,7 +9,18 @@
   "palette": {
     "card.bg": "rgba(8, 12, 20, 55)",
     "card.bg2": "rgba(10, 15, 24, 48)",
-    "w18": "rgba(255, 255, 255, 14)"
+    "w18": "rgba(255, 255, 255, 14)",
+    "bubble.bg": "rgba(10, 22, 38, 244)",
+    "bubble.bg2": "rgba(14, 34, 58, 246)",
+    "bubble.border": "rgba(140, 200, 255, 60)",
+    "bubble.accent": "rgba(120, 210, 255, 150)",
+    "light": {
+      "card.bg": "rgba(255, 255, 255, 200)",
+      "card.bg2": "rgba(255, 255, 255, 176)",
+      "w18": "rgba(15, 23, 42, 36)",
+      "bubble.border": "rgba(37, 99, 168, 70)",
+      "bubble.accent": "rgba(47, 107, 219, 140)"
+    }
   },
   "pet": {
     "canvas": 512,
@@ -66,7 +77,15 @@
   "backgrounds": {
     "main": "backgrounds/main.png",
     "panel": "backgrounds/panel.png",
-    "dim": 0.1
+    "dim": 0.1,
+    "light": {
+      "main": "backgrounds/main.light.png",
+      "panel": "backgrounds/panel.light.png",
+      "dim": 0.18
+    }
+  },
+  "bubble": {
+    "decor": "bubble/decor.png"
   },
   "voice": {
     "style": "软软糯糯的十几岁少女音，可爱治愈系，语气温柔甜美、带一点点慵懒，语速稍慢、句尾轻轻上扬，像一只小鲸鱼在你耳边呢喃，吐字清晰但奶声奶气",

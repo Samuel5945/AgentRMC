@@ -49,7 +49,13 @@ UninstallIcon "${__FILEDIR__}\..\..\assets\icon.ico"
 
 Section "主程序（必需）" SEC_MAIN
   SectionIn RO
+  ; 升级必须真覆盖：taskkill 返回时旧进程的 exe 句柄未必全释放，NSIS File
+  ; 立刻写 exe 会撞占用，静默模式把写错误吞掉继续 → 装完还是旧程序
+  ; （2026-11-04 实测：theme 等没被占用的文件更新了、exe 的 hash 却没变）。
+  ; 显式 on + taskkill 后等一拍再铺文件。
+  SetOverwrite on
   nsExec::Exec 'taskkill /IM ${APPEXE} /F'
+  Sleep 800
   SetOutPath "$INSTDIR"
   ; 排除调试符号、自测 exe，以及会覆盖用户设置的三个配置
   File /r /x "*.pdb" /x "AgentRMC*Test.exe" /x "config.json" \

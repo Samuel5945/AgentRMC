@@ -240,8 +240,9 @@ GuideDialog::GuideDialog(QWidget *parent) : QDialog(parent) {
     dropHint_ = new QLabel(QString::fromUtf8("松手，导入这个模型包"), this);
     dropHint_->setAlignment(Qt::AlignCenter);
     dropHint_->setStyleSheet(QStringLiteral(
-        "background: rgba(11,14,20,232); color: #e6edf3; font-size: 18px;"
-        " border: 2px dashed rgba(79,140,255,190); border-radius: 12px;"));
+        "background: rgba(11,14,20,232); color: #e6edf3; font-size: %1px;"
+        " border: 2px dashed rgba(79,140,255,190); border-radius: 12px;")
+                                 .arg(ThemeManager::scaledPx(18)));
     dropHint_->hide();
 
     updateStepUi();
@@ -534,9 +535,24 @@ QWidget *GuideDialog::buildKeyTestPage() {
 
     keyStatus_ = new QLabel(QString::fromUtf8("还没收到按键"));
     keyStatus_->setObjectName("guideKeyStatus");
-    keyStatus_->setStyleSheet(QStringLiteral("color:%1; font-size:16px;")
+    keyStatus_->setStyleSheet(QStringLiteral("color:%1; font-size:%2px;")
                                   .arg(ThemeManager::instance().css(
-                                      QStringLiteral("muted"))));
+                                           QStringLiteral("muted")),
+                                       QString::number(
+                                           ThemeManager::scaledPx(16))));
+    // 换主题 / 拖字体滑块后按当前状态重算样式串（px 写在里面）。
+    connect(&ThemeManager::instance(), &ThemeManager::themeChanged, keyStatus_,
+            [this](const Theme &) {
+                keyStatus_->setStyleSheet(
+                    keyCount_ > 0
+                        ? QStringLiteral("color:#3fb950; font-size:%1px;")
+                              .arg(ThemeManager::scaledPx(16))
+                        : QStringLiteral("color:%1; font-size:%2px;")
+                              .arg(ThemeManager::instance().css(
+                                       QStringLiteral("muted")),
+                                   QString::number(
+                                       ThemeManager::scaledPx(16))));
+            });
     lay->addWidget(keyStatus_);
 
     lay->addStretch(1);
@@ -638,7 +654,8 @@ void GuideDialog::noteKey(const QString &keyLabel) {
     keyStatus_->setText(
         QString::fromUtf8("✓ 已收到 %1 次 · 最近：%2").arg(keyCount_).arg(keyLabel));
     keyStatus_->setStyleSheet(
-        QStringLiteral("color:#3fb950; font-size:16px;"));
+        QStringLiteral("color:#3fb950; font-size:%1px;")
+            .arg(ThemeManager::scaledPx(16)));
 }
 
 void GuideDialog::setBackend(const QString &backend) {

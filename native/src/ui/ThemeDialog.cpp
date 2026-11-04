@@ -196,8 +196,8 @@ ThemeDialog::ThemeDialog(ProfileStore *store, QWidget *parent)
     charNote->setWordWrap(true);
     root->addWidget(charNote);
 
-    // 配色模式：浅色 / 深色（夜间）/ 跟随系统。只作用于内置 classic；
-    // 自定义主题包自带配色，选中时这三颗置灰。
+    // 配色模式：浅色 / 深色（夜间）/ 跟随系统。作用于内置 classic 和
+    // 带浅色变体的主题；没带变体的自定义主题选中时这三颗置灰。
     auto *schemeLabel = new QLabel(QString::fromUtf8("配色模式"));
     schemeLabel->setObjectName("mapHead");
     root->addWidget(schemeLabel);
@@ -245,13 +245,14 @@ ThemeDialog::ThemeDialog(ProfileStore *store, QWidget *parent)
         row->setSpacing(10);
         auto *label = new QLabel(name);
         label->setObjectName("muted");
-        label->setFixedWidth(88);
+        // 固定宽是给三条滑块对齐用的；随字号倍率长，倍率大时标签不吃字。
+        label->setFixedWidth(ThemeManager::scaledPx(88));
         auto *slider = new QSlider(Qt::Horizontal);
         slider->setRange(0, 100);
         slider->setCursor(Qt::PointingHandCursor);
         auto *value = new QLabel;
         value->setObjectName("muted");
-        value->setFixedWidth(40);
+        value->setFixedWidth(ThemeManager::scaledPx(40));
         value->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
         row->addWidget(label);
         row->addWidget(slider, 1);
@@ -262,10 +263,16 @@ ThemeDialog::ThemeDialog(ProfileStore *store, QWidget *parent)
     };
     makeRow(QString::fromUtf8("卡片不透明度"), &alpha_, &alphaValue_);
     makeRow(QString::fromUtf8("背景压暗"), &dim_, &dimValue_);
+    makeRow(QString::fromUtf8("字体大小"), &fontScale_, &fontScaleValue_);
+    // 字号滑块的刻度是百分比（85-140），和上面两条 0-100 的不同。
+    fontScale_->setRange(85, 140);
+    fontScale_->setPageStep(5);
 
     alpha_->setToolTip(
         QString::fromUtf8("往右拉：正文更清楚；往左拉：更多背景插画透出来"));
     dim_->setToolTip(QString::fromUtf8("背景图整体压暗程度，和卡片透明度独立"));
+    fontScale_->setToolTip(
+        QString::fromUtf8("整窗文字大小，立即生效；太大可能挤到个别固定高度的行"));
 
     auto *note = new QLabel(QString::fromUtf8(
         "卡片越透明，背景插画越明显，正文也越难读；拖到看不清就收一点。"));
@@ -297,12 +304,17 @@ ThemeDialog::ThemeDialog(ProfileStore *store, QWidget *parent)
     connect(debounce_, &QTimer::timeout, this, [this] {
         ThemeManager::instance().setCardAlpha(alpha_->value() * 255 / 100);
         ThemeManager::instance().setBackdropDim(dim_->value() / 100.0);
+        ThemeManager::instance().setFontScale(fontScale_->value() / 100.0);
     });
     connect(alpha_, &QSlider::valueChanged, this, [this](int) {
         syncLabels();
         scheduleApply();
     });
     connect(dim_, &QSlider::valueChanged, this, [this](int) {
+        syncLabels();
+        scheduleApply();
+    });
+    connect(fontScale_, &QSlider::valueChanged, this, [this](int) {
         syncLabels();
         scheduleApply();
     });
@@ -406,29 +418,33 @@ void ThemeDialog::reloadThemes() {
 }
 
 void ThemeDialog::reloadScheme() {
-    const bool classic =
-        ThemeManager::instance().currentId() == QStringLiteral("classic");
+    const Theme &cur = ThemeManager::instance().current();
+    const bool supports = cur.id == QStringLiteral("classic") ||
+                          cur.hasLightVariant();
     const QString scheme = ThemeManager::instance().scheme();
     schemeLight_->setChecked(scheme == QStringLiteral("light"));
     schemeDark_->setChecked(scheme == QStringLiteral("dark"));
     schemeAuto_->setChecked(scheme == QStringLiteral("auto"));
-    // 自定义主题不吃配色模式：置灰但保留选中态，回到 classic 时按这套生效。
-    schemeLight_->setEnabled(classic);
-    schemeDark_->setEnabled(classic);
-    schemeAuto_->setEnabled(classic);
+    // 没浅色变体的主题不吃配色模式：置灰但保留选中态，切回支持的主题时生效。
+    schemeLight_->setEnabled(supports);
+    schemeDark_->setEnabled(supports);
+    schemeAuto_->setEnabled(supports);
 }
 
 void ThemeDialog::reloadSliders() {
     const QSignalBlocker blockA(alpha_);
     const QSignalBlocker blockD(dim_);
+    const QSignalBlocker blockF(fontScale_);
     alpha_->setValue(qRound(ThemeManager::instance().cardAlpha() * 100 / 255.0));
     dim_->setValue(qRound(ThemeManager::instance().backdropDim() * 100));
+    fontScale_->setValue(qRound(ThemeManager::instance().fontScale() * 100));
     syncLabels();
 }
 
 void ThemeDialog::syncLabels() {
     alphaValue_->setText(QStringLiteral("%1%").arg(alpha_->value()));
     dimValue_->setText(QStringLiteral("%1%").arg(dim_->value()));
+    fontScaleValue_->setText(QStringLiteral("%1%").arg(fontScale_->value()));
 }
 
 void ThemeDialog::scheduleApply() {

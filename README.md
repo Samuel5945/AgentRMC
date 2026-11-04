@@ -532,6 +532,8 @@ Python 线的 `commands.json` 是另一套东西（任意关键词 → `run` / `
 > [docs/PRD-agent-integration.md](docs/PRD-agent-integration.md)。
 > DeepSeek Super-agent 架构的借鉴与分阶段优化方案，见
 > [docs/superagent-adaptation.md](docs/superagent-adaptation.md)。
+> 各宿主语音提示文案 / 触发钩子 / 去重机制的对照清单，见
+> [docs/voice-notify-formats.md](docs/voice-notify-formats.md)。
 
 目前接七路：Qoder、Qoder CN、ZCode、WorkBuddy、WorkBuddy AI、DeepSeek Harness
 （插件），以及 OpenSquilla（外部桥）。程序在本机回环监听 `127.0.0.1:45915`

@@ -36,7 +36,9 @@ private:
     QPushButton *schemeAuto_ = nullptr;
     QSlider *alpha_ = nullptr;
     QSlider *dim_ = nullptr;
+    QSlider *fontScale_ = nullptr;
     QLabel *alphaValue_ = nullptr;
     QLabel *dimValue_ = nullptr;
+    QLabel *fontScaleValue_ = nullptr;
     QTimer *debounce_ = nullptr;
 };

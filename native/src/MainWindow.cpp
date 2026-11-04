@@ -114,6 +114,22 @@ protected:
         }
         QWidget::mousePressEvent(event);
     }
+
+    // 双击空白处最大化 / 还原：桌面应用的肌肉记忆。按下子控件的
+    // （按钮/胶囊）各自吃掉事件，落到这里的都是标题栏空白。
+    void mouseDoubleClickEvent(QMouseEvent *event) override {
+        if (event->button() == Qt::LeftButton) {
+            auto *win = window();
+            if (win->isFullScreen() || win->isMaximized()) {
+                win->showNormal();
+            } else {
+                win->showMaximized();
+            }
+            event->accept();
+            return;
+        }
+        QWidget::mouseDoubleClickEvent(event);
+    }
 };
 
 // 全局语音热键（无遥控器触发用）的注册 ID。
@@ -136,26 +152,43 @@ protected:
         if (art.isNull()) {
             return;
         }
+        // 4K 源图每次 paint 都 Smooth 缩放太贵（全屏下 3840×2400 → 窗口尺寸
+        // 一帧几十毫秒）：按 (路径, 窗口尺寸) 缓存缩放结果。换主题换路径、
+        // 拉窗口换尺寸才重算一次，平时 repaint 直接贴缓存。
+        if (scaledPath_ != theme.mainBackground || scaledSize_ != size()) {
+            scaled_ = art.scaled(size(), Qt::KeepAspectRatioByExpanding,
+                                 Qt::SmoothTransformation);
+            scaledPath_ = theme.mainBackground;
+            scaledSize_ = size();
+        }
         QPainter painter(this);
-        const QImage scaled = art.scaled(size(), Qt::KeepAspectRatioByExpanding,
-                                         Qt::SmoothTransformation);
-        painter.drawImage(QPoint((width() - scaled.width()) / 2,
-                                 (height() - scaled.height()) / 2),
-                          scaled);
+        painter.drawImage(QPoint((width() - scaled_.width()) / 2,
+                                 (height() - scaled_.height()) / 2),
+                          scaled_);
         const qreal dim = ThemeManager::instance().backdropDim();
-        painter.fillRect(rect(), QColor(11, 14, 20, int(255 * dim)));
+        // 深色模式压暗、浅色模式蒙白纱：同一 dim 值两种语义，跟背景走。
+        const QColor veil = ThemeManager::instance().isLightActive()
+                                ? QColor(255, 255, 255, int(255 * dim))
+                                : QColor(11, 14, 20, int(255 * dim));
+        painter.fillRect(rect(), veil);
     }
+
+private:
+    QImage scaled_;
+    QString scaledPath_;
+    QSize scaledSize_;
 };
 
 // 待办行：状态色条 + 一行「Agent · 阶段 —— 时间」+ 一行消息。
 // 原来整行一个颜色、状态用方括号塞在正文里，扫十行找不出哪条在等自己。
+// 行高与纵向节奏跟着字号倍率走，不然字放大了行还是 56px，两行文字互相叠。
 class WorkItemDelegate final : public QStyledItemDelegate {
 public:
     explicit WorkItemDelegate(QObject *parent = nullptr)
         : QStyledItemDelegate(parent) {}
 
     QSize sizeHint(const QStyleOptionViewItem &, const QModelIndex &) const override {
-        return QSize(0, 56);
+        return QSize(0, ThemeManager::scaledPx(56));
     }
 
     void paint(QPainter *painter, const QStyleOptionViewItem &option,
@@ -180,8 +213,10 @@ public:
         painter->setPen(Qt::NoPen);
         painter->setBrush(stage);
         painter->drawRoundedRect(
-            QRectF(row.left() + 9, row.top() + 12, 3, row.height() - 24), 1.5,
-            1.5);
+            QRectF(row.left() + 9,
+                   row.top() + ThemeManager::scaledPx(12), 3,
+                   row.height() - ThemeManager::scaledPx(24)),
+            1.5, 1.5);
 
         const qreal textLeft = row.left() + 21;
         const qreal textRight = row.right() - 12;
@@ -192,16 +227,17 @@ public:
         const QString message = index.data(Qt::DisplayRole).toString();
 
         QFont nameFont = painter->font();
-        nameFont.setPixelSize(12);
+        nameFont.setPixelSize(ThemeManager::scaledPx(12));
         nameFont.setWeight(QFont::DemiBold);
         QFont metaFont = painter->font();
-        metaFont.setPixelSize(10);
+        metaFont.setPixelSize(ThemeManager::scaledPx(10));
         const QFontMetrics nameMetrics(nameFont);
         const QFontMetrics metaMetrics(metaFont);
 
         const qreal timeWidth = metaMetrics.horizontalAdvance(when) + 12;
-        const QRectF line1(textLeft, row.top() + 9,
-                           textRight - textLeft - timeWidth, 16);
+        const QRectF line1(textLeft, row.top() + ThemeManager::scaledPx(9),
+                           textRight - textLeft - timeWidth,
+                           ThemeManager::scaledPx(16));
 
         painter->setFont(metaFont);
         painter->setPen(ThemeManager::instance().color(QStringLiteral("ghost")));
@@ -224,11 +260,11 @@ public:
                           Qt::AlignLeft | Qt::AlignVCenter, stageText);
 
         QFont bodyFont = painter->font();
-        bodyFont.setPixelSize(11);
+        bodyFont.setPixelSize(ThemeManager::scaledPx(11));
         painter->setFont(bodyFont);
         painter->setPen(ThemeManager::instance().color(QStringLiteral("text.body")));
-        const QRectF line2(textLeft, row.top() + 29,
-                           textRight - textLeft, 16);
+        const QRectF line2(textLeft, row.top() + ThemeManager::scaledPx(29),
+                           textRight - textLeft, ThemeManager::scaledPx(16));
         painter->drawText(
             line2, Qt::AlignLeft | Qt::AlignVCenter,
             QFontMetrics(bodyFont).elidedText(message.simplified(),
@@ -238,16 +274,39 @@ public:
     }
 };
 
-// 统计小胶囊：等你 / 待验收 / 进行中。
+// 统计小胶囊：等你 / 待验收 / 进行中。样式自带（色板外的固定色），
+// 但字号随全局倍率走：主题广播时按当前倍率重刷，拖字体滑块立即跟上。
+class ChipLabel final : public QLabel {
+public:
+    ChipLabel(const QString &color, const QString &border,
+              const QString &fill, QWidget *parent = nullptr)
+        : QLabel(parent), color_(color), border_(border), fill_(fill) {
+        connect(&ThemeManager::instance(), &ThemeManager::themeChanged, this,
+                [this](const Theme &) { applyStyle(); });
+        applyStyle();
+        hide();
+    }
+
+private:
+    void applyStyle() {
+        setStyleSheet(
+            QStringLiteral("QLabel { color: %1; background: %2;"
+                           " border: 1px solid %3; border-radius: 9px;"
+                           " padding: 1px 8px; font-size: %4px;"
+                           " font-weight: 600; }")
+                .arg(color_, fill_, border_,
+                     QString::number(ThemeManager::scaledPx(10.5))));
+    }
+
+    QString color_;
+    QString border_;
+    QString fill_;
+};
+
 QLabel *makeChip(const QString &label, const QString &color,
                  const QString &border, const QString &fill) {
-    auto *chip = new QLabel(label);
-    chip->setStyleSheet(
-        QStringLiteral("QLabel { color: %1; background: %2; border: 1px solid %3;"
-                       " border-radius: 9px; padding: 1px 8px; font-size: 10.5px;"
-                       " font-weight: 600; }")
-            .arg(color, fill, border));
-    chip->hide();
+    auto *chip = new ChipLabel(color, border, fill);
+    chip->setText(label);
     return chip;
 }
 
@@ -342,13 +401,32 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
     dropHint_ = new QLabel(QString::fromUtf8("松手，导入这个模型包"), this);
     dropHint_->setAlignment(Qt::AlignCenter);
     dropHint_->setStyleSheet(QStringLiteral(
-        "background: rgba(11,14,20,225); color: #e6edf3; font-size: 18px;"
-        " border: 2px dashed rgba(79,140,255,190); border-radius: 12px;"));
+        "background: rgba(11,14,20,225); color: #e6edf3; font-size: %1px;"
+        " border: 2px dashed rgba(79,140,255,190); border-radius: 12px;")
+                                 .arg(ThemeManager::scaledPx(18)));
+    // 字号倍率变了以后样式要跟着重算，不然拖放提示停在旧字号上。
+    connect(&ThemeManager::instance(), &ThemeManager::themeChanged, dropHint_,
+            [this](const Theme &) {
+                dropHint_->setStyleSheet(QStringLiteral(
+                    "background: rgba(11,14,20,225); color: #e6edf3;"
+                    " font-size: %1px; border: 2px dashed rgba(79,140,255,190);"
+                    " border-radius: 12px;")
+                                             .arg(ThemeManager::scaledPx(18)));
+            });
     dropHint_->hide();
     qApp->installEventFilter(this);
     setWindowFlags(Qt::Window | Qt::FramelessWindowHint);
     // 再窄左栏就挤不下了：语音卡 + 遥控器卡是固定高度，列表也需要宽度放时间列。
     setMinimumSize(940, 620);
+    // F11 全屏开关：完整界面铺满整块屏幕（含任务栏区），再看时再按一次回来。
+    auto *fullscreenShortcut = new QShortcut(QKeySequence(Qt::Key_F11), this);
+    connect(fullscreenShortcut, &QShortcut::activated, this, [this] {
+        if (isFullScreen()) {
+            showNormal();
+        } else {
+            showFullScreen();
+        }
+    });
 
     auto *root = new BackdropRoot;
     root->setObjectName("root");
@@ -372,11 +450,15 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
                 }
                 if (statusText_ != nullptr) {
                     statusText_->setStyleSheet(
-                        running ? QStringLiteral("color:#3fb950; font-size:11px;"
-                                                 " font-weight:600;")
-                                : QStringLiteral("color:%1; font-size:11px;")
-                                      .arg(ThemeManager::instance().css(
-                                          QStringLiteral("muted"))));
+                        running
+                            ? QStringLiteral("color:#3fb950; font-size:%1px;"
+                                            " font-weight:600;")
+                                  .arg(ThemeManager::scaledPx(11))
+                            : QStringLiteral("color:%1; font-size:%2px;")
+                                  .arg(ThemeManager::instance().css(
+                                           QStringLiteral("muted")),
+                                       QString::number(
+                                           ThemeManager::scaledPx(11))));
                 }
                 if (remoteDot_ != nullptr) {
                     remoteDot_->setStyleSheet(
@@ -736,6 +818,15 @@ QWidget *MainWindow::buildHeader() {
     min->setFixedSize(28, 24);
     min->setCursor(Qt::PointingHandCursor);
 
+    // 最大化 / 还原（双击标题栏等效；F11 是占满整屏的全屏，两个都留）。
+    maximizeBtn_ = new QToolButton;
+    maximizeBtn_->setObjectName("winBtn");
+    maximizeBtn_->setText(QString::fromUtf8("□"));
+    maximizeBtn_->setFixedSize(28, 24);
+    maximizeBtn_->setCursor(Qt::PointingHandCursor);
+    maximizeBtn_->setToolTip(
+        QString::fromUtf8("最大化 / 还原（双击标题栏，F11 全屏）"));
+
     auto *close = new QToolButton;
     close->setObjectName("closeBtn");
     close->setText(QString::fromUtf8("✕"));
@@ -743,8 +834,11 @@ QWidget *MainWindow::buildHeader() {
     close->setCursor(Qt::PointingHandCursor);
 
     connect(min, &QToolButton::clicked, this, &QWidget::showMinimized);
+    connect(maximizeBtn_, &QToolButton::clicked, this,
+            &MainWindow::toggleMaximize);
     connect(close, &QToolButton::clicked, this, &QWidget::close);
     lay->addWidget(min);
+    lay->addWidget(maximizeBtn_);
     lay->addWidget(close);
     return bar;
 }
@@ -2125,14 +2219,16 @@ QJsonObject MainWindow::reportWorkItem(const QJsonObject &payload) {
     const QDateTime now = QDateTime::currentDateTimeUtc();
     if (kind == QStringLiteral("question")) {
         // 连报几次 blocked 别喊成一串：同一个会话 2 分钟内只喊一次。
+        // planChoice=false：blocked 不是选方案，若套 180s 迟到去重，周期连报
+        // （如每 130s 一次）会被吞掉且只刷新时间戳，永远不再出声。
         const QDateTime last = attentionAnnounced_.value(key);
         if (!last.isValid() || last.secsTo(now) > 120) {
-            announceWork(kind, title, message, message, raise, sessionId);
+            announceWork(kind, title, message, message, raise, sessionId, false);
             attentionAnnounced_.insert(key, now);
         }
     } else if (kind == QStringLiteral("stop")) {
         // 先念再记账：紧接着到的 hook stop 会看到这笔账，不再念第二遍。
-        announceWork(kind, title, message, message, raise, sessionId);
+        announceWork(kind, title, message, message, raise, sessionId, false);
         readyAnnounced_.insert(key, now);
     }
     return QJsonObject{{QStringLiteral("ok"), true},
@@ -2181,7 +2277,12 @@ void MainWindow::handleNotify(const QString &kind, const QString &title,
         // 离线补投只落工单，不补喊/抢前台，避免启动时一次念一串旧提醒。
         return;
     }
-    announceWork(kind, title, message, spoken, raise, sessionId);
+    // 选方案认语义不认文案：question 类事件（DSH / OpenSquilla）直接算；
+    // bridge 系把 question 映射成 permission 发，只能靠「等你选方案」前缀认。
+    const bool planChoice =
+        kind == QStringLiteral("question") ||
+        message.startsWith(QString::fromUtf8("等你选方案"));
+    announceWork(kind, title, message, spoken, raise, sessionId, planChoice);
 }
 
 // 只负责「喊人」：事件流一行、记宿主、气泡 + 语音 + 要不要抢前台。
@@ -2189,7 +2290,8 @@ void MainWindow::handleNotify(const QString &kind, const QString &title,
 // 再 upsert 一次会在 review 状态下多长出一张卡片（review 不在合并窗口里）。
 void MainWindow::announceWork(const QString &kind, const QString &title,
                               const QString &message, const QString &spoken,
-                              const QString &raise, const QString &sessionId) {
+                              const QString &raise, const QString &sessionId,
+                              bool planChoice) {
     appendEvent(QStringLiteral("status"), QString(), QString(),
                 spoken.isEmpty() || spoken == message
                     ? title + QStringLiteral(" · ") + message
@@ -2228,13 +2330,12 @@ void MainWindow::announceWork(const QString &kind, const QString &title,
         const QString askKey = sessionId.isEmpty() ? title : sessionId;
         const QDateTime announced = attentionAnnounced_.value(askKey);
         const bool lateQuestion =
-            message.startsWith(QString::fromUtf8("等你选方案")) &&
-            announced.isValid() &&
+            planChoice && announced.isValid() &&
             announced.secsTo(QDateTime::currentDateTimeUtc()) <= 180;
         if (lateQuestion) {
             return;
         }
-        if (message.startsWith(QString::fromUtf8("等你选方案"))) {
+        if (planChoice) {
             attentionAnnounced_.insert(askKey,
                                        QDateTime::currentDateTimeUtc());
         }
@@ -2748,9 +2849,34 @@ void MainWindow::showOnStartup(bool startHidden) {
 }
 
 void MainWindow::wake() {
-    showNormal();
+    // 只清最小化/藏起来的状态，保留最大化与全屏：托盘叫回窗口不该把
+    // 全屏中的界面缩回去（原来无脑 showNormal，全屏会被砸成小窗）。
+    if (isMinimized()) {
+        setWindowState(windowState() & ~Qt::WindowMinimized);
+    }
+    show();
     raise();
     activateWindow();
+}
+
+void MainWindow::toggleMaximize() {
+    if (isFullScreen() || isMaximized()) {
+        showNormal();
+    } else {
+        showMaximized();
+    }
+}
+
+void MainWindow::changeEvent(QEvent *event) {
+    // 窗口态变了（最大化/还原/全屏）就同步标题栏按钮的字形：
+    // □ = 可最大化，❐ = 已铺满可还原。
+    if (event->type() == QEvent::WindowStateChange &&
+        maximizeBtn_ != nullptr) {
+        maximizeBtn_->setText(isMaximized() || isFullScreen()
+                                  ? QString::fromUtf8("❐")
+                                  : QString::fromUtf8("□"));
+    }
+    QMainWindow::changeEvent(event);
 }
 
 bool MainWindow::autoStartEnabled() const {
@@ -2916,10 +3042,13 @@ void MainWindow::updateListenUi() {
         statusText_->setText(running ? QStringLiteral("监听中")
                                      : QStringLiteral("未监听"));
         statusText_->setStyleSheet(
-            running ? QStringLiteral("color:#3fb950; font-size:11px;"
-                                     " font-weight:600;")
-                    : QStringLiteral("color:%1; font-size:11px;")
-                          .arg(ThemeManager::instance().css(QStringLiteral("muted"))));
+            running
+                ? QStringLiteral("color:#3fb950; font-size:%1px;"
+                                 " font-weight:600;")
+                      .arg(ThemeManager::scaledPx(11))
+                : QStringLiteral("color:%1; font-size:%2px;")
+                      .arg(ThemeManager::instance().css(QStringLiteral("muted")),
+                           QString::number(ThemeManager::scaledPx(11))));
     }
     refreshVoiceKey();
     // 无遥控器的语音触发：监听开着才注册全局热键，停了就还给别人。
@@ -3581,9 +3710,9 @@ void MainWindow::showUpdateDialog(const UpdateInfo &info) {
     dialog.setStyleSheet(QStringLiteral(
         "QDialog { background: %1; border: 1px solid %2;"
         " border-radius: 12px; }"
-        "QLabel { color: %3; font-size: 12px; }"
-        "QLabel#newVer { color: %4; font-size: 15px; font-weight: 600; }"
-        "QCheckBox { color: %5; font-size: 11px; }"
+        "QLabel { color: %3; font-size: %12px; }"
+        "QLabel#newVer { color: %4; font-size: %13px; font-weight: 600; }"
+        "QCheckBox { color: %5; font-size: %14px; }"
         "QPushButton { color: %3; background: %6;"
         " border: 1px solid %7; border-radius: 8px;"
         " padding: 5px 12px; }"
@@ -3594,7 +3723,10 @@ void MainWindow::showUpdateDialog(const UpdateInfo &info) {
         .arg(tk("dialog.bg"), tk("w24"), tk("text.dim"))
         .arg(tk("text"), tk("muted"), tk("w8"))
         .arg(tk("w20"), tk("w14"), tk("accent"))
-        .arg(tk("on.accent")).arg(tk("accent.hover")));
+        .arg(tk("on.accent")).arg(tk("accent.hover"))
+        .arg(QString::number(ThemeManager::scaledPx(12)),
+             QString::number(ThemeManager::scaledPx(15)),
+             QString::number(ThemeManager::scaledPx(11))));
 
     auto *lay = new QVBoxLayout(&dialog);
     lay->setContentsMargins(20, 16, 20, 16);

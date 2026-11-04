@@ -49,13 +49,23 @@ UninstallIcon "${__FILEDIR__}\..\..\assets\icon.ico"
 
 Section "主程序（必需）" SEC_MAIN
   SectionIn RO
-  ; 升级必须真覆盖：taskkill 返回时旧进程的 exe 句柄未必全释放，NSIS File
-  ; 立刻写 exe 会撞占用，静默模式把写错误吞掉继续 → 装完还是旧程序
-  ; （2026-11-04 实测：theme 等没被占用的文件更新了、exe 的 hash 却没变）。
-  ; 显式 on + taskkill 后等一拍再铺文件。
+  ; 升级必须真覆盖：taskkill 返回时旧进程的 exe 句柄未必全释放（杀进程后
+  ; 内核异步清理，输入法等注入 DLL 的第三方进程还可能短暂持有映像句柄），
+  ; NSIS File 撞占用时静默模式吞错继续 → 装完还是旧程序（2026-11-04 两次
+  ; 实测：theme 等文件更新了、exe hash 没变）。固定 Sleep 不够稳，改成
+  ; 「删得掉旧 exe 才铺文件」的试探循环，最多等 10 秒。
   SetOverwrite on
   nsExec::Exec 'taskkill /IM ${APPEXE} /F'
-  Sleep 800
+  StrCpy $R0 0
+  retry_delete:
+    ClearErrors
+    Delete "$INSTDIR\${APPEXE}"
+    IfErrors 0 delete_done
+    IntOp $R0 $R0 + 1
+    IntCmp $R0 20 delete_done 0 0
+    Sleep 500
+    Goto retry_delete
+  delete_done:
   SetOutPath "$INSTDIR"
   ; 排除调试符号、自测 exe，以及会覆盖用户设置的三个配置
   File /r /x "*.pdb" /x "AgentRMC*Test.exe" /x "config.json" \

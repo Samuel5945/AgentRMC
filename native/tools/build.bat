@@ -36,9 +36,11 @@ for %%f in (vc_redist.x64.exe dxcompiler.dll dxil.dll d3dcompiler_47.dll) do (
     if exist "%ROOT%\native\build\Release\%%f" del /q "%ROOT%\native\build\Release\%%f"
 )
 
-rem Keep the native data copy across rebuilds; seed it on first build.
-if not exist "%ROOT%\native\build\Release\config.json" copy /y "%ROOT%\config.json" "%ROOT%\native\build\Release\" >nul
-if not exist "%ROOT%\native\build\Release\profiles.json" copy /y "%ROOT%\profiles.json" "%ROOT%\native\build\Release\" >nul
+rem 每次强制用仓库干净模板覆盖 build 内的 config/profiles：installer 会把它们当
+rem 全新安装的默认种子。若只在不存在时拷贝，开发期写进 build 的个人密钥/模型
+rem 配置会残留并被分发出去（2026-11-04 实测泄露过一枚 API key）。
+copy /y "%ROOT%\config.json" "%ROOT%\native\build\Release\" >nul
+copy /y "%ROOT%\profiles.json" "%ROOT%\native\build\Release\" >nul
 
 rem Themes are loose folders next to the exe so users can drop in new ones.
 if exist "%ROOT%\themes" robocopy "%ROOT%\themes" "%ROOT%\native\build\Release\themes" /E /NFL /NDL /NJH /NJS >nul

@@ -17,11 +17,13 @@ QString runtimeDir() {
     return local + QStringLiteral("/AgentRMC/runtime");
 }
 
-// 只认 Qoder 家族：它的 hooks 是唯一的消费者，别的 Electron 宿主能不能当 Node
-// 用没有实测过，不往里塞。
-QString runningQoderExe() {
+// 只列实测过 ELECTRON_RUN_AS_NODE=1 可用的宿主（2026-11-04）；CodeBuddy 未实测故不列。
+QString runningHostExe() {
     for (const QString &exe :
-         {QStringLiteral("Qoder.exe"), QStringLiteral("Qoder CN.exe")}) {
+         {QStringLiteral("Qoder.exe"), QStringLiteral("Qoder CN.exe"),
+          QStringLiteral("ZCode.exe"), QStringLiteral("WorkBuddy.exe"),
+          QStringLiteral("WorkBuddyAI.exe"), QStringLiteral("DeepSeek Harness.exe"),
+          QStringLiteral("OpenSquilla.exe")}) {
         const QString path = AgentWindow::imagePath(exe);
         if (!path.isEmpty()) {
             return path;
@@ -39,7 +41,7 @@ QString hintPath() {
 }
 
 void refreshHint() {
-    const QString exe = runningQoderExe();
+    const QString exe = runningHostExe();
     const QString path = hintPath();
     if (exe.isEmpty()) {
         QFile::remove(path);

@@ -2277,6 +2277,45 @@ void MainWindow::handleNotify(const QString &kind, const QString &title,
         // 离线补投只落工单，不补喊/抢前台，避免启动时一次念一串旧提醒。
         return;
     }
+    // 「等你回话」残留修复（2026-11-04）：Agent 若先用 pet_work_update 报过
+    // ready/blocked（那时已经喊过一声），这一轮又用问句收尾，就别再喊第二声、
+    // 再抢一次前台——工单上面已经更新成问句了。ready 的 90s「压 stop」只挡 stop
+    // 事件，等回话走的是 permission，会绕过它，所以在这里单独补一道。
+    // MCP 上报不带 session，账记在 title 名下：先按 session 找（DSH 等带 session
+    // 的宿主能精确命中），找不到再按 title 找。命中即取走作废——只压这一次，
+    // 不 lingering 去吞并行的别的会话。放在 announceWork 之前拦，压掉时就不记
+    // 那条带「念：」的误导事件了。
+    if (message.startsWith(QString::fromUtf8("等你回话"))) {
+        const QDateTime now = QDateTime::currentDateTimeUtc();
+        QStringList keys;
+        if (!sessionId.isEmpty()) {
+            keys << sessionId;
+        }
+        if (!title.isEmpty() && title != sessionId) {
+            keys << title;
+        }
+        bool announcedRecently = false;
+        for (const QString &key : keys) {
+            const QDateTime readyAt = readyAnnounced_.value(key);
+            if (readyAt.isValid() && readyAt.secsTo(now) <= 90) {
+                readyAnnounced_.remove(key);
+                announcedRecently = true;
+                break;
+            }
+            const QDateTime blockedAt = attentionAnnounced_.value(key);
+            if (blockedAt.isValid() && blockedAt.secsTo(now) <= 120) {
+                attentionAnnounced_.remove(key);
+                announcedRecently = true;
+                break;
+            }
+        }
+        if (announcedRecently) {
+            appendEvent(QStringLiteral("status"), QString(), QString(),
+                        QString::fromUtf8("等你回话已并入刚才的 ready/blocked 提醒，不重复喊"),
+                        0);
+            return;
+        }
+    }
     // 选方案认语义不认文案：question 类事件（DSH / OpenSquilla）直接算；
     // bridge 系把 question 映射成 permission 发，只能靠「等你选方案」前缀认。
     const bool planChoice =

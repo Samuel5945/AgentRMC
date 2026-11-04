@@ -78,9 +78,10 @@ Cordis bundle）、OpenSquilla（`plugins/opensquilla-bridge` 外部 WebSocket �
 
 | 机制 | 位置 | 窗口 | 作用 |
 |---|---|---|---|
-| asked-question.json | bridge hook（spool 目录） | 30 分钟 | Notification 先喊过，PreToolUse 晚到的同一弹窗不再喊 |
+| asked-question.json | bridge hook（spool 目录） | 30 分钟 | 认**弹窗**不认会话：`tool:<tool_use_id>` 为主键，同一弹窗重复派发（哪怕 session 不一致）只喊一次；`prompt:<scope>` 由 Notification 准点信号记、迟到的 PreToolUse 消费（一次性）；无 tool id 的老宿主退回 `solo:<scope>`。**不能按 session 记**——那会把同一会话连问的多题从第二题起全吞掉 |
 | 「等你选方案」迟到去重 | 原生 announceWork | 180 秒 | `question` 类事件 **或** message 以「等你选方案」开头，且近期喊过 → 跳过 |
 | 等回话不参与迟到去重 | 原生 announceWork（planChoice=false） | — | 「等你回话」发的是 permission 且不带「等你选方案」前缀，180 秒窗口吞不到它；一轮最多一条，本身不刷屏 |
+| 等回话压 ready/blocked | 原生 announceWork | ready 90 秒 / blocked 120 秒 | 先 `pet_work_update(ready/blocked)` 喊过、这一轮又问句收尾 → 「等你回话」不再喊第二声。按 session→title 找 `readyAnnounced_`/`attentionAnnounced_`（MCP 不带 session、账记 title 名下），命中即取走作废 |
 | blocked 连报去重 | 原生 reportWorkItem | 120 秒 | 同会话连报 blocked 只喊一次 |
 | ready 压 stop | 原生 announceWork | 90 秒 | pet_work_update(ready) 喊过后，紧接着的 hook stop 不念第二遍 |
 | 同 turn 去重 | DSH inbox/claimed | 同一 turn | 一轮多条消息只报一次 turn-start |
@@ -111,10 +112,13 @@ Cordis bundle）、OpenSquilla（`plugins/opensquilla-bridge` 外部 WebSocket �
 4. **stop 念什么**：bridge 系 / DSH 念最终回复第一句；OpenSquilla 念会话标题模板；
    旧脚本念固定句。
 5. **选方案触发时机**：Qoder CN 的 PreToolUse(question) 在**弹窗那一刻**就派发
-   （2026-11-04 实测：提问 12:07:06 弹出、hook 12:07:06 起跑，另有一条 12:07:37 的
-   迟到信号带着**另一个 session_id**，于是同一件事立了两张「等你选方案」卡，
-   asked-question.json 也因 session 对不上而没拦住——这条待查）；WorkBuddy 相反，
+   （2026-11-04 实测：提问 12:07:06 弹出、hook 12:07:06 起跑）；WorkBuddy 相反，
    PreToolUse 要等用户答完，靠 Notification 准时信号；ZCode 插件没有 question 钩子。
+   **更正一条误诊**：当天「两张『等你选方案』卡、session_id 不一致」不是双派发——
+   transcript 对上了，是**两个并行会话各问各的**（01bc791f 12:07:06 问「待答提醒」、
+   55f51dbc 12:07:38 问「分镜放行」，tool_use_id 各异），两张卡本就正确。但顺藤查出一个
+   真 bug：旧去重按 session 记 30 分钟，**同一会话连问多题时第二题起全被吞**
+   （55f51dbc 连问 7 题只喊了 2 声）。已修：去重改认 `tool_use_id`（见第三节）。
 6. **等回话覆盖 bridge 系 / DSH**（2026-11-04 新增）：两家都从「Agent 这轮最后说了
    什么」判（bridge 读 transcript，DSH 用 assistant-stream 攒的正文）。OpenSquilla 桥
    按模板念会话标题、ZCode 手工旧脚本不读 transcript，手里没有可判的正文，要补得先
@@ -123,11 +127,14 @@ Cordis bundle）、OpenSquilla（`plugins/opensquilla-bridge` 外部 WebSocket �
    1800 秒窗口内把同 Agent 的活跃卡更新成新事件（实测 12:06:52 报的 blocked 自定义
    文案，被 12:07:06 的「等你选方案」覆盖）。一张卡只表达最新那件要人动手的事，
    所以 `pet_work_update` 报完之后别指望原文还在。
-8. **残留缺口：先报 ready 再用问句收尾会喊两遍**。`ready` 的 90 秒「压 stop」只挡
-   stop 事件，等回话发的是 permission，`announceWork` 里那条 `readyAnnounced_.take()`
-   根本走不到。后果是念完「做完了，等你验收」再念一句「在等你回话」，并且多抢一次
-   前台。hook 与 MCP 是两个进程，要彻底修得让它们共享「这轮已经喊过」的记账；
-   当前先在 skill 里约束模型：**用问句收尾就别补 blocked / ready**。
+8. **先报 ready/blocked 再问句收尾喊两遍 —— 已修（2026-11-04）**。`ready` 的 90 秒
+   「压 stop」只挡 stop 事件，等回话发的是 permission 会绕过它。现在 `announceWork`
+   的 permission 分支对「等你回话」补了一道：近期已按 ready/blocked 喊过就不再喊第二声、
+   不再抢前台（工单上面已更新成问句）。按 session→title 找 `readyAnnounced_` /
+   `attentionAnnounced_`，命中即取走作废。**已知取舍**：MCP 上报不带 session、账记在
+   title 名下，按 title 兜底找时，理论上「同一宿主刚报过 ready/blocked、另一个并行会话
+   紧接着问句收尾」会被误压一次——账即取即作废，影响限于那一次；skill 仍约束
+   「用问句收尾就别补 blocked / ready」从源头少触发。
 
 ## 六、文案出处
 

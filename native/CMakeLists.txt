@@ -307,7 +307,7 @@ add_executable(AgentRMCAudioTest
     src/core/VoiceSettings.h
 )
 target_include_directories(AgentRMCAudioTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
-target_link_libraries(AgentRMCAudioTest PRIVATE Qt6::Core winmm)
+target_link_libraries(AgentRMCAudioTest PRIVATE Qt6::Core winmm ole32)
 target_compile_options(AgentRMCAudioTest PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
 
 if(AGENTRMC_WITH_SHERPA)

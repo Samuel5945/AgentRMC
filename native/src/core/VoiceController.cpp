@@ -16,57 +16,11 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
-#include <mmdeviceapi.h>
 
 namespace {
 
 // 耳机麦克风的可说话峰值（RMS，约 -34 dBFS），高于它算还在说话。
 constexpr double kMediaVoiceFloor = 0.02;
-
-// 蓝牙耳机只要被占着麦克风，整个耳机就会切进通话（HFP）通道、A2DP 立刻挂起，
-// 表现是「软件一开，耳机没声音」。蓝牙麦克风的采集端点名必带 Hands-Free，
-// 拿它当判定：蓝牙时不预开麦克风（preroll 没了认了），改成说话期间临时开。
-const PROPERTYKEY kPKEYDeviceFriendlyName = {
-    {0xa45c254e, 0xdf1c, 0x4efd,
-     {0x80, 0x20, 0x67, 0xd1, 0x46, 0xa8, 0x50, 0xe0}},
-    14};  // PKEY_Device_FriendlyName
-
-bool defaultCaptureIsBluetooth() {
-    static const bool comReady = [] {
-        CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
-        return true;  // 失败 = 别处已按别的模式初始化过 COM，照样能用
-    }();
-    Q_UNUSED(comReady);
-
-    IMMDeviceEnumerator *enumerator = nullptr;
-    if (FAILED(CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr,
-                                CLSCTX_ALL, __uuidof(IMMDeviceEnumerator),
-                                reinterpret_cast<void **>(&enumerator)))) {
-        return false;
-    }
-    IMMDevice *device = nullptr;
-    const HRESULT hr =
-        enumerator->GetDefaultAudioEndpoint(eCapture, eConsole, &device);
-    enumerator->Release();
-    if (FAILED(hr)) {
-        return false;
-    }
-    IPropertyStore *store = nullptr;
-    bool bluetooth = false;
-    if (SUCCEEDED(device->OpenPropertyStore(STGM_READ, &store))) {
-        PROPVARIANT name{};
-        if (SUCCEEDED(store->GetValue(kPKEYDeviceFriendlyName, &name)) &&
-            name.vt == VT_LPWSTR && name.pwszVal != nullptr) {
-            bluetooth = QString::fromWCharArray(name.pwszVal)
-                            .contains(QStringLiteral("hands-free"),
-                                      Qt::CaseInsensitive);
-        }
-        PropVariantClear(&name);
-        store->Release();
-    }
-    device->Release();
-    return bluetooth;
-}
 
 }  // namespace
 
@@ -127,8 +81,10 @@ void VoiceController::updateOptions() {
 
 // 非蓝牙麦克风常开，换取 preroll 补回按键判定期间的开头几百毫秒；
 // 蓝牙麦克风绝不常开（会占死耳机通道），startSession 里有「没开就临时开」的分支。
+// 判的是 AudioRecorder 真正要打开的那台设备（默认通信录音端点），
+// 不是 MME 默认录制设备——两者在装了 Steam 虚拟麦的机器上会不一致。
 bool VoiceController::shouldHoldMic() {
-    return !defaultCaptureIsBluetooth();
+    return !AudioRecorder::communicationsDeviceIsBluetooth();
 }
 
 VoiceOptions VoiceController::options() {

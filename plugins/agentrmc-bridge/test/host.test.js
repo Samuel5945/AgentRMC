@@ -436,6 +436,58 @@ check('去重键兜底: 没 session_id 时按宿主+项目认，大小写与斜�
   assert.notStrictEqual(afterNoCwd, null, '给不出 cwd 的宿主只许多喊一声，不能静默漏掉');
 });
 
+// —— 2026-11-04 加固：去重认「弹窗」(tool_use_id) 不认「会话」 ——
+// 曾经按 session 记 30 分钟：同一会话连问多题，第二题起全被吞（实测某会话
+// 7 问只喊 2 声）。现在每道题有自己的 tool_use_id，各喊各的。
+check('同会话连问多题: 不同 tool_use_id 每题都喊，不再被上一题的账吞掉', () => {
+  const s = installInto('.qoder-cn');
+  const q1 = dryRun(s, 'question', JSON.stringify({
+    session_id: 'multi', tool_name: 'AskUserQuestion', tool_use_id: 'call-a',
+  }));
+  assert.strictEqual(q1.payload.message, '等你选方案');
+  const q2 = dryRun(s, 'question', JSON.stringify({
+    session_id: 'multi', tool_name: 'AskUserQuestion', tool_use_id: 'call-b',
+  }));
+  assert.notStrictEqual(q2, null, '同一会话的第二道题必须喊');
+  assert.strictEqual(q2.payload.message, '等你选方案');
+  const q3 = dryRun(s, 'question', JSON.stringify({
+    session_id: 'multi', tool_name: 'AskUserQuestion', tool_use_id: 'call-c',
+  }));
+  assert.notStrictEqual(q3, null, '第三道题也要喊');
+});
+
+check('同一弹窗重复派发: tool_use_id 相同就吞，哪怕 session 给得不一致', () => {
+  const s = installInto('.qoder-cn');
+  const first = dryRun(s, 'question', JSON.stringify({
+    session_id: 's-one', tool_name: 'AskUserQuestion', tool_use_id: 'call-same',
+  }));
+  assert.strictEqual(first.payload.message, '等你选方案');
+  // 同一弹窗又被派发一次，session 还换了个写法——仍要认成同一件事。
+  const again = dryRun(s, 'question', JSON.stringify({
+    session_id: 's-two', tool_name: 'AskUserQuestion', tool_use_id: 'call-same',
+  }));
+  assert.strictEqual(again, null, '同一 tool_use_id 不该喊第二遍');
+});
+
+check('prompt 喊过后，带 tool_use_id 的迟到 question 也被吞', () => {
+  const s = installInto('.workbuddy-ai');
+  const early = dryRun(s, 'prompt', JSON.stringify({
+    session_id: 'w-tid',
+    notification_type: 'permission_prompt',
+    message: 'needs your permission to use AskUserQuestion',
+  }));
+  assert.strictEqual(early.payload.message, '等你选方案');
+  const late = dryRun(s, 'question', JSON.stringify({
+    session_id: 'w-tid', tool_name: 'AskUserQuestion', tool_use_id: 'call-w',
+  }));
+  assert.strictEqual(late, null, 'prompt 已喊，迟到的 question 消费掉那笔账');
+  // 账是一次性的：答完后的下一道新题不受上一题影响。
+  const next = dryRun(s, 'question', JSON.stringify({
+    session_id: 'w-tid', tool_name: 'AskUserQuestion', tool_use_id: 'call-w2',
+  }));
+  assert.notStrictEqual(next, null, 'prompt 的账被消费后，新题照常喊');
+});
+
 // 语音和气泡要念/显示两回事：「等你确认 Bash：D:\path」看着有用，念出来是噪音；
 // 而语音少了宿主名就分不清是谁在等。speech 只给语音，缺省才退回念 message。
 check('speech 与 message 分开: 语音短文案带宿主名，气泡留工具名和路径', () => {

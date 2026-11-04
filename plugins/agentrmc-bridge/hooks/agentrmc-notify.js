@@ -153,6 +153,16 @@ function lastAssistantText(hook) {
 // 同一个弹窗会被两个 hook 看到：Notification(permission_prompt) 在弹出时（准），
 // PreToolUse 在用户答完后（晚）。准的那条先喊，晚的那条不该再喊一遍——用户等了
 // 5 分钟才答，原生端 180 秒的迟到去重兜不住，只能在这里记一笔。
+//
+// 键分三种（2026-11-04 加固）：
+//   tool:<tool_use_id>  一次弹窗的天然唯一 ID。question 分支的主去重键——
+//                       同一弹窗无论被派发几次、session 给得一不一致都认它。
+//   pending:<scope>     只有 prompt（准点信号）记；question 晚到时**消费掉**它。
+//                       一次性：答完后的下一道新题不会被上一题的账吞掉。
+//   solo:<scope>        老宿主不给 tool_use_id 时的退路，按 scope 去重。
+// 曾经的教训：question 分支按 session 记 30 分钟——Qoder 里同一会话连问两道题，
+// 第二道被第一道的账吞掉（实测 55f51dbc 会话 7 问只喊了 2 声）。scope 键只能
+// 用于「同一弹窗的两条信号」，不能用于「同一会话的多次提问」。
 const ASKED_FILE = path.join(SPOOL_DIR, 'asked-question.json');
 const ASKED_TTL_MS = 30 * 60 * 1000;
 
@@ -178,7 +188,11 @@ function projectOf(hook) {
     .toLowerCase();
 }
 
-function askedKey(hook) {
+function toolUseId(hook) {
+  return String(hook.tool_use_id || hook.toolUseId || '').trim();
+}
+
+function askedScopeKey(hook) {
   const sid = String(hook.session_id || hook.sessionId || '').trim();
   if (sid) return sid;
   // 没有 session（老宿主）：按「宿主身份 + 项目目录」认，宁可多喊一次也别漏。
@@ -188,36 +202,56 @@ function askedKey(hook) {
   return `host:${(raise || agent || 'agent').toLowerCase()}|${projectOf(hook)}`;
 }
 
-function rememberAsked(hook) {
+function loadAsked() {
+  try {
+    return JSON.parse(fs.readFileSync(ASKED_FILE, 'utf8')) || {};
+  } catch {
+    return {};
+  }
+}
+
+function saveAsked(all) {
+  const now = Date.now();
+  for (const k of Object.keys(all)) {
+    if (!(now - Number(all[k]) < ASKED_TTL_MS)) delete all[k];
+  }
+  // 原子替换：先写 pid 后缀的临时文件再 rename。两条 hook 并发时读者
+  // 不会看到半截 JSON（直接 writeFileSync 写到一半被读走，解析失败按
+  // 「没问过」处理，会重复喊）。并发写最坏后写覆盖先写，多喊一声而已。
+  const tmp = `${ASKED_FILE}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(all));
+  fs.renameSync(tmp, ASKED_FILE);
+}
+
+function rememberKeys(keys) {
   try {
     fs.mkdirSync(SPOOL_DIR, { recursive: true });
-    let all = {};
-    try {
-      all = JSON.parse(fs.readFileSync(ASKED_FILE, 'utf8')) || {};
-    } catch {
-      all = {};
-    }
+    const all = loadAsked();
     const now = Date.now();
-    for (const k of Object.keys(all)) {
-      if (!(now - Number(all[k]) < ASKED_TTL_MS)) delete all[k];
-    }
-    all[askedKey(hook)] = now;
-    // 原子替换：先写 pid 后缀的临时文件再 rename。两条 hook 并发时读者
-    // 不会看到半截 JSON（直接 writeFileSync 写到一半被读走，解析失败按
-    // 「没问过」处理，会重复喊）。并发写最坏后写覆盖先写，多喊一声而已。
-    const tmp = `${ASKED_FILE}.${process.pid}.tmp`;
-    fs.writeFileSync(tmp, JSON.stringify(all));
-    fs.renameSync(tmp, ASKED_FILE);
+    for (const k of keys) all[k] = now;
+    saveAsked(all);
   } catch {
     // 记不住就记不住：最多多喊一声，不能挡会话。
   }
 }
 
-function alreadyAsked(hook) {
+function fresh(all, key) {
+  const at = Number(all[key] || 0);
+  return at > 0 && Date.now() - at < ASKED_TTL_MS;
+}
+
+function seenKey(key) {
+  return fresh(loadAsked(), key);
+}
+
+// 命中即作废：pending 是「同一弹窗的晚到信号」专用，消费后下一道新题不受影响。
+function consumeKey(key) {
   try {
-    const all = JSON.parse(fs.readFileSync(ASKED_FILE, 'utf8')) || {};
-    const at = Number(all[askedKey(hook)] || 0);
-    return at > 0 && Date.now() - at < ASKED_TTL_MS;
+    const all = loadAsked();
+    if (!fresh(all, key)) return false;
+    delete all[key];
+    saveAsked(all);
+    return true;
   } catch {
     return false;
   }
@@ -261,7 +295,10 @@ process.stdin.on('end', () => {
     outEvent = 'permission';
     message = '等你选方案';
     speech = `${agent} 在等你选方案`;
-    rememberAsked(hook);
+    // 准点信号先喊，记一笔「这个 scope 有弹窗喊过了」，等答完后的 question
+    // 晚到信号来消费（一次性）。不记 tool 键：Notification 未必带 tool_use_id，
+    // 记了反而可能残留到下一道题。
+    rememberKeys([`prompt:${askedScopeKey(hook)}`]);
   } else if (event === 'stop') {
     // 优先念 Agent 的最终回复（transcript 最后一条 assistant），
     // 拿不到才退回通用文案——宿主不给 transcript 也照样能用。
@@ -287,13 +324,22 @@ process.stdin.on('end', () => {
     // matcher 万一不被宿主执行，这里再判一次 tool_name 兜底——PreToolUse 每个工具
     // 都会触发，认不出来就静默，绝不能把授权提醒刷成屏。
     if (tool !== 'AskUserQuestion') process.exit(0);
-    // 弹出那一刻 Notification hook 已经喊过了（WorkBuddy 走这条），
-    // 这里只给没有 Notification hook 的宿主兜底，别把同一件事喊两遍。
-    if (alreadyAsked(hook)) process.exit(0);
+    // 去重认「弹窗」不认「会话」（2026-11-04 加固）：
+    // 1) 同一 tool_use_id 喊过了 → 同一弹窗的重复派发，吞掉（session 给得
+    //    一不一致都认它）；
+    // 2) prompt 准点信号喊过了 → 我是答完后的晚到回声，消费掉那笔账，吞掉；
+    // 3) 老宿主不给 tool_use_id → 退回 scope 键（维持旧行为）。
+    // 绝不能按 session 记 30 分钟：同一会话连问多题时，第二题起全被吞
+    // （实测 55f51dbc 会话 7 问只喊了 2 声，中间 5 题静默卡住）。
+    const tid = toolUseId(hook);
+    const scope = askedScopeKey(hook);
+    if (tid && seenKey(`tool:${tid}`)) process.exit(0);
+    if (consumeKey(`prompt:${scope}`)) process.exit(0);
+    if (!tid && seenKey(`solo:${scope}`)) process.exit(0);
     outEvent = 'permission';
     message = '等你选方案';
     speech = `${agent} 在等你选方案`;
-    rememberAsked(hook);
+    rememberKeys([tid ? `tool:${tid}` : `solo:${scope}`]);
   } else if (event === 'permission') {
     const detail = String(input.file_path || input.path || input.command || input.url || '');
     const short = detail.length > 60 ? detail.slice(0, 57) + '…' : detail;

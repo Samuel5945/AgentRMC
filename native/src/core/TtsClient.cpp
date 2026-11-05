@@ -21,6 +21,10 @@ namespace {
 constexpr const char *kDefaultStyle =
     "亲切自然的中文语音助手，语气轻快友好，吐字清晰，语速适中，简短利落";
 
+// 不设超时的话，走本机代理的连接可能永远停在 CloseWait：reply 不 finished，
+// synthesizing_ 就一直是 true，之后每句只排队不合成，桌宠彻底哑掉。
+constexpr int kTransferTimeoutMs = 30000;
+
 }  // namespace
 
 TtsClient::TtsClient(QObject *parent) : QObject(parent) {
@@ -89,14 +93,23 @@ void TtsClient::pump() {
     request.setHeader(QNetworkRequest::ContentTypeHeader,
                       QStringLiteral("application/json"));
     request.setRawHeader("Authorization", "Bearer " + apiKey_.toUtf8());
+    request.setTransferTimeout(kTransferTimeoutMs);
     QNetworkReply *reply = http_->post(
         request, QJsonDocument(body).toJson(QJsonDocument::Compact));
+    inFlight_ = reply;
     connect(reply, &QNetworkReply::finished, this,
             [this, reply, generation = generation_] {
                 reply->deleteLater();
+                if (inFlight_ == reply) {
+                    inFlight_ = nullptr;
+                }
                 synthesizing_ = false;
                 if (generation != generation_) {
-                    return;  // 中途 stop() 过：这句直接扔
+                    // 中途 stop() 过：这句直接扔。但开关重新打开后要能接着念。
+                    if (enabled_) {
+                        pump();
+                    }
+                    return;
                 }
                 const QByteArray bodyBytes = reply->readAll();
                 if (reply->error() != QNetworkReply::NoError) {
@@ -158,9 +171,16 @@ void TtsClient::stop() {
     ++generation_;
     pending_.clear();
     stashed_.clear();
-    audio_.stop();
     playing_.clear();
     idleTimer_->stop();
+    // 在途请求必须掐掉：光清队列的话 synthesizing_ 还等着一个可能永远不回来的
+    // reply，开关关掉再打开也救不回来。abort 会走 finished 回调复位状态。
+    QNetworkReply *reply = inFlight_;
+    inFlight_ = nullptr;
+    if (reply != nullptr) {
+        reply->abort();
+    }
+    audio_.stop();
 }
 
 void TtsClient::play(const QByteArray &wav) {

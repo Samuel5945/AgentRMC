@@ -10,6 +10,7 @@
 
 class QJsonArray;
 class QNetworkAccessManager;
+class QNetworkReply;
 class QTimer;
 
 // 通用 OpenAI 兼容 TTS 客户端：文本 → base64 wav，winmm 播放。
@@ -46,6 +47,7 @@ private:
     void onIdleTick();
 
     QNetworkAccessManager *http_ = nullptr;
+    QNetworkReply *inFlight_ = nullptr;  // stop() 要能掐掉在途请求
     bool enabled_ = true;
     bool synthesizing_ = false;  // 一次只合成一句
     static constexpr int kMaxPending = 3;  // 队列上限，连发提醒别刷屏

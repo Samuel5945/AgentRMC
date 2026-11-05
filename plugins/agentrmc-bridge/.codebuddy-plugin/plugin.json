@@ -1,6 +1,6 @@
 {
   "name": "agentrmc-bridge",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "AgentRMC 桌宠联动：等授权、等选方案、任务完成自动气泡 + 语音提醒（hooks），MCP 工具汇报进度、让桌宠说话、查桌宠状态；WorkBuddy / WorkBuddy AI 需分别安装。",
   "author": {
     "name": "AgentRMC"

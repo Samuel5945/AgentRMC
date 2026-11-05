@@ -98,8 +98,9 @@
   才跟着升，纯 native 改动不必为了对齐而空升插件。
 - 出包前跑 `native\tools\check-version.ps1`（CMake / NSIS / exe 一致）和
   `native\tools\sync-plugin-version.ps1 -Check`（六处清单 == VERSION）。
-- 当前批次：Native `0.4.0` / 插件 `0.4.0`（0.4.0 已升版并本地验收，尚未出包发布；
-  上线待办见 `docs/release-checklist-v0.4.0.md`）。
+- 当前批次：Native `0.4.1` / 插件 `0.4.1`（0.4.0 已出包装机、本地验收；0.4.1 是
+  「模型出错要喊人」这条插件能力 + 一次本地装机，上线待办仍见
+  `docs/release-checklist-v0.4.0.md`）。
 - **插件版本只有一个来源**：`plugins/agentrmc-bridge/VERSION`。构建时
   `native/tools/sync-plugin-version.ps1` 把它同步进 3 个 `plugin.json`、
   `plugins/deepseek-harness/package.json`（DSH 版）和 2 个 `marketplace.json`；

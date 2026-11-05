@@ -117,7 +117,10 @@ const TOOLS = [
     description:
       "查询 AgentRMC 桌宠当前状态：pet_visible/pet_enabled（桌宠可见/开关）、" +
       "docked（贴边收纳）、listening/recording/transcribing（语音监听/录音/转写中）、" +
-      "chat_mode（对话模式）、tts_ready（TTS 可用）。想在桌宠上提示前可先查一眼。",
+      "chat_mode（对话模式）、tts_ready（TTS 可用）、" +
+      "mic（麦克风读数：config=配置点名的设备或 auto、pick/pick_source=这次会用哪台、" +
+      "device/source=实际在录的那台、note=点名没用上的原因）。" +
+      "想在桌宠上提示前可先查一眼；语音录不到就先看 mic。",
     inputSchema: { type: "object", properties: {} },
   },
   {

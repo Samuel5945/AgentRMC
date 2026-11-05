@@ -1,6 +1,7 @@
 #include "ui/TtsSettingsDialog.h"
 
 #include "core/AudioOut.h"
+#include "core/AudioRecorder.h"
 #include "core/Profiles.h"
 #include "core/ThemeManager.h"
 #include "core/TtsClient.h"
@@ -11,6 +12,7 @@
 #include <QDesktopServices>
 #include <QCoreApplication>
 #include <QHBoxLayout>
+#include <QJsonValue>
 #include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
@@ -153,6 +155,45 @@ TtsSettingsDialog::TtsSettingsDialog(ProfileStore *store, QWidget *parent)
         "对话多的话别写太长的句子"));
     addRow(QString::fromUtf8("音色描述"), styleEdit_);
 
+    // 输入设备：默认档跟随系统「默认通信录音设备」，但那档被蓝牙耳机麦或虚拟麦
+    // 占着、且还有真麦克风时会自动改用真麦；再不准就在下面点名。和「输出设备」配成一对。
+    input_ = new QComboBox;
+    input_->addItem(QString::fromUtf8("自动（优先真麦克风，躲开耳机麦/虚拟麦）"),
+                    QString());
+    const QStringList inputs = AudioRecorder::waveInNames();
+    QString savedInput = voice.value("input_device").toString().trimmed();
+    if (savedInput.isEmpty() && voice.value("input_device").isDouble()) {
+        // 老写法填的是设备序号：换成当前列表里的名字，界面和运行时看到的是同一台。
+        const int index = voice.value("input_device").toInt(-1);
+        if (index >= 0 && index < inputs.size()) {
+            savedInput = inputs.at(index).trimmed();
+        }
+    }
+    for (const QString &name : inputs) {
+        input_->addItem(name, name);
+        if (name.compare(savedInput, Qt::CaseInsensitive) == 0) {
+            input_->setCurrentIndex(input_->count() - 1);
+        }
+    }
+    if (!savedInput.isEmpty() &&
+        input_->currentData().toString().compare(savedInput, Qt::CaseInsensitive) != 0) {
+        // 保存过的那台现在不在列表里（拔了/改名）：留着原值当选项并标出来，
+        // 别静默退回自动——否则用户以为选着，其实在录别的设备。
+        input_->addItem(QString::fromUtf8("%1（现在没插着）").arg(savedInput),
+                        savedInput);
+        input_->setCurrentIndex(input_->count() - 1);
+    }
+    const QString autoName = AudioRecorder::communicationsDeviceName();
+    input_->setToolTip(QString::fromUtf8(
+        "说话时从哪个麦克风收声\n"
+        "自动 = 跟着系统「默认通信录音设备」（现在是「%1」）；那一档被蓝牙耳机麦\n"
+        "或虚拟麦占着、列表里还有真麦克风时，自动改用真麦克风\n"
+        "列表来自当前插着的输入设备，插上新麦后重开这里刷新\n"
+        "点名哪台就用哪台，保存后立即生效，不用重启")
+                           .arg(autoName.isEmpty() ? QString::fromUtf8("没有")
+                                                   : autoName));
+    addRow(QString::fromUtf8("输入设备"), input_);
+
     // 输出设备：软件只能从这里的列表选，系统默认还是耳机自己定。
     output_ = new QComboBox;
     output_->addItem(QString::fromUtf8("跟随系统默认"), QString());
@@ -280,7 +321,11 @@ void TtsSettingsDialog::save() {
         patch["style"] = styleEdit_->text().trimmed();
     }
     patch["output_device"] = output_->currentData().toString();
-    if (!store_->updateVoice(QJsonObject{{"tts", patch}})) {
+    // 录音设备写在 voice 级（voice.input_device），不塞进 tts：tts 那组只管出声。
+    // 空串 = 自动跟随系统默认通信录音设备。
+    if (!store_->updateVoice(QJsonObject{{QStringLiteral("tts"), patch},
+                                         {QStringLiteral("input_device"),
+                                          input_->currentData().toString()}})) {
         note_->setText(QString::fromUtf8("保存失败：无法写入 config.json"));
         note_->setStyleSheet(QStringLiteral("color:#f85149;"));
         return;

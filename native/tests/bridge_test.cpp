@@ -187,6 +187,9 @@ int main(int argc, char **argv) {
                                                                                         expectNotice(Notice{true, "speak", "ZCode", "curl 式"}, resp);
                                                                                     },
                                                                                     [] {
+                                                                                        // 正面通过标记：原来只在失败时打印，空输出分不清「全过」和「没跑完」。
+                                                                                        std::printf(ok ? "ALL PASS bridge\n" : "FAIL bridge\n");
+                                                                                        std::fflush(stdout);
                                                                                         QCoreApplication::exit(ok ? 0 : 1);
                                                                                     });
                                                                         });

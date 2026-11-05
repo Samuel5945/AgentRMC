@@ -28,6 +28,7 @@ private:
 
     ProfileStore *store_ = nullptr;
     QCheckBox *enabled_ = nullptr;
+    QComboBox *input_ = nullptr;   // 录音设备（voice.input_device），和下面输出成对
     QComboBox *output_ = nullptr;
     QLineEdit *baseUrl_ = nullptr;
     QLineEdit *apiKey_ = nullptr;

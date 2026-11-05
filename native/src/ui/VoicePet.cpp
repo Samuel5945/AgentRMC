@@ -695,6 +695,10 @@ QString VoicePet::stateJson() const {
         {QStringLiteral("transcribing"), transcribing_},
         {QStringLiteral("chat_mode"), chatMode_},
         {QStringLiteral("tts_ready"), tts_ != nullptr && tts_->ready()},
+        // 麦克风读数：排查「说话没录到」时先看这里——config=配置点名的设备、
+        // source=这次真用哪一档（pinned/comms/mapper）、note=降级原因。
+        {QStringLiteral("mic"),
+         voice_ ? voice_->micStatus() : QJsonObject{}},
         {QStringLiteral("agents"), agents},
     };
     return QString::fromUtf8(

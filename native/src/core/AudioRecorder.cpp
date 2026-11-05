@@ -165,12 +165,107 @@ QString AudioRecorder::communicationsDeviceName() {
     return communicationsEndpointName();
 }
 
-bool AudioRecorder::communicationsDeviceIsBluetooth() {
-    return communicationsDeviceName().contains(QStringLiteral("hands-free"),
-                                               Qt::CaseInsensitive);
+QStringList AudioRecorder::waveInNames() { return waveInDeviceNames(); }
+
+bool AudioRecorder::nameIsBluetooth(const QString &name) {
+    return name.contains(QStringLiteral("hands-free"), Qt::CaseInsensitive);
 }
 
-QStringList AudioRecorder::waveInNames() { return waveInDeviceNames(); }
+bool AudioRecorder::nameIsVirtualMic(const QString &name) {
+    static const QStringList markers = {
+        QStringLiteral("steam streaming"),   // Steam 直播虚拟麦
+        QStringLiteral("voicemeeter"),
+        QStringLiteral("vb-audio"),
+        QStringLiteral("vb-cable"),
+        QStringLiteral("virtual audio"),     // Virtual Audio Cable 一类
+        QStringLiteral("virtual mic"),
+        QStringLiteral("cable input"),
+    };
+    for (const QString &marker : markers) {
+        if (name.contains(marker, Qt::CaseInsensitive)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+QString AudioRecorder::firstRealMic(const QStringList &names) {
+    for (const QString &raw : names) {
+        const QString name = raw.trimmed();
+        if (name.isEmpty() || nameIsBluetooth(name) || nameIsVirtualMic(name)) {
+            continue;
+        }
+        return name;
+    }
+    return {};
+}
+
+bool AudioRecorder::communicationsDeviceIsBluetooth() {
+    return nameIsBluetooth(communicationsDeviceName());
+}
+
+MicChoice AudioRecorder::chooseMicDevice(const QString &pinned,
+                                         const QString &commsName,
+                                         const QStringList &names) {
+    MicChoice choice;
+    const QString want = pinned.trimmed();
+    if (!want.isEmpty()) {
+        const int index = matchWaveInIndex(want, names);
+        if (index >= 0) {
+            choice.name = want;
+            choice.index = index;
+            choice.source = QStringLiteral("pinned");
+        } else {
+            // 用户在设置里点名的设备没了，不能静默改成自动——原因写进 note。
+            choice.note = QStringLiteral("点名的「%1」现在不在输入设备列表里"
+                                         "（拔了或改了名）")
+                              .arg(want);
+        }
+    }
+    if (choice.index < 0) {
+        const int index = matchWaveInIndex(commsName, names);
+        if (index >= 0) {
+            choice.name = commsName;
+            choice.index = index;
+            choice.source = QStringLiteral("comms");
+            // 自动档躲占位：通信端点被蓝牙耳机麦或虚拟麦占着、而列表里还有
+            // 「既不是蓝牙也不是虚拟麦」的真麦克风时才换过去。没有真麦就照旧
+            // 跟随——只有耳机麦 + Steam 虚拟麦的机器上，换到虚拟麦只会录到
+            // 静音，宁可不换。
+            if (nameIsBluetooth(commsName) || nameIsVirtualMic(commsName)) {
+                const QString real = firstRealMic(names);
+                const int realIndex = matchWaveInIndex(real, names);
+                if (!real.isEmpty() && realIndex >= 0) {
+                    choice.name = real;
+                    choice.index = realIndex;
+                    choice.source = QStringLiteral("prefer");
+                }
+            }
+        } else {
+            // 端点名在列表里对不上：先试真麦克风，再退 WAVE_MAPPER——
+            // mapper 那档正是当年被 Steam 虚拟麦占住的那一档。
+            const QString real = firstRealMic(names);
+            const int realIndex = matchWaveInIndex(real, names);
+            if (!real.isEmpty() && realIndex >= 0) {
+                choice.name = real;
+                choice.index = realIndex;
+                choice.source = QStringLiteral("prefer");
+            }
+        }
+    }
+    if (choice.index < 0) {
+        // WAVE_MAPPER 没有名字可读；蓝牙判据沿用端点名，判不准时宁可当真。
+        choice.name.clear();
+        choice.source = QStringLiteral("mapper");
+    }
+    choice.bluetooth =
+        nameIsBluetooth(choice.name.isEmpty() ? commsName : choice.name);
+    return choice;
+}
+
+void AudioRecorder::setDeviceName(const QString &name) {
+    deviceName_ = name.trimmed();
+}
 
 int AudioRecorder::matchWaveInIndex(const QString &endpointName,
                                     const QStringList &waveInNames) {
@@ -220,16 +315,20 @@ bool AudioRecorder::open(QString *error) {
     const std::vector<CaptureFormat> formats = {
         {16000, 1}, {44100, 1}, {48000, 1}, {44100, 2}, {48000, 2},
     };
-    // 先按「默认通信设备」的设备号开；匹配不到或开不动再退回 WAVE_MAPPER
-    // （MME 默认录制设备），保证老环境行为不塌。
-    const int preferred = communicationsWaveInIndex();
+    // 设备次序：用户在设置里点名的 → 系统默认「通信」录音端点 → WAVE_MAPPER
+    // （MME 默认录制设备）。点名那台匹配不到或开不动照样往后退，但退到哪、
+    // 为什么退都记进 opened_，让「/state 看到的」和「真在录的」是同一台。
+    const QString commsName = communicationsEndpointName();
+    const MicChoice choice =
+        chooseMicDevice(deviceName_, commsName, waveInDeviceNames());
     std::vector<UINT> devices;
-    if (preferred >= 0) {
-        devices.push_back(UINT(preferred));
+    if (choice.index >= 0) {
+        devices.push_back(UINT(choice.index));
     }
     devices.push_back(WAVE_MAPPER);
 
     bool opened = false;
+    UINT usedDevice = WAVE_MAPPER;
     for (const UINT device : devices) {
         for (const CaptureFormat &candidate : formats) {
             WAVEFORMATEX format{};
@@ -247,6 +346,7 @@ bool AudioRecorder::open(QString *error) {
                 impl_->format = format;
                 impl_->rate = candidate.rate;
                 impl_->channels = candidate.channels;
+                usedDevice = device;
                 opened = true;
                 break;
             }
@@ -257,11 +357,38 @@ bool AudioRecorder::open(QString *error) {
     }
 
     if (!opened) {
+        opened_ = MicChoice{};
+        opened_.source = QStringLiteral("none");
+        opened_.note = deviceName_.isEmpty()
+                           ? QStringLiteral("没有可用的麦克风")
+                           : QStringLiteral("点名的「%1」打不开，其它输入设备也打不开")
+                                 .arg(deviceName_);
         if (error != nullptr) {
-            *error = QStringLiteral("没有可用的麦克风（WinMM 打不开默认通信输入设备）");
+            *error = deviceName_.isEmpty()
+                         ? QStringLiteral("没有可用的麦克风（WinMM 打不开默认通信输入设备）")
+                         : opened_.note;
         }
         return false;
     }
+
+    // 记账：这次到底从哪台收声（pinned / comms / mapper），降级原因只报
+    // 「用户点名的设备没用上」这种反直觉的情况，自动档退 mapper 是老行为、不刷屏。
+    MicChoice actual = choice;
+    if (usedDevice == WAVE_MAPPER) {
+        actual.name.clear();
+        actual.index = -1;
+        actual.source = QStringLiteral("mapper");
+        if (!deviceName_.isEmpty()) {
+            actual.note = choice.note.isEmpty()
+                              ? QStringLiteral("点名的「%1」打不开（被独占或刚拔出），"
+                                               "退回系统默认录制设备")
+                                    .arg(deviceName_)
+                              : choice.note + QStringLiteral("，退回系统默认录制设备");
+        }
+    } else {
+        actual.index = int(usedDevice);
+    }
+    opened_ = actual;
 
     // 50ms 一块：松手时最多再等一块，句尾不会丢 100-200ms。
     impl_->chunkBytes = qMax(800, impl_->rate * impl_->channels * 2 / 20);

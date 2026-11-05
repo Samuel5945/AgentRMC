@@ -81,10 +81,84 @@ void VoiceController::updateOptions() {
 
 // 非蓝牙麦克风常开，换取 preroll 补回按键判定期间的开头几百毫秒；
 // 蓝牙麦克风绝不常开（会占死耳机通道），startSession 里有「没开就临时开」的分支。
-// 判的是 AudioRecorder 真正要打开的那台设备（默认通信录音端点），
-// 不是 MME 默认录制设备——两者在装了 Steam 虚拟麦的机器上会不一致。
+// 判的是 chooseMicDevice 这次真要打开的那台设备（用户点名的，或默认通信录音
+// 端点），不是 MME 默认录制设备——两者在装了 Steam 虚拟麦的机器上会不一致；
+// 判据和实际打开必须走同一个裁决，否则会出现「以为常开安全、开的却是耳机麦」。
 bool VoiceController::shouldHoldMic() {
-    return !AudioRecorder::communicationsDeviceIsBluetooth();
+    const MicChoice choice = AudioRecorder::chooseMicDevice(
+        pinnedMicName(), AudioRecorder::communicationsDeviceName(),
+        AudioRecorder::waveInNames());
+    return !choice.bluetooth;
+}
+
+QString VoiceController::pinnedMicName() const {
+    const QString byName = options_.micDevice.trimmed();
+    if (!byName.isEmpty()) {
+        return byName;
+    }
+    // 老配置的数字序号形态：按当前设备列表换成名字，后面判蓝牙、开麦都只认名字。
+    if (options_.micDeviceIndex >= 0) {
+        const QStringList names = AudioRecorder::waveInNames();
+        if (options_.micDeviceIndex < names.size()) {
+            return names.at(options_.micDeviceIndex).trimmed();
+        }
+    }
+    return {};
+}
+
+bool VoiceController::openMic(QString *error) {
+    const QString wanted = pinnedMicName();
+    // 已经开着、但开的是上一台：先放掉再按当前配置开——否则在设置里换了设备
+    // 却还在从旧设备收声，看起来就是「选了没用」。
+    if (recorder_.isOpen() && recorder_.requestedDeviceName() != wanted) {
+        recorder_.close();
+    }
+    recorder_.setDeviceName(wanted);
+    if (recorder_.isOpen()) {
+        return true;  // 同一台常开着，不重开（重开有 0.5-1s 的空窗）
+    }
+    if (!recorder_.open(error)) {
+        return false;
+    }
+    // 点名没用上（设备拔了/被独占）要说出来：不然用户以为自己选的是耳机麦，
+    // 实际在从系统默认那台收声。
+    const QString note = recorder_.openedDeviceNote();
+    if (!note.isEmpty()) {
+        emit eventReady(QStringLiteral("voice"),
+                        QString::fromUtf8("麦克风：%1").arg(note));
+    }
+    return true;
+}
+
+QJsonObject VoiceController::micStatus() const {
+    // 读数分两半：pick* = 「现在说话会用哪台」（不依赖麦克风开没开，热键档下
+    // 麦克风平时是关的，只报 open/device 就全是空，看不出选错了档）；
+    // device/source = 「这一刻真在录的那台」。config 留原值，方便对账手改的配置。
+    const QString wanted = pinnedMicName();
+    const QString commsName = AudioRecorder::communicationsDeviceName();
+    const MicChoice pick = AudioRecorder::chooseMicDevice(
+        wanted, commsName, AudioRecorder::waveInNames());
+    QString configValue = options_.micDevice.trimmed();
+    if (configValue.isEmpty() && options_.micDeviceIndex >= 0) {
+        configValue = QString::number(options_.micDeviceIndex);
+    }
+    return QJsonObject{
+        {QStringLiteral("config"),
+         configValue.isEmpty() ? QStringLiteral("auto") : configValue},
+        {QStringLiteral("pick"), pick.name},
+        {QStringLiteral("pick_source"), pick.source},
+        {QStringLiteral("pick_bluetooth"), pick.bluetooth},
+        // pick_source=="prefer" 时说明自动档躲开了被占的端点：这里给出它躲开了谁。
+        {QStringLiteral("comms_device"), commsName},
+        // 点名的设备现在不在列表里：蓝牙档不会预开麦克风，下面的 note 要等
+        // 真开过一次才有值，所以前瞻性原因单独报一行，别让「选了没用」查不到。
+        {QStringLiteral("pick_note"), pick.note},
+        {QStringLiteral("hold"), micAlwaysOn_},
+        {QStringLiteral("open"), recorder_.isOpen()},
+        {QStringLiteral("device"), recorder_.openedDeviceName()},
+        {QStringLiteral("source"), recorder_.openedDeviceSource()},
+        {QStringLiteral("note"), recorder_.openedDeviceNote()},
+    };
 }
 
 VoiceOptions VoiceController::options() {
@@ -306,7 +380,7 @@ void VoiceController::startSession(bool media) {
         setState(State::Idle, QStringLiteral("就绪"));
         return;
     }
-    if (!recorder_.isOpen() && !recorder_.open(&error)) {
+    if (!recorder_.isOpen() && !openMic(&error)) {
         emit eventReady(QStringLiteral("error"), error);
         setState(State::Idle, QStringLiteral("就绪"));
         return;
@@ -386,7 +460,7 @@ void VoiceController::startTest() {
         return;
     }
     if (!recorder_.isOpen()) {
-        if (!recorder_.open(&error)) {
+        if (!openMic(&error)) {
             emit eventReady(QStringLiteral("error"), error);
             return;
         }
@@ -607,11 +681,10 @@ void VoiceController::reload() {
     micAlwaysOn_ = listening_ && options_.backend != VoiceBackend::Hotkey &&
                    shouldHoldMic();
     if (micAlwaysOn_) {
-        if (!recorder_.isOpen()) {
-            QString error;
-            if (!recorder_.open(&error)) {
-                emit eventReady(QStringLiteral("error"), error);
-            }
+        // 走 openMic：里面会比对配置，换了设备先放掉旧的再开。
+        QString error;
+        if (!openMic(&error)) {
+            emit eventReady(QStringLiteral("error"), error);
         }
     } else {
         // 蓝牙麦克风长期占用会把耳机整个切进通话通道（A2DP 挂起），
@@ -635,9 +708,9 @@ void VoiceController::setListening(bool listening) {
         return;
     }
     micAlwaysOn_ = options_.backend != VoiceBackend::Hotkey && shouldHoldMic();
-    if (micAlwaysOn_ && !recorder_.isOpen()) {
+    if (micAlwaysOn_) {
         QString error;
-        if (!recorder_.open(&error)) {
+        if (!openMic(&error)) {
             emit eventReady(QStringLiteral("error"), error);
         }
     }

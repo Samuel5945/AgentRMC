@@ -25,6 +25,13 @@ struct VoiceOptions {
     bool paste = true;
     bool autoEnter = false;
     int sampleRate = 16000;
+    // 录音设备点名（voice.input_device）：字符串 = 设备名（「语音反馈」里的
+    // 输入设备下拉选的就是它）；数字 = 老的 waveIn 序号，由调用方按当前设备
+    // 列表换成名字。两者都没配 = 自动跟随系统默认「通信」录音端点。
+    // 用它的理由：默认档会被蓝牙耳机麦 / Steam 虚拟麦 / 串流占着，
+    // 点名才能稳定收到真麦克风。
+    QString micDevice;
+    int micDeviceIndex = -1;
     int minRecordMs = 300;
     int confirmWindowMs = 250;
     int minRepeats = 2;

@@ -255,6 +255,16 @@ VoiceOptions resolveVoiceOptions(const QJsonObject &config,
     options.paste = boolValue(voice, "paste", true);
     options.autoEnter = boolValue(voice, "auto_enter", false);
     options.sampleRate = qBound(8000, intValue(voice, "sample_rate", 16000), 48000);
+    // voice.input_device 认两种形态：字符串 = 设备名（推荐，设置界面写这种）；
+    // 数字 = 旧的 waveIn 序号（README 老写法，留着不改变旧配置语义）。
+    // 都不写就保持自动：跟随系统默认「通信」录音端点。
+    const QJsonValue micDeviceValue = voice.value("input_device");
+    if (micDeviceValue.isString()) {
+        options.micDevice = micDeviceValue.toString().trimmed();
+    } else if (micDeviceValue.isDouble()) {
+        options.micDeviceIndex = micDeviceValue.toInt(-1);
+    }
+
     options.language = stringValue(voice, "asr_language", QStringLiteral("auto"));
     options.threads = qBound(1, intValue(voice, "threads", 4), 8);
 

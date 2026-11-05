@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QByteArray>
+#include <QJsonObject>
 #include <QObject>
 #include <QString>
 
@@ -34,6 +35,9 @@ public:
     bool chatMode() const { return chatMode_; }
     // 麦克风实时电平（0~1，未开麦时为 0），给语音主界面画电平环。
     double micLevel() const { return recorder_.level(); }
+    // 麦克风读数（进 /state）：想要哪台、实际开的哪台、走的是点名还是自动、
+    // 为什么退档。「语音没声」要先能分清是没设备、被占、还是选错了档。
+    QJsonObject micStatus() const;
     // 把一句话直接粘到当前前台窗口（桌宠「交给 Agent」用，不做前台判断）。
     // 调用方负责先把目标窗口拉到前台。
     bool injectText(const QString &text, bool autoEnter = true);
@@ -74,6 +78,12 @@ private:
     void updateOptions();
     // 监听期间是否常开麦克风：蓝牙耳机永远 false（占麦克风会挂起 A2DP）。
     bool shouldHoldMic();
+    // 配置里点名的录音设备（voice.input_device：名字，或老的序号形态）
+    // 换成当前 waveIn 列表里的设备名；空串 = 自动跟随默认通信端点。
+    QString pinnedMicName() const;
+    // 所有开麦入口都走这里：先按当前配置点名，再 open，
+    // 保证「判据看的那台」和「真打开的那台」不会分叉。
+    bool openMic(QString *error);
     void startSession(bool media);
     void finishSession();
     void beginTestCapture();

@@ -845,7 +845,11 @@ agent/qoder 的实际用法：
                                        // sensevoice / qwen3 = 本地转写
     "sensevoice_dir": "",              // 留空则找 exe 同目录 models\sensevoice，再退到 native\models
     "qwen3_dir": "",
-    "input_device": null,              // null=系统默认，或填设备序号（本地后端才用）
+    "input_device": null,              // null=自动：跟随系统默认「通信」录音设备，
+                                       // 那一档被蓝牙耳机麦/虚拟麦占着且列表里还有
+                                       // 真麦克风时自动改用真麦；
+                                       // 填设备名=点名麦克风（「语音反馈」里可选），
+                                       // 填数字=老式 waveIn 序号；本地后端才用
     "sample_rate": 16000,
     "asr_language": "zh",
     "paste": true,                     // 转写后粘贴到前台窗口

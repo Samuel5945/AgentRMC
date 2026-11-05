@@ -2,10 +2,12 @@
 
 #include "core/ModelImport.h"
 #include "core/Profiles.h"
+#include "core/SystemControl.h"
 #include "core/ThemeManager.h"
 #include "core/VoiceSettings.h"
 #include "ui/AsrSettingsDialog.h"
 #include "ui/LlmSettingsDialog.h"
+#include "ui/ToggleSwitch.h"
 #include "ui/TtsSettingsDialog.h"
 
 #include <QAbstractButton>
@@ -308,6 +310,44 @@ VoiceSettingsDialog::VoiceSettingsDialog(ProfileStore *store, QWidget *parent)
     mediaHint_->setObjectName("muted");
     mediaHint_->setWordWrap(true);
     root->addWidget(mediaHint_);
+
+    // 语音系统控制的分类开关：总开关在应用页，这里只决定哪几类话允许就地执行。
+    // 即改即存（和主题下拉一样），执行前每条命令现读，不用等保存。
+    auto *systemRow = new QHBoxLayout;
+    systemRow->setSpacing(6);
+    auto *systemLabel = new QLabel(QString::fromUtf8("系统控制"));
+    systemLabel->setObjectName("muted");
+    systemLabel->setFixedWidth(98);
+    systemLabel->setToolTip(QString::fromUtf8(
+        "允许语音直接执行哪几类系统命令\n"
+        "总开关「语音系统控制」在应用页；关掉的类会照原样听写下去"));
+    systemRow->addWidget(systemLabel);
+    const QStringList systemCategories = {QStringLiteral("volume"),
+                                          QStringLiteral("brightness"),
+                                          QStringLiteral("media"),
+                                          QStringLiteral("power")};
+    for (const QString &category : systemCategories) {
+        const QString name = SystemControlSettings::categoryLabel(category);
+        const QString key = QStringLiteral("voice_system_") + category;
+        const QString tip = category == QStringLiteral("power")
+                                ? QString::fromUtf8(
+                                      "关屏幕、锁屏、睡眠、休眠、关机、重启\n"
+                                      "睡眠/休眠/关机/重启还要再说「确认关机」这样的口令才执行")
+                                : QString::fromUtf8("允许语音直接调%1").arg(name);
+        auto *label = new QLabel(name);
+        label->setObjectName("muted");
+        label->setToolTip(tip);
+        auto *toggle = new ToggleSwitch(store_->uiBool(key, true));
+        toggle->setToolTip(tip);
+        connect(toggle, &ToggleSwitch::toggled, this, [this, key](bool on) {
+            store_->setUiBool(key, on);
+        });
+        systemRow->addWidget(label);
+        systemRow->addWidget(toggle, 0, Qt::AlignVCenter);
+        systemRow->addSpacing(4);
+    }
+    systemRow->addStretch(1);
+    root->addLayout(systemRow);
 
     // 桌宠语音反馈：详细配置（Base URL / API Key / 模型 / 音色）在共享的
     // TtsSettingsDialog 里编辑，语音主界面和这里开的是同一个。

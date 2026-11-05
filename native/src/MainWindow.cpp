@@ -344,6 +344,13 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
     }
     engine_ = new InputEngine(store_.get(), this);
     voice_ = new VoiceController(store_.get(), this);
+    system_ = std::make_unique<WinSystemControl>();
+    voice_->setSystemControl(system_.get());
+    connect(voice_, &VoiceController::spokenFeedback, this, [this](const QString &text) {
+        if (voicePet_ != nullptr) {
+            voicePet_->speak(text);
+        }
+    });
     connect(engine_, &InputEngine::eventReady, this, &MainWindow::onEngineEvent);
     connect(engine_, &InputEngine::runningChanged, this,
             &MainWindow::onEngineRunning);
@@ -713,6 +720,8 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
         bridge->setWorkersProvider([this] { return workersJson(); });
         bridge->setWorkItemUpdateHandler(
             [this](const QJsonObject &payload) { return reportWorkItem(payload); });
+        bridge->setCommandHandler(
+            [this](const QJsonObject &payload) { return onBridgeCommand(payload); });
         connect(bridge, &AgentBridge::notify, this,
                 [this](const QString &kind, const QString &title,
                        const QString &message, const QString &raise,
@@ -3472,6 +3481,56 @@ void MainWindow::onVoiceTranscribed(const QString &text, int costMs) {
     refreshVoiceUi();
 }
 
+QJsonObject MainWindow::onBridgeCommand(const QJsonObject &body) {
+    const QString action = body.value(QStringLiteral("action")).toString().trimmed();
+    const SystemCommand command = SystemCommandText::parse(action);
+    if (!command.matched || command.confirmed) {
+        return QJsonObject{
+            {QStringLiteral("ok"), false},
+            {QStringLiteral("code"), 400},
+            {QStringLiteral("message"),
+             QString::fromUtf8("不认识的命令说法：%1").arg(action)}};
+    }
+    if (system_ == nullptr) {
+        return QJsonObject{{QStringLiteral("ok"), false},
+                           {QStringLiteral("code"), 400},
+                           {QStringLiteral("message"),
+                            QString::fromUtf8("系统控制还没就绪")}};
+    }
+    if (!SystemControlSettings::enabled(store_.get(), command.kind)) {
+        return QJsonObject{
+            {QStringLiteral("ok"), false},
+            {QStringLiteral("code"), 403},
+            {QStringLiteral("message"),
+             QString::fromUtf8("「%1」这类语音系统控制被关掉了")
+                 .arg(SystemControlSettings::categoryLabel(
+                     SystemCommandText::category(command.kind)))}};
+    }
+    // 宿主 Agent 要自己负责确认：native 不替它攒 pending，缺 confirm 就回 409。
+    const bool confirmed = body.value(QStringLiteral("confirm")).toBool(false);
+    const SystemResult result = system_->execute(command, confirmed);
+    const int code = result.ok ? 200 : (result.needsConfirm ? 409 : 400);
+    appendEvent(result.ok ? QStringLiteral("system") : QStringLiteral("error"),
+                QString(), QString(),
+                QString::fromUtf8("桥接命令 %1：%2").arg(action, result.text), 0);
+    if (result.ok && voicePet_ != nullptr) {
+        voicePet_->speak(result.text);
+    }
+    QJsonObject reply{{QStringLiteral("ok"), result.ok},
+                      {QStringLiteral("code"), code},
+                      {QStringLiteral("message"), result.text},
+                      {QStringLiteral("kind"), command.kind}};
+    if (result.value >= 0) {
+        reply.insert(QStringLiteral("value"), result.value);
+    }
+    if (result.needsConfirm) {
+        reply.insert(QStringLiteral("needs_confirm"), true);
+        reply.insert(QStringLiteral("confirm_phrase"),
+                     SystemCommandText::confirmPhrase(command.kind));
+    }
+    return reply;
+}
+
 void MainWindow::onEngineEvent(const QString &kind, const QString &name,
                                const QString &profile, const QString &detail,
                                int vk) {
@@ -3571,7 +3630,8 @@ void MainWindow::appendEvent(const QString &kind, const QString &name,
     QColor color = ThemeManager::instance().color(QStringLiteral("text.dim"));
     if (kind == "error") {
         color = QColor("#f85149");
-    } else if (kind == "voice") {
+    } else if (kind == "voice" || kind == "system") {
+        // 系统命令的成功结果和听写同色：都是「按你说的做完了」。
         color = QColor("#3fb950");
     } else if (kind == "status") {
         color = ThemeManager::instance().color(QStringLiteral("muted"));
@@ -3615,6 +3675,11 @@ bool MainWindow::nativeEvent(const QByteArray &eventType, void *message,
         voice_->mediaToggle();
         *result = 0;
         return true;
+    }
+    // 插拔显示器/改分辨率后，缓存的物理屏句柄会失效，亮度命令要重新取。
+    if (msg != nullptr && msg->message == WM_DISPLAYCHANGE && system_ != nullptr) {
+        system_->invalidateMonitors();
+        return QMainWindow::nativeEvent(eventType, message, result);
     }
     return QMainWindow::nativeEvent(eventType, message, result);
 }

@@ -4,6 +4,7 @@
 #include "core/AsrClient.h"
 #include "core/AsrEngine.h"
 #include "core/Profiles.h"
+#include "core/SystemControl.h"
 
 #include <QCoreApplication>
 #include <QDateTime>
@@ -21,6 +22,9 @@ namespace {
 
 // 耳机麦克风的可说话峰值（RMS，约 -34 dBFS），高于它算还在说话。
 constexpr double kMediaVoiceFloor = 0.02;
+
+// 二次确认窗口。要把 TTS 念确认口令那一两秒算进去，否则用户还没听完就超时了。
+constexpr qint64 kConfirmWindowMs = 20000;
 
 }  // namespace
 
@@ -300,6 +304,7 @@ void VoiceController::mediaToggle() {
 
 void VoiceController::tick() {
     const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    expireConfirm(now);
     if (state_ == State::Pending && now - pendingAt_ > options_.confirmWindowMs) {
         setState(State::Idle, QStringLiteral("就绪"));
         return;
@@ -589,6 +594,11 @@ void VoiceController::deliver(const QString &text, int costMs,
         setState(State::Idle, QStringLiteral("就绪"));
         return;
     }
+    // 系统控制（音量/亮度/媒体/电源）优先于听写和对话：命中就地执行。
+    // 二次确认的口令也在这里拦，绝不能被当成听写贴进前台。
+    if (deliverSystem(text, costMs, false)) {
+        return;
+    }
     // 桌宠对话模式：「打开 xx」照样直接启动（省一次 LLM 往返），确认话术
     // 通过状态文案让桌宠念出来；其余的话才交给 LLM 聊。
     if (chatMode_) {
@@ -635,6 +645,112 @@ void VoiceController::deliver(const QString &text, int costMs,
                           .arg(costMs / 1000.0, 0, 'f', 1));
 }
 
+void VoiceController::setSystemControl(ISystemControl *control) {
+    system_ = control;
+}
+
+void VoiceController::expireConfirm(qint64 now) {
+    if (!confirm_.pending()) {
+        return;
+    }
+    SystemCommand waiting;
+    waiting.kind = confirm_.kind();
+    const QString name = SystemCommandText::label(waiting);
+    if (!confirm_.expire(now)) {
+        return;
+    }
+    emit eventReady(QStringLiteral("system"),
+                    name + QStringLiteral("：超时未确认，已取消"));
+    emit spokenFeedback(name + QStringLiteral("取消了，没执行"));
+    setState(State::Idle, QStringLiteral("就绪"));
+}
+
+bool VoiceController::deliverSystem(const QString &text, int costMs, bool typed) {
+    if (system_ == nullptr) {
+        return false;
+    }
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    expireConfirm(now);
+    const SystemCommand command = SystemCommandText::parse(text);
+    const SystemConfirm::Verdict verdict = confirm_.offer(command, now);
+    if (verdict == SystemConfirm::Verdict::Confirmed) {
+        const SystemCommand pending = confirm_.take();
+        emit transcribed(text, costMs);
+        dispatchSystem(pending, true, typed);
+        return true;
+    }
+    if (verdict == SystemConfirm::Verdict::Cancelled) {
+        emit eventReady(QStringLiteral("system"), QStringLiteral("已取消，没执行"));
+    }
+    // 没有待确认命令时，「确认关机」这类口令不算命令，照原样听写下去。
+    if (!command.matched || command.confirmed ||
+        !SystemControlSettings::enabled(store_, command.kind)) {
+        return false;
+    }
+    // 打字只能调音量亮度这类可逆的；关机/睡眠必须真的说出口再过确认。
+    if (typed && SystemCommandText::needsConfirm(command.kind)) {
+        emit transcribed(text, costMs);
+        emit eventReady(QStringLiteral("system"),
+                        QStringLiteral("关机/睡眠这类动作只能语音触发：按住语音键说「%1」")
+                            .arg(SystemCommandText::label(command)));
+        setState(State::Idle, QStringLiteral("这类动作只能语音触发"));
+        return true;
+    }
+    emit transcribed(text, costMs);
+    if (SystemCommandText::needsConfirm(command.kind)) {
+        confirm_.arm(command, now, kConfirmWindowMs);
+        const QString prompt =
+            QStringLiteral("要%1吗？%2 秒内说「%3」执行，说别的就取消")
+                .arg(SystemCommandText::label(command))
+                .arg(int(kConfirmWindowMs / 1000))
+                .arg(SystemCommandText::confirmPhrase(command.kind));
+        emit eventReady(QStringLiteral("system"), prompt);
+        if (!typed) {
+            emit spokenFeedback(prompt);
+        }
+        setState(State::Idle, prompt);
+        return true;
+    }
+    dispatchSystem(command, false, typed);
+    return true;
+}
+
+void VoiceController::dispatchSystem(const SystemCommand &command, bool confirmed,
+                                     bool typed) {
+    if (system_ == nullptr) {
+        return;
+    }
+    if (systemBusy_) {
+        setState(State::Idle, QStringLiteral("上一条系统命令还没执行完"));
+        return;
+    }
+    const QString name = SystemCommandText::label(command);
+    systemBusy_ = true;
+    setState(State::Idle, name + QStringLiteral("…"));
+    ISystemControl *control = system_;
+    // DDC/CI 一次要几百毫秒，不能在主线程做；结果回主线程再报状态。
+    QThreadPool::globalInstance()->start([this, control, command, confirmed, name,
+                                          typed] {
+        const SystemResult result = control->execute(command, confirmed);
+        QMetaObject::invokeMethod(
+            this,
+            [this, result, name, typed] {
+                if (!alive_.load()) {
+                    return;
+                }
+                systemBusy_ = false;
+                emit eventReady(result.ok ? QStringLiteral("system")
+                                          : QStringLiteral("error"),
+                                name + QStringLiteral("：") + result.text);
+                if (!typed) {
+                    emit spokenFeedback(result.text);
+                }
+                setState(State::Idle, result.text);
+            },
+            Qt::QueuedConnection);
+    });
+}
+
 bool VoiceController::injectText(const QString &text, bool autoEnter) {
     if (text.isEmpty()) {
         return false;
@@ -649,6 +765,9 @@ bool VoiceController::sendHotkey(const QStringList &mods, int vk) {
 void VoiceController::submitTyped(const QString &text) {
     const QString trimmed = text.trimmed();
     if (trimmed.isEmpty()) {
+        return;
+    }
+    if (deliverSystem(trimmed, 0, true)) {
         return;
     }
     emit transcribed(trimmed, 0);
@@ -672,6 +791,7 @@ void VoiceController::beep(int frequency, int durationMs, bool enabled) {
 
 void VoiceController::reload() {
     updateOptions();
+    confirm_.cancel();
     {
         std::lock_guard<std::mutex> lock(engineMutex_);
         engine_.reset();
@@ -705,6 +825,7 @@ void VoiceController::setListening(bool listening) {
         }
         micAlwaysOn_ = false;
         recorder_.close();
+        confirm_.cancel();
         return;
     }
     micAlwaysOn_ = options_.backend != VoiceBackend::Hotkey && shouldHoldMic();

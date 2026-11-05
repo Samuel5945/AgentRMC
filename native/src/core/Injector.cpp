@@ -1,6 +1,7 @@
 #include "Injector.h"
 
 #include "core/AppLauncher.h"
+#include "core/SystemControl.h"
 
 #include <QHash>
 #include <QProcess>
@@ -14,12 +15,6 @@
 #include <windows.h>
 
 namespace {
-
-struct PhysicalMonitor {
-    HANDLE handle;
-    wchar_t description[128];
-};
-using LPPHYSICAL_MONITOR = PhysicalMonitor *;
 
 constexpr int kInputKeyboard = 1;
 constexpr DWORD kKeyUp = 0x0002;
@@ -240,60 +235,10 @@ void WinInjector::mouseClick() {
 }
 
 void WinInjector::brightness(int delta) {
-    if (!dxva2_) {
-        dxva2_ = LoadLibraryW(L"dxva2.dll");
-    }
-    if (!dxva2_) {
-        return;
-    }
-    using GetCountFn = BOOL(WINAPI *)(HMONITOR, LPDWORD);
-    using GetMonitorsFn = BOOL(WINAPI *)(HMONITOR, DWORD, LPPHYSICAL_MONITOR);
-    using GetVcpFn = BOOL(WINAPI *)(HANDLE, BYTE, LPDWORD, LPDWORD, LPDWORD);
-    using SetVcpFn = BOOL(WINAPI *)(HANDLE, BYTE, DWORD);
-    auto getCount = reinterpret_cast<GetCountFn>(
-        GetProcAddress(HMODULE(dxva2_), "GetNumberOfPhysicalMonitorsFromHMONITOR"));
-    auto getMonitors = reinterpret_cast<GetMonitorsFn>(
-        GetProcAddress(HMODULE(dxva2_), "GetPhysicalMonitorsFromHMONITOR"));
-    auto getVcp = reinterpret_cast<GetVcpFn>(
-        GetProcAddress(HMODULE(dxva2_), "GetVCPFeatureAndVCPFeatureReply"));
-    auto setVcp = reinterpret_cast<SetVcpFn>(
-        GetProcAddress(HMODULE(dxva2_), "SetVCPFeature"));
-    if (!getCount || !getMonitors || !getVcp || !setVcp) {
-        return;
-    }
-
-    if (!monitor_) {
-        POINT origin{0, 0};
-        HMONITOR hmon = MonitorFromPoint(origin, MONITOR_DEFAULTTOPRIMARY);
-        if (!hmon) {
-            return;
-        }
-        DWORD count = 0;
-        if (!getCount(hmon, &count) || count == 0) {
-            return;
-        }
-        PhysicalMonitor monitors[8]{};
-        if (!getMonitors(hmon, qMin<DWORD>(count, 8), monitors)) {
-            return;
-        }
-        monitor_ = monitors[0].handle;
-    }
-    if (!monitor_) {
-        return;
-    }
-
-    DWORD current = 0;
-    DWORD maximum = 0;
-    DWORD type = 0;
-    for (int attempt = 0; attempt < 2; ++attempt) {
-        if (getVcp(HANDLE(monitor_), 0x10, &type, &current, &maximum)) {
-            const DWORD top = maximum ? maximum : 100;
-            const int value = qBound<int>(0, int(current) + delta, int(top));
-            setVcp(HANDLE(monitor_), 0x10, DWORD(value));
-            return;
-        }
-        QThread::msleep(20);
-    }
+    // 语音命令和遥控器共用一份实现（光标所在屏 + WMI 回退）。函数内静态：
+    // 多个 WinInjector 实例共享同一份显示器句柄缓存，析构时统一还句柄。
+    static WinSystemControl control;
+    control.adjustBrightness(delta);
 }
 
 void WinInjector::run(const QString &cmd) {

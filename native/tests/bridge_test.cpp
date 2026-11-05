@@ -2,10 +2,12 @@
 // 覆盖：/notify 全字段与默认文案、raise 透传、/speak 正常与缺参、/state、错路径 404。
 #include <QCoreApplication>
 #include <QHostAddress>
+#include <QJsonObject>
 #include <QTcpSocket>
 #include <QTimer>
 #include <cstdio>
 #include <functional>
+#include <memory>
 
 #include "core/AgentBridge.h"
 
@@ -21,6 +23,8 @@ struct Notice {
 
 Notice lastNotice;
 bool ok = true;
+// 默认走真端口；本机装着 AgentRMC 时端口被占，测试可以指一个空闲端口跑。
+quint16 testPort = AgentBridge::kPort;
 
 // 发一个请求，等响应回来交给 onResponse 校验；校验完调 next。
 QTcpSocket *request(QCoreApplication &app, const QByteArray &raw,
@@ -37,7 +41,7 @@ QTcpSocket *request(QCoreApplication &app, const QByteArray &raw,
                          onResponse(response);
                          next();
                      });
-    socket->connectToHost(QHostAddress::LocalHost, AgentBridge::kPort);
+    socket->connectToHost(QHostAddress::LocalHost, testPort);
     return socket;
 }
 
@@ -52,14 +56,93 @@ bool fail(const char *what, const QByteArray &resp) {
     return false;
 }
 
+struct CommandCall {
+    QString action;
+    bool confirm = false;
+};
+
+CommandCall lastCommand;
+int commandCalls = 0;
+
+// /command：状态码由主窗给的 code 翻出来。这里用一个假 handler 验证翻译规则
+// 和 body 透传，真实执行在 MainWindow::onBridgeCommand 那边。
+void runCommandTests(QCoreApplication &app, AgentBridge &bridge,
+                     const std::function<void()> &done) {
+    bridge.setCommandHandler([](const QJsonObject &body) {
+        lastCommand.action = body.value(QStringLiteral("action")).toString();
+        lastCommand.confirm = body.value(QStringLiteral("confirm")).toBool(false);
+        ++commandCalls;
+        // 中文一律 fromUtf8：MSVC 下窄字面量按本地代码页解释，QLatin1String 比不中。
+        const QString shutdown = QString::fromUtf8("关机");
+        const QString disabled = QString::fromUtf8("关掉的");
+        const QString volume = QString::fromUtf8("音量调到50");
+        QJsonObject reply{{QStringLiteral("ok"), false},
+                          {QStringLiteral("code"), 400}};
+        if (lastCommand.action == shutdown && !lastCommand.confirm) {
+            reply[QStringLiteral("code")] = 409;
+            reply[QStringLiteral("needs_confirm")] = true;
+        } else if (lastCommand.action == disabled) {
+            reply[QStringLiteral("code")] = 403;
+        } else if (lastCommand.action == volume ||
+                   (lastCommand.action == shutdown && lastCommand.confirm)) {
+            reply[QStringLiteral("ok")] = true;
+            reply[QStringLiteral("code")] = 200;
+        }
+        return reply;
+    });
+
+    struct Case {
+        const char *body;
+        const char *status;
+        const char *fragment;
+        bool confirm;
+    };
+    static const Case cases[] = {
+        {R"({"action":"音量调到50"})", "HTTP/1.1 200", "\"ok\":true", false},
+        {R"({"action":"关机"})", "HTTP/1.1 409", "needs_confirm", false},
+        {R"({"action":"关机","confirm":true})", "HTTP/1.1 200", "\"ok\":true", true},
+        {R"({"action":"关掉的"})", "HTTP/1.1 403", "", false},
+        {R"({"action":"不认识的话"})", "HTTP/1.1 400", "", false},
+    };
+    auto step = std::make_shared<std::function<void(int)>>();
+    *step = [&, step, done](int index) {
+        if (index >= int(sizeof(cases) / sizeof(cases[0]))) {
+            if (commandCalls != 5) {
+                fail("command handler call count", QByteArray::number(commandCalls));
+            }
+            done();
+            return;
+        }
+        const Case &test = cases[index];
+        request(app,
+                withLength("POST /command HTTP/1.1\r\n", test.body),
+                [test](const QByteArray &resp) {
+                    if (!resp.startsWith(test.status)) {
+                        fail(test.status, resp);
+                    }
+                    if (test.fragment[0] != '\0' && !resp.contains(test.fragment)) {
+                        fail(test.fragment, resp);
+                    }
+                    if (lastCommand.confirm != test.confirm) {
+                        fail("confirm flag passthrough", resp);
+                    }
+                },
+                [step, index] { (*step)(index + 1); });
+    };
+    (*step)(0);
+}
+
 }  // namespace
 
 int main(int argc, char **argv) {
     QCoreApplication app(argc, argv);
+    if (argc > 1) {
+        testPort = quint16(QByteArray(argv[1]).toUShort());
+    }
 
     AgentBridge bridge;
-    if (!bridge.start()) {
-        std::fprintf(stderr, "FAIL: bridge 没监听起来\n");
+    if (!bridge.start(testPort)) {
+        std::fprintf(stderr, "FAIL: bridge 没监听起来（端口 %u）\n", uint(testPort));
         return 1;
     }
     bridge.setStateProvider([] {
@@ -186,11 +269,13 @@ int main(int argc, char **argv) {
                                                                                     [&](const QByteArray &resp) {
                                                                                         expectNotice(Notice{true, "speak", "ZCode", "curl 式"}, resp);
                                                                                     },
-                                                                                    [] {
-                                                                                        // 正面通过标记：原来只在失败时打印，空输出分不清「全过」和「没跑完」。
-                                                                                        std::printf(ok ? "ALL PASS bridge\n" : "FAIL bridge\n");
-                                                                                        std::fflush(stdout);
-                                                                                        QCoreApplication::exit(ok ? 0 : 1);
+                                                                                    [&] {
+                                                                                        runCommandTests(app, bridge, [] {
+                                                                                            // 正面通过标记：原来只在失败时打印，空输出分不清「全过」和「没跑完」。
+                                                                                            std::printf(ok ? "ALL PASS bridge\n" : "FAIL bridge\n");
+                                                                                            std::fflush(stdout);
+                                                                                            QCoreApplication::exit(ok ? 0 : 1);
+                                                                                        });
                                                                                     });
                                                                         });
                                                             });

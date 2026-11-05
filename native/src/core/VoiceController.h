@@ -11,10 +11,13 @@
 
 #include "core/AudioRecorder.h"
 #include "core/Injector.h"
+#include "core/SystemCommand.h"
+#include "core/SystemConfirm.h"
 #include "core/VoiceSettings.h"
 
 class AsrClient;
 class AsrEngine;
+class ISystemControl;
 class ProfileStore;
 class QTimer;
 
@@ -48,6 +51,8 @@ public:
     // transcribed 展示 + chatRequested 交桌宠判派活/对话；不走 deliver 的
     // 「粘进前台」路（打字时前台往往就是自己这个窗口）。
     void submitTyped(const QString &text);
+    // 系统控制（音量/亮度/媒体/电源）的执行器，主窗建好后注入，与桥共用一份。
+    void setSystemControl(ISystemControl *control);
 
 public slots:
     void voiceDown();
@@ -71,6 +76,9 @@ signals:
     void chatModeChanged(bool on);
     // 对话模式下的一句转写（chatMode 才会发）。
     void chatRequested(const QString &text);
+    // 系统命令的确认口令与执行结果：主窗接到桌宠的 speak 上念出来。
+    // 只有语音来源才发——打字时用户就在键盘前，不必再念一遍。
+    void spokenFeedback(const QString &text);
 
 private:
     enum class State { Idle, Pending, Recording };
@@ -90,12 +98,18 @@ private:
     void runTranscription(const QByteArray &pcm);
     void runCloudTranscription(const QByteArray &pcm);
     void deliver(const QString &text, int costMs, const QString &error);
+    // 命中系统命令返回 true（调用方就此收手，不再听写）；没命中返回 false，
+    // 这句话照原样往下走。typed=true 时不许触发关机/睡眠这类不可逆动作。
+    bool deliverSystem(const QString &text, int costMs, bool typed);
+    void dispatchSystem(const SystemCommand &command, bool confirmed, bool typed);
+    void expireConfirm(qint64 now);
     void setState(State state, const QString &detail);
     void beep(int frequency, int durationMs, bool enabled);
     QString appDir() const;
 
     ProfileStore *store_ = nullptr;
     WinInjector injector_;
+    ISystemControl *system_ = nullptr;
     AudioRecorder recorder_;
     AsrClient *asr_ = nullptr;  // 云端 ASR 路线；本地路线仍是 engine_
     std::unique_ptr<AsrEngine> engine_;
@@ -123,5 +137,8 @@ private:
     int activeVk_ = 0;
     QString activeTrigger_;
     QString lastText_;
+    // 危险动作的二次确认：只认完整口令（「确认关机」），超时或说别的都作废。
+    SystemConfirm confirm_;
+    bool systemBusy_ = false;
     std::atomic<bool> alive_{true};
 };

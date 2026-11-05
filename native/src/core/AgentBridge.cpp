@@ -67,6 +67,11 @@ void AgentBridge::setWorkersProvider(std::function<QString()> provider) {
     workersProvider_ = std::move(provider);
 }
 
+void AgentBridge::setCommandHandler(
+    std::function<QJsonObject(const QJsonObject &)> handler) {
+    commandHandler_ = std::move(handler);
+}
+
 void AgentBridge::setHealthProvider(std::function<QString()> provider) {
     healthProvider_ = std::move(provider);
 }
@@ -136,7 +141,8 @@ void AgentBridge::onReadable(QTcpSocket *socket) {
     const bool isSpeak = requestLine.startsWith("POST /speak ");
     const bool isAck = requestLine.startsWith("POST /work-items/ack ");
     const bool isUpdate = requestLine.startsWith("POST /work-items/update ");
-    if (!isNotify && !isSpeak && !isAck && !isUpdate) {
+    const bool isCommand = requestLine.startsWith("POST /command ");
+    if (!isNotify && !isSpeak && !isAck && !isUpdate && !isCommand) {
         finish(socket, "404 Not Found");
         return;
     }
@@ -185,6 +191,26 @@ void AgentBridge::onReadable(QTcpSocket *socket) {
         finish(socket,
                result.value(QStringLiteral("ok")).toBool() ? "200 OK"
                                                            : "400 Bad Request",
+               QJsonDocument(result).toJson(QJsonDocument::Compact),
+               "application/json");
+        return;
+    }
+    if (isCommand) {
+        // 系统控制：说法解析、开关、危险动作确认都在主窗那边判，这里只把
+        // 它给的 code 翻成 HTTP 状态——缺确认必须是 409，不能静默当成功。
+        const QJsonObject result =
+            commandHandler_
+                ? commandHandler_(obj)
+                : QJsonObject{{QStringLiteral("ok"), false},
+                              {QStringLiteral("code"), 400},
+                              {QStringLiteral("message"),
+                               QStringLiteral("bridge has no command handler")}};
+        const int code = result.value(QStringLiteral("code")).toInt(400);
+        const char *status = code == 200   ? "200 OK"
+                             : code == 403 ? "403 Forbidden"
+                             : code == 409 ? "409 Conflict"
+                                           : "400 Bad Request";
+        finish(socket, status,
                QJsonDocument(result).toJson(QJsonDocument::Compact),
                "application/json");
         return;

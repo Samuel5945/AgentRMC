@@ -28,4 +28,5 @@ private:
     QVBoxLayout *rows_ = nullptr;
     QLabel *summary_ = nullptr;
     ToggleSwitch *voiceSwitch_ = nullptr;
+    ToggleSwitch *systemSwitch_ = nullptr;
 };

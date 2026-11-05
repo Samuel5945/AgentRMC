@@ -43,6 +43,12 @@ qt_add_executable(AgentRMCNative
     src/core/AppLauncher.h
     src/core/Injector.cpp
     src/core/Injector.h
+    src/core/SystemCommand.cpp
+    src/core/SystemCommand.h
+    src/core/SystemConfirm.cpp
+    src/core/SystemConfirm.h
+    src/core/SystemControl.cpp
+    src/core/SystemControl.h
     src/core/KeyRouter.cpp
     src/core/KeyRouter.h
     src/core/InputEngine.cpp
@@ -124,8 +130,10 @@ qt_add_executable(AgentRMCNative
 
 set_target_properties(AgentRMCNative PROPERTIES WIN32_EXECUTABLE TRUE)
 target_include_directories(AgentRMCNative PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+# powrprof = 睡眠/休眠，wbemuuid + oleaut32 = 笔记本背光的 WMI 回退。
+set(AGENTRMC_SYSTEM_LIBS powrprof wbemuuid oleaut32)
 target_link_libraries(AgentRMCNative PRIVATE Qt6::Widgets Qt6::Network winmm
-    shell32 ole32 UIAutomationCore.lib)
+    shell32 ole32 UIAutomationCore.lib ${AGENTRMC_SYSTEM_LIBS})
 target_compile_options(AgentRMCNative PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
 target_compile_definitions(AgentRMCNative PRIVATE AGENTRMC_VERSION="${PROJECT_VERSION}")
 
@@ -153,6 +161,25 @@ else()
     set(AGENTRMC_WITH_SHERPA OFF)
 endif()
 
+# WinInjector::brightness 转调 SystemControl，所以凡是编 Injector.cpp 的 target
+# 都要带上这条链（SystemControl → Profiles → Presets → AppLauncher）。
+set(AGENTRMC_SYSTEM_SOURCES
+    src/core/SystemCommand.cpp
+    src/core/SystemCommand.h
+    src/core/SystemConfirm.cpp
+    src/core/SystemConfirm.h
+    src/core/SystemControl.cpp
+    src/core/SystemControl.h
+    src/core/Profiles.cpp
+    src/core/Profiles.h
+    src/core/Presets.cpp
+    src/core/Presets.h
+    src/core/AppLauncher.cpp
+    src/core/AppLauncher.h
+    src/core/PinyinInitials.cpp
+    src/core/PinyinInitials.h
+)
+
 add_executable(AgentRMCStoreTest
     tests/m2_store_test.cpp
     src/core/Profiles.cpp
@@ -178,9 +205,11 @@ add_executable(AgentRMCRouterTest
     src/core/Presets.h
     src/core/Injector.cpp
     src/core/Injector.h
+    ${AGENTRMC_SYSTEM_SOURCES}
 )
 target_include_directories(AgentRMCRouterTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
-target_link_libraries(AgentRMCRouterTest PRIVATE Qt6::Core shell32)
+target_link_libraries(AgentRMCRouterTest PRIVATE Qt6::Core shell32 ole32
+    ${AGENTRMC_SYSTEM_LIBS})
 target_compile_options(AgentRMCRouterTest PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
 
 add_executable(AgentRMCTakeoverTest
@@ -196,9 +225,11 @@ add_executable(AgentRMCTakeoverTest
     src/core/Injector.h
     src/core/NativeHooks.cpp
     src/core/NativeHooks.h
+    ${AGENTRMC_SYSTEM_SOURCES}
 )
 target_include_directories(AgentRMCTakeoverTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
-target_link_libraries(AgentRMCTakeoverTest PRIVATE Qt6::Core shell32)
+target_link_libraries(AgentRMCTakeoverTest PRIVATE Qt6::Core shell32 ole32
+    ${AGENTRMC_SYSTEM_LIBS})
 target_compile_options(AgentRMCTakeoverTest PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
 
 add_executable(AgentRMCAppTest
@@ -315,6 +346,19 @@ add_executable(AgentRMCAudioTest
 target_include_directories(AgentRMCAudioTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(AgentRMCAudioTest PRIVATE Qt6::Core winmm ole32)
 target_compile_options(AgentRMCAudioTest PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
+
+# 语音系统控制：解析词表、二次确认状态机、执行器闸门。全部离线判定，
+# 不碰真实音量/亮度/电源——真机那部分用 rc_probe 手动验。
+add_executable(AgentRMCSystemTest
+    tests/system_command_test.cpp
+    src/core/Injector.cpp
+    src/core/Injector.h
+    ${AGENTRMC_SYSTEM_SOURCES}
+)
+target_include_directories(AgentRMCSystemTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(AgentRMCSystemTest PRIVATE Qt6::Core shell32 ole32 user32
+    ${AGENTRMC_SYSTEM_LIBS})
+target_compile_options(AgentRMCSystemTest PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
 
 if(AGENTRMC_WITH_SHERPA)
     add_executable(AgentRMCAsrTest

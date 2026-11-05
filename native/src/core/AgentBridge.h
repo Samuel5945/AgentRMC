@@ -28,6 +28,10 @@ class QTcpSocket;
 //                 → 宿主 Agent 主动汇报阶段（MCP 工具 pet_work_update）。
 //                   progress 只落工单；blocked / ready 走提醒通道（气泡 + 语音，
 //                   要人动手的事必须喊到），同一件事 hook 的 stop 不会再念一遍。
+//   POST /command {"action":"音量调到 50","confirm":false}
+//                 → 系统控制（音量/亮度/媒体/电源），与语音命令同一套实现。
+//                   200 执行成功；400 说法不认识；403 开关关着；
+//                   409 危险动作（关机/重启/睡眠/休眠）缺 confirm:true。
 //   GET  /workers → 当前在跑的 Worker 列表（alive / foreground / 待办计数）
 //   GET  /health  → 桥接 / 待补投 / Worker / 最近事件健康快照
 // 纯回环、只此一用；端口被占就放弃监听，不影响主功能。
@@ -50,6 +54,10 @@ public:
     // POST /work-items/update 的处理器；返回给 MCP 工具看的 JSON
     // （{"ok":true,"id":...,"stage":...} 或 {"ok":false,"error":...}）。
     void setWorkItemUpdateHandler(
+        std::function<QJsonObject(const QJsonObject &)> handler);
+    // POST /command 的处理器；返回 {"ok":bool,"code":200|400|403|409,...}，
+    // code 直接当 HTTP 状态用（危险命令缺确认 = 409，开关关着 = 403）。
+    void setCommandHandler(
         std::function<QJsonObject(const QJsonObject &)> handler);
     // GET /workers 的应答来源。
     void setWorkersProvider(std::function<QString()> provider);
@@ -86,6 +94,7 @@ private:
     std::function<QString()> workItemsProvider_;
     std::function<bool(const QString &)> workItemAckHandler_;
     std::function<QJsonObject(const QJsonObject &)> workItemUpdateHandler_;
+    std::function<QJsonObject(const QJsonObject &)> commandHandler_;
     std::function<QString()> workersProvider_;
     std::function<QString()> healthProvider_;
 };

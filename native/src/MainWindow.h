@@ -11,6 +11,7 @@
 #include <memory>
 
 #include "core/Profiles.h"
+#include "core/SystemControl.h"
 #include "core/WorkItems.h"
 
 class QCloseEvent;
@@ -150,11 +151,15 @@ private:
     void openThemeDialog();
     void onVoiceState(const QString &state, const QString &detail);
     void onVoiceTranscribed(const QString &text, int costMs);
+    // POST /command：宿主 Agent 调系统控制，与语音走同一套闸门。
+    QJsonObject onBridgeCommand(const QJsonObject &body);
     void setVoiceStatus(const QString &detail, const QString &color,
                         bool showTranscript);
 
     std::unique_ptr<ProfileStore> store_;
     std::unique_ptr<WorkItemStore> workItems_;
+    // 语音命令与 HTTP /command 共用这一份系统控制执行器。
+    std::unique_ptr<WinSystemControl> system_;
     // pet_work_update 的播报节流：Agent 可能连着报几次 blocked，别喊成一串。
     // key = session_id（没有就用宿主名）；值 = 上次真的喊出去的时间。
     QHash<QString, QDateTime> attentionAnnounced_;

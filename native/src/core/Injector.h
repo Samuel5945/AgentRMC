@@ -46,7 +46,4 @@ public:
 
 private:
     bool sendKey(int vk, bool up);
-    void *brightnessMonitor();
-    void *dxva2_ = nullptr;
-    void *monitor_ = nullptr;
 };

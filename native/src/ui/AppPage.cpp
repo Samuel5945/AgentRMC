@@ -2,6 +2,7 @@
 
 #include "core/AppLauncher.h"
 #include "core/Profiles.h"
+#include "core/SystemControl.h"
 #include "ui/ToggleSwitch.h"
 
 #include <QDialog>
@@ -93,6 +94,22 @@ AppPage::AppPage(ProfileStore *store, QWidget *parent)
     foot->addSpacing(6);
     foot->addWidget(voiceLabel);
     foot->addWidget(voiceSwitch_, 0, Qt::AlignVCenter);
+    const QString systemTip = QStringLiteral(
+        "开着：说「音量调到 50」「亮度暗一点」「下一首」「关屏幕」直接执行，不再贴进输入框\n"
+        "关机/重启/睡眠/休眠要再说一句「确认关机」这样的口令才动手\n"
+        "分类开关在语音设置里；想把这句话原样打给 Agent，就关掉它");
+    auto *systemLabel = new QLabel(QStringLiteral("语音系统控制"));
+    systemLabel->setObjectName("muted");
+    systemLabel->setToolTip(systemTip);
+    systemSwitch_ = new ToggleSwitch(
+        store_->uiBool(SystemControlSettings::masterKey(), true));
+    systemSwitch_->setToolTip(systemTip);
+    connect(systemSwitch_, &ToggleSwitch::toggled, this, [this](bool on) {
+        store_->setUiBool(SystemControlSettings::masterKey(), on);
+    });
+    foot->addSpacing(10);
+    foot->addWidget(systemLabel);
+    foot->addWidget(systemSwitch_, 0, Qt::AlignVCenter);
     lay->addLayout(foot);
 
     rebuild();

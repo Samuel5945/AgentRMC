@@ -12,6 +12,7 @@
 class QCloseEvent;
 class QEvent;
 class QMouseEvent;
+class QResizeEvent;
 class QShowEvent;
 class DispatchPicker;
 class ProfileStore;
@@ -48,6 +49,7 @@ signals:
 protected:
     void closeEvent(QCloseEvent *event) override;
     void showEvent(QShowEvent *event) override;
+    void resizeEvent(QResizeEvent *event) override;
     void paintEvent(QPaintEvent *event) override;
     void mousePressEvent(QMouseEvent *event) override;
     bool eventFilter(QObject *watched, QEvent *event) override;
@@ -61,6 +63,10 @@ public:
 private:
     void copyText(const QString &text);
     void pushHistory(const QString &text, int costMs);
+    // 转写框：全文另存，显示的那段按框宽折行、超出行数上限折成省略号，
+    // 高度按当前字体现量（layoutTranscript），所以点击复制拿到的是全文。
+    void setTranscript(const QString &text);
+    void layoutTranscript();
     void refreshHint();
     void refreshHistoryEmpty();
     void refreshStatusDot();
@@ -84,6 +90,8 @@ private:
     QPushButton *readLast_ = nullptr;
     QTimer *levelTimer_ = nullptr;
     QString lastText_;
+    // 转写框的全文（显示的那段可能被折成省略号，复制/悬浮提示用这份）。
+    QString transcriptFull_;
 
     bool listening_ = false;
     bool recording_ = false;

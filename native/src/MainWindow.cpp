@@ -263,7 +263,9 @@ public:
         QFont bodyFont = painter->font();
         bodyFont.setPixelSize(ThemeManager::scaledPx(11));
         painter->setFont(bodyFont);
-        painter->setPen(ThemeManager::instance().color(QStringLiteral("text.body")));
+        // 正文吃主字色（用户 2026-11-05 选 B）：浅底上灰字边缘最先被读成
+        // 「发虚」，层级改由粗体承担——标题是 700，正文是常规字重。
+        painter->setPen(ThemeManager::instance().color(QStringLiteral("text")));
         const QRectF line2(textLeft, row.top() + ThemeManager::scaledPx(29),
                            textRight - textLeft, ThemeManager::scaledPx(16));
         painter->drawText(

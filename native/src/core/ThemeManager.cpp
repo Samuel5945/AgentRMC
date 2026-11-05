@@ -182,14 +182,20 @@ QHash<QString, QString> ThemeManager::classicLightPalette() {
               QStringLiteral("rgba(15, 23, 42, 60)"));
     m_.insert(QStringLiteral("guide.image.bg"), QStringLiteral("#ffffff"));
     // 字色：浅底深字，主次层级与深色版一一对应（text 最重、body 最轻）。
+    // 灰阶整体压深一档（用户 2026-11-05：浅底上的灰字边缘最先被读成「发虚」，
+    // 同屏对比资源管理器纯黑正文，app 正文对比只有 149/255）。层级仍然保留：
+    // text 30 → soft 35 → dim 48 → body 63 → muted 78 → ghost 80（亮度值）。
     m_.insert(QStringLiteral("text"), QStringLiteral("#171e2a"));
-    m_.insert(QStringLiteral("text.soft"), QStringLiteral("#232b3a"));
-    m_.insert(QStringLiteral("text.dim"), QStringLiteral("#3a4453"));
-    m_.insert(QStringLiteral("text.body"), QStringLiteral("#55606e"));
-    m_.insert(QStringLiteral("muted"), QStringLiteral("#5f6b7a"));
-    m_.insert(QStringLiteral("muted.2"), QStringLiteral("#77828f"));
-    m_.insert(QStringLiteral("faint"), QStringLiteral("#aeb6c0"));
-    m_.insert(QStringLiteral("faint.2"), QStringLiteral("#c2c9d2"));
+    m_.insert(QStringLiteral("text.soft"), QStringLiteral("#1c2331"));
+    m_.insert(QStringLiteral("text.dim"), QStringLiteral("#2a323f"));
+    m_.insert(QStringLiteral("text.body"), QStringLiteral("#39414f"));
+    m_.insert(QStringLiteral("muted"), QStringLiteral("#48525f"));
+    m_.insert(QStringLiteral("muted.2"), QStringLiteral("#5a6472"));
+    // ghost 原本只在深色盘里定义（#6b7684，亮度 114）：浅底上时间戳这类
+    // 次要信息就落在最虚的那一档，这里给它一个浅色专用值。
+    m_.insert(QStringLiteral("ghost"), QStringLiteral("#4a5361"));
+    m_.insert(QStringLiteral("faint"), QStringLiteral("#8f98a3"));
+    m_.insert(QStringLiteral("faint.2"), QStringLiteral("#a8b0ba"));
     m_.insert(QStringLiteral("line"), QStringLiteral("#c9d0d9"));
     // 浅底上的蓝色文字要压深才读得出；主按钮仍是蓝底白字，accent 本身不动。
     m_.insert(QStringLiteral("accent.text"), QStringLiteral("#2f6bdb"));

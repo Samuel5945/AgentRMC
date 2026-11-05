@@ -170,10 +170,17 @@ int main(int argc, char *argv[]) {
         pet.setAttribute(Qt::WA_DontShowOnScreen);
         pet.setVoiceFeedbackMuted(true);  // 截图别真发 TTS 请求
         pet.present();
+        // 状态行文案是「事后」才出现的：先塞一条超长的，验证卡片不会被它顶开、
+        // 下拉行不会被挤掉半截（expandCard 里的 adjustSize 就在这一步之后跑）。
+        // AGENTRMC_PET_LONG_DETAIL=1 时启用。
+        if (qEnvironmentVariableIsSet("AGENTRMC_PET_LONG_DETAIL")) {
+            pet.setStatusDetailForShot(
+                QString::fromUtf8("亮度 50% · 光标所在屏 · 这条状态文案故意写得很长"));
+        }
         pet.expandCard();
         pet.speak(QString::fromUtf8("你好，我是你的语音桌宠"));
         QTimer::singleShot(450, &pet, [&pet, petShot] {
-            QPixmap canvas(320, 420);
+            QPixmap canvas(320, 480);
             canvas.fill(Qt::transparent);
             QPainter painter(&canvas);
             painter.drawPixmap(30, 8, pet.grab());

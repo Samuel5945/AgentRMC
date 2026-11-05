@@ -35,6 +35,7 @@
 #include <QPushButton>
 #include <QScreen>
 #include <QShowEvent>
+#include <QResizeEvent>
 #include <QSignalBlocker>
 #include <QStringList>
 #include <QRegularExpression>
@@ -114,8 +115,13 @@ public:
 
         detail_ = new QLabel(this);
         detail_->setObjectName("petDetail");
-        detail_->setWordWrap(true);
-        detail_->hide();  // 空时不占行，否则顶行与派任务行之间留一条大缝
+        // 卡片是在文案还空的时候 adjustSize() 定高的：这里一旦折行，多出来的
+        // 那行会把下面的下拉行挤掉半截。所以状态行永远单行（自己 elide，
+        // QLabel 没有 setTextElideMode），全文进 tooltip；空态也占这一行，
+        // 卡片高度从头到尾不变。
+        detail_->setWordWrap(false);
+        detail_->setTextFormat(Qt::PlainText);
+        detail_->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
         root->addWidget(detail_);
 
         // 中部原识别模型按钮排改为「宿主派任务」（宿主+会话两下拉），
@@ -163,8 +169,30 @@ public:
     }
 
     void setDetail(const QString &text) {
-        detail_->setText(text);
-        detail_->setVisible(!text.isEmpty());
+        // 占位行一直有内容：空文案时兜底成「就绪」，别留一条缝。
+        detailFull_ = text.isEmpty() ? QString::fromUtf8("就绪") : text;
+        refitDetail();
+    }
+
+    // QLabel 不会自己省略，超长按单行宽度算一遍：宁可少看几个字，
+    // 也不能让这一行折成两行把下面的控件挤没。
+    void refitDetail() {
+        const int width = detail_->width() > 0
+                              ? detail_->width()
+                              : kCardWidth - 24;  // 卡片左右 contentsMargins 各 12
+        detail_->setText(QFontMetrics(detail_->font())
+                             .elidedText(detailFull_, Qt::ElideRight, width));
+        detail_->setToolTip(detailFull_);
+    }
+
+    void showEvent(QShowEvent *event) override {
+        QWidget::showEvent(event);
+        refitDetail();
+    }
+
+    void resizeEvent(QResizeEvent *event) override {
+        QWidget::resizeEvent(event);
+        refitDetail();
     }
 
     void setBackendChecked(int backend) {
@@ -184,6 +212,7 @@ public:
 
     void setHint(const QString &text) {
         hint_->setText(text);
+        hint_->setToolTip(text);
         hint_->setVisible(!text.isEmpty());
     }
 
@@ -194,6 +223,7 @@ public:
     QComboBox *backendCombo_ = nullptr;
     DispatchPicker *dispatch_ = nullptr;
     QString text_;
+    QString detailFull_;  // 状态行全文（显示的是按宽度 elide 后的版本，全文进 tooltip）
 
 protected:
     void paintEvent(QPaintEvent *event) override {
@@ -1553,6 +1583,11 @@ void VoicePet::maybeSnap() {
     dockAndPeek();
 }
 
+void VoicePet::setStatusDetailForShot(const QString &text) {
+    detailOverrideForShot_ = text;
+    refreshState();
+}
+
 void VoicePet::refreshState() {
     const VoiceOptions options = voice_->options();
     QString state;
@@ -1575,7 +1610,8 @@ void VoicePet::refreshState() {
                    .arg(state, backend));
     if (card_ != nullptr) {
         card_->setStatus(state, color, backend);
-        card_->setDetail(detail_);
+        card_->setDetail(detailOverrideForShot_.isEmpty() ? detail_
+                                                          : detailOverrideForShot_);
         card_->setBackendChecked(int(options.backend));
         card_->setHint(options.kbHotkeyEnabled
                            ? QString::fromUtf8("热键 %1 也可以开始")

@@ -48,6 +48,8 @@ public:
 
     // 悬停展开/收起卡片（也供截图模式用）。
     void expandCard();
+    // 截图专用：往卡片状态行塞一句话术，用来验长文案不会把下拉行挤掉半截。
+    void setStatusDetailForShot(const QString &text);
 
     // 会话级静音（不落盘）：截图/演示模式不想真发 TTS 请求时用。
     void setVoiceFeedbackMuted(bool muted);
@@ -182,6 +184,8 @@ private:
     bool recording_ = false;
     bool transcribing_ = false;
     QString detail_;
+    // 非空时覆盖卡片状态行文案，只给截图验收用（见 setStatusDetailForShot）。
+    QString detailOverrideForShot_;
     double level_ = 0.0;
     int phase_ = 0;  // 呼吸 / 旋转动画相位
 

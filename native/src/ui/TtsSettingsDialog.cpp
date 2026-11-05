@@ -169,7 +169,11 @@ TtsSettingsDialog::TtsSettingsDialog(ProfileStore *store, QWidget *parent)
             savedInput = inputs.at(index).trimmed();
         }
     }
-    for (const QString &name : inputs) {
+    for (const QString &raw : inputs) {
+        // WinMM 名字只有 31 字符宽，截断后常留尾空格；savedInput 已 trim，
+        // 这里不 trim 就认不出是同一台，会多出一条假的「现在没插着」。
+        // 归一化口径跟运行时的 matchWaveInIndex 保持一致。
+        const QString name = raw.trimmed();
         input_->addItem(name, name);
         if (name.compare(savedInput, Qt::CaseInsensitive) == 0) {
             input_->setCurrentIndex(input_->count() - 1);
@@ -197,8 +201,9 @@ TtsSettingsDialog::TtsSettingsDialog(ProfileStore *store, QWidget *parent)
     // 输出设备：软件只能从这里的列表选，系统默认还是耳机自己定。
     output_ = new QComboBox;
     output_->addItem(QString::fromUtf8("跟随系统默认"), QString());
-    const QString savedDevice = tts.value("output_device").toString();
-    for (const QString &name : AudioOut::deviceNames()) {
+    const QString savedDevice = tts.value("output_device").toString().trimmed();
+    for (const QString &raw : AudioOut::deviceNames()) {
+        const QString name = raw.trimmed();
         output_->addItem(name, name);
         if (name.compare(savedDevice, Qt::CaseInsensitive) == 0) {
             output_->setCurrentIndex(output_->count() - 1);

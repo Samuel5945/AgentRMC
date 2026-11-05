@@ -26,7 +26,7 @@ DispatchPicker::DispatchPicker(ProfileStore *store, QWidget *parent)
         refreshMode();
     });
     mode_ = new QComboBox;
-    mode_->addItem(QString::fromUtf8("续当前会话（默认）"), QString());
+    mode_->addItem(QString::fromUtf8("续当前会话"), QString());
     mode_->addItem(QString::fromUtf8("下次派活开新任务"), QStringLiteral("new"));
     connect(mode_, &QComboBox::currentIndexChanged, this, [this](int index) {
         if (index < 0) {

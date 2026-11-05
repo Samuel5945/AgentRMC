@@ -19,6 +19,7 @@
 #include "core/TtsClient.h"
 #include "core/VoiceController.h"
 #include "ui/GuideDialog.h"
+#include "ui/PopupShape.h"
 #include "ui/ThemeDialog.h"
 #include "ui/TtsSettingsDialog.h"
 #include "ui/VoicePet.h"
@@ -29,6 +30,9 @@ int main(int argc, char *argv[]) {
     QApplication::setApplicationName("AgentRMCNative");
     QApplication::setOrganizationName("LIG");
     QApplication::setApplicationVersion(AGENTRMC_VERSION);
+    // 下拉弹层 / 右键菜单是独立 popup 窗口：启动时装一次圆角+表面色，
+    // QSS 的圆角才不会被方形窗口底顶出黑角（见 PopupShape.h）。
+    PopupShape::install();
     // QSS 由 ThemeManager 渲染 @token@ 后再 setStyleSheet（init 时应用），
     // 这里绝不能直接加载 :/style.qss——那是带占位符的模板。
 

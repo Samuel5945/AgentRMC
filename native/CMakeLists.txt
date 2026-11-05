@@ -99,6 +99,10 @@ qt_add_executable(AgentRMCNative
     src/ui/TtsSettingsDialog.h
     src/ui/ThemeDialog.cpp
     src/ui/ThemeDialog.h
+    src/ui/ThemeSlider.cpp
+    src/ui/ThemeSlider.h
+    src/ui/PopupShape.cpp
+    src/ui/PopupShape.h
     src/ui/GuideDialog.cpp
     src/ui/GuideDialog.h
     src/ui/AgentBridgeDialog.cpp

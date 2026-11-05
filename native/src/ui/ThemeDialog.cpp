@@ -1,5 +1,7 @@
 #include "ThemeDialog.h"
 
+#include "ThemeSlider.h"
+
 #include "core/Profiles.h"
 #include "core/ThemeManager.h"
 
@@ -247,13 +249,13 @@ ThemeDialog::ThemeDialog(ProfileStore *store, QWidget *parent)
         label->setObjectName("muted");
         // 固定宽是给三条滑块对齐用的；随字号倍率长，倍率大时标签不吃字。
         label->setFixedWidth(ThemeManager::scaledPx(88));
-        auto *slider = new QSlider(Qt::Horizontal);
+        auto *slider = new ThemeSlider;
         slider->setRange(0, 100);
-        slider->setCursor(Qt::PointingHandCursor);
         auto *value = new QLabel;
-        value->setObjectName("muted");
-        value->setFixedWidth(ThemeManager::scaledPx(40));
-        value->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        // 读数做成小胶囊：和下拉、按钮同一套圆角语言，不再是一串裸数字。
+        value->setObjectName("sliderValue");
+        value->setFixedWidth(ThemeManager::scaledPx(44));
+        value->setAlignment(Qt::AlignCenter);
         row->addWidget(label);
         row->addWidget(slider, 1);
         row->addWidget(value);

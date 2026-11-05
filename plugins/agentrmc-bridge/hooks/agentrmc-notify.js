@@ -12,6 +12,13 @@
 //   node agentrmc-notify.js stop       [Agent名] [窗口进程名]   ← 一轮结束
 //        （transcript 末句是问句 → 这轮其实没完，改按 permission 发
 //          「等你回话」：出声 + 拉前台 + 待我处理卡片；见 trailingQuestion）
+//   node agentrmc-notify.js error      [Agent名] [窗口进程名]   ← 一轮以错误中止
+//        （挂 Qoder / Qoder CN 的 StopFailure 事件上：模型 429 限流 / 5xx / 上下文满 /
+//          登录失效时宿主**不派 Stop**，桌宠过去全程静默——人只能自己盯着屏幕发现。
+//          payload 给 error（分类名，见 ERROR_REASONS）+ error_details（原文）。
+//          只注册在 hooks-qoder：WorkBuddy 那家的 harness 里 StopFailure 是「Stop 钩子
+//          自己执行失败」，语义不同，套上去会把无关故障喊成模型出错。ZCode 的运行时里
+//          查不到这个事件，没证据就不注册。）
 // 后两个参数**现在一般不用传**：宿主名和要拉前台的进程映像名由 lib/host.js 自检
 // （脚本装在哪个配置家就是哪个宿主，Qoder 国际版 → Qoder.exe，Qoder CN →
 // Qoder CN.exe，不传则按环境变量认 WorkBuddy / ZCode）。显式传了以传的为准，
@@ -244,6 +251,13 @@ function seenKey(key) {
   return fresh(loadAsked(), key);
 }
 
+// 同 seenKey，但自己带窗口：ASKED_TTL_MS（30 分钟）是给「同一弹窗两条信号」定的，
+// 出错提醒要的是「这一次失败只喊一声，连错两次要能再喊」，只能自己掐表。
+function seenWithin(key, windowMs) {
+  const at = Number(loadAsked()[key] || 0);
+  return at > 0 && Date.now() - at < windowMs;
+}
+
 // 命中即作废：pending 是「同一弹窗的晚到信号」专用，消费后下一道新题不受影响。
 function consumeKey(key) {
   try {
@@ -255,6 +269,58 @@ function consumeKey(key) {
   } catch {
     return false;
   }
+}
+
+// 宿主 StopFailure 的 error 分类 → 中文（气泡短语 / 念出来的短语）。
+// 念出来不能用宿主给的英文原文（「the model provider is temporarily unavailable」
+// 念成一串英文没人听得懂），所以气泡可以带原文，语音只用这张表。
+// 分类名来自 Qoder CLI 的 classifyStopFailureError，认不出来一律按「出错了」喊。
+const ERROR_REASONS = {
+  rate_limit: ['被限流了', '被限流了'],
+  overloaded: ['服务繁忙', '服务繁忙了'],
+  server_error: ['服务报错', '服务出错了'],
+  model_not_found: ['模型不可用', '模型不可用了'],
+  authentication_failed: ['登录态失效', '登录态失效了'],
+  oauth_org_not_allowed: ['登录态失效', '登录态失效了'],
+  billing_error: ['额度用完了', '额度用完了'],
+  invalid_request: ['请求被拒', '请求被模型拒了'],
+  empty_response: ['没返回内容', '没返回内容'],
+  max_output_tokens: ['输出超限', '输出太长被截断了'],
+  unknown: ['出错了', '出错了'],
+};
+
+// 一次失败只喊一声。窗口要盖住「同一次失败的两条信号」：StopFailure 之后，
+// 有的宿主还会把错误原文当成最终回复再发一条 stop（WorkBuddy 实测念出过
+// 「429 您的使用量已超出频率限制…」），两条都念就成了自相矛盾。
+const ERROR_WINDOW_MS = 2 * 60 * 1000;
+
+// 人自己按停止不算「模型出错」：宿主在「中止且没吐出正文」这条路上也派
+// StopFailure（分类落 unknown，原文带 AbortError / Interrupted by user），
+// 那种喊出来是凭空一声。
+const USER_ABORT_RE =
+  /aborterror|operation aborted|interrupted by user|request interrupted|user cancelled|response interrupted/i;
+
+// 把宿主的失败信号拼成「气泡文案 + 念出来的短句」。认不出来就报泛化文案，
+// 不能因为分类表没覆盖就静默——出错不喊人正是要修的事。
+function describeModelFailure(hook, agentName) {
+  const kind = String(hook.error || '').trim().toLowerCase();
+  const details = String(hook.error_details || hook.errorDetails || '').trim();
+  // 两个都没有 = 这条信号没告诉我们为什么停：宁可不喊，也别在人自己按了停止的
+  // 那一轮凭空喊一声「模型出错了」。
+  if (!kind && !details) return null;
+  if (USER_ABORT_RE.test(kind) || USER_ABORT_RE.test(details)) return null;
+  const zh = ERROR_REASONS[kind] || ERROR_REASONS.unknown;
+  // 气泡带一句原文好判断（stack 只取第一行，一屏放不下），语音永远只念中文短语：
+  // 宿主给的英文原文念出来是「the model provider is temporarily unavailable」这种。
+  const line = (details.split(/\r?\n/).find((s) => s && s.trim()) || '').trim();
+  const short = line.length > 60 ? line.slice(0, 57) + '…' : line;
+  const known = kind && kind !== 'unknown';
+  return {
+    bubble: known
+      ? (short ? `模型出错（${zh[0]}）：${short}` : `模型出错：${zh[0]}`)
+      : (short ? `模型出错：${short}` : '模型出错了'),
+    speech: known ? `${agentName} 模型出错了，${zh[1]}` : `${agentName} 模型出错了`,
+  };
 }
 
 let raw = '';
@@ -300,6 +366,10 @@ process.stdin.on('end', () => {
     // 记了反而可能残留到下一道题。
     rememberKeys([`prompt:${askedScopeKey(hook)}`]);
   } else if (event === 'stop') {
+    // 刚刚为这一次失败喊过（同 scope 的 error 账还没被新一轮清掉）：别再念
+    // 「做完了」。有的宿主会把错误原文当成最终回复再发一条 stop，两条都念就
+    // 成了自相矛盾——一声「模型出错了」、一声「XX 做完了，等你回来看」。
+    if (seenWithin(`error:${askedScopeKey(hook)}`, ERROR_WINDOW_MS)) process.exit(0);
     // 优先念 Agent 的最终回复（transcript 最后一条 assistant），
     // 拿不到才退回通用文案——宿主不给 transcript 也照样能用。
     const said = lastAssistantText(hook);
@@ -351,8 +421,23 @@ process.stdin.on('end', () => {
       message = `等你确认${tool ? ' ' + tool : ''}${short ? '：' + short : ''}`;
       speech = `${agent} 在等你点确认`;
     }
+  } else if (event === 'error') {
+    const said = describeModelFailure(hook, agent);
+    if (!said) process.exit(0);  // 认不出错因、或人自己按的停止：不喊
+    const key = `error:${askedScopeKey(hook)}`;
+    if (seenWithin(key, ERROR_WINDOW_MS)) process.exit(0);
+    // 出错这一轮球也在人这边（要他重试/换模型），所以同样走 permission 通道：
+    // 出声 + 拉前台 + 待我处理卡片。复用 permission 而不是新增 kind：旧版原生端
+    // 只认 stop/permission 出语音，加新类型得让用户重装 App 才生效。
+    outEvent = 'permission';
+    message = said.bubble;
+    speech = said.speech;
+    rememberKeys([key]);
   } else if (event === 'turn-start') {
     // 新一轮对话开始：原生端把同 session 的旧 review 自动归档，不出声。
+    // 顺手清掉上一次的「出错」账：他改口重问、那一轮正常结束后该念「做完了」，
+    // 不能被上一轮出错的去重窗口吞掉。
+    consumeKey(`error:${askedScopeKey(hook)}`);
     outEvent = 'turn-start';
     message = '';
   } else {

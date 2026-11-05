@@ -52,6 +52,19 @@
           }
         ]
       }
+    ],
+    "StopFailure": [
+      {
+        "async": true,
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${QODER_PLUGIN_ROOT}/hooks/agentrmc-launch.cmd\" error",
+            "name": "agentrmc-notify-error",
+            "timeout": 3
+          }
+        ]
+      }
     ]
   }
 }

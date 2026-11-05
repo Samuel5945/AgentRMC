@@ -655,6 +655,73 @@ check('hooks-workbuddy 注册了 PreToolUse + matcher=AskUserQuestion（清单�
   assert.strictEqual(manifest.hooks, './hooks-workbuddy/hooks.json');
 });
 
+// —— 模型出错：错误中止的那一轮宿主**不派 Stop**（Qoder 派 StopFailure），
+//    过去桌宠全程静默，人只能自己盯屏幕才发现（2026-11-05 报的这条）。
+//    出声复用 permission 通道：原生只对 stop/permission 念 + 抢前台 + 落待我处理卡，
+//    旧版 App 也认这个 kind，不用重装才生效。文案不能撞「等你选方案」「等你回话」
+//    这两个前缀——原生按前缀判语义。
+check('error: 模型出错喊一声，按 permission 通道发（出声 + 抢前台 + 待我处理卡）', () => {
+  const s = installInto('.qoder-cn');
+  const r = dryRun(s, 'error', JSON.stringify({
+    session_id: 'boom1',
+    error: 'rate_limit',
+    error_details: 'Custom provider request failed: 429 模型 egg-alpha 调用失败，请提供 traceId 联系管理员核查',
+  }));
+  assert.strictEqual(r.payload.event, 'permission');
+  assert.match(r.payload.message, /^模型出错（被限流了）：Custom provider request failed: 429/);
+  assert.strictEqual(r.payload.speech, 'Qoder CN 模型出错了，被限流了');
+  assert.strictEqual(r.payload.session_id, 'boom1');
+  // 同一次失败宿主可能连着给两条信号（StopFailure 之后又把错误原文当回复发一条
+  // stop）：只喊一声，晚到的那条必须静默——一声「模型出错了」一声「做完了」最烦。
+  assert.strictEqual(dryRun(s, 'error', JSON.stringify({ session_id: 'boom1', error: 'rate_limit' })), null);
+  assert.strictEqual(dryRun(s, 'stop', JSON.stringify({ session_id: 'boom1' })), null);
+  // 他改口重问 = 新一轮，上一轮的出错账要结清，否则这一轮正常结束就念不出「做完了」。
+  dryRun(s, 'turn-start', JSON.stringify({ session_id: 'boom1' }));
+  const done = dryRun(s, 'stop', JSON.stringify({ session_id: 'boom1' }));
+  assert.notStrictEqual(done, null, '新一轮正常结束必须照常念');
+  assert.match(done.payload.message, /^Qoder CN/);
+  // 别的会话出错不受这笔账影响。
+  const other = dryRun(s, 'error', JSON.stringify({ session_id: 'boom2', error: 'overloaded' }));
+  assert.strictEqual(other.payload.speech, 'Qoder CN 模型出错了，服务繁忙了');
+});
+
+check('error: 人自己按停止不算模型出错；认不出错因也别凭空喊', () => {
+  const s = installInto('.qoder');
+  // StopFailure 也会为「中止且没吐正文」派发，分类落 unknown + AbortError 字样。
+  assert.strictEqual(dryRun(s, 'error', JSON.stringify({ session_id: 'ab1' })), null);
+  assert.strictEqual(dryRun(s, 'error', JSON.stringify({
+    session_id: 'ab2', error: 'unknown', error_details: 'Error: Operation aborted\n    at foo',
+  })), null);
+  assert.strictEqual(dryRun(s, 'error', JSON.stringify({
+    session_id: 'ab3', error: 'unknown', error_details: '[Request interrupted by user]',
+  })), null);
+  // 真失败但分类认不出来：泛化文案也得喊到人，漏喊才是要修的事。
+  const g = dryRun(s, 'error', JSON.stringify({
+    session_id: 'ab4', error: 'server_error',
+    error_details: '500 the model provider is temporarily unavailable, please try again later',
+  }));
+  assert.strictEqual(g.payload.event, 'permission');
+  assert.strictEqual(g.payload.speech, 'Qoder 模型出错了，服务出错了');
+  assert.match(g.payload.message, /^模型出错（服务报错）：500 /);
+});
+
+// StopFailure 只在已验证支持的宿主清单里注册：WorkBuddy 的 harness 里这个事件是
+// 「Stop 钩子自己执行失败」，语义不同；ZCode 的运行时里查不到这个事件。
+check('清单: StopFailure 只注册在 hooks-qoder，命令指向 error', () => {
+  const qoder = JSON.parse(
+    fs.readFileSync(path.join(PLUGIN_ROOT, 'hooks-qoder', 'hooks.json'), 'utf8'),
+  );
+  const group = qoder.hooks.StopFailure[0];
+  assert.strictEqual(group.async, true);
+  assert.match(group.hooks[0].command, /agentrmc-launch\.cmd" error$/);
+  assert.strictEqual(group.hooks[0].name, 'agentrmc-notify-error');
+  assert.strictEqual(group.hooks[0].timeout, 3);
+  for (const rel of [['hooks', 'hooks.json'], ['hooks-workbuddy', 'hooks.json']]) {
+    const h = JSON.parse(fs.readFileSync(path.join(PLUGIN_ROOT, ...rel), 'utf8'));
+    assert.strictEqual(h.hooks.StopFailure, undefined, rel.join('/') + ' 不该注册 StopFailure');
+  }
+});
+
 fs.rmSync(tmp, { recursive: true, force: true });
 
 const total = passed + failures.length;

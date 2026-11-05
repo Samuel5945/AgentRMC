@@ -272,6 +272,28 @@ int main() {
         check(tokenizer.endsWith("tokenizer"), "qwen3 tokenizer path");
     }
 
+    {
+        // 音色哨兵：现文案「跟随形象」和旧文案「跟随主题」都要归一成 @theme，
+        // 否则换过文案后旧配置里存的界面文案会被当成音色名原样发给服务端。
+        const auto resolveTtsVoice = [&appDir](const QString &raw) {
+            QJsonObject config = baseConfig();
+            QJsonObject voice = config.value("voice").toObject();
+            voice["tts"] = QJsonObject{{"voice", raw}};
+            config["voice"] = voice;
+            return resolveVoiceOptions(config, QJsonObject{}, appDir).ttsVoice;
+        };
+        check(resolveTtsVoice(QStringLiteral("@theme")) == QStringLiteral("@theme"),
+              "tts voice sentinel kept");
+        check(resolveTtsVoice(QString::fromUtf8("跟随形象 · 鲸鱼娘")) ==
+                  QStringLiteral("@theme"),
+              "tts voice follow-character wording normalized");
+        check(resolveTtsVoice(QString::fromUtf8("跟随主题 · 经典")) ==
+                  QStringLiteral("@theme"),
+              "tts voice legacy follow-theme wording normalized");
+        check(resolveTtsVoice(QString::fromUtf8("冰糖")) == QString::fromUtf8("冰糖"),
+              "tts voice explicit name kept");
+    }
+
     if (failures == 0) {
         std::puts("PASS native voice: options / wav / model discovery");
         return 0;

@@ -1144,7 +1144,7 @@ void VoicePet::applyTtsOptions() {
         return;
     }
     const VoiceOptions options = voice_->options();
-    // 音色跟随主题：音色名与描述都取主题带的（鲸鱼娘=萌系少女），换主题
+    // 音色跟随形象：音色名与描述都取形象包带的（鲸鱼娘=萌系少女），换形象
     // 立即跟着换；指令驱动 TTS 只有钉死 audio.voice 音色才不会每句都漂。
     QString voice = options.ttsVoice;
     QString style = options.ttsStyle;

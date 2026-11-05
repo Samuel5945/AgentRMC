@@ -2,13 +2,15 @@
 
 把 [AgentRMC](https://github.com/AgentRMC/Agentrmc) 桌宠接进你的 Agent：
 
-- **自动提醒（hooks）**：四类提醒都出声，等确认 / 等选方案 / 等回话时直接把该 Agent
-  主窗口拉到前台——等工具授权（`PermissionRequest`，念「等你确认 Bash：命令…」）、
+- **自动提醒（hooks）**：五类提醒都出声，等确认 / 等选方案 / 等回话 / 模型出错时直接
+  把该 Agent 主窗口拉到前台——等工具授权（`PermissionRequest`，念「等你确认 Bash：命令…」）、
   等选方案（念「等你选方案」；Qoder 和 WorkBuddy 里走 `PreToolUse` +
   `matcher:"AskUserQuestion"`，见下）、**等你回话**（`Stop` 时回复以问句收尾 →
   念「X 在等你回话」，气泡带那句问话；正文提问没有选项卡片，宿主不为它发任何等待
-  事件，只能从 transcript 判，见 `trailingQuestion`）、一轮回答结束（`Stop`，
-  念「X：<最终回复>」，取不到 transcript 时退回「X 已完成任务，等你回来验收」）。
+  事件，只能从 transcript 判，见 `trailingQuestion`）、**模型出错**（`StopFailure`，
+  仅 Qoder / Qoder CN：错误中止那一轮宿主**不派 Stop**，过去桌宠全程静默；现在念
+  「X 模型出错了，被限流了」，气泡带一句原文，见 `ERROR_REASONS`）、一轮回答结束
+  （`Stop`，念「X：<最终回复>」，取不到 transcript 时退回「X 已完成任务，等你回来验收」）。
   完成提醒**不自动抢前台**，但气泡可点，点一下把 Agent 窗口叫回来。AgentRMC 没开就
   静默跳过（<100ms），不拖慢会话。
 - **主动交互（MCP）**：四个工具——`pet_notify`（阶段进度气泡）、`pet_speak`
@@ -115,6 +117,21 @@ hook 都是 `agentrmc-launch.cmd <已经不存在的文件>`——静默失败�
 | 等工具授权 | `PermissionRequest`                               | `PermissionRequest`                                | `PermissionRequest`                   |
 | 等选方案   | `PreToolUse` + `matcher:"AskUserQuestion"`        | `PreToolUse` + `matcher:"AskUserQuestion"`         | `PermissionRequest`（tool_name 命中） |
 | 一轮结束   | `Stop`                                            | `Stop`                                             | `Stop`                                |
+| 模型出错   | `StopFailure` → 脚本 `error`                       | 无（同名事件语义不同，见下）                       | 无（运行时里查不到该事件）            |
+
+**「模型出错」这条 0.4.0 才补上**（2026-11-05 报的：Qoder CN 里错误中止那一轮桌宠连
+气泡都没有）。宿主在错误终止时**不派 `Stop`**（派发点在错误分支里直接 return，只有
+`StopFailure` 会走到），所以那一轮过去全程静默：实测 429 重试风暴十几分钟里
+`work-items` 一条记录都没有，最后还是人自己按的停止。现在 `hooks-qoder/hooks.json`
+把 `StopFailure` 挂到脚本的 `error` 动词上，念「Qoder CN 模型出错了，被限流了」，
+气泡带一句宿主原文，同样走 `permission` 通道（出声 + 拉前台 + 待我处理卡，**不用
+重装 App**——原生端本来就只对 stop/permission 出声）。
+
+WorkBuddy **故意没挂**：它那家 harness 里 `StopFailure` 是在「Stop 钩子自己执行失败」
+的 catch 里派发的，语义不是模型出错，挂上去会把无关故障喊成模型出错；ZCode 的运行时里
+查不到这个事件。WorkBuddy 里错误文本仍会作为最终回复被 `Stop` 念出来（维持旧行为）。
+用户自己按停止也走 `StopFailure`（分类落 `unknown` + `AbortError` 字样），脚本认出来
+就整条静默——凭空喊一声比漏喊更烦。
 
 「等选方案」在 Qoder 里必须挂 `PreToolUse`：拿 `~/.qoder/logs/runs/<run>/qodercli.log` 的
 `hook.started` 对账实测，Qoder 对 `AskUserQuestion` **不发** `PermissionRequest`（只有一条

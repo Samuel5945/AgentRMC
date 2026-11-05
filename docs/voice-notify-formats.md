@@ -20,6 +20,9 @@ Cordis bundle）、OpenSquilla（`plugins/opensquilla-bridge` 外部 WebSocket �
   - `speak`（MCP pet_speak）：只念，不抢前台。
   - `turn-start`：只归档同 session 旧验收，不出声、不建卡。
   - 离线补投（replay）：只落工单，不补喊、不抢前台。
+  - **要出声的新语义一律复用 `permission`，不在原生端加 kind**：「等你选方案」「等你回话」
+    「模型出错」三条都是这么走的（球在人这边 → 出声 + 抢前台 + 待我处理卡），这样旧版
+    装好的 App 不用重装就能收到新提醒。
 - `{宿主}` 取值由 `plugins/agentrmc-bridge/lib/host.js` 按安装路径 / 环境变量判定：
   Qoder、Qoder CN、ZCode、WorkBuddy、WorkBuddy AI；OpenSquilla 只认显式声明
   （`AGENTRMC_NOTIFY_HOST` 或 `.opensquilla` 路径）。
@@ -32,6 +35,7 @@ Cordis bundle）、OpenSquilla（`plugins/opensquilla-bridge` 外部 WebSocket �
 | **等回话（正文提问收尾）** | 气泡：`等你回话：{末句问话≤48字}`；念：`{宿主} 在等你回话`；按 `permission` 发出（出声 + 抢前台 + 待我处理卡）。正文提问没有选项卡片，宿主不为它派发任何等待事件，只能从回复收尾文字判 | 同款（判据在 `lib/text.js` 的 `trailingQuestion`，攒到的 assistant 正文直接判；气泡同文案，念 `DeepSeek Harness 在等你回话`） | 无（按模板念会话标题，判不了正文） | 无（不读 transcript） |
 | **等授权 permission** | 气泡：`等你确认 {工具}：{路径/命令≤60字}`；念：`{宿主} 在等你点确认` | 气泡：`等你确认 {工具名}`（**不带路径细节**，无工具名时 `等你确认工具授权`）；念：`DeepSeek Harness 在等你点确认` | 气泡+念：`有个操作在等你确认`（`--msg-permission` 可改） | 气泡+念：`等你确认 {工具}：{细节}【{项目}】` |
 | **等选方案** | 气泡：`等你选方案`；念：`{宿主} 在等你选方案` | 气泡：`等你选方案`；念：`DeepSeek Harness 在等你选方案` | 气泡+念：`「{会话}」方案出来了，等你选一个`（`--msg-plan` 可改） | 气泡+念：`等你选方案【{项目}】` |
+| **模型出错（一轮以错误中止）** | 气泡：认得出分类 → `模型出错（{中文短语}）：{原文首行≤60字}`；认不出 → `模型出错：{原文首行}` / `模型出错了`；念：`{宿主} 模型出错了，{中文短语}`（认不出分类时只念 `{宿主} 模型出错了`）；按 `permission` 发出（出声 + 抢前台 + 待我处理卡）。**只有 Qoder / Qoder CN 有这条路**（`StopFailure`，见第二节） | 无（harness 没有对应事件；错误文本当回复吐出来时走 stop） | 无 | 无 |
 | **新轮开始 turn-start** | 空文案，只归档旧验收，不出声 | 同左 | `新一轮对话开始`（同样只归档不出声） | 无此事件 |
 | **其它事件** | `hook.message` 或 `有新消息` | 静默不发 | 静默不发 | `hook.message` 或 `有新消息` + `【{项目}】` |
 
@@ -50,19 +54,38 @@ Cordis bundle）、OpenSquilla（`plugins/opensquilla-bridge` 外部 WebSocket �
   一律仍按 stop 念：判宽了会把客套问句当成待答，念错比不念更烦。
 - **permission 细节**（bridge 系 / 旧脚本）：取 `file_path || path || command || url`，
   超 60 字截到 57 字加 `…`；工具名 / 细节为空时对应部分省略。
+- **出错分类中文表**（bridge 系 `ERROR_REASONS`，键名来自宿主 `classifyStopFailureError`
+  的分类）：`rate_limit` 被限流了 / `overloaded` 服务繁忙 / `server_error` 服务报错 /
+  `model_not_found` 模型不可用 / `authentication_failed`、`oauth_org_not_allowed` 登录态失效 /
+  `billing_error` 额度用完了 / `invalid_request` 请求被拒 / `empty_response` 没返回内容 /
+  `max_output_tokens` 输出超限 / 其余一律 `unknown` = 泛化「出错了」。
+  气泡可以带宿主原文（英文、HTTP 码都在内，方便判断），**语音只念中文短语**——
+  「the model provider is temporarily unavailable」念出来等于没提醒。
+- **用户自己按停止不算出错**：宿主在「中止且正文一句都没吐出来」这条路上也派
+  `StopFailure`（分类落 `unknown`、原文带 `AbortError` / `Interrupted by user`）。
+  `USER_ABORT_RE` 命中就整条静默——凭空喊一声比漏喊更烦。`error` 和 `error_details`
+  两个字段都没有时同样静默（认不出是什么事，不猜）。
 - **OpenSquilla 模板变量**：`{会话}` = 会话标题缓存，取不到用会话 key 末段（≤24 字），
   再兜底「这个会话」；`--relay` 时模板可用 `{text}`（回复前 80 字）；整条截 200 字。
   另有 selftest 文案：`联动桥自检：桌宠出声说明桥是通的`。
 
 ## 二、触发钩子对照（同一件事各家怎么报）
 
-| 宿主 | 回合结束 | 等授权 | 等选方案 | 新轮开始 |
-|---|---|---|---|---|
-| Qoder / Qoder CN | Stop | PermissionRequest | PreToolUse matcher=AskUserQuestion → `question`（映射成 permission 发出） | UserPromptSubmit |
-| WorkBuddy / WorkBuddy AI | Stop | PermissionRequest | Notification(permission_prompt) → `prompt`（弹窗那一刻，准）+ PreToolUse 兜底 | UserPromptSubmit |
-| ZCode（插件） | Stop | PermissionRequest | 无独立钩子，AskUserQuestion 落 permission 分支 | UserPromptSubmit |
-| DeepSeek Harness | agent/turn-stopping | session/event `approval/asked` | session/event `tool/call` name=ask_user_question → `question` | agent/inbox/claimed（同 turn 去重） |
-| OpenSquilla | session.event.done / chat.done / task.succeeded | session.event.approval_required | session.event.plan_presentation（发 `question` 类） | session.event.turn_committed |
+| 宿主 | 回合结束 | 等授权 | 等选方案 | 模型出错 | 新轮开始 |
+|---|---|---|---|---|---|
+| Qoder / Qoder CN | Stop | PermissionRequest | PreToolUse matcher=AskUserQuestion → `question`（映射成 permission 发出） | **StopFailure → `error`** | UserPromptSubmit |
+| WorkBuddy / WorkBuddy AI | Stop | PermissionRequest | Notification(permission_prompt) → `prompt`（弹窗那一刻，准）+ PreToolUse 兜底 | 无（见下） | UserPromptSubmit |
+| ZCode（插件） | Stop | PermissionRequest | 无独立钩子，AskUserQuestion 落 permission 分支 | 无（运行时里查不到该事件） | UserPromptSubmit |
+| DeepSeek Harness | agent/turn-stopping | session/event `approval/asked` | session/event `tool/call` name=ask_user_question → `question` | 无 | agent/inbox/claimed（同 turn 去重） |
+| OpenSquilla | session.event.done / chat.done / task.succeeded | session.event.approval_required | session.event.plan_presentation（发 `question` 类） | 无 | session.event.turn_committed |
+
+- **模型出错为什么只有 Qoder 挂**：宿主在错误中止那一轮**不派 Stop**（实测：429 重试
+  风暴十几分钟 + 人手动打断，`work-items` 里一条记录都没有），桌宠全程静默。Qoder 的
+  `StopFailure` 正是这条路（派发点：上下文写满、406 拒答、max-output-tokens 耗尽、
+  畸形工具调用重试耗尽、终止性 API 错误、空正文中止）。**WorkBuddy 的同名事件语义不
+  一样**——它的 harness 是在「Stop 钩子自己执行失败」的 catch 里派发的，套上去会把
+  无关故障喊成模型出错；ZCode 的运行时里查不到这个事件。所以只注册在
+  `hooks-qoder/hooks.json`，WorkBuddy 里错误文本仍按 stop 念原文。
 
 - DSH 挂 `session/event`（emit，所有监听器都跑）而不是 `approval/request` /
   `user-questions/request` 瀑布——Web UI 应答者作答后不再调 next()，排后面的监听器
@@ -83,6 +106,7 @@ Cordis bundle）、OpenSquilla（`plugins/opensquilla-bridge` 外部 WebSocket �
 | 等回话不参与迟到去重 | 原生 announceWork（planChoice=false） | — | 「等你回话」发的是 permission 且不带「等你选方案」前缀，180 秒窗口吞不到它；一轮最多一条，本身不刷屏 |
 | 等回话压 ready/blocked | 原生 announceWork | ready 90 秒 / blocked 120 秒 | 先 `pet_work_update(ready/blocked)` 喊过、这一轮又问句收尾 → 「等你回话」不再喊第二声。按 session→title 找 `readyAnnounced_`/`attentionAnnounced_`（MCP 不带 session、账记 title 名下），命中即取走作废 |
 | blocked 连报去重 | 原生 reportWorkItem | 120 秒 | 同会话连报 blocked 只喊一次 |
+| 出错只喊一声 | bridge hook（asked-question.json 里 `error:<scope>`） | 120 秒 | 同一次失败宿主可能给两条信号（`StopFailure`，之后又把错误原文当最终回复发一条 `stop`）：先到的 `error` 记账并出声，窗口内的 `stop` 整条静默——一声「模型出错了」一声「XX 做完了，等你回来看」是自相矛盾。`turn-start`（新一轮）把这笔账清掉，所以改口重问后那一轮正常结束照常念「做完了」 |
 | ready 压 stop | 原生 announceWork | 90 秒 | pet_work_update(ready) 喊过后，紧接着的 hook stop 不念第二遍 |
 | 同 turn 去重 | DSH inbox/claimed | 同一 turn | 一轮多条消息只报一次 turn-start |
 | session+kind 去重 | OpenSquilla 桥 dedupe | 15 秒 | 同一会话同类事件不重复发 |

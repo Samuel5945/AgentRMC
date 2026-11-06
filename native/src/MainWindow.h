@@ -83,6 +83,13 @@ private:
     void raiseSelectedWork();
     void ackSelectedWork();
     void raiseWorkItem(const QString &id);
+    // 回到该待办对应的 Agent：有窗口就切过去，窗口没了先启动宿主（Electron
+    // 单实例，再启一次就是叫到前台）。返回 false = 没能送到人跟前——
+    // 宿主不在应用表里或启动失败，调用方据此别把提醒销掉。
+    bool bringToAgent(const QString &id);
+    // 双击一行：回到对应 Agent；「等你处理 / 待验收」这种顺手标为已处理
+    // （点进去看＝已经看过，提醒不该再挂着），进行中不动。
+    void openWorkItem(const QString &id);
     QString selectedWorkId() const;
     QJsonArray workersArray() const;
     QString workersJson() const;

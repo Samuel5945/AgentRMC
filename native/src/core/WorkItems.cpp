@@ -10,7 +10,11 @@
 #include <QSaveFile>
 #include <QUuid>
 
+#include <algorithm>
+
 namespace {
+
+constexpr qint64 kStaleWorkingSecs = 1800;  // 30 分钟没动静就不再说「在跑」
 
 QString iso(const QDateTime &when) {
     return when.isValid() ? when.toUTC().toString(Qt::ISODateWithMs)
@@ -202,6 +206,12 @@ WorkItem WorkItemStore::upsert(const QString &source, const QString &agentExe,
         const int windowSecs = sessionId.isEmpty() ? 300 : 1800;
         const QDateTime cutoff = now.addSecs(-windowSecs);
         WorkItem *target = nullptr;
+        // 认领优先级：同 session 的卡 > 待绑定的派活回执 > 未关联的卡 >
+        // 同宿主唯一一张已绑定的卡。后两档只在来件本身没有 session 时才考虑。
+        WorkItem *voiceReceipt = nullptr;
+        WorkItem *unbound = nullptr;
+        WorkItem *soleBound = nullptr;
+        int boundCandidates = 0;
         for (WorkItem &item : items_) {
             if (item.done || item.updatedAt < cutoff) {
                 continue;
@@ -210,18 +220,47 @@ WorkItem WorkItemStore::upsert(const QString &source, const QString &agentExe,
                 item.stage != QStringLiteral("needs-me")) {
                 continue;
             }
-            const bool sameSession = !sessionId.isEmpty() &&
-                                     item.sessionId == sessionId;
             const bool sameAgent =
                 !agentExe.isEmpty() &&
                 item.agentExe.compare(agentExe, Qt::CaseInsensitive) == 0;
             const bool sameTitle =
                 !title.isEmpty() &&
                 item.title.compare(title, Qt::CaseInsensitive) == 0;
-            const bool loose = item.sessionId.isEmpty() || sessionId.isEmpty();
-            if (sameSession || (loose && (sameAgent || sameTitle))) {
+            // 项目两边都知道又不一样 = 不是同一件事（同宿主开两个目录时，
+            // 光按宿主名合并会把另一个目录的事写进这张卡）。
+            const bool projectOk =
+                project.isEmpty() || item.project.isEmpty() ||
+                item.project.compare(project, Qt::CaseInsensitive) == 0;
+            if (!sessionId.isEmpty() && item.sessionId == sessionId) {
                 target = &item;
                 break;
+            }
+            if (!item.sessionId.isEmpty()) {
+                if (sessionId.isEmpty() && sameAgent && projectOk) {
+                    ++boundCandidates;
+                    soleBound = &item;
+                }
+                continue;
+            }
+            if (!projectOk) {
+                continue;
+            }
+            if (sessionId.isEmpty()) {
+                if (unbound == nullptr && (sameAgent || sameTitle)) {
+                    unbound = &item;
+                }
+            } else if (voiceReceipt == nullptr && sameAgent &&
+                       item.source == QStringLiteral("voice")) {
+                voiceReceipt = &item;
+            }
+        }
+        if (target == nullptr) {
+            if (!sessionId.isEmpty()) {
+                target = voiceReceipt;
+            } else {
+                target = unbound != nullptr
+                             ? unbound
+                             : (boundCandidates == 1 ? soleBound : nullptr);
             }
         }
         if (target != nullptr) {
@@ -231,7 +270,11 @@ WorkItem WorkItemStore::upsert(const QString &source, const QString &agentExe,
             target->title = title;
             target->message = message;
             target->raiseExe = raiseExe;
-            target->project = project;
+            // 只认 session 之外，项目是第二道判据：来件没带项目时别把卡片原有的抹掉，
+            // 否则下一次「按项目区分」就没了依据（MCP 上报常常不带 cwd）。
+            if (!project.isEmpty()) {
+                target->project = project;
+            }
             if (target->sessionId.isEmpty() && !sessionId.isEmpty()) {
                 target->sessionId = sessionId;
             }
@@ -239,8 +282,10 @@ WorkItem WorkItemStore::upsert(const QString &source, const QString &agentExe,
             if (!wasAttention && isAttentionStage(stage)) {
                 target->attentionSince = now;
             }
-            if (kind == QStringLiteral("stop") && !sessionId.isEmpty()) {
-                resolveSession(sessionId, target->id, true);
+            // 一个会话只留一张活卡：状态变了，同会话的其它未结案记录就该翻篇，
+            // 不然列表里同一件事挂着三条「待验收」，谁也说不清哪条是现在。
+            if (!sessionId.isEmpty()) {
+                closeOtherStates(sessionId, target->id);
             }
             save();
             return *target;
@@ -271,7 +316,9 @@ WorkItem WorkItemStore::upsert(const QString &source, const QString &agentExe,
         item.title = title;
         item.message = message;
         item.raiseExe = raiseExe;
-        item.project = project;
+        if (!project.isEmpty()) {
+            item.project = project;
+        }
         item.updatedAt = now;
         if (!isAttentionStage(item.stage) && isAttentionStage(stage)) {
             item.attentionSince = now;
@@ -281,11 +328,7 @@ WorkItem WorkItemStore::upsert(const QString &source, const QString &agentExe,
         return item;
     }
 
-    // 新一轮 stop：旧 review 和本 session 其它 needs-me 都已经翻篇。
-    if (kind == QStringLiteral("stop") && !sessionId.isEmpty()) {
-        resolveSession(sessionId, QString(), true);
-    }
-
+    // 没有可合并的卡 = 这个会话新一轮：之前那张活卡翻篇（同会话只留一张）。
     WorkItem item;
     item.id = QUuid::createUuid().toString(QUuid::WithoutBraces);
     item.source = source;
@@ -304,6 +347,9 @@ WorkItem WorkItemStore::upsert(const QString &source, const QString &agentExe,
         item.attentionSince = now;
     }
     items_.prepend(item);
+    if (!sessionId.isEmpty()) {
+        closeOtherStates(sessionId, item.id);
+    }
     prune();
     save();
     return item;
@@ -327,6 +373,78 @@ int WorkItemStore::openCount() const {
         }
     }
     return count;
+}
+
+qint64 WorkItem::waitedSecs(const QDateTime &now) const {
+    if (done || !isAttentionStage(stage) || !attentionSince.isValid()) {
+        return -1;
+    }
+    return attentionSince.secsTo(now);
+}
+
+bool WorkItem::staleWorking(const QDateTime &now) const {
+    return !done && stage == QStringLiteral("working") && updatedAt.isValid() &&
+           updatedAt.secsTo(now) > kStaleWorkingSecs;
+}
+
+QVector<WorkItem> WorkItemStore::displayOrder() const {
+    QVector<WorkItem> out;
+    out.reserve(items_.size());
+    for (const WorkItem &item : items_) {
+        if (!item.done) {
+            out.append(item);
+        }
+    }
+    const auto rank = [](const QString &stage) {
+        if (stage == QStringLiteral("needs-me")) {
+            return 0;
+        }
+        if (stage == QStringLiteral("review")) {
+            return 1;
+        }
+        if (stage == QStringLiteral("working")) {
+            return 2;
+        }
+        return 3;
+    };
+    std::stable_sort(out.begin(), out.end(), [&rank](const WorkItem &a,
+                                                     const WorkItem &b) {
+        const int ra = rank(a.stage);
+        const int rb = rank(b.stage);
+        if (ra != rb) {
+            return ra < rb;
+        }
+        if (ra <= 1) {
+            // 等人这件事按「开始等」的先后排队：新到的进度不该把老账挤下去。
+            const QDateTime wa = a.attentionSince.isValid() ? a.attentionSince
+                                                           : a.updatedAt;
+            const QDateTime wb = b.attentionSince.isValid() ? b.attentionSince
+                                                           : b.updatedAt;
+            if (wa != wb) {
+                return wa < wb;
+            }
+        }
+        return a.updatedAt > b.updatedAt;
+    });
+    return out;
+}
+
+bool WorkItemStore::closeOtherStates(const QString &sessionId,
+                                     const QString &keepId) {
+    if (sessionId.isEmpty()) {
+        return false;
+    }
+    bool changed = false;
+    const QDateTime now = QDateTime::currentDateTimeUtc();
+    for (WorkItem &item : items_) {
+        if (!item.done && item.id != keepId && item.sessionId == sessionId) {
+            item.done = true;
+            item.stage = QStringLiteral("done");
+            item.updatedAt = now;
+            changed = true;
+        }
+    }
+    return changed;
 }
 
 bool WorkItemStore::ack(const QString &id) {
@@ -406,9 +524,17 @@ bool WorkItemStore::clearFinished() {
 }
 
 QString WorkItemStore::toJson() const {
+    // 对外按面板同一套顺序回（displayOrder），别让人对着 JSON 数一遍、
+    // 对着界面又数一遍——两边顺序不一样时，谁都不知道哪个是真相。
+    // 已结案的一条不丢：排在后面，历史还查得到。
     QJsonArray array;
-    for (const WorkItem &item : items_) {
+    for (const WorkItem &item : displayOrder()) {
         array.append(toJson(item));
+    }
+    for (const WorkItem &item : items_) {
+        if (item.done) {
+            array.append(toJson(item));
+        }
     }
     const QJsonObject root{
         {QStringLiteral("attention_count"), attentionCount()},

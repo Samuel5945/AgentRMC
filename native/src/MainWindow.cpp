@@ -225,6 +225,7 @@ public:
         const QString agent = index.data(Qt::UserRole + 4).toString();
         const QString stageText = index.data(Qt::UserRole + 3).toString();
         const QString when = index.data(Qt::UserRole + 5).toString();
+        const QString where = index.data(Qt::UserRole + 6).toString();
         const QString message = index.data(Qt::DisplayRole).toString();
 
         QFont nameFont = painter->font();
@@ -235,18 +236,31 @@ public:
         const QFontMetrics nameMetrics(nameFont);
         const QFontMetrics metaMetrics(metaFont);
 
-        const qreal timeWidth = metaMetrics.horizontalAdvance(when) + 12;
+        // 时间列固定宽、右贴边：「12:18」和「12:18 · 等 5 小时」按各自宽度让位
+        // 会把一列数字画成锯齿（用户 2026-11-06 指），所以先钉死列宽再让正文缩。
+        const qreal timeCol = metaMetrics.horizontalAdvance(
+                                  QStringLiteral("00:00 · 等 00 天")) + 10;
+        const QRectF timeRect(textRight - timeCol,
+                              row.top() + ThemeManager::scaledPx(9), timeCol,
+                              ThemeManager::scaledPx(16));
         const QRectF line1(textLeft, row.top() + ThemeManager::scaledPx(9),
-                           textRight - textLeft - timeWidth,
+                           textRight - textLeft - timeCol - 8,
                            ThemeManager::scaledPx(16));
 
         painter->setFont(metaFont);
         painter->setPen(ThemeManager::instance().color(QStringLiteral("ghost")));
-        painter->drawText(line1, Qt::AlignRight | Qt::AlignVCenter, when);
+        painter->drawText(timeRect, Qt::AlignRight | Qt::AlignVCenter, when);
 
         const qreal stageWidth = metaMetrics.horizontalAdvance(stageText);
+        // 同一宿主并行开两个会话时，两行都只写「Qoder」分不出谁是谁：把项目
+        // （或「未关联会话」）钉在状态后面，宽度不够时先让名字让步。
+        const qreal whereRoom =
+            where.isEmpty()
+                ? 0.0
+                : qMin<qreal>(metaMetrics.horizontalAdvance(where) + 12,
+                              line1.width() * 0.45);
         const qreal nameRoom =
-            qMax<qreal>(40, line1.width() - stageWidth - 14);
+            qMax<qreal>(40, line1.width() - stageWidth - whereRoom - 26);
         painter->setFont(nameFont);
         painter->setPen(ThemeManager::instance().color(QStringLiteral("text")));
         const QString shownAgent =
@@ -259,6 +273,21 @@ public:
         painter->drawText(QRectF(line1.left() + agentWidth + 7, line1.top(),
                                  stageWidth + 4, line1.height()),
                           Qt::AlignLeft | Qt::AlignVCenter, stageText);
+
+        if (!where.isEmpty()) {
+            const qreal whereLeft =
+                line1.left() + agentWidth + 7 + stageWidth + 12;
+            const QRectF whereRect(whereLeft, line1.top(),
+                                   line1.right() - whereLeft, line1.height());
+            painter->setFont(metaFont);
+            painter->setPen(
+                ThemeManager::instance().color(QStringLiteral("muted")));
+            // 项目名用中间省略：两个目录常是前后缀相近的兄弟名，砍尾巴就分不出了。
+            painter->drawText(
+                whereRect, Qt::AlignLeft | Qt::AlignVCenter,
+                metaMetrics.elidedText(where, Qt::ElideMiddle,
+                                       int(whereRect.width())));
+        }
 
         QFont bodyFont = painter->font();
         bodyFont.setPixelSize(ThemeManager::scaledPx(11));
@@ -1160,7 +1189,7 @@ QWidget *MainWindow::buildWorkPage() {
     connect(workList_, &QListWidget::itemDoubleClicked, this,
             [this](QListWidgetItem *item) {
                 if (item != nullptr) {
-                    raiseWorkItem(item->data(Qt::UserRole).toString());
+                    openWorkItem(item->data(Qt::UserRole).toString());
                 }
             });
     connect(workList_, &QListWidget::itemSelectionChanged, this, [this] {
@@ -1175,7 +1204,7 @@ QWidget *MainWindow::buildWorkPage() {
             workHint_->setText(
                 has ? QString::fromUtf8("Enter 回到 Agent · Delete 标为已处理")
                     : QString::fromUtf8(
-                          "选中一条待办后可操作 · 双击直接回到对应 Agent"));
+                          "选中一条待办后可操作 · 双击打开 Agent（没开着会先启动）并销账"));
         }
     });
     cl->addWidget(workList_, 1);
@@ -1227,7 +1256,8 @@ QWidget *MainWindow::buildWorkPage() {
     workRaise_ = new QPushButton(QString::fromUtf8("回到 Agent"));
     workRaise_->setObjectName("ghostSmall");
     workRaise_->setCursor(Qt::PointingHandCursor);
-    workRaise_->setToolTip(QString::fromUtf8("把发这条待办的 Agent 窗口切到前台"));
+    workRaise_->setToolTip(QString::fromUtf8(
+        "把发这条待办的 Agent 切到前台；它没开着就先启动宿主"));
     workRaise_->setEnabled(false);
     connect(workRaise_, &QPushButton::clicked, this,
             &MainWindow::raiseSelectedWork);
@@ -1286,45 +1316,56 @@ void MainWindow::refreshWorkItems() {
         workFilter_->setCurrentIndex(index >= 0 ? index : 0);
     }
 
-    QVector<WorkItem> items = workItems_->items();
-    std::sort(items.begin(), items.end(),
-              [](const WorkItem &a, const WorkItem &b) {
-                  const auto rank = [](const QString &stage) {
-                      if (stage == QStringLiteral("needs-me")) {
-                          return 0;
-                      }
-                      if (stage == QStringLiteral("review")) {
-                          return 1;
-                      }
-                      if (stage == QStringLiteral("working")) {
-                          return 2;
-                      }
-                      return 3;
-                  };
-                  const int ra = rank(a.stage);
-                  const int rb = rank(b.stage);
-                  if (ra != rb) {
-                      return ra < rb;
-                  }
-                  return a.updatedAt > b.updatedAt;
-              });
+    const QVector<WorkItem> items = workItems_->displayOrder();
+
+    // 「在哪儿」：项目目录名比会话 id 好认；两者都没有就直说是未关联会话，
+    // 不拿宿主名冒充身份（同宿主并行两个会话时那是唯一的区分）。
+    const auto whereFor = [](const WorkItem &item) {
+        if (item.sessionId.isEmpty()) {
+            return QString::fromUtf8("未关联会话");
+        }
+        QString dirName = QDir(item.project).dirName();
+        // 宿主给的是相对路径时 dirName 会是 "." ".."，读起来像坏数据。
+        if (dirName == QLatin1String(".") || dirName == QLatin1String("..")) {
+            dirName.clear();
+        }
+        return dirName.isEmpty() ? QString::fromUtf8("会话 %1")
+                                       .arg(item.sessionId.left(8))
+                                 : dirName;
+    };
+    const auto matchesFilter = [&filterExe](const WorkItem &item) {
+        if (filterExe.isEmpty()) {
+            return true;
+        }
+        return item.agentExe.compare(filterExe, Qt::CaseInsensitive) == 0 ||
+               item.title.compare(AgentWindow::displayName(filterExe),
+                                  Qt::CaseInsensitive) == 0;
+    };
+    const auto agentFor = [](const WorkItem &item) {
+        return item.title.isEmpty() ? AgentWindow::displayName(item.agentExe)
+                                    : item.title;
+    };
+    // 同宿主同项目并行两个会话时，两行都只写「Agentrmc」等于没写：
+    // 先数一遍重名，重名的行才补会话短 id。
+    QHash<QString, int> whereHits;
+    for (const WorkItem &item : items) {
+        if (item.done || !matchesFilter(item)) {
+            continue;
+        }
+        ++whereHits[agentFor(item) + QLatin1Char('|') + whereFor(item)];
+    }
 
     int needs = 0;
     int review = 0;
     int working = 0;
     int open = 0;
+    const QDateTime now = QDateTime::currentDateTimeUtc();
     for (const WorkItem &item : items) {
         if (item.done) {
             continue;
         }
-        if (!filterExe.isEmpty()) {
-            const bool match =
-                item.agentExe.compare(filterExe, Qt::CaseInsensitive) == 0 ||
-                item.title.compare(AgentWindow::displayName(filterExe),
-                                   Qt::CaseInsensitive) == 0;
-            if (!match) {
-                continue;
-            }
+        if (!matchesFilter(item)) {
+            continue;
         }
         ++open;
         QString stage = QString::fromUtf8("待办");
@@ -1338,17 +1379,29 @@ void MainWindow::refreshWorkItems() {
             color = QColor("#3fb950");
             ++review;
         } else if (item.stage == QStringLiteral("working")) {
-            stage = QString::fromUtf8("进行中");
-            color = QColor("#58a6ff");
+            if (item.staleWorking(now)) {
+                // 半小时没有任何事件：不能说它还在跑，也不能说它做完了。
+                stage = QString::fromUtf8("状态待确认");
+                color = ThemeManager::instance().color(QStringLiteral("muted"));
+            } else {
+                stage = QString::fromUtf8("进行中");
+                color = QColor("#58a6ff");
+            }
             ++working;
         }
 
-        QString agent = item.title;
-        if (agent.isEmpty()) {
-            agent = AgentWindow::displayName(item.agentExe);
-        }
+        const QString agent = agentFor(item);
         const QDateTime when = item.updatedAt.isValid() ? item.updatedAt
                                                         : item.createdAt;
+
+        QString where = whereFor(item);
+        // 只有「按项目分不出来」时才占用宽度：会话短 id 是最后手段，不是常态。
+        if (!item.sessionId.isEmpty() &&
+            !where.startsWith(QString::fromUtf8("会话 ")) &&
+            where != QString::fromUtf8("未关联会话") &&
+            whereHits.value(agent + QLatin1Char('|') + where) > 1) {
+            where += QString::fromUtf8(" · %1").arg(item.sessionId.left(6));
+        }
 
         // 行内不再拼「[待验收] Xxx」这种字符串：阶段色、Agent、时间各占各的位置，
         // 由 WorkItemDelegate 分栏画，扫一眼就能分出「谁在等我」。
@@ -1359,13 +1412,28 @@ void MainWindow::refreshWorkItems() {
         row->setData(Qt::UserRole + 2, color);
         row->setData(Qt::UserRole + 3, stage);
         row->setData(Qt::UserRole + 4, agent);
-        row->setData(Qt::UserRole + 5,
-                     when.isValid()
-                         ? when.toLocalTime().toString(QStringLiteral("HH:mm"))
-                         : QString());
+        // 时间位顺手报「等了多久」：十分钟以内看钟点就够，久了得让人看见账。
+        QString whenText = when.isValid()
+                               ? when.toLocalTime().toString(
+                                     QStringLiteral("HH:mm"))
+                               : QString();
+        const qint64 waited = item.waitedSecs(now);
+        if (waited >= 600) {
+            const qint64 mins = waited / 60;
+            if (mins < 60) {
+                whenText += QString::fromUtf8(" · 等 %1 分").arg(mins);
+            } else if (mins < 60 * 24) {
+                whenText += QString::fromUtf8(" · 等 %1 小时").arg(mins / 60);
+            } else {
+                // 过了两天还挂着，报小时已经读不出量级了。
+                whenText += QString::fromUtf8(" · 等 %1 天").arg(mins / (60 * 24));
+            }
+        }
+        row->setData(Qt::UserRole + 5, whenText);
+        row->setData(Qt::UserRole + 6, where);
         row->setSizeHint(QSize(0, 56));
         row->setToolTip(
-            QString::fromUtf8("%1 · %2  %3\n%4\n%5")
+            QString::fromUtf8("%1 · %2  %3\n%4\n%5%6")
                 .arg(stage, agent,
                      when.isValid()
                          ? when.toLocalTime().toString(
@@ -1374,7 +1442,11 @@ void MainWindow::refreshWorkItems() {
                      item.message,
                      item.project.isEmpty()
                          ? QStringLiteral("（无项目路径）")
-                         : QString::fromUtf8("项目：%1").arg(item.project)));
+                         : QString::fromUtf8("项目：%1").arg(item.project),
+                     item.sessionId.isEmpty()
+                         ? QString()
+                         : QString::fromUtf8("\n会话：%1")
+                               .arg(item.sessionId)));
         if (item.id == selected) {
             workList_->setCurrentItem(row);
         }
@@ -1432,7 +1504,7 @@ void MainWindow::refreshWorkItems() {
         workHint_->setText(
             has ? QString::fromUtf8("Enter 回到 Agent · Delete 标为已处理")
                 : QString::fromUtf8(
-                      "选中一条待办后可操作 · 双击直接回到对应 Agent"));
+                      "选中一条待办后可操作 · 双击打开 Agent（没开着会先启动）并销账"));
     }
     refreshHealth();
 }
@@ -1534,6 +1606,27 @@ QString pluginZipPath() {
 QString pluginBundleDir() {
     return QCoreApplication::applicationDirPath() +
            QStringLiteral("/plugins/deepseek-harness");
+}
+
+// 宿主进程名 → 应用表 id。表里的名字和 displayName 不完全一路（DSH 的表项叫
+// DeepSeek、快捷方式才叫 DeepSeek Harness），所以按 exe 手写对应，不靠猜。
+// 表里没有的宿主（比如 CodeBuddy）回空串：启动不了就明说，别把提醒销了。
+QString hostAppId(const QString &exe) {
+    static const QVector<QPair<QString, QString>> kIds = {
+        {QStringLiteral("Qoder.exe"), QStringLiteral("qoder")},
+        {QStringLiteral("Qoder CN.exe"), QStringLiteral("qodercn")},
+        {QStringLiteral("WorkBuddyAI.exe"), QStringLiteral("workbuddyai")},
+        {QStringLiteral("WorkBuddy.exe"), QStringLiteral("workbuddy")},
+        {QStringLiteral("ZCode.exe"), QStringLiteral("zcode")},
+        {QStringLiteral("DeepSeek Harness.exe"), QStringLiteral("deepseek")},
+        {QStringLiteral("OpenSquilla.exe"), QStringLiteral("opensquilla")},
+    };
+    for (const auto &entry : kIds) {
+        if (entry.first.compare(exe, Qt::CaseInsensitive) == 0) {
+            return entry.second;
+        }
+    }
+    return QString();
 }
 
 }  // namespace
@@ -2423,26 +2516,79 @@ void MainWindow::announceWork(const QString &kind, const QString &title,
 }
 
 void MainWindow::raiseWorkItem(const QString &id) {
+    bringToAgent(id);
+}
+
+// 回到那条待办对应的 Agent：有窗口就切过去；窗口没了（被关掉、或收进托盘
+// 拿不到可见窗口）就先把宿主启动起来——Electron 单实例，再启一次等于叫到前台。
+// 启动不了返回 false：人没送到跟前，调用方不该把提醒销掉。
+bool MainWindow::bringToAgent(const QString &id) {
     if (workItems_ == nullptr || id.isEmpty()) {
+        return false;
+    }
+    QString exe;
+    for (const WorkItem &item : workItems_->items()) {
+        if (item.id == id) {
+            exe = item.raiseExe.isEmpty() ? item.agentExe : item.raiseExe;
+            break;
+        }
+    }
+    if (AgentWindow::alive(exe)) {
+        AgentWindow::raise(exe);
+        return true;
+    }
+    if (exe.isEmpty()) {
+        AgentWindow::raise(QString());  // 老数据没带宿主名：按缺省找 ZCode
+        return true;
+    }
+    const QString appId = hostAppId(exe);
+    QString error;
+    if (appId.isEmpty()) {
+        appendEvent(QStringLiteral("error"), QString(), QString(),
+                    QString::fromUtf8("%1 不在应用表里，启动不了；提醒先留着")
+                        .arg(AgentWindow::displayName(exe)),
+                    0);
+        return false;
+    }
+    if (!AppLauncher::launch(appId, &error)) {
+        appendEvent(QStringLiteral("error"), QString(), QString(),
+                    QString::fromUtf8("启动 %1 没成（%2）；提醒先留着")
+                        .arg(AgentWindow::displayName(exe),
+                             error.isEmpty() ? QStringLiteral("launch failed")
+                                             : error),
+                    0);
+        return false;
+    }
+    return true;
+}
+
+void MainWindow::raiseSelectedWork() {
+    raiseWorkItem(selectedWorkId());
+}
+
+void MainWindow::openWorkItem(const QString &id) {
+    // 先送到 Agent 跟前（宿主没开着会先启动），真送到了才销账。
+    if (!bringToAgent(id) || workItems_ == nullptr) {
         return;
     }
     for (const WorkItem &item : workItems_->items()) {
         if (item.id != id) {
             continue;
         }
-        if (!item.raiseExe.isEmpty()) {
-            AgentWindow::raise(item.raiseExe);
-        } else if (!item.agentExe.isEmpty()) {
-            AgentWindow::raise(item.agentExe);
-        } else {
-            AgentWindow::raise(QString());  // 缺省找 ZCode
+        // 只有「等我看」的账才结：进行中/状态待确认不是提醒，看了也不代表做完。
+        if (!item.done && (item.stage == QStringLiteral("needs-me") ||
+                           item.stage == QStringLiteral("review"))) {
+            workItems_->ack(id);
+            appendEvent(QStringLiteral("status"), QString(), QString(),
+                        QString::fromUtf8("已打开 %1，这条提醒已销账")
+                            .arg(item.title.isEmpty()
+                                     ? AgentWindow::displayName(item.agentExe)
+                                     : item.title),
+                        0);
         }
-        return;
+        break;
     }
-}
-
-void MainWindow::raiseSelectedWork() {
-    raiseWorkItem(selectedWorkId());
+    refreshWorkItems();
 }
 
 void MainWindow::ackSelectedWork() {

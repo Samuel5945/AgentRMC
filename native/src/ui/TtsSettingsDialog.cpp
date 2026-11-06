@@ -186,11 +186,10 @@ TtsSettingsDialog::TtsSettingsDialog(ProfileStore *store, QWidget *parent)
     }
     if (!savedInput.isEmpty() &&
         input_->currentData().toString().compare(savedInput, Qt::CaseInsensitive) != 0) {
-        // 保存过的那台现在不在列表里（拔了/改名）：留着原值当选项并标出来，
-        // 别静默退回自动——否则用户以为选着，其实在录别的设备。
-        input_->addItem(QString::fromUtf8("%1（现在没插着）").arg(savedInput),
-                        savedInput);
-        input_->setCurrentIndex(input_->count() - 1);
+        // 保存过的那台现在不在列表里（拔了/改名，或压根没连这台电脑）：
+        // 不再列成可选项——留着就等人误选一台打不开的设备，说完没反应。
+        // 回到自动就行，不用额外解释：设备连回来时它自己会重新出现在列表里。
+        input_->setCurrentIndex(0);
     }
     const QString autoName = AudioRecorder::communicationsDeviceName();
     input_->setToolTip(QString::fromUtf8(

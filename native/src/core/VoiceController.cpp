@@ -6,6 +6,7 @@
 #include "core/Profiles.h"
 #include "core/SystemControl.h"
 
+#include <QJsonArray>
 #include <QCoreApplication>
 #include <QDateTime>
 #include <QElapsedTimer>
@@ -134,6 +135,56 @@ bool VoiceController::openMic(QString *error) {
     return true;
 }
 
+// 盯着设备变化：Windows 的「默认通信录音设备」会在插拔耳机、串流起停时自己跳走
+// （实测跳过 Steam 虚拟麦），而常开的麦克风是按打开那一刻的裁决挂着的——
+// 判据和实际录的那台就此分叉，症状是「选了设备也没用、说话没反应」。
+// 说话中途不换（会掐掉正在录的那句），等回到空闲再切。
+void VoiceController::syncMicDevice() {
+    if (!listening_ || options_.backend == VoiceBackend::Hotkey) {
+        return;  // 热键档不占本机麦克风，没必要盯
+    }
+    if (state_ == State::Recording || transcribing_) {
+        return;
+    }
+    const MicChoice now = AudioRecorder::chooseMicDevice(
+        pinnedMicName(), AudioRecorder::communicationsDeviceName(),
+        AudioRecorder::waveInNames());
+    MicChoice opened;
+    opened.name = recorder_.openedDeviceName();
+    opened.index = recorder_.openedDeviceIndex();
+    opened.source = recorder_.openedDeviceSource();
+    opened.bluetooth = recorder_.openedDeviceIsBluetooth();
+    if (recorder_.isOpen() && AudioRecorder::sameDevice(opened, now)) {
+        return;  // 还是那台，别乱重开（重开有 0.5-1s 空窗）
+    }
+    recorder_.close();
+    micAlwaysOn_ = !now.bluetooth;
+    if (micAlwaysOn_) {
+        QString error;
+        if (!openMic(&error)) {
+            emit eventReady(QStringLiteral("error"), error);
+            return;
+        }
+    }
+    emit eventReady(
+        QStringLiteral("voice"),
+        QString::fromUtf8("麦克风已切到「%1」%2")
+            .arg(now.name.isEmpty() ? QString::fromUtf8("系统默认录制设备")
+                                    : now.name,
+                 micAlwaysOn_ ? QString() : QString::fromUtf8("（蓝牙耳机麦，说完才开）")));
+}
+
+QJsonArray VoiceController::micDeviceList() {
+    QJsonArray out;
+    for (const QString &name : AudioRecorder::waveInNames()) {
+        const QString trimmed = name.trimmed();
+        if (!trimmed.isEmpty()) {
+            out.append(trimmed);
+        }
+    }
+    return out;
+}
+
 QJsonObject VoiceController::micStatus() const {
     // 读数分两半：pick* = 「现在说话会用哪台」（不依赖麦克风开没开，热键档下
     // 麦克风平时是关的，只报 open/device 就全是空，看不出选错了档）；
@@ -146,6 +197,14 @@ QJsonObject VoiceController::micStatus() const {
     if (configValue.isEmpty() && options_.micDeviceIndex >= 0) {
         configValue = QString::number(options_.micDeviceIndex);
     }
+    // stale = 「开着的那台」和「现在该用的那台」不是同一台。这次就是靠它抓出
+    // 默认档被抢走后麦克风还挂在旧设备上；正常情况应该一直是 false。
+    MicChoice opened;
+    opened.name = recorder_.openedDeviceName();
+    opened.index = recorder_.openedDeviceIndex();
+    opened.source = recorder_.openedDeviceSource();
+    const bool stale = recorder_.isOpen() &&
+                       !AudioRecorder::sameDevice(opened, pick);
     return QJsonObject{
         {QStringLiteral("config"),
          configValue.isEmpty() ? QStringLiteral("auto") : configValue},
@@ -161,6 +220,12 @@ QJsonObject VoiceController::micStatus() const {
         {QStringLiteral("open"), recorder_.isOpen()},
         {QStringLiteral("device"), recorder_.openedDeviceName()},
         {QStringLiteral("source"), recorder_.openedDeviceSource()},
+        {QStringLiteral("stale"), stale},
+        // level = 麦克风当前 RMS（0~1）。只有麦开着的时候有意义：说话时一直是
+        // 0.0 就说明这台设备根本没收到声音（幽灵端点/麦被别的程序独占/人不在
+        // 这台设备前），比「听没听到」这种主观判断好对账。
+        {QStringLiteral("level"), qRound(recorder_.level() * 1000.0) / 1000.0},
+        {QStringLiteral("devices"), micDeviceList()},
         {QStringLiteral("note"), recorder_.openedDeviceNote()},
     };
 }
@@ -304,6 +369,10 @@ void VoiceController::mediaToggle() {
 
 void VoiceController::tick() {
     const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    if (now - micSyncAt_ >= 2000) {
+        micSyncAt_ = now;
+        syncMicDevice();
+    }
     expireConfirm(now);
     if (state_ == State::Pending && now - pendingAt_ > options_.confirmWindowMs) {
         setState(State::Idle, QStringLiteral("就绪"));

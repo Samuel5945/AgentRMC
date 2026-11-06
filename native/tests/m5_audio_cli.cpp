@@ -160,6 +160,36 @@ static int checkDeviceChoice() {
         std::fprintf(stderr, "FAIL firstRealMic: 只有虚拟麦+耳机麦时不该给出设备\n");
         ++failures;
     }
+    // sameDevice 是「设备变了要重开麦克风」的判据：按设备号认，不按来源认。
+    const auto same = [](const QString &sa, int ia, const QString &sb, int ib) {
+        MicChoice a;
+        a.source = sa;
+        a.index = ia;
+        MicChoice b;
+        b.source = sb;
+        b.index = ib;
+        return AudioRecorder::sameDevice(a, b);
+    };
+    struct SameCase {
+        const char *label;
+        bool got;
+        bool want;
+    };
+    const SameCase cases[] = {
+        {"同一台：点名命中 vs 自动命中同一号", same("pinned", 1, "comms", 1), true},
+        {"同一台：自动 vs 躲占位命中同一号", same("comms", 2, "prefer", 2), true},
+        {"换了台：耳机麦 vs 真麦", same("comms", 1, "prefer", 2), false},
+        {"都没号：mapper vs mapper", same("mapper", -1, "mapper", -1), true},
+        {"都没号：没开过 vs mapper", same("none", -1, "mapper", -1), false},
+        {"一边有号一边没号", same("comms", 1, "mapper", -1), false},
+    };
+    for (const SameCase &c : cases) {
+        if (c.got != c.want) {
+            std::fprintf(stderr, "FAIL sameDevice[%s]: got %d want %d\n", c.label,
+                         c.got ? 1 : 0, c.want ? 1 : 0);
+            ++failures;
+        }
+    }
     std::printf("%s device choice\n", failures == 0 ? "PASS" : "FAIL");
     return failures;
 }
@@ -169,6 +199,9 @@ int main(int argc, char **argv) {
                                  : 2;
     const QString path = argc > 2 ? QString::fromLocal8Bit(argv[2])
                                   : QStringLiteral("audio_test.wav");
+    // 第三个参数：点名要从哪台录（用来采「你说话时到底录到了什么」的真音频）。
+    const QString pinArg =
+        argc > 3 ? QString::fromLocal8Bit(argv[3]).trimmed() : QString();
 
     int failures = checkNameMatching() + checkDeviceChoice();
     if (failures != 0) {
@@ -200,9 +233,11 @@ int main(int argc, char **argv) {
                 recorder.openedDeviceSource().toUtf8().constData());
     recorder.close();
 
-    // 点名档：选列表里的第一台，验证「点名的就是实际打开的那台」。
-    if (!names.isEmpty()) {
-        const QString pinned = names.at(0).trimmed();
+    // 点名档：验证「点名的就是实际打开的那台」。没给参数就拿列表第一台试。
+    const QString pinned = pinArg.isEmpty()
+                               ? (names.isEmpty() ? QString() : names.at(0).trimmed())
+                               : pinArg;
+    if (!pinned.isEmpty()) {
         recorder.setDeviceName(pinned);
         QString pinError;
         if (!recorder.open(&pinError)) {

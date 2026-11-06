@@ -55,6 +55,10 @@ public:
     static MicChoice chooseMicDevice(const QString &pinned,
                                      const QString &commsName,
                                      const QStringList &names);
+    // 纯函数：两次裁决是不是同一台物理设备。有具体设备号就只按号认——同一台
+    // 既可能被「点名」命中也可能被「自动」选中，来源不同不代表换了设备；
+    // 两边都没有号时才比来源。上层「设备变了要重开麦克风」靠它判。
+    static bool sameDevice(const MicChoice &a, const MicChoice &b);
 
     // 点名要用的设备（空 = 自动跟随默认通信端点）；要在 open() 之前设。
     // 只在 GUI 线程读写（采集线程不碰这几个字段）。
@@ -62,6 +66,7 @@ public:
     QString requestedDeviceName() const { return deviceName_; }
     // 上一次 open() 实际用的设备读数；没开过时 source=="none"。
     QString openedDeviceName() const { return opened_.name; }
+    int openedDeviceIndex() const { return opened_.index; }
     QString openedDeviceSource() const { return opened_.source; }
     QString openedDeviceNote() const { return opened_.note; }
     bool openedDeviceIsBluetooth() const { return opened_.bluetooth; }

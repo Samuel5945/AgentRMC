@@ -267,6 +267,17 @@ void AudioRecorder::setDeviceName(const QString &name) {
     deviceName_ = name.trimmed();
 }
 
+bool AudioRecorder::sameDevice(const MicChoice &a, const MicChoice &b) {
+    // 有具体设备号就按号认：同一台设备既可能是「点名」命中的，也可能是「自动」
+    // 选中的，来源不同不代表换了设备——按来源重开会白给一个 0.5-1s 的空窗。
+    if (a.index >= 0 || b.index >= 0) {
+        return a.index == b.index;
+    }
+    // 两边都没有设备号（mapper / 还没开过）时只能比来源，
+    // 免得「none」和「mapper」被当成同一台。
+    return a.source == b.source;
+}
+
 int AudioRecorder::matchWaveInIndex(const QString &endpointName,
                                     const QStringList &waveInNames) {
     const QString want = endpointName.trimmed();

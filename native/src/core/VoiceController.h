@@ -93,9 +93,6 @@ private:
     // 所有开麦入口都走这里：先按当前配置点名，再 open，
     // 保证「判据看的那台」和「真打开的那台」不会分叉。
     bool openMic(QString *error);
-    // 盯着设备变化：默认通信档被换掉（插拔耳机、串流起停、Steam 虚拟麦抢档）时，
-    // 常开的麦克风还挂在旧设备上，判据和实际录的那台会分叉，必须重开。
-    void syncMicDevice();
     // /state 用的当前可打开录音设备清单：一次 curl 就能对账「列不列得到那台麦」
     // 和「实际用的是哪台」。
     static QJsonArray micDeviceList();
@@ -135,7 +132,6 @@ private:
     bool toggleCombo_ = false;
     bool holdCombo_ = false;
     bool micAlwaysOn_ = false;  // true = 监听期间常开（非蓝牙，保 preroll）
-    qint64 micSyncAt_ = 0;      // 上次盯设备变化的时刻（tick 是 50ms，这里 2s 一次）
     int repeats_ = 0;
     qint64 pendingAt_ = 0;
     qint64 recordAt_ = 0;

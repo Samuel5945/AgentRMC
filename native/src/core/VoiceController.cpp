@@ -135,45 +135,6 @@ bool VoiceController::openMic(QString *error) {
     return true;
 }
 
-// 盯着设备变化：Windows 的「默认通信录音设备」会在插拔耳机、串流起停时自己跳走
-// （实测跳过 Steam 虚拟麦），而常开的麦克风是按打开那一刻的裁决挂着的——
-// 判据和实际录的那台就此分叉，症状是「选了设备也没用、说话没反应」。
-// 说话中途不换（会掐掉正在录的那句），等回到空闲再切。
-void VoiceController::syncMicDevice() {
-    if (!listening_ || options_.backend == VoiceBackend::Hotkey) {
-        return;  // 热键档不占本机麦克风，没必要盯
-    }
-    if (state_ == State::Recording || transcribing_) {
-        return;
-    }
-    const MicChoice now = AudioRecorder::chooseMicDevice(
-        pinnedMicName(), AudioRecorder::communicationsDeviceName(),
-        AudioRecorder::waveInNames());
-    MicChoice opened;
-    opened.name = recorder_.openedDeviceName();
-    opened.index = recorder_.openedDeviceIndex();
-    opened.source = recorder_.openedDeviceSource();
-    opened.bluetooth = recorder_.openedDeviceIsBluetooth();
-    if (recorder_.isOpen() && AudioRecorder::sameDevice(opened, now)) {
-        return;  // 还是那台，别乱重开（重开有 0.5-1s 空窗）
-    }
-    recorder_.close();
-    micAlwaysOn_ = !now.bluetooth;
-    if (micAlwaysOn_) {
-        QString error;
-        if (!openMic(&error)) {
-            emit eventReady(QStringLiteral("error"), error);
-            return;
-        }
-    }
-    emit eventReady(
-        QStringLiteral("voice"),
-        QString::fromUtf8("麦克风已切到「%1」%2")
-            .arg(now.name.isEmpty() ? QString::fromUtf8("系统默认录制设备")
-                                    : now.name,
-                 micAlwaysOn_ ? QString() : QString::fromUtf8("（蓝牙耳机麦，说完才开）")));
-}
-
 QJsonArray VoiceController::micDeviceList() {
     QJsonArray out;
     for (const QString &name : AudioRecorder::waveInNames()) {
@@ -369,10 +330,6 @@ void VoiceController::mediaToggle() {
 
 void VoiceController::tick() {
     const qint64 now = QDateTime::currentMSecsSinceEpoch();
-    if (now - micSyncAt_ >= 2000) {
-        micSyncAt_ = now;
-        syncMicDevice();
-    }
     expireConfirm(now);
     if (state_ == State::Pending && now - pendingAt_ > options_.confirmWindowMs) {
         setState(State::Idle, QStringLiteral("就绪"));

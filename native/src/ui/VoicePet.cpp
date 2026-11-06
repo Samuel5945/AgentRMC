@@ -6,6 +6,8 @@
 #include "core/LlmClient.h"
 #include "core/Profiles.h"
 #include "core/SpeechText.h"
+#include "core/SystemCommand.h"
+#include "core/TaskCue.h"
 #include "core/ThemeManager.h"
 #include "core/TtsClient.h"
 #include "core/VoiceController.h"
@@ -38,7 +40,6 @@
 #include <QResizeEvent>
 #include <QSignalBlocker>
 #include <QStringList>
-#include <QRegularExpression>
 #include <QTimer>
 #include <QThread>
 #include <QVBoxLayout>
@@ -66,7 +67,8 @@ constexpr int kDecorOverlap = 12;   // 贴纸顶边压进箱底的深度（文�
 constexpr const char *kDefaultChatSystem =
     "你是 AgentRMC 的语音桌宠，一个待在屏幕边上的小助手。用户在用语音和你聊天："
     "回复要口语化、简短（最多两句话、50 字以内），不要用列表、markdown、加粗、"
-    "表情或颜文字，因为你的回复会被朗读出来。默认用中文回答。"
+    "表情或颜文字，因为你的回复会被朗读出来；用户明确要清单或步骤时可以逐条说。"
+    "默认用中文回答。"
     "用户纠正听写或名词时，直接用一句话确认并继续，不要反问一串问题；不确定时"
     "最多问一个最短的澄清问题。"
     "你没有工具或函数调用能力，不要输出 tool call、<function>、mcp 函数名或 JSON "
@@ -724,6 +726,12 @@ QString VoicePet::stateJson() const {
         {QStringLiteral("recording"), recording_},
         {QStringLiteral("transcribing"), transcribing_},
         {QStringLiteral("chat_mode"), chatMode_},
+        // 分流读数（排查「这句为什么没交给 Agent」先看这里）：cue=这句命中了
+        // 哪条判据（点名/交接/回指/干活/长句/定住/回落），空=判据没命中、
+        // 桌宠自己接；agent=这一刻真交出去的那台宿主，空=没交。
+        {QStringLiteral("handoff"),
+         QJsonObject{{QStringLiteral("cue"), handoffCue_},
+                     {QStringLiteral("agent"), handoffAgent_}}},
         {QStringLiteral("tts_ready"), tts_ != nullptr && tts_->ready()},
         // 麦克风读数：排查「说话没录到」时先看这里——config=配置点名的设备、
         // source=这次真用哪一档（pinned/comms/mapper）、note=降级原因。
@@ -814,21 +822,6 @@ void VoicePet::setChatMode(bool on) {
     } else {
         bubbleOnly(QString::fromUtf8("已退出对话模式"), 2000);
     }
-}
-
-// 分流判据：纯本地正则，不调模型。判断本身要是还得等一次推理，
-// 「说完就有反应」就没了——这层必须零延迟。
-bool VoicePet::looksLikeTask(const QString &text) {
-    static const QRegularExpression kTask(QStringLiteral(
-        "打开|启动|运行|执行|帮我|替我|给我|改一下|改改|修改|修复|构建|编译|"
-        "打包|安装|卸载|部署|跑一下|跑个|测试|提交|推送|拉取|合并|搜索|查一下|"
-        "查查|看一下|读一下|总结|生成|写一个|新建|创建|删除|重命名|移动|"
-        "git |npm |pip |cmake|报错|日志|仓库"));
-    if (kTask.match(text).hasMatch()) {
-        return true;
-    }
-    // 长句多半是任务描述（"帮我看看这个为什么……"），短句多半是闲聊。
-    return text.size() >= 40;
 }
 
 QString VoicePet::onlineAgentExe() const {
@@ -1105,7 +1098,10 @@ void VoicePet::handleUtterance(const QString &text) {
     bubbleOnly(QString::fromUtf8("你：%1").arg(text), 2400);
     const QString agent = onlineAgentExe();
     const bool llmReady = llm_ != nullptr && llm_->ready();
-    const bool task = looksLikeTask(text);
+    const QString cue = TaskCue::of(text);
+    // 分流读数每句重记：这句没交出去就留空，别让上一句的判据冒充这一句的。
+    handoffCue_ = cue;
+    handoffAgent_ = QString();
     // 干活的话优先给宿主 Agent（已在项目上下文里，也不用另配 key）；
     // 闲聊优先自带 LLM（快、不占会话）。哪边缺就回落另一边——
     // 没有 Agent 时自带 LLM 照常用，反过来也一样，两条腿走路。
@@ -1123,10 +1119,16 @@ void VoicePet::handleUtterance(const QString &text) {
         store_ != nullptr ? store_->uiString(QStringLiteral("agent_target"))
                           : QString();
     if (!pinned.isEmpty() && agent.compare(pinned, Qt::CaseInsensitive) == 0) {
+        handoffCue_ = QStringLiteral("定住");
+        handoffAgent_ = agent;
         handOffToAgent(text, agent);
         return;
     }
-    if (!agent.isEmpty() && (task || !llmReady)) {
+    if (!agent.isEmpty() && (!cue.isEmpty() || !llmReady)) {
+        if (cue.isEmpty()) {
+            handoffCue_ = QStringLiteral("回落");  // 判据没命中，但对话模型没配
+        }
+        handoffAgent_ = agent;
         handOffToAgent(text, agent);
         return;
     }
@@ -1153,7 +1155,8 @@ void VoicePet::askLlm(const QString &text) {
     QJsonArray messages;
     messages.append(QJsonObject{
         {"role", "system"},
-        {"content", chatPersona()}});
+        // 只有这句真在要清单，才把整份功能清单放进这一次请求。
+        {"content", chatPersona(TaskCue::wantsList(text))}});
     for (const QJsonValue &entry : chatHistory_) {
         messages.append(entry);
     }
@@ -1631,7 +1634,7 @@ void VoicePet::tick() {
     update();
 }
 
-QString VoicePet::chatPersona() const {
+QString VoicePet::chatPersona(bool withInventory) const {
     const VoiceOptions options = voice_->options();
     QString persona = options.llmApiSystem;
     if (persona.isEmpty()) {
@@ -1649,7 +1652,7 @@ QString VoicePet::chatPersona() const {
         "（本程序联动的宿主），不是编程语言，也不是用户本人。"
         "你没有工具或函数调用能力，不要输出 <tool call>、mcp 函数名或 JSON "
         "tool_calls；任务状态只依据下面提供的当前待办。"
-        "回答保持一到两句话，不列清单，不连续反问。");
+        "回答保持一到两句话，不连续反问；用户要清单或步骤时照下面的功能答。");
     if (workSummaryProvider_) {
         const QString tasks = workSummaryProvider_();
         if (!tasks.isEmpty()) {
@@ -1660,6 +1663,27 @@ QString VoicePet::chatPersona() const {
     if (!fg.isEmpty()) {
         context += QString::fromUtf8(" 用户此刻前台是 %1。")
                        .arg(AgentWindow::displayName(fg));
+    }
+    // 软件自己的功能只能自己说，但平时只带一句索引；整份清单（350 字）只在
+    // 用户这句真在要清单时进这一次请求——不然系统提示词就成了上下文垃圾桶。
+    // 词表直接问解析层，不在这儿抄一份。
+    context += QString::fromUtf8(
+        " 你自己会：语音操控电脑的音量、亮度、媒体播放、屏幕与电源"
+        "（关机/重启/睡眠/休眠要先说「确认」）、听写粘贴、把话转交给在跑的 "
+        "AI 编程助手、替宿主喊人（等授权 / 等选方案 / 做完 / 出错）、"
+        "把回复念出来。");
+    QStringList hosts;
+    for (const QString &exe : AgentWindow::knownExes()) {
+        if (AgentWindow::alive(exe)) {
+            hosts << AgentWindow::displayName(exe);
+        }
+    }
+    context += QString::fromUtf8("现在在跑的 AI 编程助手：%1。")
+                   .arg(hosts.isEmpty() ? QString::fromUtf8("无")
+                                        : hosts.join(QStringLiteral("、")));
+    if (withInventory) {
+        context += QString::fromUtf8("\n逐条清单（这一句用户要的就是清单）：\n%1")
+                       .arg(SystemCommandText::spokenList());
     }
     return persona + context;
 }

@@ -69,7 +69,7 @@ AgentRMC 已经有一个「Router 雏形」，但还没有领域模型和持久�
 | Source | `AgentBridge /notify`、MCP、语音 | 没有统一事件模型；不同来源各走各的 |
 | Trigger | hook payload（permission/question/stop/progress） | 即发即忘；没有 id / 幂等 / 持久化 |
 | Thread | 宿主 Agent 的 session/transcript | 没有接住 `session_id` 和项目上下文 |
-| Eval | 本地正则（`looksLikeTask`）+ 按 kind 分支 | 没有策略层；所有事件按固定规则提醒 |
+| Eval | 本地词表（`core/TaskCue`）+ 按 kind 分支 | 没有策略层；所有事件按固定规则提醒 |
 | Ticket | 无 | 没有「一件事」的状态和生命周期 |
 | Assignment | `AgentWindow` 按进程/窗口查找 | 只绑到 exe，不绑到 session / 项目 |
 | Report | stop/permission/question 文案 | 没有结构化状态（progress/blocked/ready…） |
@@ -148,7 +148,7 @@ AgentRMC 已经有一个「Router 雏形」，但还没有领域模型和持久�
 
 - **Fast Path（确定性）**：事件来源、kind、是否重复、安静时段、per-agent 白名单。前台状态只用于决定是否自动 raise / 气泡摆位，**不得用于静音语音提醒**。零延迟、零模型成本。
 - **Slow Path（可选）**：只有模糊事件才调 LLM，例如「这条 stop 结果值不值得念」「这条 progress 是否意味着卡住」。默认关闭，避免延迟和费用。
-- AgentRMC 现有的 `looksLikeTask` 已经是 Fast Path 的雏形；可以扩展到通知侧。
+- AgentRMC 现有的 `core/TaskCue`（原 `VoicePet::looksLikeTask`）已经是 Fast Path 的雏形；可以扩展到通知侧。
 
 ### 3.5 持久化投递 + Watchdog + 三问面板
 

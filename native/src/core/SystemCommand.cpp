@@ -3,6 +3,7 @@
 #include <QHash>
 #include <QRegularExpression>
 #include <QStringList>
+#include <QVector>
 
 namespace {
 
@@ -64,6 +65,47 @@ const QStringList kStepVerbs = {
 const QStringList kStepTails = {
     QStringLiteral("一点"), QStringLiteral("一些"), QStringLiteral("点"),
     QStringLiteral("些"),
+};
+
+// 问「音量多少」是查询，不是调整。
+const QStringList kQueryWords = {
+    QStringLiteral("多少"), QStringLiteral("多大"), QStringLiteral("几"),
+};
+
+// 亮度按屏调：点名所有屏 / 主屏的词。
+const QStringList kScopeAllWords = {
+    QStringLiteral("所有"), QStringLiteral("全部"),
+    QStringLiteral("每块"), QStringLiteral("都"),
+};
+
+const QStringList kScopePrimaryWords = {
+    QStringLiteral("主屏"), QStringLiteral("主显示"),
+    QStringLiteral("主monitor"),
+};
+
+const QStringList kVolumeMaxWords = {
+    QStringLiteral("最大"), QStringLiteral("最高"),
+};
+
+const QStringList kVolumeMinWords = {
+    QStringLiteral("最小"), QStringLiteral("最低"),
+};
+
+// 亮度独有的方向词（「调亮一点」「暗一些」）。
+const QStringList kBrightnessUpWords = {
+    QStringLiteral("亮"),
+};
+
+const QStringList kBrightnessDownWords = {
+    QStringLiteral("暗"),
+};
+
+const QStringList kBrightnessMaxWords = {
+    QStringLiteral("最亮"), QStringLiteral("最高"), QStringLiteral("最大"),
+};
+
+const QStringList kBrightnessMinWords = {
+    QStringLiteral("最暗"), QStringLiteral("最低"), QStringLiteral("最小"),
 };
 
 QString flatText(const QString &text) {
@@ -172,8 +214,15 @@ SystemCommand make(const QString &kind, const QString &op, int value = 0) {
     return command;
 }
 
-SystemCommand parseExact(const QString &flat) {
-    static const QHash<QString, SystemCommand> table = {
+struct ExactEntry {
+    QString spoken;
+    SystemCommand command;
+};
+
+// 一句话说得出口，parse() 就认得；spokenList() 也照这一张表念「你能说什么」。
+// 用有序表而不是 QHash：清单要有稳定次序，同义说法归到同一个动作下面。
+const QVector<ExactEntry> &exactTable() {
+    static const QVector<ExactEntry> table = {
         {QStringLiteral("播放"), make("media", "play")},
         {QStringLiteral("继续播放"), make("media", "play")},
         {QStringLiteral("暂停"), make("media", "pause")},
@@ -208,7 +257,27 @@ SystemCommand parseExact(const QString &flat) {
         {QStringLiteral("解除静音"), make("volume", "unmute")},
         {QStringLiteral("关闭静音"), make("volume", "unmute")},
     };
-    return table.value(flat);
+    return table;
+}
+
+// 表里同一种说法有好几种讲法，清单只报第一种（第一种最常用）。
+QString firstSpoken(const QString &kind, const QString &op = QString()) {
+    for (const ExactEntry &entry : exactTable()) {
+        if (entry.command.kind == kind &&
+            (op.isEmpty() || entry.command.op == op)) {
+            return entry.spoken;
+        }
+    }
+    return QString();
+}
+
+SystemCommand parseExact(const QString &flat) {
+    for (const ExactEntry &entry : exactTable()) {
+        if (entry.spoken == flat) {
+            return entry.command;
+        }
+    }
+    return {};
 }
 
 // 音量与亮度共用同一套「值 / 最值 / 方向」判定，只有词表不同。
@@ -240,17 +309,13 @@ SystemCommand parseLevel(const QString &flat, const QStringList &nouns,
     command.kind = kind;
     command.matched = true;
     if (kind == QStringLiteral("brightness")) {
-        if (hasAny(before, {QStringLiteral("所有"), QStringLiteral("全部"),
-                            QStringLiteral("每块"), QStringLiteral("都")})) {
+        if (hasAny(before, kScopeAllWords)) {
             command.screen = ScreenScope::All;
-        } else if (hasAny(before, {QStringLiteral("主屏"), QStringLiteral("主显示"),
-                                   QStringLiteral("主monitor")})) {
+        } else if (hasAny(before, kScopePrimaryWords)) {
             command.screen = ScreenScope::Primary;
         }
     }
-    if (after.contains(QStringLiteral("多少")) ||
-        after.contains(QStringLiteral("多大")) ||
-        after.contains(QStringLiteral("几"))) {
+    if (hasAny(after, kQueryWords)) {
         command.op = QStringLiteral("query");
         return command;
     }
@@ -400,6 +465,72 @@ QString confirmPhrase(const QString &kind) {
     return QStringLiteral("确认") + label(command);
 }
 
+QString spokenList() {
+    // 逐条从解析词表生成：以后加个说法只改 exactTable()/词表常量，
+    // 这里跟着变——桌宠答给用户的清单不会和真听得懂的词分叉。
+    QStringList media;
+    QStringList seenOps;
+    QStringList power;
+    QStringList danger;
+    QStringList seenKinds;
+    for (const ExactEntry &entry : exactTable()) {
+        const QString &kind = entry.command.kind;
+        if (kind == QStringLiteral("volume")) {
+            continue;
+        }
+        if (kind == QStringLiteral("media")) {
+            if (!seenOps.contains(entry.command.op)) {
+                seenOps.append(entry.command.op);
+                media.append(entry.spoken);
+            }
+            continue;
+        }
+        if (!seenKinds.contains(kind)) {
+            seenKinds.append(kind);
+            power.append(entry.spoken);
+            if (needsConfirm(kind)) {
+                danger.append(entry.spoken);
+            }
+        }
+    }
+    const QString mutePair = firstSpoken(QStringLiteral("volume"),
+                                         QStringLiteral("mute")) +
+                             QStringLiteral("/") +
+                             firstSpoken(QStringLiteral("volume"),
+                                         QStringLiteral("unmute"));
+    QStringList lines;
+    lines << QString::fromUtf8(
+                "音量：可说 %1；升一档用 %2，降一档用 %3，也能直接给数值"
+                "（音量 30 / 百分之三十）；顶格=%4，到底=%5；还有 %6。"
+                "问「音量多少」是查当前值。")
+                 .arg(kVolumeNouns.join(QStringLiteral("/")),
+                      kUpWords.join(QStringLiteral("/")),
+                      kDownWords.join(QStringLiteral("/")),
+                      kVolumeMaxWords.join(QStringLiteral("/")),
+                      kVolumeMinWords.join(QStringLiteral("/")), mutePair);
+    lines << QString::fromUtf8(
+                "亮度：可说 %1；方向词同音量，另有 %2/%3；顶格=%4，到底=%5；"
+                "加 %6 调所有屏、加 %7 只调主屏。问「亮度多少」是查当前值。")
+                 .arg(kBrightnessNouns.join(QStringLiteral("/")),
+                      kBrightnessUpWords.join(QStringLiteral("/")),
+                      kBrightnessDownWords.join(QStringLiteral("/")),
+                      kBrightnessMaxWords.join(QStringLiteral("/")),
+                      kBrightnessMinWords.join(QStringLiteral("/")),
+                      kScopeAllWords.join(QStringLiteral("/")),
+                      kScopePrimaryWords.join(QStringLiteral("/")));
+    lines << QString::fromUtf8("媒体：%1（同义说法都认）。")
+                 .arg(media.join(QStringLiteral("、")));
+    lines << QString::fromUtf8("屏幕与电源：%1。")
+                 .arg(power.join(QStringLiteral("、")));
+    if (!danger.isEmpty()) {
+        lines << QString::fromUtf8(
+                    "其中 %1 属危险动作：先说一句，要用户再说「确认XX」"
+                    "（如「确认关机」）才真执行。")
+                     .arg(danger.join(QStringLiteral("/")));
+    }
+    return lines.join(QStringLiteral("\n"));
+}
+
 SystemCommand parse(const QString &text) {
     const QString flat = flatText(text);
     if (flat.isEmpty()) {
@@ -422,18 +553,14 @@ SystemCommand parse(const QString &text) {
     }
     const SystemCommand volume = parseLevel(
         flat, kVolumeNouns, QStringLiteral("volume"), {}, {},
-        {QStringLiteral("最大"), QStringLiteral("最高")},
-        {QStringLiteral("最小"), QStringLiteral("最低")},
+        kVolumeMaxWords, kVolumeMinWords,
         {{QStringLiteral("大声"), 1}, {QStringLiteral("小声"), -1}});
     if (volume.matched) {
         return volume;
     }
     return parseLevel(flat, kBrightnessNouns, QStringLiteral("brightness"),
-                      {QStringLiteral("亮")}, {QStringLiteral("暗")},
-                      {QStringLiteral("最亮"), QStringLiteral("最高"),
-                       QStringLiteral("最大")},
-                      {QStringLiteral("最暗"), QStringLiteral("最低"),
-                       QStringLiteral("最小")});
+                      kBrightnessUpWords, kBrightnessDownWords,
+                      kBrightnessMaxWords, kBrightnessMinWords);
 }
 
 }  // namespace SystemCommandText

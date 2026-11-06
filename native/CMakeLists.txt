@@ -81,6 +81,8 @@ qt_add_executable(AgentRMCNative
     src/core/TtsClient.h
     src/core/SpeechText.cpp
     src/core/SpeechText.h
+    src/core/TaskCue.cpp
+    src/core/TaskCue.h
     src/core/ThemeManager.cpp
     src/core/ThemeManager.h
     src/ui/AppPage.cpp
@@ -335,6 +337,16 @@ add_executable(AgentRMCSpeechTest
 target_include_directories(AgentRMCSpeechTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(AgentRMCSpeechTest PRIVATE Qt6::Core)
 target_compile_options(AgentRMCSpeechTest PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
+
+# 对话模式「这句该谁接」的判据：纯本地词表，离线逐句可测。
+add_executable(AgentRMCTaskCueTest
+    tests/task_cue_test.cpp
+    src/core/TaskCue.cpp
+    src/core/TaskCue.h
+)
+target_include_directories(AgentRMCTaskCueTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(AgentRMCTaskCueTest PRIVATE Qt6::Core)
+target_compile_options(AgentRMCTaskCueTest PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
 
 add_executable(AgentRMCAudioTest
     tests/m5_audio_cli.cpp

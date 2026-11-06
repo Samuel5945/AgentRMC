@@ -128,10 +128,9 @@ private:
                     const QString &raiseExe = QString());
     void speakAs(const QString &text);  // 对话回复朗读：tts.chat_voice 独立音色
     void askLlm(const QString &text);
-    // 对话模式的一句话：先按本地规则判断该谁接，再分流给宿主 Agent 或自带 LLM。
+    // 对话模式的一句话：先按本地词表判该谁接（见 core/TaskCue），再分流给
+    // 宿主 Agent 或自带 LLM。
     void handleUtterance(const QString &text);
-    // 这句话像「让 Agent 干活」而不是闲聊（纯本地规则，零延迟，不调模型）。
-    static bool looksLikeTask(const QString &text);
     // 这句话该交给哪个宿主：显式指定 > 说话时前台的那个 > 最近发通知的那个 > 探测。
     // 返回空 = 一个 Agent 都不在。
     QString onlineAgentExe() const;
@@ -161,7 +160,9 @@ private:
                       const QString &shortName);
     void openLlmSettings();
     void tick();
-    QString chatPersona() const;  // llm_api.system → 主题人设 → 内置默认
+    // llm_api.system → 主题人设 → 内置默认。withInventory 只在用户这句确实
+    // 在要清单时为真：整份功能清单不进平时的每次请求。
+    QString chatPersona(bool withInventory = false) const;
     QString spriteState() const;  // 当前应显示的精灵状态名
 
     ProfileStore *store_ = nullptr;
@@ -179,6 +180,10 @@ private:
     bool chatMode_ = false;
     bool llmBusy_ = false;
     QJsonArray chatHistory_;  // user/assistant 轮次，system 每次请求现拼
+    // 最近一句的分流读数（/state 的 handoff 块）：每句都重写，
+    // 别拿上一句的判据冒充这一句的。
+    QString handoffCue_;    // 点名/交接/回指/干活/长句/定住，空 = 没当成任务
+    QString handoffAgent_;  // 真交出去的那个宿主，空 = 没交
 
     bool listening_ = false;
     bool recording_ = false;

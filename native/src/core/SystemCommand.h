@@ -30,6 +30,9 @@ bool needsConfirm(const QString &kind);
 QString category(const QString &kind);
 QString label(const SystemCommand &command);
 QString confirmPhrase(const QString &kind);
+// 「你会用语音干什么」的清单，直接从上面那张解析词表生成——桌宠的对话模型
+// 只有照着它答才不会编，硬抄一份文案迟早和真能听懂的词分叉。
+QString spokenList();
 // 「五十」「一百」「三十五」→ 数值；解不出或超出 0~100 返回 -1。
 int percentValue(const QString &text);
 

@@ -222,7 +222,7 @@
 | 完成提醒不抢前台 | `stop` 只气泡 + 语音，不调 `SetForegroundWindow` | `MainWindow.cpp` | 已实现 |
 | 气泡点击回跳 | 气泡带 `raise` 目标时可点；点了收起气泡并拉起对应进程窗口 | `VoicePet::bubbleOnly` / `PetBubble` / `AgentWindow::raise` | 已实现 |
 | 宿主探测与前置 | 按进程映像名枚举可见顶层窗口；支持 `alive` / `foregroundExe` / `foregroundAgentExe` / `raise` | `native/src/core/AgentWindow.*` | 已实现 |
-| 语音分流 | 对话模式下按本地关键词判断「干活 / 闲聊」：干活优先交给宿主 Agent，闲聊走自带 LLM | `VoicePet::handleUtterance` / `looksLikeTask` / `handOffToAgent` | 已实现 |
+| 语音分流 | 对话模式下按本地词表判「干活 / 闲聊」：命中判据（点名宿主 / 交给… / 刚才那句 / 干活动词 / 长句 ≥40）优先交给宿主 Agent，闲聊走自带 LLM | `VoicePet::handleUtterance` / `core/TaskCue::of` / `handOffToAgent` | 已实现 |
 | 目标选择 | 显式指定 > 说话时前台 Agent > 最近发通知的宿主 > 按常见宿主探测；`VoicePet::onlineAgentExe` 四级顺序已按此实现 | `VoicePet::onlineAgentExe` | 已实现（但最后一档仍靠 `knownExes()` 顺序，偏向 AI；菜单项显示的是裸 exe 名） |
 | 目标显式指定 | 桌宠右键「交给哪个 Agent」→「自动判断」+ 在跑宿主列表 + 「（没检测到在跑的 Agent）」禁用项，写回 `ui.agent_target` | `VoicePet.cpp:980-1005` | 已实现 |
 | 粘贴失败兜底 | 注入失败时复制到剪贴板，气泡提示「已复制，手动发一下」 | `VoicePet::handOffToAgent` | 已实现 |
@@ -260,7 +260,7 @@ Agent 宿主
 用户语音（对话模式 + 本地 ASR）
   └─ VoiceController::chatRequested
        └─ VoicePet::handleUtterance
-            ├─ looksLikeTask? ── 否 → 自带 LLM 对话
+            ├─ TaskCue::of 命中? ── 否 → 自带 LLM 对话
             └─ 是 → onlineAgentExe()
                  ├─ 前台就是目标 Agent → 立即粘贴 + 回车
                  └─ 否则 → raise → 180ms → 粘贴 + 回车（失败则复制）
@@ -284,7 +284,7 @@ Agent 宿主
 | P1 | 语音启动内置表 `workbuddy` 指向旧版 AUMID `WorkBuddy.WorkBuddy`，没有 WorkBuddy AI 条目 | 「打开 WorkBuddy」开的是旧版；AI 要说全名，靠开始菜单 `.lnk` 兜名 | `AppLauncher.cpp:431-434` |
 | P1 | `alive()` 要求「可见且有标题的窗口」 | 宿主收在托盘 / 后台运行时被判为不在线；语音不会分流过去，`raise` 也找不到窗口 | `AgentWindow.cpp:26-43,96-98` |
 | P1 | 同一进程多窗口时只取第一个可见窗口 | 多开项目 / 多会话可能拉错窗口 | `findAgentWindow` |
-| P2 | 任务 / 闲聊判定是固定正则 + 长度阈值，无用户覆盖 | 口述内容含「帮我 / 改一下」等词时可能被误送 Agent | `VoicePet::looksLikeTask` |
+| P2 | 任务 / 闲聊判定是固定词表（指向性 + 动词）+ 长度阈值，无用户覆盖 | 闲聊里出现「刚才 / 发给」会被派进 Agent 会话；反过来「列出…清单」这类没进词表的短句仍留在桌宠 | `core/TaskCue.cpp` |
 | P2 | 粘贴前固定等待 180ms | 慢机器上可能仍粘到旧窗口；快机器上白等 | `handOffToAgent` |
 | P2 | 插件 hook 依赖 PATH 里的 `node` | 宿主自带 node 但 PATH 没有时，hooks 静默失效 | README 前提说明 |
 | P2 | 双 WorkBuddy 没有自动化测试用例 | 回归只能靠手工 | `test/host.test.js` |
@@ -714,7 +714,7 @@ Agent 宿主
 ```
 说话 → 本地转写
   ├─ 空文本 → 忽略
-  ├─ 明显是任务（关键词或长度 ≥ 40）
+  ├─ 明显是任务（点名宿主 / 交给… / 刚才那句 / 关键词 / 长度 ≥ 40，见 core/TaskCue）
   │    ├─ 有可用 Agent → 交给 Agent
   │    └─ 无 Agent 但有 LLM → LLM 兜底
   └─ 闲聊

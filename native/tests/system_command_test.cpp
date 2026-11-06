@@ -261,11 +261,42 @@ void testSettingsGate() {
                                           volume));
 }
 
+// 「你会说什么」的清单必须和解析词表同源：清单里给的每个直说口令 parse() 都得
+// 认（有人手抄一份新文案、或从表里删了说法，这里就会红）。
+void testSpokenList() {
+    const QString list = SystemCommandText::spokenList();
+    static const char *kSpoken[] = {
+        "播放",   "暂停",     "播放暂停", "下一首",   "上一首",   "关屏幕",
+        "锁屏",   "睡眠",     "休眠",     "关机",     "重启",     "取消关机",
+        "静音",   "取消静音",
+    };
+    for (const char *spoken : kSpoken) {
+        const QString word = u8(spoken);
+        char name[96];
+        std::snprintf(name, sizeof(name), "list keeps spoken command [%s]",
+                      spoken);
+        check(name, list.contains(word) &&
+                        SystemCommandText::parse(word).matched);
+    }
+    check("list covers volume nouns",
+          list.contains(u8("音量")) && list.contains(u8("大声")));
+    check("list covers brightness nouns",
+          list.contains(u8("亮度")) && list.contains(u8("显示器")));
+    check("list covers spoken percent", list.contains(u8("百分之三十")));
+    check("list covers query", list.contains(u8("音量多少")));
+    check("list covers screen scope", list.contains(u8("主屏")));
+    check("list warns about confirm",
+          list.contains(u8("确认关机")) && list.contains(u8("危险")));
+    check("list does not invent capabilities",
+          !list.contains(u8("风扇")) && !list.contains(u8("蓝牙")));
+}
+
 int runOfflineTests() {
     testParser();
     testConfirm();
     testExecutorGate();
     testSettingsGate();
+    testSpokenList();
     std::printf(failures == 0 ? "\nALL PASS system\n" : "\n%d FAILED\n", failures);
     std::fflush(stdout);
     return failures == 0 ? 0 : 1;
@@ -370,6 +401,11 @@ int runLiveTests(int argc, char **argv) {
 int main(int argc, char **argv) {
     if (argc > 1 && QString::fromLocal8Bit(argv[1]) == QLatin1String("--live")) {
         return runLiveTests(argc, argv);
+    }
+    if (argc > 1 && QString::fromLocal8Bit(argv[1]) == QLatin1String("--list")) {
+        // 给验收用：把喂给对话模型的功能清单原样打出来，看它会不会念顺。
+        std::printf("%s\n", SystemCommandText::spokenList().toUtf8().constData());
+        return 0;
     }
     return runOfflineTests();
 }

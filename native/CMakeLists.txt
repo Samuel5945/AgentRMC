@@ -28,6 +28,10 @@ qt_add_executable(AgentRMCNative
     src/core/ChatText.h
     src/core/WorkItems.cpp
     src/core/WorkItems.h
+    src/core/SessionDispatch.cpp
+    src/core/SessionDispatch.h
+    src/core/UiDispatch.cpp
+    src/core/UiDispatch.h
     src/core/AgentWindow.cpp
     src/core/AgentWindow.h
     src/core/HostNewTask.cpp
@@ -323,6 +327,20 @@ add_executable(AgentRMCWorkItemTest
 target_include_directories(AgentRMCWorkItemTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(AgentRMCWorkItemTest PRIVATE Qt6::Core)
 target_compile_options(AgentRMCWorkItemTest PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
+
+add_executable(AgentRMCDispatchTest
+    tests/dispatch_test.cpp
+    src/core/SessionDispatch.cpp
+    src/core/SessionDispatch.h
+    src/core/UiDispatch.cpp
+    src/core/UiDispatch.h
+    src/core/AgentWindow.cpp
+    src/core/AgentWindow.h
+)
+target_include_directories(AgentRMCDispatchTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(AgentRMCDispatchTest PRIVATE Qt6::Core shell32 ole32
+    user32 UIAutomationCore.lib)
+target_compile_options(AgentRMCDispatchTest PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
 
 add_executable(AgentRMCChatTextTest
     tests/chat_text_test.cpp

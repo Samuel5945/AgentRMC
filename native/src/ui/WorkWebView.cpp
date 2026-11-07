@@ -923,10 +923,20 @@ QString WorkWebView::htmlFor(const QString &stateJson) const {
 <div id="guide" class="page" hidden>
   <div class="guide" id="guBody"></div>
 </div>
-<div class="foot" id="foot">
+<div class="foot" id="foot" style="flex-wrap:wrap">
   <span class="hint" id="hint"></span>
   <button class="btn" id="raise" disabled>回到 Agent</button>
   <button class="btn primary" id="ack" disabled>标为已处理</button>
+  <span id="dpWrap" style="display:none;width:100%;gap:8px;align-items:center;
+    margin-top:6px;flex-wrap:wrap">
+    <input id="dpText" placeholder="派回这条会话（WorkBuddy 系走桌面 UIA，需前台、全局串行）"
+      style="flex:1 1 240px;min-width:0;font-size:var(--f11);color:var(--text);
+      background:var(--raised);border:1px solid var(--line);border-radius:8px;
+      padding:6px 10px">
+    <button class="btn" id="dpSend" style="flex:0 0 auto;white-space:nowrap">派回会话</button>
+    <span class="hint" id="dpNotice"
+      style="flex:1 1 100%;white-space:normal;line-height:1.4"></span>
+  </span>
 </div>
 </div>
 </div>
@@ -991,6 +1001,12 @@ function waitText(it){if(!it.attention_since) return '';
   return ' · 等 '+Math.floor(m/1440)+' 天';}
 function isStale(it){return it.stage==='working' && it.updated_at &&
   (now-Date.parse(it.updated_at))>1800000;}
+// ISO(UTC) → 本地 HH:mm：updated_at/last_event_at 是带 Z 的 UTC 串，直接
+// slice(11,16) 抠出来的是 UTC 钟点（本机 UTC+8，17:40 的活会显示成 09:40，
+// 被当成早上没动的旧账）。排序和「等 X 分」用的是绝对时刻，不受影响。
+function hhmm(iso){const t=Date.parse(iso||'');if(isNaN(t)) return '';
+  const d=new Date(t);
+  return String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0');}
 function rank(s){return s==='needs-me'?0:s==='review'?1:s==='working'?2:3;}
 // 必须 post 对象：postMessage(JSON.stringify(obj)) 传的是字符串，
 // C++ 侧 get_WebMessageAsJson 拿到的是带引号的字符串字面量，.object() 解出空，
@@ -1065,7 +1081,7 @@ function renderHealth(){
   const h=STATE.health||{};
   const ok=!!h.bridge;
   const n=WORKERS.filter(w=>w.alive).length;
-  const last=(h.last_event_at||'').slice(11,16);
+  const last=hhmm(h.last_event_at);
   $('health').innerHTML='<span style="color:'+(ok?'#3fb950':'#f0883e')+'">●</span> '+
     (ok?'桥接正常':'桥接未启动')+' · '+n+' 个 Worker'+
     (last?' · 最近 '+last:'');
@@ -1081,7 +1097,7 @@ function row(it){
   stage.style.color=stageColor(it);stage.textContent=stageLabel(it);
   const wh=document.createElement('span');wh.className='where';wh.textContent=where(it);
   const time=document.createElement('span');time.className='time';
-  time.textContent=(it.updated_at||'').slice(11,16)+waitText(it);
+  time.textContent=hhmm(it.updated_at)+waitText(it);
   l1.append(name,stage,wh,time);
   const l2=document.createElement('div');l2.className='l2';l2.textContent=it.message||'';
   el.append(bar,l1,l2);
@@ -1096,6 +1112,16 @@ function renderFoot(){
     : '选中一条待办后可操作 · 双击打开 Agent（没开着会先启动）并销账';
   $('raise').disabled=!selItem;
   $('ack').disabled=!selItem;
+  // 定向派发只对有会话身份且宿主已接通道（Qoder 系）的待办开放。
+  const dpOk=!!(selItem && selItem.session_id &&
+    ((STATE.dispatch||{}).supported||[]).includes(selItem.agent_exe));
+  $('dpWrap').style.display=dpOk?'flex':'none';
+  $('dpSend').disabled=!dpOk;
+  const d=STATE.dispatch||{};
+  // 通知只跟当次派发的那张卡走，别把上一条的拒绝原因挂在新选中的卡下面。
+  $('dpNotice').textContent=(d.noticeId && d.noticeId!==selected)?'':(d.notice||'');
+  if(dpOk && d.draftId===selected && d.draftText && !$('dpText').value)
+    $('dpText').value=d.draftText;
 }
 function renderEvents(){
   $('evCount').textContent=EVENTS.length+' 条';
@@ -1502,6 +1528,15 @@ $('clear').onclick=()=>post('clear');
 $('evClear').onclick=()=>post('clearLog');
 $('raise').onclick=()=>post('open',selected);
 $('ack').onclick=()=>post('ack',selected);
+function sendDispatch(){
+  const t=$('dpText').value.trim();
+  if(!t||!selected) return;
+  postObj({cmd:'dispatch',id:selected,text:t});
+  $('dpText').value='';
+}
+$('dpSend').onclick=sendDispatch;
+$('dpText').addEventListener('keydown',e=>{
+  if(e.key==='Enter'){e.preventDefault();sendDispatch();}});
 $('workGuide').onclick=()=>{activeTab=5;render();};
 // 系统/映射/应用页的动作按钮：状态机全在 Qt 侧，这里只发命令。
 $('sysRefresh').onclick=()=>postObj({cmd:'sysRefresh'});
@@ -1515,6 +1550,7 @@ $('apRescan').onclick=()=>postObj({cmd:'appRescan'});
 document.addEventListener('keydown',e=>{
   // 快捷键只属于待办页：Qt 侧事件流是 NoSelection/NoFocus，别的页也不接。
   if(activeTab!==0 || !selected) return;
+  if(e.target && e.target.tagName==='INPUT') return;
   if(e.key==='Enter'){post('open',selected);}
   else if(e.key==='Delete'){post('ack',selected);}
 });

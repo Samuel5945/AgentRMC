@@ -23,6 +23,7 @@
 #include "core/InputEngine.h"
 #include "core/ModelImport.h"
 #include "core/Presets.h"
+#include "core/SessionDispatch.h"
 #include "core/ThemeManager.h"
 #include "core/Updater.h"
 #include "core/VoiceController.h"
@@ -388,6 +389,34 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
     QDir().mkpath(workDir);
     workItems_ = std::make_unique<WorkItemStore>(workDir + "/work-items.json");
     workItems_->load();
+    dispatch_ = new SessionDispatch(this);
+    connect(dispatch_, &SessionDispatch::receipt, this,
+            [this](const QString &dispatchId, const QString &exe,
+                   const QString &sid, const QString &proj, const QString &text) {
+                if (workItems_ != nullptr) {
+                    // 回执落账＝这件事真的送到那条会话了：工单转进行中。
+                    workItems_->upsert(QStringLiteral("dispatch"), exe, sid, proj,
+                                       QStringLiteral("progress"),
+                                       AgentWindow::displayName(exe), text, exe);
+                }
+                dispatchNotice_ =
+                    QStringLiteral("会话 %1 回执已落账").arg(sid.left(8));
+                dispatchNoticeId_ = itemIdForSession(sid);
+                appendEvent(QStringLiteral("status"), QString(), QString(),
+                            QStringLiteral("派发回执：%1… 会话 %2")
+                                .arg(dispatchId.left(8), sid.left(8)), 0);
+                refreshWorkItems();
+            });
+    connect(dispatch_, &SessionDispatch::failed, this,
+            [this](const QString &dispatchId, const QString &reason) {
+                dispatchNotice_ = reason;
+                dispatchNoticeId_ =
+                    itemIdForSession(dispatchSessionById_.value(dispatchId));
+                appendEvent(QStringLiteral("error"), QString(), QString(),
+                            QStringLiteral("派发失败：%1… %2")
+                                .arg(dispatchId.left(8), reason), 0);
+                refreshWorkItems();
+            });
     spoolPath_ = workDir + "/pending-events.jsonl";
     startedAt_ = QDateTime::currentDateTimeUtc();
     // 主题在窗口构建前应用：渲染 QSS + 载入 ui.theme 指向的主题。
@@ -2536,8 +2565,25 @@ void MainWindow::handleNotify(const QString &kind, const QString &title,
         (kind == QStringLiteral("permission") ||
          kind == QStringLiteral("question") ||
          kind == QStringLiteral("progress") || kind == QStringLiteral("stop"))) {
+        QString cardMessage = message;
+        if (kind == QStringLiteral("stop") && !sessionId.isEmpty()) {
+            // 通用收尾文案（"做完了，等你回来看"）没有信息量：换成该会话最后
+            // 一条回复正文，待办卡直接能读结果；要人动手的文案保留原语义。
+            const QString reply = SessionDispatch::lastReply(
+                SessionDispatch::configHomeFor(raise), sessionId);
+            const bool actionable =
+                message.startsWith(QStringLiteral("等你回话")) ||
+                message.startsWith(QStringLiteral("等你选方案")) ||
+                message.startsWith(QStringLiteral("等你确认")) ||
+                message.startsWith(QStringLiteral("模型出错"));
+            if (!reply.isEmpty() && !actionable) {
+                cardMessage = reply;
+                appendEvent(QStringLiteral("status"), QString(), QString(),
+                            QStringLiteral("会话回复：%1").arg(reply), 0);
+            }
+        }
         workItems_->upsert(QStringLiteral("hook"), raise, sessionId, project,
-                           kind, title, message, raise, eventId);
+                           kind, title, cardMessage, raise, eventId);
         refreshWorkItems();
     }
     if (replay) {
@@ -2771,6 +2817,28 @@ QJsonObject MainWindow::webThemeJson() {
 
 // WebView2 版外壳要的整份状态：待办队列 + Worker 列表 + 健康行 + 主题 + 事件流
 // + 系统/按键映射/应用/引导四页，一次推过去。
+QString MainWindow::itemIdForSession(const QString &sessionId) const {
+    if (workItems_ == nullptr || sessionId.isEmpty()) {
+        return QString();
+    }
+    for (const WorkItem &it : workItems_->items()) {
+        if (it.sessionId == sessionId) {
+            return it.id;
+        }
+    }
+    return QString();
+}
+
+QJsonArray MainWindow::supportedDispatchExes() const {
+    QJsonArray out;
+    for (const QString &exe : AgentWindow::knownExes()) {
+        if (!SessionDispatch::configHomeFor(exe).isEmpty()) {
+            out.append(exe);
+        }
+    }
+    return out;
+}
+
 QString MainWindow::webShellState() {
     QJsonObject work;
     if (workItems_ != nullptr) {
@@ -2811,6 +2879,12 @@ QString MainWindow::webShellState() {
              {QStringLiteral("recording"), voiceRecording_},
              {QStringLiteral("maximized"), isMaximized() || isFullScreen()}}},
         {QStringLiteral("left"), leftShellState()},
+        {QStringLiteral("dispatch"),
+         QJsonObject{{QStringLiteral("notice"), dispatchNotice_},
+                     {QStringLiteral("noticeId"), dispatchNoticeId_},
+                     {QStringLiteral("draftId"), dispatchDraftId_},
+                     {QStringLiteral("draftText"), dispatchDraftText_},
+                     {QStringLiteral("supported"), supportedDispatchExes()}}},
     };
     return QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Compact));
 }
@@ -3095,6 +3169,43 @@ void MainWindow::handleWebAction(const QJsonObject &action) {
             refreshWorkItems();
         } else if (cmd == QStringLiteral("clear")) {
             workItems_->clearFinished();
+            refreshWorkItems();
+        } else if (cmd == QStringLiteral("dispatch")) {
+            const QString text =
+                action.value(QStringLiteral("text")).toString().trimmed();
+            const WorkItem *item = nullptr;
+            for (const WorkItem &it : workItems_->items()) {
+                if (it.id == id) {
+                    item = &it;
+                    break;
+                }
+            }
+            QString reason;
+            QString dispatchId;
+            if (item == nullptr || text.isEmpty()) {
+                reason = QStringLiteral("选中待办或派发文案为空");
+            } else if (dispatch_->dispatch(item->agentExe, item->sessionId,
+                                           item->project, text, &reason,
+                                           &dispatchId)) {
+                dispatchSessionById_.insert(dispatchId, item->sessionId);
+                dispatchNotice_ = QStringLiteral("已派往会话 %1，等回执…")
+                                      .arg(item->sessionId.left(8));
+                dispatchNoticeId_ = id;
+                dispatchDraftId_.clear();
+                dispatchDraftText_.clear();
+                appendEvent(QStringLiteral("status"), QString(), QString(),
+                            QStringLiteral("定向派发：%1 → 会话 %2")
+                                .arg(text.left(40), item->sessionId.left(8)), 0);
+            }
+            if (!reason.isEmpty()) {
+                // 裁决 6：证明不了就不发；草稿留在页面输入框里别丢。
+                dispatchNotice_ = reason;
+                dispatchNoticeId_ = id;
+                dispatchDraftId_ = id;
+                dispatchDraftText_ = text;
+                appendEvent(QStringLiteral("error"), QString(), QString(),
+                            QStringLiteral("定向派发未发：%1").arg(reason), 0);
+            }
             refreshWorkItems();
         }
     }

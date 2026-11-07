@@ -16,6 +16,7 @@
 
 class QCloseEvent;
 class QAction;
+class SessionDispatch;
 class QComboBox;
 class QDragEnterEvent;
 struct UpdateInfo;
@@ -172,11 +173,20 @@ private:
     void onVoiceTranscribed(const QString &text, int costMs);
     // POST /command：宿主 Agent 调系统控制，与语音走同一套闸门。
     QJsonObject onBridgeCommand(const QJsonObject &body);
+    QJsonArray supportedDispatchExes() const;
+    QString itemIdForSession(const QString &sessionId) const;
     void setVoiceStatus(const QString &detail, const QString &color,
                         bool showTranscript);
 
     std::unique_ptr<ProfileStore> store_;
     std::unique_ptr<WorkItemStore> workItems_;
+    // 第 3 批定向派发路由（Qoder 系 CLI 通道）；拒绝原因/草稿回显给外壳。
+    SessionDispatch *dispatch_ = nullptr;
+    QString dispatchNotice_;
+    QString dispatchNoticeId_;
+    QString dispatchDraftId_;
+    QString dispatchDraftText_;
+    QHash<QString, QString> dispatchSessionById_;
     // 右半区默认交给 WebView2 渲染（AGENTRMC_WORKWEB=0 或运行库缺失时回退 Qt 页签）。
     WorkWebView *workWeb_ = nullptr;
     // 外壳版事件流：Qt 侧 logList_ 只有合成好的文本，这里多存一份 kind，

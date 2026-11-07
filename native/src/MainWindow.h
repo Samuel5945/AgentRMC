@@ -33,6 +33,7 @@ class QToolButton;
 class QWidget;
 class AgentBridge;
 class InputEngine;
+class WorkWebView;
 class AppPage;
 class KeymapPage;
 class GuideDialog;
@@ -90,6 +91,11 @@ private:
     // 双击一行：回到对应 Agent；「等你处理 / 待验收」这种顺手标为已处理
     // （点进去看＝已经看过，提醒不该再挂着），进行中不动。
     void openWorkItem(const QString &id);
+    // WebView2 外壳：推一份完整状态过去，收回来的动作在这里分发。
+    QString webShellState();
+    // 外壳页的配色：把当前主题的 token 翻成 CSS 写法（含字号倍率）。
+    QJsonObject webThemeJson();
+    void handleWebAction(const QJsonObject &action);
     QString selectedWorkId() const;
     QJsonArray workersArray() const;
     QString workersJson() const;
@@ -165,6 +171,8 @@ private:
 
     std::unique_ptr<ProfileStore> store_;
     std::unique_ptr<WorkItemStore> workItems_;
+    // 原型开关（AGENTRMC_WORKWEB=1）：待办页交给 WebView2 渲染时非空。
+    WorkWebView *workWeb_ = nullptr;
     // 语音命令与 HTTP /command 共用这一份系统控制执行器。
     std::unique_ptr<WinSystemControl> system_;
     // pet_work_update 的播报节流：Agent 可能连着报几次 blocked，别喊成一串。

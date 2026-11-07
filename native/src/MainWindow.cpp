@@ -11,6 +11,7 @@
 #include "ui/VoiceSettingsDialog.h"
 #include "ui/DispatchPicker.h"
 #include "ui/VoiceWindow.h"
+#include "ui/WorkWebView.h"
 #include "ui/WaveformButton.h"
 
 #include "core/AgentBridge.h"
@@ -98,6 +99,22 @@ namespace {
 // 文案本身在 pluginupgrade::installSentence()，那儿有测试盯着占位符替换。
 QString agentBridgeInstallSentence() {
     return pluginupgrade::installSentence(QCoreApplication::applicationDirPath());
+}
+
+// 调色板 token → CSS 颜色串。注意不能直接把 palette 里的字符串丢给网页：
+// QSS 的 rgba(r,g,b,26) 里 alpha 是 0-255，CSS 要 0-1，照抄过去全是全透明。
+QString cssColor(const QColor &color) {
+    if (!color.isValid()) {
+        return QString();
+    }
+    if (color.alpha() == 255) {
+        return color.name(QColor::HexRgb);
+    }
+    return QStringLiteral("rgba(%1,%2,%3,%4)")
+        .arg(color.red())
+        .arg(color.green())
+        .arg(color.blue())
+        .arg(color.alphaF(), 0, 'f', 3);
 }
 
 class TitleBar final : public QWidget {
@@ -594,6 +611,23 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
             });
     tabs_->addTab(appPage_, QString::fromUtf8("应用"));
     tabs_->addTab(buildGuidePage(), QString::fromUtf8("使用引导"));
+    // 原型：整个右半区（页签栏 + 页面）交给一个 WebView2 画，Qt 只留左侧语音面板。
+    // 不塞进 QTabWidget：布局那一步把它直接放到 grid 的 1 号位，Qt 页签整块藏起来。
+    if (!qgetenv("AGENTRMC_WORKWEB").isEmpty() && WorkWebView::runtimeAvailable()) {
+        auto *shell = new WorkWebView;
+        shell->setSources([this] { return webShellState(); },
+                          [this](const QJsonObject &action) { handleWebAction(action); });
+        shell->setResourceRoot(ThemeManager::themesRoot());
+        workWeb_ = shell;
+        // 换主题 / 拖外观滑块（含字号倍率）都只重推一次状态：页面不重载，
+        // CSS 变量自己换掉，选中态和滚动位置不动。
+        connect(&ThemeManager::instance(), &ThemeManager::themeChanged, this,
+                [this] {
+                    if (workWeb_ != nullptr) {
+                        workWeb_->refresh();
+                    }
+                });
+    }
     connect(tabs_, &QTabWidget::currentChanged, this, [this](int index) {
         if (remotePanel_ != nullptr) {
             const int keymapIndex =
@@ -607,11 +641,20 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
     // 打开先看待办：有人等你确认才是需要你回来处理的事；没有待办时才落到按键映射。
     const bool hasAttention = workItems_ != nullptr &&
                               workItems_->attentionCount() > 0;
-    tabs_->setCurrentIndex(hasAttention || keymapPage_ == nullptr
-                               ? 0
-                               : tabs_->indexOf(keymapPage_));
+    if (workWeb_ == nullptr) {
+        tabs_->setCurrentIndex(hasAttention || keymapPage_ == nullptr
+                                   ? 0
+                                   : tabs_->indexOf(keymapPage_));
+    }
     refreshWorkItems();
-    grid->addWidget(tabs_, 1);
+    if (workWeb_ != nullptr) {
+        // 外壳版：整个右半区就是那一个 WebView2，Qt 的页签整块藏起来
+        // （页签在 HTML 里画）。不放进 QTabWidget 里，省得被 currentIndex 拉回去。
+        tabs_->hide();
+        grid->addWidget(workWeb_, 1);
+    } else {
+        grid->addWidget(tabs_, 1);
+    }
 
     outer->addWidget(body, 1);
 
@@ -1287,6 +1330,18 @@ QWidget *MainWindow::buildWorkPage() {
 }
 
 void MainWindow::refreshWorkItems() {
+    if (workWeb_ != nullptr) {
+        // WebView2 版：页面自己排版，这里只推一次数据 + 同步页签上的计数。
+        workWeb_->refresh();
+        if (tabs_ != nullptr && tabs_->count() > 0 && workItems_ != nullptr) {
+            const int attention = workItems_->attentionCount();
+            tabs_->setTabText(
+                0, attention > 0
+                       ? QString::fromUtf8("待我处理 (%1)").arg(attention)
+                       : QString::fromUtf8("待我处理"));
+        }
+        return;
+    }
     if (workList_ == nullptr || workItems_ == nullptr) {
         return;
     }
@@ -2564,6 +2619,87 @@ bool MainWindow::bringToAgent(const QString &id) {
 
 void MainWindow::raiseSelectedWork() {
     raiseWorkItem(selectedWorkId());
+}
+
+// 外壳页的配色：只把 ThemeManager 已经解析好的 token 翻译成 CSS 能吃的写法。
+QJsonObject MainWindow::webThemeJson() {
+    // token 名与 style.qss 里的 @token@ 一致：网页不许自带一套配色，
+    // 浅色/深色/美术主题（半透明卡片）都从这一份走。
+    static const char *const kTokens[] = {
+        "bg",   "card.bg",   "card.bg2",  "text",      "text.soft",
+        "text.dim", "muted", "muted.2",   "ghost",     "faint",
+        "line", "raised",    "accent",    "accent.hover", "on.accent",
+        "danger", "warn",    "w6",        "w8",        "w10",
+        "w14",  "w16",       "w18",       "w30",       "a26",
+        "a36",  "a64"};
+    QJsonObject theme;
+    ThemeManager &tm = ThemeManager::instance();
+    for (const char *token : kTokens) {
+        const QString value = cssColor(tm.color(QString::fromLatin1(token)));
+        if (!value.isEmpty()) {
+            theme.insert(QString::fromLatin1(token), value);
+        }
+    }
+    theme.insert(QStringLiteral("fontScale"), tm.fontScale());
+    // 首帧兜底色：背景图要等 Chromium 解码，先垫一层不透明纯色，别闪白。
+    QColor base = tm.color(QStringLiteral("bg"));
+    base.setAlpha(255);
+    theme.insert(QStringLiteral("base"), cssColor(base));
+    // 美术主题的插画走虚拟域名（素材目录只读映射），不把 3MB PNG 编进状态里。
+    const QString art = tm.current().mainBackground;
+    if (!art.isEmpty()) {
+        const QString rel = QDir(ThemeManager::themesRoot()).relativeFilePath(art);
+        if (!rel.isEmpty() && !QDir::isAbsolutePath(rel) &&
+            !rel.startsWith(QStringLiteral("../"))) {
+            theme.insert(QStringLiteral("image"),
+                         QStringLiteral("https://agentrmc.theme/") + rel);
+        }
+    }
+    // 压暗纱和 BackdropRoot::paintEvent 同一个公式：深色压黑、浅色压白。
+    const QColor veil = tm.isLightActive()
+                            ? QColor(255, 255, 255, int(255 * tm.backdropDim()))
+                            : QColor(11, 14, 20, int(255 * tm.backdropDim()));
+    theme.insert(QStringLiteral("veil"), cssColor(veil));
+    return theme;
+}
+
+// WebView2 版外壳要的整份状态：待办队列 + Worker 列表 + 健康行 + 主题，一次推过去。
+QString MainWindow::webShellState() {
+    QJsonObject work;
+    if (workItems_ != nullptr) {
+        work = QJsonDocument::fromJson(workItems_->toJson().toUtf8()).object();
+    }
+    const QJsonObject root{
+        {QStringLiteral("work"), work},
+        {QStringLiteral("workers"), workersArray()},
+        {QStringLiteral("health"),
+         QJsonDocument::fromJson(healthJson().toUtf8()).object()},
+        {QStringLiteral("theme"), webThemeJson()},
+    };
+    return QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Compact));
+}
+
+// 页面上的按钮/双击回到这里：全部转给既有实现，不在页面里另起一套状态机。
+void MainWindow::handleWebAction(const QJsonObject &action) {
+    const QString cmd = action.value(QStringLiteral("cmd")).toString();
+    const QString id = action.value(QStringLiteral("id")).toString();
+    if (cmd == QStringLiteral("open")) {
+        openWorkItem(id);
+        return;
+    }
+    if (workItems_ == nullptr) {
+        return;
+    }
+    if (cmd == QStringLiteral("ack")) {
+        if (workItems_->ack(id)) {
+            appendEvent(QStringLiteral("status"), QString(), QString(),
+                        QString::fromUtf8("待办已标记完成"), 0);
+        }
+        refreshWorkItems();
+    } else if (cmd == QStringLiteral("clear")) {
+        workItems_->clearFinished();
+        refreshWorkItems();
+    }
 }
 
 void MainWindow::openWorkItem(const QString &id) {

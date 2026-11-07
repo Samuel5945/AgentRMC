@@ -83,6 +83,8 @@ qt_add_executable(AgentRMCNative
     src/core/SpeechText.h
     src/core/TaskCue.cpp
     src/core/TaskCue.h
+    src/ui/WorkWebView.cpp
+    src/ui/WorkWebView.h
     src/core/ThemeManager.cpp
     src/core/ThemeManager.h
     src/ui/AppPage.cpp
@@ -132,6 +134,10 @@ qt_add_executable(AgentRMCNative
 
 set_target_properties(AgentRMCNative PROPERTIES WIN32_EXECUTABLE TRUE)
 target_include_directories(AgentRMCNative PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+# 原型用：WebView2 的 COM 接口头（从 nuget 解到本地 .webview2-sdk/，不进仓库）。
+# loader 是运行时 LoadLibrary 取的，不链接 .lib，所以 Release 目录里不会多出 DLL。
+target_include_directories(AgentRMCNative PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/.webview2-sdk/build/native/include)
 # powrprof = 睡眠/休眠，wbemuuid + oleaut32 = 笔记本背光的 WMI 回退。
 set(AGENTRMC_SYSTEM_LIBS powrprof wbemuuid oleaut32)
 target_link_libraries(AgentRMCNative PRIVATE Qt6::Widgets Qt6::Network winmm

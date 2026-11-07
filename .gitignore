@@ -54,3 +54,6 @@ themes-candidate/
 
 # ---------- 背景重绘/浅色生成的临时 scratch（对比图、掩膜、备份、脚本）----------
 tmp_bg_fix/
+
+# ---------- WebView2 原型：从 nuget 解出的 SDK（头 + loader，不入库）----------
+native/.webview2-sdk/

@@ -471,6 +471,174 @@ await check('插件入口可读: cordis.patch.yml 的 name 与 package.json 对�
   assert.ok(manifest.exports['./icon'], 'icon 要导出');
 });
 
+// —— 定向派发通道：真 HTTP 轮询取件 → followup 注入 → ack 回执 ——
+async function waitUntil(predicate, ms = 6000) {
+  const deadline = Date.now() + ms;
+  while (Date.now() < deadline) {
+    if (predicate()) return true;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  return false;
+}
+
+/** 假原生端：/dispatch/pending 一次性吐完 items（模拟 take-once），/dispatch/ack 记账。
+ * 响应必须带 Connection: close——原生端 AgentBridge 就是这么回的；不关的话 node
+ * 全局 agent 会池化连接，server.close() 要等 5s 空闲超时，测试被拖死。 */
+function makeDispatchServer(pendingItems) {
+  const seen = { pendingUrls: [], acks: [] };
+  const queue = pendingItems.slice();
+  const server = http.createServer((req, res) => {
+    let body = '';
+    req.on('data', (chunk) => {
+      body += chunk;
+    });
+    req.on('end', () => {
+      res.setHeader('Connection', 'close');
+      if (req.url.startsWith('/dispatch/pending')) {
+        seen.pendingUrls.push(req.url);
+        res.setHeader('Content-Type', 'application/json');
+        res.end(JSON.stringify(queue.splice(0)));
+        return;
+      }
+      if (req.url.startsWith('/dispatch/ack')) {
+        seen.acks.push(JSON.parse(body || '{}'));
+        res.end('{"ok":true}');
+        return;
+      }
+      res.end('{}');
+    });
+  });
+  return { server, seen, queue };
+}
+
+/** 给假 ctx 补一个 agents 服务（真实插件从 ctx.get('agents') 拿活表）。 */
+function applyWithAgents(agents, config) {
+  const stub = makeCtx();
+  const innerGet = stub.ctx.get;
+  stub.ctx.get = (service) => (service === 'agents' ? agents : innerGet(service));
+  apply(stub.ctx, { registerSkill: false, registerTools: false, ...config });
+  return stub;
+}
+
+await check('派发通道: 取件 → followup 注入（UserMessage 与 ACP 同形）→ ack ok', async () => {
+  const sid = 'session-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
+  const item = {
+    dispatch_id: 'd-1',
+    session_id: sid,
+    project: 'D:/repo',
+    text: '定向派发探针 MARK-1：只回复收到',
+  };
+  const injected = [];
+  const agents = {
+    get: (id) => (id === sid ? { followup: (m) => injected.push(m) } : undefined),
+  };
+  const { server, seen } = makeDispatchServer([item]);
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  try {
+    applyWithAgents(agents, { port: server.address().port });
+    assert.ok(await waitUntil(() => seen.acks.length > 0), 'ack 未到');
+    assert.ok(
+      seen.pendingUrls[0].includes('exe=DeepSeek%20Harness.exe'),
+      '取件要带自己的映像名，实际 ' + seen.pendingUrls[0],
+    );
+    assert.strictEqual(injected.length, 1);
+    assert.strictEqual(injected[0].role, 'user');
+    assert.strictEqual(injected[0].source.kind, 'user');
+    assert.strictEqual(injected[0].content[0].type, 'text');
+    assert.strictEqual(injected[0].content[0].text, item.text);
+    assert.ok(injected[0].id, 'UserMessage 要有稳定 id');
+    assert.strictEqual(seen.acks[0].dispatch_id, 'd-1');
+    assert.strictEqual(seen.acks[0].ok, true);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+await check('派发通道: 会话不在活表 / agents 不可达 → ack ok:false 带原因', async () => {
+  // 一台 server 撑两个场景（批量两条走第一个实例；agents 不可达换新实例，
+  // 后续 items 由 queue 补进）。不再关了重开：池化 socket 的关-开序列会拖死测试。
+  const { server, seen, queue } = makeDispatchServer([
+    { dispatch_id: 'd-2', session_id: 'session-missing', project: '', text: 'x' },
+    { dispatch_id: 'd-3', session_id: 'session-too', project: '', text: 'y' },
+  ]);
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const port = server.address().port;
+  try {
+    // 实例 A：有 agents 服务但目标不在活表 → 两条都拒。
+    const withAgents = makeCtx();
+    const innerGet = withAgents.ctx.get;
+    withAgents.ctx.get = (service) =>
+      service === 'agents' ? { get: () => undefined } : innerGet(service);
+    apply(withAgents.ctx, {
+      port,
+      registerSkill: false,
+      registerTools: false,
+    });
+    assert.ok(await waitUntil(() => seen.acks.length >= 2), 'ack 未到');
+    assert.deepStrictEqual(
+      seen.acks.map((ack) => ack.dispatch_id),
+      ['d-2', 'd-3'],
+      '一次取件的两条要逐条 ack',
+    );
+    for (const ack of seen.acks) {
+      assert.strictEqual(ack.ok, false);
+      assert.ok(/不在活表/.test(ack.error), ack.error);
+    }
+    // 实例 B：连 agents 服务都拿不到。先把 A 的轮询器停掉（effect disposer =
+    // clearInterval），不然下一条 items 会被 A 抢先消费、报错文本对不上。
+    for (const dispose of withAgents.effects) dispose();
+    queue.push({ dispatch_id: 'd-4', session_id: 'session-x', project: '', text: 'z' });
+    apply(makeCtx().ctx, {
+      port,
+      registerSkill: false,
+      registerTools: false,
+    });
+    assert.ok(await waitUntil(() => seen.acks.length >= 3), 'ack B 未到');
+    assert.strictEqual(seen.acks[2].dispatch_id, 'd-4');
+    assert.strictEqual(seen.acks[2].ok, false);
+    assert.ok(/agents 服务不可达/.test(seen.acks[2].error), seen.acks[2].error);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+await check('派发通道: followup 抛错 → ack ok:false 带原因，不炸轮询', async () => {
+  const agents = {
+    get: () => ({
+      followup: () => {
+        throw new Error('driver disposed');
+      },
+    }),
+  };
+  const { server, seen } = makeDispatchServer([
+    { dispatch_id: 'd-5', session_id: 'session-boom', project: '', text: 'boom' },
+  ]);
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  try {
+    applyWithAgents(agents, { port: server.address().port });
+    assert.ok(await waitUntil(() => seen.acks.length > 0), 'ack 未到');
+    assert.strictEqual(seen.acks[0].ok, false);
+    assert.ok(/followup 被拒/.test(seen.acks[0].error), seen.acks[0].error);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+await check('派发通道: dispatch=false 不轮询（关开关就该安静）', async () => {
+  const { server, seen } = makeDispatchServer([]);
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  try {
+    applyWithAgents({ get: () => undefined }, {
+      port: server.address().port,
+      dispatch: false,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 2500));
+    assert.deepStrictEqual(seen.pendingUrls, [], '关掉的通道不该发取件请求');
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
 fs.rmSync(SPOOL_ROOT, { recursive: true, force: true });
 
 const total = passed + failures.length;

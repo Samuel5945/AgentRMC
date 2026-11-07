@@ -21,6 +21,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
 import { createBridge, resolveSpoolDir } from './lib/bridge.js';
@@ -51,6 +52,8 @@ const DEFAULTS = {
   // 注册 pet_* 工具与 agentrmc-pet skill。
   registerTools: true,
   registerSkill: true,
+  // 定向派发通道：轮询原生端取件 → agent.followup() 注入 → ack 回执。
+  dispatch: true,
   // 只打印将要发送的 payload，不真发（排查用；与 AGENTRMC_DRY_RUN=1 等价）。
   dryRun: false,
 };
@@ -109,6 +112,7 @@ function normalizeConfig(raw) {
     speakFinalReply: asBool(input.speakFinalReply, DEFAULTS.speakFinalReply),
     registerTools: asBool(input.registerTools, DEFAULTS.registerTools),
     registerSkill: asBool(input.registerSkill, DEFAULTS.registerSkill),
+    dispatch: asBool(input.dispatch, DEFAULTS.dispatch),
     dryRun,
   };
 }
@@ -609,6 +613,96 @@ export function apply(ctx, rawConfig) {
       }
     } catch (error) {
       warn('skill registration skipped: ' + (error && error.message));
+    }
+  }
+
+  // —— 定向派发通道（2026-11-07 接线）：原生端下发 → 本插件轮询取件 →
+  // agent.followup() 注入 → ack 回执。followup 同步落 durable inbox，ack ok
+  // 就是「确实到了那条会话」的回执（与 WorkBuddy 的 jsonl user 行同级证明）；
+  // 守卫在取件后：agents.get(session_id) 命中才注入——证明不了目标就不发，
+  // 拒绝原因走 ack ok:false，原生端按派发失败上卡（裁决 6）。
+  let dispatchBusy = false;
+  let dispatchLogAt = 0;
+  if (config.dispatch && typeof ctx.get === 'function') {
+    const pollDispatches = async () => {
+      if (dispatchBusy) return;
+      dispatchBusy = true;
+      try {
+        const res = await bridge.get(
+          '/dispatch/pending?exe=' + encodeURIComponent(config.raiseExe || ''),
+        );
+        if (res.status !== 200) return; // 旧原生端没有这条路由：安静跳过
+        let items;
+        try {
+          items = JSON.parse(res.body || '[]');
+        } catch {
+          return;
+        }
+        if (!Array.isArray(items) || items.length === 0) return;
+        const agents = ctx.get('agents');
+        for (const item of items) {
+          const dispatchId = String((item && item.dispatch_id) || '');
+          const sessionId = String((item && item.session_id) || '');
+          const text = String((item && item.text) || '');
+          let error = '';
+          if (!agents || typeof agents.get !== 'function') {
+            error = 'agents 服务不可达（ctx 拿不到，DSH 版本不匹配？）';
+          } else if (!dispatchId || !sessionId || !text) {
+            error = '取件缺字段（dispatch_id/session_id/text）';
+          } else {
+            const agent = agents.get(sessionId);
+            if (!agent || typeof agent.followup !== 'function') {
+              error =
+                '会话 ' + sessionId.slice(0, 13) + '… 不在活表里（未打开），未注入';
+            } else {
+              // 手搓 UserMessage，与 ACP 桥同形（kind:'user' 源 + 单 text 块），
+              // 不 import 任何 @deepseek-ai 包。
+              try {
+                agent.followup({
+                  id: randomUUID(),
+                  role: 'user',
+                  content: [{ type: 'text', text }],
+                  source: { kind: 'user' },
+                });
+              } catch (e) {
+                error = 'followup 被拒：' + ((e && e.message) || e);
+              }
+            }
+          }
+          try {
+            await bridge.post('/dispatch/ack', {
+              dispatch_id: dispatchId,
+              ok: error === '',
+              ...(error ? { error } : {}),
+            });
+          } catch (e) {
+            // ack 发不回去：原生端 60s 取件超时会兜底取消，这里节流记一笔。
+            const now = Date.now();
+            if (now - dispatchLogAt > 60_000) {
+              dispatchLogAt = now;
+              warn('dispatch ack failed: ' + ((e && e.message) || e));
+            }
+          }
+        }
+      } catch (e) {
+        // 原生端没开：轮询失败保持安静，60s 记一次，别把 Host 日志刷满。
+        const now = Date.now();
+        if (now - dispatchLogAt > 60_000) {
+          dispatchLogAt = now;
+          warn('dispatch poll failed: ' + ((e && e.message) || e));
+        }
+      } finally {
+        dispatchBusy = false;
+      }
+    };
+    const dispatchTimer = setInterval(pollDispatches, 1500);
+    // 别撑住宿主/测试进程的事件循环：通道纯靠原生端下发，不需要保活。
+    if (typeof dispatchTimer.unref === 'function') dispatchTimer.unref();
+    if (typeof ctx.effect === 'function') {
+      ctx.effect(
+        () => () => clearInterval(dispatchTimer),
+        'agentrmc-bridge dispatch poll',
+      );
     }
   }
 }

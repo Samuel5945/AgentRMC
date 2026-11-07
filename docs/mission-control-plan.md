@@ -65,7 +65,7 @@ Task/WorkItem 的**会话归属**与**可验证投递**，这两块得自己补�
 |---|---|---|---|---|
 | 拿到真实会话 id | 有（插件从宿主取） | 有（hook payload） | 有（hook payload / sqlite） | 有（agent.id，即盘上 `session-<uuid>` 目录名） |
 | 打开指定会话 | **已接线**（UIA 通道，见下） | 桌面通道证伪（CLI 已否决） | **已探明**（app-server 协议，见下） | 不需要（API 注入，见下） |
-| 按 id 发送并回回执 | **已接线**（UIA 通道，见下） | 桌面通道证伪（CLI 已否决） | **已探明**（app-server 协议，见下） | **已探通**（插件进程内 followup，实测见下） |
+| 按 id 发送并回回执 | **已接线**（UIA 通道，见下） | 桌面通道证伪（CLI 已否决） | **已探明**（app-server 协议，见下） | **已接线**（插件进程内 followup，见下） |
 
 #### WorkBuddy 系实测（2026-11-07，探针 `rc_probe/wb_open_session.py` / `wb_send_receipt.py`）
 
@@ -246,15 +246,37 @@ Task/WorkItem 的**会话归属**与**可验证投递**，这两块得自己补�
   1. 会话库 `session.v4.jsonl.zstd` 是**多帧拼接**：zstandard `decompress()` 只解
      第一帧，追加轮次全在后续帧——必须 `stream_reader(read_across_frames=True)`
      跨帧流式读，否则全库扫描零命中假阴性。native 侧回执走插件通知即可，不必读盘。
-  2. 回执节奏由 LLM 决定（本轮 ~57s），SessionDispatch 的回执等待超时不能按
-     WorkBuddy 的秒级算；turn-start 归档会 touch 旧卡（updated_at 刷新、
-     created_at 保留），对账别把它当新卡。
+  2. turn-start 归档会 touch 旧卡（updated_at 刷新、created_at 保留），对账别把
+     它当新卡；轮次本身仍由 LLM 节奏决定（首轮实测 ~57s，二段 ~2.5s），回执
+     （= ack）不等它，但派发后「卡转 review 带回复」要等轮次跑完。
   3. `agent.id` 带 `session-` 前缀（WorkBuddy 是裸 uuid），正好是盘上目录名，
      守卫判别可直接对目录。
   4. 插件里加定时器要 `unref()`，否则测试进程跑完不退出。
 - 待清理（用户裁决）：牺牲会话 `9c08421f…`（含两条「收到」轮次）与其 `review`
   待验收卡；在跑的 DSH 进程还持着撤码前的探针代码（文件触发、无文件即惰性），
   下次重启自然回到干净代码。
+- **已接线（2026-11-07 深夜）**：`SessionDispatch` 加插件通道（`Channel::Plugin`），
+  `AgentBridge` 开 `GET /dispatch/pending?exe=…`（取件）与 `POST /dispatch/ack`
+  （回执）两条路由；插件侧生产化（`dispatch: true` 默认开，1.5s 轮询取件 →
+  `agents.get()` 守卫 → 手搓 UserMessage → `followup()` → ack）。**回执 = ack ok**：
+  followup 同步落 durable inbox，与 WorkBuddy 的 jsonl user 行同级证明，不引入新
+  通知事件类型；ack ok:false 带插件侧拒绝原因走既有 `failed` 通道上卡。守卫分工：
+  native 只做 id 格式哨兵（必须 `session-` 前缀）+ 同会话在途 + 60s 取件超时
+  （DSH 没开 / 插件过旧），归属证明在插件侧（活表 `agents.get` 命中才注入）；
+  不做 10s 活动闸（进程内 followup 排队安全，轮次中注入＝下一轮消费）。派发行按
+  `dispatch.supported` 对 DSH 开放（`MainWindow::supportedDispatchExes` 加
+  `supportsPluginChannel`）。
+- **端到端活体验收（`rc_probe/dsh_dispatch_e2e.py`）**：外壳卡片派发行真实入口
+  （UIA 选中探针卡 → dpText 粘贴带标记指令 → 「派回会话」）→ 卡转 working 且
+  message 即派发原文（回执落账）→ 轮次真跑 → 卡转 review 带回复「收到」；
+  zstd 全库扫描标记只在牺牲会话，零泄漏。接线坑：① WebView2 的 a11y 树挂在
+  `Chrome_WidgetWin_1` 子窗上，从顶层窗走树是空的（桌宠气泡窗反而有名字）——
+  要先 EnumChildWindows 找 Chrome 子窗再 `ElementFromHandle`；② 假桥接测试响应
+  必须带 `Connection: close`（原生端本来就回这个头），否则 node 全局 agent 池化
+  连接把测试的关-开序列拖死；③ 插件假 ctx 的 `apply` 要传 `.ctx`（makeCtx 返回
+  包装对象），传错了守卫静默跳过、轮询器根本不注册。
+- 离线 resume 未接：`resolveAgent` 对离线会话会从盘上 resume，但 composition/
+  presets 那套在插件里复制不划算——V1 只派活会话，不在活表就拒绝（裁决 6）。
 
 已定的设计约束：
 
@@ -337,16 +359,16 @@ Task/WorkItem 的**会话归属**与**可验证投递**，这两块得自己补�
 
 ## 8. 现状与剩余
 
-- 数据面：第 1、2 批已落地并装机验证；第 3 批定向派发的前置能力 **WorkBuddy 系、
-  ZCode 系、DSH 已探明并实测**（打开指定会话 / 定向发送 / 回执）；DSH 通道为
-  插件进程内 followup（官方服务面），Qoder 桌面 UI 定向打开 / 国际版待补。
+- 数据面：第 1、2 批已落地并装机验证；第 3 批定向派发 **WorkBuddy 系、DSH 已
+  接线并活体验收**，ZCode 系已探明待接线；Qoder 桌面 UI 定向打开 / 国际版待补。
 - 表现面：外壳＋六个页签已落，默认启用；桌宠／气泡保持 Qt。
 - 版本号仍是 `0.4.1`（Native 与插件同号）：按约定等用户明确说「升版」才动。
 - 剩余事项：
   1. 第 3 批：**WorkBuddy 系 UIA 通道已接线并活体验收**；**ZCode 系 app-server
      协议通道已探明并活体验收**（create/send×3/回执全链通，hook 毒化隔离实证，
-     桌面可见性待人工眼见后接线）；**DSH 插件进程内 followup 通道已探明并
-     活体验收**（agents 服务可达、注入/回执/零泄漏全绿，native 侧接线待做）；
+     桌面可见性待人工眼见后接线）；**DSH 插件进程内 followup 通道已接线并
+     端到端活体验收**（native 队列 + 插件轮询注入 + ack 回执落账 + zstd 零泄漏，
+     `rc_probe/dsh_dispatch_e2e.py`）；
      Qoder CN 的 CLI 通道实测后被用户否决（桌面不可见），路由休眠；桌面可见
      通道两候选（deep link、a11y 设置）2026-11-07 深夜均证伪——**Qoder 线等
      上游**（官方 deeplink 支持按 id 打开会话、renderer a11y 开关或本地会话

@@ -34,6 +34,9 @@ class QTcpSocket;
 //                   409 危险动作（关机/重启/睡眠/休眠）缺 confirm:true。
 //   GET  /workers → 当前在跑的 Worker 列表（alive / foreground / 待办计数）
 //   GET  /health  → 桥接 / 待补投 / Worker / 最近事件健康快照
+//   GET  /dispatch/pending?exe=<映像名> → DSH 定向派发取件：待注入清单 JSON 数组
+//   POST /dispatch/ack {"dispatch_id":..,"ok":true|false,"error":".."}
+//                 → 插件注入回执：ok=投递成立（durable inbox），false=守卫拒绝
 // 纯回环、只此一用；端口被占就放弃监听，不影响主功能。
 class AgentBridge final : public QObject {
     Q_OBJECT
@@ -63,6 +66,14 @@ public:
     void setWorkersProvider(std::function<QString()> provider);
     // GET /health 的应答来源。
     void setHealthProvider(std::function<QString()> provider);
+    // GET /dispatch/pending?exe=<映像名> 的应答来源：DSH 插件轮询取件，
+    // 返回 JSON 数组文本（可空数组）。
+    void setDispatchPendingProvider(
+        std::function<QString(const QString &exe)> provider);
+    // POST /dispatch/ack 的处理器：{"dispatch_id":..,"ok":true|false,"error":".."}
+    // （插件注入成功 / 守卫拒绝的回执）。返回 false = dispatch_id 不认识。
+    void setDispatchAckHandler(
+        std::function<bool(const QJsonObject &)> handler);
 
 signals:
     // kind：/notify 透传 event 字段；/speak 固定为 "speak"。
@@ -97,4 +108,6 @@ private:
     std::function<QJsonObject(const QJsonObject &)> commandHandler_;
     std::function<QString()> workersProvider_;
     std::function<QString()> healthProvider_;
+    std::function<QString(const QString &exe)> dispatchPendingProvider_;
+    std::function<bool(const QJsonObject &)> dispatchAckHandler_;
 };

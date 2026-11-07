@@ -2,14 +2,17 @@
 
 #include <QElapsedTimer>
 #include <QHash>
+#include <QJsonArray>
 #include <QObject>
 #include <QProcess>
 #include <QString>
 #include <QTimer>
 
 // 第 3 批定向派发路由：把指令派回待办绑定的那条会话，并拿「确实到了」的回执。
-// Qoder 系走 CLI --resume（headless、不抢前台，2026-11-07 实测回执与身份）；
-// 其它宿主本轮不接：返回拒绝而不是降级瞎发（裁决 6：证明不了目标就不发）。
+// WorkBuddy 系走桌面可见 UIA 通道；DSH 走插件进程内通道（native 下发 → DSH 插件
+// 轮询取件 → agent.followup() 注入 → ack 回执）；Qoder 系 CLI --resume 已被用户
+// 否决（桌面不可见），configHomeFor 返回空＝通道休眠。证明不了归属就不发，
+// 绝不降级瞎发（裁决 6）。
 class SessionDispatch final : public QObject {
     Q_OBJECT
 
@@ -17,6 +20,9 @@ public:
     explicit SessionDispatch(QObject *parent = nullptr);
 
     static QString configHomeFor(const QString &agentExe);
+    // DSH 的插件通道：会话库是 zstd 多帧压缩 native 读不了，归属守卫在插件侧
+    // （活表 agents.get 命中才注入，拒绝走 ack 带原因）。
+    static bool supportsPluginChannel(const QString &agentExe);
     static QString cliPathFor(const QString &configHome);
     // jsonl 一行里取用户正文（content 可能是字符串或 [{type:text}]）。
     static bool userTextOf(const QByteArray &line, QString *text);
@@ -35,6 +41,13 @@ public:
                   const QString &project, const QString &text, QString *reason,
                   QString *dispatchIdOut = nullptr);
 
+    // —— DSH 插件通道（AgentBridge 转发）——
+    // 插件轮询：取走该宿主尚未下发的派发（Pending 标记 handed，等 ack/超时）。
+    QJsonArray takePluginDispatches(const QString &agentExe);
+    // 插件应答：ok=true = followup 已被接受（durable inbox 落账，投递成立 →
+    // receipt）；false = 插件侧守卫拒绝（reason 给用户 → failed）。
+    void pluginAck(const QString &dispatchId, bool ok, const QString &error);
+
 signals:
     void receipt(const QString &dispatchId, const QString &agentExe,
                  const QString &sessionId, const QString &project,
@@ -42,6 +55,8 @@ signals:
     void failed(const QString &dispatchId, const QString &reason);
 
 private:
+    enum class Channel { Ui, Cli, Plugin };
+
     struct Pending {
         QString dispatchId;
         QString agentExe;
@@ -52,6 +67,8 @@ private:
         qint64 offset = 0;
         QElapsedTimer clock;
         QProcess *process = nullptr;
+        Channel channel = Channel::Cli;
+        bool pluginHanded = false;  // Plugin 通道：已下发给插件，等 ack
     };
 
     void poll();

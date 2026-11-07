@@ -892,6 +892,25 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
             [this](const QJsonObject &payload) { return reportWorkItem(payload); });
         bridge->setCommandHandler(
             [this](const QJsonObject &payload) { return onBridgeCommand(payload); });
+        // DSH 定向派发通道：插件轮询取件 + 注入 ack（回执 = ack ok，followup
+        // 同步落 durable inbox，与 WorkBuddy 的 jsonl user 行同级证明）。
+        bridge->setDispatchPendingProvider([this](const QString &exe) {
+            const QJsonArray items = dispatch_ != nullptr
+                                         ? dispatch_->takePluginDispatches(exe)
+                                         : QJsonArray{};
+            return QString::fromUtf8(
+                QJsonDocument(items).toJson(QJsonDocument::Compact));
+        });
+        bridge->setDispatchAckHandler([this](const QJsonObject &payload) {
+            if (dispatch_ == nullptr) {
+                return false;
+            }
+            dispatch_->pluginAck(
+                payload.value(QStringLiteral("dispatch_id")).toString(),
+                payload.value(QStringLiteral("ok")).toBool(),
+                payload.value(QStringLiteral("error")).toString());
+            return true;
+        });
         connect(bridge, &AgentBridge::notify, this,
                 [this](const QString &kind, const QString &title,
                        const QString &message, const QString &raise,
@@ -2832,7 +2851,9 @@ QString MainWindow::itemIdForSession(const QString &sessionId) const {
 QJsonArray MainWindow::supportedDispatchExes() const {
     QJsonArray out;
     for (const QString &exe : AgentWindow::knownExes()) {
-        if (!SessionDispatch::configHomeFor(exe).isEmpty()) {
+        // WorkBuddy 系走 UIA（configHomeFor 非空）；DSH 走插件通道。
+        if (!SessionDispatch::configHomeFor(exe).isEmpty() ||
+            SessionDispatch::supportsPluginChannel(exe)) {
             out.append(exe);
         }
     }

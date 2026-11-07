@@ -17,6 +17,9 @@ namespace {
 
 constexpr qint64 kActivityGuardMs = 10000;
 constexpr qint64 kReceiptTimeoutMs = 120000;
+// 插件通道的取件窗口：插件 ~1.5s 轮询一次，60s 没来取 = DSH 没开或插件过旧。
+// followup 是同步落账，ack 不该慢——慢了就是通道死了，不用等 LLM 的节奏。
+constexpr qint64 kPluginAckTimeoutMs = 60000;
 
 }  // namespace
 
@@ -64,6 +67,13 @@ QString SessionDispatch::cliPathFor(const QString &configHome) {
         return configHome + QStringLiteral("/bin/qoderclicn/qoderclicn.exe");
     }
     return configHome + QStringLiteral("/bin/qodercli/qodercli.exe");
+}
+
+bool SessionDispatch::supportsPluginChannel(const QString &agentExe) {
+    // DSH 桌面装的 agentrmc-bridge Host 插件在 DSH 进程里，通过 AgentBridge
+    // 轮询取件。2026-11-07 探针全链活体验收：followup 注入 / 回执 / 零泄漏。
+    return agentExe.compare(QStringLiteral("DeepSeek Harness.exe"),
+                            Qt::CaseInsensitive) == 0;
 }
 
 bool SessionDispatch::userTextOf(const QByteArray &line, QString *text) {
@@ -248,9 +258,38 @@ bool SessionDispatch::dispatch(const QString &agentExe, const QString &sessionId
     if (sessionId.trimmed().isEmpty()) {
         return refuse(QStringLiteral("待办未关联会话，不能定向派发"));
     }
+    if (supportsPluginChannel(agentExe)) {
+        // DSH：会话库是 zstd 多帧压缩，native 读不了；归属证明在插件侧做
+        // （agents.get 命中才 followup，拒绝带原因走 ack）。native 只做格式
+        // 哨兵：DSH 的 agent.id 就是盘上 session-<uuid> 目录名。
+        if (!sessionId.startsWith(QStringLiteral("session-"))) {
+            return refuse(
+                QStringLiteral("DSH 会话 id 应为 session-<uuid>，这张卡的归属可疑，未发"));
+        }
+        if (pending_.contains(sessionId)) {
+            return refuse(QStringLiteral("该会话已有派发在途，等回执后再派"));
+        }
+        Pending p;
+        p.dispatchId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+        p.agentExe = agentExe;
+        p.sessionId = sessionId;
+        p.project = project;
+        p.text = text;
+        p.channel = Channel::Plugin;
+        p.clock.start();
+        if (dispatchIdOut != nullptr) {
+            *dispatchIdOut = p.dispatchId;
+        }
+        pending_.insert(sessionId, p);
+        if (!timer_->isActive()) {
+            timer_->start();
+        }
+        return true;
+    }
     const QString home = configHomeFor(agentExe);
     if (home.isEmpty()) {
-        return refuse(QStringLiteral("该宿主未接定向派发（当前仅 WorkBuddy 系）"));
+        return refuse(
+            QStringLiteral("该宿主未接定向派发（当前仅 WorkBuddy 系 / DSH）"));
     }
     QString path, cwd, title, altTitle;
     if (!findSession(home, sessionId, &path, &cwd, &title, &altTitle)) {
@@ -284,6 +323,7 @@ bool SessionDispatch::dispatch(const QString &agentExe, const QString &sessionId
             return refuse(QStringLiteral("已有 UI 派发在途（依赖前台，全局串行）"));
         }
         uiBusy_ = true;
+        p.channel = Channel::Ui;
         pending_.insert(sessionId, p);
         if (!timer_->isActive()) {
             timer_->start();
@@ -340,11 +380,57 @@ bool SessionDispatch::dispatch(const QString &agentExe, const QString &sessionId
         p.process->deleteLater();
         return refuse(QStringLiteral("CLI 启动失败：%1").arg(p.process->errorString()));
     }
+    p.channel = Channel::Cli;
     pending_.insert(sessionId, p);
     if (!timer_->isActive()) {
         timer_->start();
     }
     return true;
+}
+
+QJsonArray SessionDispatch::takePluginDispatches(const QString &agentExe) {
+    QJsonArray out;
+    if (!supportsPluginChannel(agentExe)) {
+        return out;
+    }
+    for (auto it = pending_.begin(); it != pending_.end(); ++it) {
+        if (it->channel != Channel::Plugin || it->pluginHanded) {
+            continue;
+        }
+        // 一次取件标记一次：ack 或超时前不会重复下发，防止插件重连后双注入。
+        it->pluginHanded = true;
+        QJsonObject o;
+        o.insert(QStringLiteral("dispatch_id"), it->dispatchId);
+        o.insert(QStringLiteral("session_id"), it->sessionId);
+        o.insert(QStringLiteral("project"), it->project);
+        o.insert(QStringLiteral("text"), it->text);
+        out.append(o);
+    }
+    return out;
+}
+
+void SessionDispatch::pluginAck(const QString &dispatchId, bool ok,
+                                const QString &error) {
+    for (auto it = pending_.begin(); it != pending_.end(); ++it) {
+        if (it->dispatchId != dispatchId) {
+            continue;
+        }
+        const Pending p = it.value();
+        pending_.erase(it);
+        if (ok) {
+            // followup 同步落 durable inbox：这就是「确实到了那条会话」的回执，
+            // 与 WorkBuddy 的 jsonl user 行同级。
+            emit receipt(p.dispatchId, p.agentExe, p.sessionId, p.project, p.text);
+        } else {
+            emit failed(p.dispatchId,
+                        error.isEmpty() ? QStringLiteral("DSH 插件拒绝注入")
+                                        : error);
+        }
+        break;
+    }
+    if (pending_.isEmpty() && timer_->isActive()) {
+        timer_->stop();
+    }
 }
 
 void SessionDispatch::poll() {
@@ -355,6 +441,18 @@ void SessionDispatch::poll() {
             continue;
         }
         Pending p = it.value();
+        if (p.channel == Channel::Plugin) {
+            // 插件通道不读会话库：回执走 ack。取件窗口超时 = 插件没在跑。
+            if (p.clock.elapsed() > kPluginAckTimeoutMs) {
+                const QString id = p.dispatchId;
+                pending_.erase(it);
+                emit failed(id,
+                            QStringLiteral(
+                                "DSH 插件没来取件（DeepSeek Harness 没开或插件"
+                                "过旧），派发取消"));
+            }
+            continue;
+        }
         bool got = false;
         bool timedOut = false;
         QFile f(p.path);

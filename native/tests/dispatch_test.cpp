@@ -6,6 +6,7 @@
 #include <QDateTime>
 #include <QDir>
 #include <QFile>
+#include <QJsonObject>
 #include <QTemporaryDir>
 #include <QTimer>
 
@@ -151,6 +152,84 @@ int main(int argc, char *argv[]) {
     check("dispatch: empty session refused",
           !d.dispatch("Qoder CN.exe", "", "", "task", &reason) &&
               reason.contains("未关联"));
+
+    // —— DSH 插件通道：native 下发 → 插件轮询取件 → ack 回执（2026-11-07）——
+    // 会话库是 zstd 多帧压缩 native 读不了：不在 dispatch() 里 findSession，
+    // 归属守卫在插件侧（agents.get 命中才注入，拒绝走 ack 带原因）。
+    check("plugin channel: DSH supported, configHome stays empty",
+          SessionDispatch::supportsPluginChannel(
+              QStringLiteral("DeepSeek Harness.exe")) &&
+              !SessionDispatch::supportsPluginChannel(QStringLiteral("WorkBuddy.exe")) &&
+              SessionDispatch::configHomeFor(QStringLiteral("DeepSeek Harness.exe"))
+                  .isEmpty());
+    {
+        const QString dshSid =
+            QStringLiteral("session-9c08421f-080c-4a79-9325-c23464226a62");
+        QString rid;
+        SessionDispatch dsh;
+        bool receiptOk = false;
+        QString failedWhy;
+        QObject::connect(&dsh, &SessionDispatch::receipt,
+                         [&](const QString &, const QString &exe,
+                             const QString &sid, const QString &,
+                             const QString &text) {
+                             receiptOk = exe == QStringLiteral("DeepSeek Harness.exe") &&
+                                         sid == dshSid &&
+                                         text == QStringLiteral("探针指令");
+                         });
+        QObject::connect(&dsh, &SessionDispatch::failed,
+                         [&](const QString &, const QString &why) { failedWhy = why; });
+
+        check("plugin channel: bare uuid refused (id format sentinel)",
+              !dsh.dispatch(QStringLiteral("DeepSeek Harness.exe"),
+                            QStringLiteral("9c08421f-080c-4a79-9325-c23464226a62"),
+                            QString(), QStringLiteral("task"), &reason) &&
+                  reason.contains(QStringLiteral("归属可疑")));
+        check("plugin channel: accepted without session library",
+              dsh.dispatch(QStringLiteral("DeepSeek Harness.exe"), dshSid,
+                           QStringLiteral("D:/w"), QStringLiteral("探针指令"),
+                           &reason, &rid));
+        check("plugin channel: same-session in-flight refused",
+              !dsh.dispatch(QStringLiteral("DeepSeek Harness.exe"), dshSid,
+                            QString(), QStringLiteral("第二发"), &reason) &&
+                  reason.contains(QStringLiteral("在途")));
+
+        const QJsonArray taken = dsh.takePluginDispatches(
+            QStringLiteral("DeepSeek Harness.exe"));
+        check("plugin channel: take returns one item with fields",
+              taken.size() == 1 &&
+                  taken.at(0).toObject()
+                          .value(QStringLiteral("dispatch_id"))
+                          .toString() == rid &&
+                  taken.at(0).toObject()
+                          .value(QStringLiteral("session_id"))
+                          .toString() == dshSid &&
+                  taken.at(0).toObject().value(QStringLiteral("text")).toString() ==
+                      QStringLiteral("探针指令"));
+        check("plugin channel: take-once (handed items not re-sent)",
+              dsh.takePluginDispatches(QStringLiteral("DeepSeek Harness.exe"))
+                  .isEmpty());
+        check("plugin channel: other exe takes nothing",
+              dsh.takePluginDispatches(QStringLiteral("WorkBuddy.exe")).isEmpty());
+        dsh.pluginAck(rid, true, QString());
+        check("plugin channel: ack ok → receipt",
+              receiptOk && failedWhy.isEmpty());
+
+        bool gotFail = false;
+        check("plugin channel: accepted again after receipt",
+              dsh.dispatch(QStringLiteral("DeepSeek Harness.exe"), dshSid,
+                           QString(), QStringLiteral("第二条"), &reason, &rid));
+        QObject::connect(&dsh, &SessionDispatch::failed,
+                         [&](const QString &, const QString &why) {
+                             gotFail = true;
+                             failedWhy = why;
+                         });
+        dsh.pluginAck(rid, false, QStringLiteral("会话不在活表"));
+        check("plugin channel: ack failure → failed with plugin reason",
+              gotFail && failedWhy == QStringLiteral("会话不在活表"));
+        dsh.pluginAck(QStringLiteral("nonexistent"), true, QString());
+        check("plugin channel: unknown dispatch id ignored", true);
+    }
 
     // 活体 harness（默认不跑）：AGENTRMC_DISPATCH_LIVE=<session id> 时真派一条
     // 探针进该会话并等回执，用来把路由问题和 UI 探针问题分开。

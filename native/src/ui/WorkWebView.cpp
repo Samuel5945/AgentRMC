@@ -929,7 +929,7 @@ QString WorkWebView::htmlFor(const QString &stateJson) const {
   <button class="btn primary" id="ack" disabled>标为已处理</button>
   <span id="dpWrap" style="display:none;width:100%;gap:8px;align-items:center;
     margin-top:6px;flex-wrap:wrap">
-    <input id="dpText" placeholder="派回这条会话（WorkBuddy 系走桌面 UIA，需前台、全局串行）"
+    <input id="dpText" placeholder="派回这条会话的指令（Enter 或按钮发送，回执到了转进行中）"
       style="flex:1 1 240px;min-width:0;font-size:var(--f11);color:var(--text);
       background:var(--raised);border:1px solid var(--line);border-radius:8px;
       padding:6px 10px">

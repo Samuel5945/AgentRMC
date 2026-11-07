@@ -107,6 +107,7 @@ pnpm add "link:D:\githubrepos\Agentrmc\plugins\deepseek-harness"
 | `speakFinalReply` | `true` | 念正文；`false` 时只念「做完了」 |
 | `registerTools` | `true` | 注册四个 `pet_*` 工具 |
 | `registerSkill` | `true` | 注册 `agentrmc-pet` skill |
+| `dispatch` | `true` | 定向派发通道：轮询原生端取件 → `agent.followup()` 注入 → ack 回执 |
 | `dryRun` | `false` | 只打印将要发送的 payload，不真发（也可用 `AGENTRMC_DRY_RUN=1`） |
 
 本包**没有导出 `Config`**，所以插件管理页不会给这几个字段生成表单（配置状态显示为
@@ -120,10 +121,26 @@ pnpm add "link:D:\githubrepos\Agentrmc\plugins\deepseek-harness"
 - `pet_notify` —— 阶段进度气泡（不出声）；
 - `pet_speak` —— 气泡 + TTS 念一句；
 - `pet_state` —— 查桌宠状态；
-- `pet_work_update` —— `progress` / `blocked` / `ready` 写进「待我处理」；后两个会冒泡 + 语音。
+- `pet_work_update` —— `progress` / `blocked` / `ready` 写进「待我处理」；后两个会冒气泡 + 语音。
 
 比原版多带一个 `agent_exe` 字段：原生端按进程映像名把工单归到 Worker 行，
 `DeepSeek Harness` 不在它的已知宿主白名单里，靠产品名反查会挂空。
+
+## 定向派发通道（2026-11-07 接线）
+
+AgentRMC 待办卡可以把指令**定向派回某条会话**。DSH 这条线不走 UI 自动化也不走
+CLI：原生端把派发排进队列（`GET /dispatch/pending?exe=…` 取件），本插件每 1.5s
+轮询取件，按 `session_id` 从 `ctx.get('agents')` 拿活 Agent，手搓 UserMessage
+（`source:{kind:'user'}`，与 ACP 桥同形，不 import 任何 @deepseek-ai 包）调
+`agent.followup()` 注入，再 `POST /dispatch/ack` 回执。
+
+- **回执语义**：`followup` 同步落 durable inbox，ack ok 就是「确实到了那条会话」
+  的证明（原生端据此把工单转进行中）；守卫拒绝（会话不在活表等）走
+  ack `ok:false` 带原因，原生端按派发失败上卡——证明不了目标就不发。
+- **只认活会话**：`agents.get()` 没命中就拒绝注入（离线 resume 需要 composition，
+  插件里不复制那套；会话没打开时原生端 60s 取件超时取消）。
+- 这条通道只在会话里多一轮普通对话，气泡/语音提醒由既有的 turn-start / stop
+  自动提醒照常完成，不需要插件额外做什么。
 
 ## 行为细节
 

@@ -195,6 +195,13 @@ Task/WorkItem 的**会话归属**与**可验证投递**，这两块得自己补�
   读回。`session/resume` 跨实例可重开别人实例建的会话——**dispatch 到用户既有
   会话就是同一条路**。会话按 workspace 归堆，db 为共享 SQLite
   （`~/.zcode/cli/db/db.sqlite` + `rollout/model-io-<sid>.jsonl`）。
+- **跨实例投递的模型绑定坑（实机踩出）**：目标会话若在桌面端开着，外部实例
+  `resume` 后 `send` 会被接受、user 消息落库，但 turn 死在
+  `model_creation`（日志 warn「model selection restored but **not bound to the
+  runtime**」→ error「Select a model before continuing」）——新实例不绑模型。
+  修法：`session/send` 带上 `modelSelection`（该会话保存的选择可从
+  `session_entry` 表 `runtime/model_selection` 行读出，providerId+modelId+options），
+  或 resume 后先 `session/setModel`。带上后全链通（助手回「协议收到了」）。
 - **hook 隔离四件套（照搬 Qoder 重做轮教训）**：hook 事件走 agentrmc-bridge
   （UserPromptSubmit/PermissionRequest/Stop），桥的 `AGENTRMC_PORT` 与
   `AGENTRMC_SPOOL_DIR` 都是**环境变量**——给探针 app-server 喂

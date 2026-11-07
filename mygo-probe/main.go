@@ -11,6 +11,7 @@ package main
 
 import (
 	"embed"
+	"flag"
 	"fmt"
 	"log"
 
@@ -79,8 +80,12 @@ func main() {
 	}
 	p := &probe{sprite: sprite}
 
+	x := flag.Int("x", -1, "window X (DIP), -1 = default position")
+	y := flag.Int("y", -1, "window Y (DIP), -1 = default position")
+	flag.Parse()
+
 	mygo.App.WhenReady(func() {
-		p.win = mygo.NewWindow(mygo.WindowOptions{
+		opts := mygo.WindowOptions{
 			Title:         "MyGo Probe",
 			Width:         240,
 			Height:        300,
@@ -91,7 +96,14 @@ func main() {
 			DisableShadow: true, // 透明窗不留阴影缝
 			DisableResize: true,
 			Content:       ui.View(p.view),
-		})
+		}
+		if *x >= 0 {
+			opts.X = *x
+		}
+		if *y >= 0 {
+			opts.Y = *y
+		}
+		p.win = mygo.NewWindow(opts)
 		// 全局快捷键兜底：穿透开了以后按钮点不到，靠 Ctrl+Alt+T 切回来
 		if err := mygo.GlobalShortcut.Register("Ctrl+Alt+T", p.toggle); err != nil {
 			log.Fatal(err)

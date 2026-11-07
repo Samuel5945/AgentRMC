@@ -15,7 +15,9 @@ import time
 from ctypes import wintypes
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-EXE = os.path.abspath(os.path.join(HERE, "..", "mygo-probe.exe"))
+EXE = (sys.argv[1] if len(sys.argv) > 1
+       else os.path.abspath(os.path.join(HERE, "..", "mygo-probe.exe")))
+TAG = os.path.splitext(os.path.basename(EXE))[0]
 SHOT = os.path.join(HERE, "shot.ps1")
 SHOTS_DIR = os.path.join(os.environ["TEMP"], "mygoprobe-shots")
 TITLE = "MyGo Probe"
@@ -156,7 +158,7 @@ def main():
     subprocess.run([
         "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
         "-File", SHOT, "-Path",
-        os.path.join(SHOTS_DIR, "shot3_redboard.png"),
+        os.path.join(SHOTS_DIR, "shot3_%s.png" % TAG),
     ], capture_output=True)
 
     close_probe(h2)

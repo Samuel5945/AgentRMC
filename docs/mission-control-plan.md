@@ -61,11 +61,11 @@ Task/WorkItem 的**会话归属**与**可验证投递**，这两块得自己补�
 
 前置能力必须先逐宿主探明，**不能假设**：
 
-| 能力 | WorkBuddy 系 | Qoder 系 | DSH |
-|---|---|---|---|
-| 拿到真实会话 id | 有（插件从宿主取） | 有（hook payload） | 有（agent.id） |
-| 打开指定会话 | **已接线**（UIA 通道，见下） | 桌面通道待探（CLI 已否决） | 待验证 |
-| 按 id 发送并回回执 | **已接线**（UIA 通道，见下） | 桌面通道待探（CLI 已否决） | 待验证 |
+| 能力 | WorkBuddy 系 | Qoder 系 | ZCode 系 | DSH |
+|---|---|---|---|---|
+| 拿到真实会话 id | 有（插件从宿主取） | 有（hook payload） | 有（hook payload / sqlite） | 有（agent.id） |
+| 打开指定会话 | **已接线**（UIA 通道，见下） | 桌面通道证伪（CLI 已否决） | **已探明**（app-server 协议，见下） | 待验证 |
+| 按 id 发送并回回执 | **已接线**（UIA 通道，见下） | 桌面通道证伪（CLI 已否决） | **已探明**（app-server 协议，见下） | 待验证 |
 
 #### WorkBuddy 系实测（2026-11-07，探针 `rc_probe/wb_open_session.py` / `wb_send_receipt.py`）
 
@@ -171,6 +171,43 @@ Task/WorkItem 的**会话归属**与**可验证投递**，这两块得自己补�
   **「续当前会话」模式对 Qoder CN 可用**；定向任意会话（第 3 批路由）仍未接线，
   国际版未验。护栏：发送前断言前台为 Qoder 系，发送后断言目标回执+本会话无标记。
 
+#### ZCode 系实测（2026-11-07 深夜，探针 `rc_probe/zcode_appserver_probe.py` / `zcode_dispatch_probe.py` / `zcode_uia_probe.py`）
+
+- **桌面形态**：Electron（3.17.2），UI 与 agent 后端分离——桌面拉起
+  `ZCode.exe resources/glm/zcode.cjs app-server --stdio`（`ELECTRON_RUN_AS_NODE=1`），
+  之间走 **ndjson 双向协议**（`{"id":N,"method":…,"params":…}` ↔ `{"id":N,"result":…}`）。
+- **UIA 与 deep link 同样不通**：主窗前台复扫后仍荒树（12 元素无 named，
+  asar 里也没有 renderer-a11y 开关可开）；`zcode://` 只注册了
+  `oauth/callback` 与 `workspace/open?path=`（开文件夹），无会话路由。
+- **正解是 app-server 协议**（合法宿主 API，符合「宿主支持 API/插件命令」约束）：
+  `session/list`（列会话，含 id/title/status/workspace/updatedAt）、
+  `session/create`、`session/resume`、**`session/send`**（按 sessionId 投递，
+  `{sessionId, content, …}`；忙时 -32010 拒绝）、`session/messages`（读收据）、
+  `session/subscribe`/`session/events`、`session/stop` 等。
+  注意两点：① server 会**反向请求客户端**，`session/create` 前会要
+  `session/requestRuntimePreferences`，必须成功应答（zod `Uon` schema 只有
+  `nativeSearchEnhancementsEnabled` 必填，其余有默认；回 error 或不回，create 直接失败）；
+  ② 会话消息 shape：role 在 `msg.info.role`，正文在 `parts[]` 里 `type:"text"` 的
+  `text` 字段（`step-start/reasoning/text/step-finish` 为一组）。
+- **活体验收（炮灰会话 `sess_b7605697…`，workspace 即本仓库）**：
+  `session/create` → `session/send`×3（全按 sessionId 命中）→ 助手真实回「畅通」
+  （assistant 消息 parts 含 text，判据 role+text 无污染）→ `session/messages`
+  读回。`session/resume` 跨实例可重开别人实例建的会话——**dispatch 到用户既有
+  会话就是同一条路**。会话按 workspace 归堆，db 为共享 SQLite
+  （`~/.zcode/cli/db/db.sqlite` + `rollout/model-io-<sid>.jsonl`）。
+- **hook 隔离四件套（照搬 Qoder 重做轮教训）**：hook 事件走 agentrmc-bridge
+  （UserPromptSubmit/PermissionRequest/Stop），桥的 `AGENTRMC_PORT` 与
+  `AGENTRMC_SPOOL_DIR` 都是**环境变量**——给探针 app-server 喂
+  `AGENTRMC_PORT=1`（不可路由）+ 临时 SPOOL_DIR，hook POST 失败落探针 spool。
+  实证：探针 spool 收到 `turn-start`（带炮灰 sessionId），真实 store 与真实
+  spool 全程无 MARKER。
+- **待人工核验**：桌面可见性（协议层 `session/list` 已见该会话 idle+标题，
+  桌面与探针读同一 db）——用户开 ZCode 会话列表应见
+  「[AgentRMC 探针 AGENTRMC-DISPATCH-PROBE-20261107]…」三条轮次；
+  眼见为实后即可按此通道接线 `SessionDispatch` 的 ZCode 路由。
+- 与 Qoder 的本质差异：Qoder CLI 追加的轮次桌面**永不重扫**；ZCode 桌面的
+  会话视图就建在共享 db 上，协议投递即落库，闭环预期成立。
+
 已定的设计约束：
 
 - 宿主若支持 API／插件命令：新建或指定会话，发送带 `dispatchId`，回执关联到工单。
@@ -258,10 +295,12 @@ Task/WorkItem 的**会话归属**与**可验证投递**，这两块得自己补�
 - 表现面：外壳＋六个页签已落，默认启用；桌宠／气泡保持 Qt。
 - 版本号仍是 `0.4.1`（Native 与插件同号）：按约定等用户明确说「升版」才动。
 - 剩余事项：
-  1. 第 3 批：**WorkBuddy 系 UIA 通道已接线并活体验收**；Qoder CN 的 CLI 通道
-     实测后被用户否决（桌面不可见），路由休眠；桌面可见通道两候选（deep link、
-     a11y 设置）2026-11-07 深夜均证伪——**Qoder 线等上游**（官方 deeplink 支持
-     按 id 打开会话、renderer a11y 开关或本地会话 API 任一出现再接线）；
-     「续当前会话」模式保持可用；**DSH 仍待验证**。
+  1. 第 3 批：**WorkBuddy 系 UIA 通道已接线并活体验收**；**ZCode 系 app-server
+     协议通道已探明并活体验收**（create/send×3/回执全链通，hook 毒化隔离实证，
+     桌面可见性待人工眼见后接线）；Qoder CN 的 CLI 通道实测后被用户否决
+     （桌面不可见），路由休眠；桌面可见通道两候选（deep link、a11y 设置）
+     2026-11-07 深夜均证伪——**Qoder 线等上游**（官方 deeplink 支持按 id 打开
+     会话、renderer a11y 开关或本地会话 API 任一出现再接线）；「续当前会话」
+     模式保持可用；**DSH 仍待验证**。
   2. 事件流／系统页的真实数据字段如有新增，记得同步给 `webShellState()`。
   3. 美术主题下的外壳观感复检（有探针图，但需人工确认一遍）。

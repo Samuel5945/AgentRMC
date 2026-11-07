@@ -270,6 +270,11 @@ WorkItem WorkItemStore::upsert(const QString &source, const QString &agentExe,
             target->title = title;
             target->message = message;
             target->raiseExe = raiseExe;
+            // session id 是宿主内唯一的：同一 session 报来别的宿主名只可能是
+            // 先前记错了（WorkBuddy 内嵌 Qoder SDK 曾被认成 Qoder CN），纠正。
+            if (!agentExe.isEmpty()) {
+                target->agentExe = agentExe;
+            }
             // 只认 session 之外，项目是第二道判据：来件没带项目时别把卡片原有的抹掉，
             // 否则下一次「按项目区分」就没了依据（MCP 上报常常不带 cwd）。
             if (!project.isEmpty()) {
@@ -316,6 +321,9 @@ WorkItem WorkItemStore::upsert(const QString &source, const QString &agentExe,
         item.title = title;
         item.message = message;
         item.raiseExe = raiseExe;
+        if (!agentExe.isEmpty()) {
+            item.agentExe = agentExe;
+        }
         if (!project.isEmpty()) {
             item.project = project;
         }

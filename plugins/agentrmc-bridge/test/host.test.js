@@ -5,7 +5,7 @@
 //   B) 真脚本端到端：把插件树复制到假装的 ~/.qoder 与 ~/.qoder-cn 配置家里，
 //      用 AGENTRMC_DRY_RUN=1 跑 hooks/agentrmc-notify.js，断言它自己报出的
 //      {title, raise, source}——这才是「装到哪个 app 就念哪个、拉哪个窗」。
-// 判据是 8 个具名用例 + 2 个端到端用例，全过才打 ALL PASS。
+// 判据优先级具名用例 + 真脚本端到端用例，全过才打 ALL PASS。
 
 const assert = require('assert');
 const fs = require('fs');
@@ -105,6 +105,49 @@ check('workbuddy 未知变体: 路径判不出但产品名命中 -> AI 兜底并
   assert.strictEqual(h.agent, 'WorkBuddy');
   assert.strictEqual(h.raise, 'WorkBuddyAI.exe');
   assert.strictEqual(h.source, 'workbuddy-unknown-variant');
+});
+
+// 2026-11-07 实锤：经典 WorkBuddy 内嵌 Qoder CN SDK，进程环境里带着
+// QODER_CONFIG_DIR=.qoder-cn / QODER_PRODUCT_ID=qoder-cn；WorkBuddy 判据排在
+// 后面就会把它的整串会话记到 Qoder CN 头上（store 里 f08033a9 一案）。
+const WB_POLLUTED_ENV = {
+  WORKBUDDY_APP_VERSION: '5.9.3',
+  CLIENT_INFO_PRODUCT_NAME: 'WorkBuddy',
+  WORKBUDDY_CONFIG_DIR: 'C:\\Users\\PC\\.workbuddy',
+  QODER_CONFIG_DIR: 'C:\\Users\\PC\\.qoder-cn',
+  QODERCN_CONFIG_DIR: 'C:\\Users\\PC\\.qoder-cn',
+  QODER_PRODUCT_ID: 'qoder-cn',
+};
+
+check('workbuddy-classic: 借来的 QODER_* 环境变量不抢归属', () => {
+  const h = resolveHost({ scriptDir: WB_HOOKS, argv: ['stop'], env: WB_POLLUTED_ENV });
+  assert.deepStrictEqual([h.agent, h.raise, h.source],
+                         ['WorkBuddy', 'WorkBuddy.exe', 'workbuddy-classic']);
+});
+
+check('workbuddy-ai: 带 QODER_* 也认 AI', () => {
+  const h = resolveHost({ scriptDir: WB_AI_HOOKS, argv: ['stop'], env: WB_POLLUTED_ENV });
+  assert.deepStrictEqual([h.agent, h.raise, h.source],
+                         ['WorkBuddy AI', 'WorkBuddyAI.exe', 'workbuddy-ai']);
+});
+
+check('workbuddy 无路径: 产品名命中也要抢在 QODER_* 之前', () => {
+  const env = Object.assign({}, WB_POLLUTED_ENV);
+  delete env.WORKBUDDY_CONFIG_DIR;
+  const h = resolveHost({ scriptDir: 'D:/somewhere/else/hooks', argv: ['stop'], env });
+  assert.strictEqual(h.agent, 'WorkBuddy');
+  assert.strictEqual(h.source, 'workbuddy-unknown-variant');
+});
+
+check('qoder-cn: 安装路径最硬，不被 WORKBUDDY_* 环境变量反抢', () => {
+  const h = resolveHost({
+    scriptDir: CN_HOOKS,
+    argv: ['stop'],
+    env: { WORKBUDDY_APP_VERSION: '5.9.3',
+           WORKBUDDY_CONFIG_DIR: 'C:\\Users\\PC\\.workbuddy' },
+  });
+  assert.deepStrictEqual([h.agent, h.raise, h.source],
+                         ['Qoder CN', 'Qoder CN.exe', 'qoder-cn']);
 });
 
 check('argv 优先: 手写配置显式给了就照办（向后兼容）', () => {

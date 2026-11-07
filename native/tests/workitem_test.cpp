@@ -418,6 +418,22 @@ int main(int argc, char *argv[]) {
         }
     }
 
+    {
+        // 2026-11-07：WorkBuddy 内嵌 Qoder CN SDK 曾被 host.js 认成 Qoder CN；
+        // 判据修好后同一 session 再报，活卡必须跟着改宿主，不能留在错名下。
+        WorkItemStore fix(dir.path() + "/reattribute.json");
+        const WorkItem wrong = fix.upsert(
+            "hook", "Qoder CN.exe", "wb1", "D:/repo", "progress",
+            "Qoder CN", "在跑", "Qoder CN.exe", "");
+        const WorkItem right = fix.upsert(
+            "hook", "WorkBuddy.exe", "wb1", "D:/repo", "stop",
+            "WorkBuddy", "做完了", "WorkBuddy.exe", "");
+        check("same session re-reported by another host corrects agent_exe",
+              right.id == wrong.id &&
+                  right.agentExe == QStringLiteral("WorkBuddy.exe") &&
+                  fix.items().size() == 1);
+    }
+
     std::printf(failures == 0 ? "\nALL PASS\n" : "\n%d FAILED\n", failures);
     return failures == 0 ? 0 : 1;
 }

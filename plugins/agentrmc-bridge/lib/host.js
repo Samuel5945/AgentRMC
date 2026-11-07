@@ -9,8 +9,10 @@
 //   1) 调用方 argv 显式给了宿主名和进程名 → 照办（老的手写配置行为不变）；
 //   2) 脚本自己的安装路径落在哪个配置家 —— 每个 app 只会把插件解到自己的
 //      ~/.qoder(-cn)/plugins/cache/... 下，这是最硬的证据，不依赖宿主注入什么；
+//   2.5) WorkBuddy 家族（安装路径 / WORKBUDDY_* / 产品名）——必须抢在 Qoder
+//      环境变量之前：经典 WorkBuddy 内嵌 Qoder CN SDK，带着 QODER_* 环境变量；
 //   3) 宿主注入的环境变量 QODER_CONFIG_DIR / QODERCN_CONFIG_DIR / QODER_PRODUCT_ID；
-//   4) 都不是 Qoder 家族 → 沿用旧逻辑，按环境变量认 WorkBuddy / ZCode。
+//   4) 都不是 → 缺省 ZCode。
 // 只认出「是 Qoder 家族」但认不出变体（自定义配置家）时按国际版处理，并在返回值
 // 里标 source，方便排查。
 //
@@ -147,6 +149,28 @@ function resolveHost(options) {
   // 2) 自己的安装路径。
   let variant = variantFromPath(scriptDir);
 
+  // 2.5) WorkBuddy 家族必须抢在 Qoder 环境变量之前：经典 WorkBuddy 内嵌
+  //      Qoder CN SDK，进程里带着 QODER_CONFIG_DIR=.qoder-cn /
+  //      QODER_PRODUCT_ID=qoder-cn（2026-11-07 实测活进程环境块），放在后面
+  //      判就会把 WorkBuddy 的会话整串记到 Qoder CN 头上。安装路径与产品名
+  //      是它自己的硬证据，比借来的 SDK 环境变量可靠。
+  const wbVariantEarly =
+    workbuddyVariantFromPath(scriptDir) ||
+    workbuddyVariantFromPath(env.WORKBUDDY_CONFIG_DIR) ||
+    workbuddyVariantFromPath(env.WORKBUDDY_PLUGIN_ROOT) ||
+    workbuddyVariantFromPath(env.CLAUDE_PLUGIN_ROOT) ||
+    workbuddyVariantFromPath(env.CODEBUDDY_PLUGIN_ROOT) ||
+    workbuddyVariantFromName(env.AGENTRMC_NOTIFY_HOST);
+  // scriptDir 已认出 Qoder 配置家时不被 WorkBuddy 环境变量反抢（路径最硬）。
+  if (!variant && (wbVariantEarly || isWorkBuddyFamily(env))) {
+    const v = wbVariantEarly ? WORKBUDDY_VARIANTS[wbVariantEarly] : null;
+    return {
+      agent: env.AGENTRMC_NOTIFY_HOST || (v ? v.agent : 'WorkBuddy'),
+      raise: argvRaise || (v ? v.raise : 'WorkBuddyAI.exe'),
+      source: v ? 'workbuddy-' + wbVariantEarly : 'workbuddy-unknown-variant',
+    };
+  }
+
   // 3) 宿主注入的环境变量（路径类判据优先于产品 ID 字符串）。
   if (!variant) {
     variant =
@@ -179,27 +203,7 @@ function resolveHost(options) {
     };
   }
 
-  // 4) 非 Qoder 宿主。WorkBuddy 家族先按安装路径判变体：这是唯一能区分
-  //    「旧版 WorkBuddy 发的通知」和「WorkBuddy AI 发的通知」的硬证据，不依赖
-  //    宿主注入什么。路径判不出才退回产品名，并按旧行为兜底 AI，同时标记
-  //    unknown-variant，避免再次把「拉错 app」当成正常。
-  const wbVariant =
-    workbuddyVariantFromPath(scriptDir) ||
-    workbuddyVariantFromPath(env.WORKBUDDY_CONFIG_DIR) ||
-    workbuddyVariantFromPath(env.WORKBUDDY_PLUGIN_ROOT) ||
-    workbuddyVariantFromPath(env.CLAUDE_PLUGIN_ROOT) ||
-    workbuddyVariantFromPath(env.CODEBUDDY_PLUGIN_ROOT) ||
-    workbuddyVariantFromName(env.AGENTRMC_NOTIFY_HOST);
-  if (wbVariant || isWorkBuddyFamily(env)) {
-    const v = wbVariant ? WORKBUDDY_VARIANTS[wbVariant] : null;
-    return {
-      agent: env.AGENTRMC_NOTIFY_HOST || (v ? v.agent : 'WorkBuddy'),
-      raise: argvRaise || (v ? v.raise : 'WorkBuddyAI.exe'),
-      source: v ? 'workbuddy-' + wbVariant : 'workbuddy-unknown-variant',
-    };
-  }
-
-  // 5) 缺省 ZCode。ZCode 那份 hooks.json 不传 argv，raise 留空由原生端找 ZCode.exe。
+  // 4) 缺省 ZCode。ZCode 那份 hooks.json 不传 argv，raise 留空由原生端找 ZCode.exe。
   return {
     agent: env.AGENTRMC_NOTIFY_HOST || 'ZCode',
     raise: argvRaise || '',

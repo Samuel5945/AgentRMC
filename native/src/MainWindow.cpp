@@ -2663,7 +2663,8 @@ QJsonObject MainWindow::webThemeJson() {
     return theme;
 }
 
-// WebView2 版外壳要的整份状态：待办队列 + Worker 列表 + 健康行 + 主题，一次推过去。
+// WebView2 版外壳要的整份状态：待办队列 + Worker 列表 + 健康行 + 主题 + 事件流，
+// 一次推过去。
 QString MainWindow::webShellState() {
     QJsonObject work;
     if (workItems_ != nullptr) {
@@ -2675,6 +2676,7 @@ QString MainWindow::webShellState() {
         {QStringLiteral("health"),
          QJsonDocument::fromJson(healthJson().toUtf8()).object()},
         {QStringLiteral("theme"), webThemeJson()},
+        {QStringLiteral("events"), webEvents_},
     };
     return QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Compact));
 }
@@ -2685,6 +2687,13 @@ void MainWindow::handleWebAction(const QJsonObject &action) {
     const QString id = action.value(QStringLiteral("id")).toString();
     if (cmd == QStringLiteral("open")) {
         openWorkItem(id);
+        return;
+    }
+    if (cmd == QStringLiteral("clearLog")) {
+        clearLog();
+        if (workWeb_ != nullptr) {
+            workWeb_->refresh();
+        }
         return;
     }
     if (workItems_ == nullptr) {
@@ -3927,6 +3936,12 @@ void MainWindow::appendEvent(const QString &kind, const QString &name,
     }
     logList_->show();
     logCount_->setText(QStringLiteral("%1 条").arg(logList_->count()));
+    if (workWeb_ != nullptr) {
+        // 外壳版另存一份带 kind 的账：页面按 kind 上色，规则和上面 Qt 版一致。
+        webEvents_.append(QJsonObject{{QStringLiteral("kind"), kind},
+                                      {QStringLiteral("text"), text}});
+        workWeb_->refresh();
+    }
 }
 
 void MainWindow::clearLog() {
@@ -3939,6 +3954,7 @@ void MainWindow::clearLog() {
         emptyBox->show();
     }
     logCount_->setText(QStringLiteral("0 条"));
+    webEvents_ = QJsonArray();
 }
 
 bool MainWindow::nativeEvent(const QByteArray &eventType, void *message,

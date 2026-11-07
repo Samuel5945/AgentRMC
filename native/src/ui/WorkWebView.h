@@ -16,10 +16,11 @@ class WorkWebView : public QWidget {
     Q_OBJECT
 
 public:
-    // 整份界面状态（待办队列 + Worker 列表 + 健康行 + 主题 token），一次推给页面。
+    // 整份界面状态（待办队列 + Worker 列表 + 健康行 + 主题 token + 事件流），
+    // 一次推给页面。
     using StateProvider = std::function<QString()>;
-    // 页面上的一次动作：{"cmd":"open|ack|clear", "id":"..."} 原样交回主窗，
-    // 由它走既有的 openWorkItem / ack / clearFinished，不在页面里另起一套。
+    // 页面上的一次动作：{"cmd":"open|ack|clear|clearLog", "id":"..."} 原样交回主窗，
+    // 由它走既有的 openWorkItem / ack / clearFinished / clearLog，不在页面里另起一套。
     using ActionHandler = std::function<void(const QJsonObject &action)>;
 
     explicit WorkWebView(QWidget *parent = nullptr);

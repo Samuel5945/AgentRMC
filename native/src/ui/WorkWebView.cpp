@@ -510,7 +510,7 @@ void WorkWebView::handleNavigationCompleted(bool success) {
 }
 
 QString WorkWebView::htmlFor(const QString &stateJson) const {
-    // 状态由 Qt 侧一次推全（work / workers / health / theme）。页面只管三件事：
+    // 状态由 Qt 侧一次推全（work / workers / health / theme / events）。页面只管三件事：
     // 排版、把动作发回 Qt、把 theme 里的 token 落成 CSS 变量。
     //
     // 底是页面自己画的，不是「透明透出主窗」：实测 WebView2 的透明背景透出来的是
@@ -532,6 +532,9 @@ QString WorkWebView::htmlFor(const QString &stateJson) const {
   --f10:10px;--f11:11px;--f12:12px;--f13:13px}
  html,body{margin:0;height:100%;background:transparent;color:var(--text);
    font-family:"Microsoft YaHei UI","Segoe UI",sans-serif;overflow:hidden}
+ /* .page/.foot 自带 display:flex，会盖掉 UA 的 [hidden]{display:none}，
+    藏起来的页会把头行漏在别的页下面（实测）。统一用 !important 压住。 */
+ [hidden]{display:none !important}
  body{display:flex;flex-direction:column}
  .tabs{flex:0 0 auto;display:flex;gap:4px;padding:8px 12px 0}
  .tab{border:1px solid transparent;background:transparent;color:var(--muted);
@@ -575,6 +578,11 @@ QString WorkWebView::htmlFor(const QString &stateJson) const {
  .time{margin-left:auto;font-size:var(--f10);color:var(--ghost)}
  .l2{font-size:var(--f11);margin-top:2px;color:var(--text-soft);
    white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+ /* 事件行照 QListWidget#logList::item：5px 6px 内边距、圆角、hover 一层 w6；
+    长文案折行（Qt 侧 wordWrap=true），时间戳和正文之间是两个空格。 */
+ .ev{padding:5px 6px;border-radius:6px;font-size:var(--f11);line-height:1.5;
+   white-space:pre-wrap;word-break:break-word}
+ .ev:hover{background:var(--w6)}
  .empty{flex:1 1 auto;padding:48px 16px;text-align:center}
  .empty h3{font-size:var(--f12);margin:0 0 6px;font-weight:600;color:var(--text)}
  .empty p{font-size:var(--f11);color:var(--muted);margin:0 0 12px;line-height:1.6;
@@ -611,6 +619,19 @@ QString WorkWebView::htmlFor(const QString &stateJson) const {
 先给 Qoder / ZCode / WorkBuddy 装上 agentrmc-bridge 插件。</p>
   <button class="btn" id="guide">看怎么接入 Agent</button>
 </div>
+<div id="events" class="page" hidden>
+  <div class="head">
+    <span class="total" id="evCount">0 条</span>
+    <span class="spacer"></span>
+    <button class="ghost" id="evClear">清空</button>
+  </div>
+  <div class="list" id="evList"></div>
+  <div class="empty" id="evEmpty" hidden>
+    <h3>还没有事件</h3>
+    <p>遥控器按键、语音转写、Agent 通知都会按时间记在这里，
+排查「按了没反应」时先看这一页。</p>
+  </div>
+</div>
 <div id="placeholder" class="placeholder" hidden></div>
 <div class="foot" id="foot">
   <span class="hint" id="hint"></span>
@@ -623,8 +644,12 @@ QString WorkWebView::htmlFor(const QString &stateJson) const {
 let STATE = )HTML")
                          + jsEscape(stateJson)
                          + QString::fromUtf8(R"HTML(;
-let WORK = {items:[]}, WORKERS = [], now = Date.now();
+let WORK = {items:[]}, WORKERS = [], EVENTS = [], now = Date.now();
 const COLOR = {'needs-me':'#f0883e','review':'#3fb950','working':'#58a6ff'};
+// 事件按 kind 上色，和 Qt 侧 appendEvent 同一套：错误红、听写/系统命令绿、
+// 状态灰（muted token）、其余（按键等）用 text.dim。阶段色一样两边硬编码同值。
+const EVCOLOR = {error:'#f85149',voice:'#3fb950',system:'#3fb950',status:'var(--muted)'};
+let evSeen = 0;
 const LABEL = {'needs-me':'等你处理','review':'待验收','working':'进行中'};
 const TABS = ['待我处理','事件流','系统','按键映射','应用','使用引导'];
 let activeTab = 0, selected = '', filterExe = '';
@@ -765,13 +790,35 @@ function renderFoot(){
   $('raise').disabled=!selItem;
   $('ack').disabled=!selItem;
 }
+function renderEvents(){
+  $('evCount').textContent=EVENTS.length+' 条';
+  $('evEmpty').hidden=EVENTS.length>0;
+  const list=$('evList');
+  list.hidden=EVENTS.length===0;
+  const keep=list.scrollTop;
+  // 和 Qt 的 scrollToBottom 一致：来了新事件就滚到底；条数没变的刷新
+  // （换主题、别的页签动静）不动滚动位置。
+  const grew=EVENTS.length>evSeen;
+  list.replaceChildren();
+  EVENTS.forEach(ev=>{
+    const d=document.createElement('div');
+    d.className='ev';
+    d.style.color=EVCOLOR[ev.kind]||'var(--text-dim)';
+    d.textContent=ev.text||'';
+    list.append(d);
+  });
+  list.scrollTop=grew?list.scrollHeight:keep;
+  evSeen=EVENTS.length;
+}
 function render(){
   renderTabs();
   const workView=activeTab===0;
   $('work').hidden=!workView;
   $('foot').hidden=!workView;
+  $('events').hidden=activeTab!==1;
   $('empty').hidden=true;
   $('placeholder').hidden=true;
+  if(activeTab===1){renderEvents();return;}
   if(!workView){
     $('placeholder').hidden=false;
     $('placeholder').textContent='「'+TABS[activeTab]+'」还没搬过来（下一步）';
@@ -799,11 +846,13 @@ function render(){
   renderFoot();
 }
 $('clear').onclick=()=>post('clear');
+$('evClear').onclick=()=>post('clearLog');
 $('raise').onclick=()=>post('open',selected);
 $('ack').onclick=()=>post('ack',selected);
 $('guide').onclick=()=>{activeTab=5;render();};
 document.addEventListener('keydown',e=>{
-  if(!selected) return;
+  // 快捷键只属于待办页：Qt 侧事件流是 NoSelection/NoFocus，别的页也不接。
+  if(activeTab!==0 || !selected) return;
   if(e.key==='Enter'){post('open',selected);}
   else if(e.key==='Delete'){post('ack',selected);}
 });
@@ -811,6 +860,7 @@ function adopt(s){
   STATE=s||{};
   WORK=STATE.work||{items:[]};
   WORKERS=STATE.workers||[];
+  EVENTS=STATE.events||[];
   now=Date.now();
   applyTheme(STATE.theme||{});
   render();

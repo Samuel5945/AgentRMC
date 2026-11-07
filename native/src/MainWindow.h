@@ -173,6 +173,9 @@ private:
     std::unique_ptr<WorkItemStore> workItems_;
     // 原型开关（AGENTRMC_WORKWEB=1）：待办页交给 WebView2 渲染时非空。
     WorkWebView *workWeb_ = nullptr;
+    // 外壳版事件流：Qt 侧 logList_ 只有合成好的文本，这里多存一份 kind，
+    // 页面按 kind 上色。和 logList_ 同生命周期——内存账，清空/重启即没。
+    QJsonArray webEvents_;
     // 语音命令与 HTTP /command 共用这一份系统控制执行器。
     std::unique_ptr<WinSystemControl> system_;
     // pet_work_update 的播报节流：Agent 可能连着报几次 blocked，别喊成一串。

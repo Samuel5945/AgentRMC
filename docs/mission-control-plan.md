@@ -63,9 +63,9 @@ Task/WorkItem 的**会话归属**与**可验证投递**，这两块得自己补�
 
 | 能力 | WorkBuddy 系 | Qoder 系 | ZCode 系 | DSH |
 |---|---|---|---|---|
-| 拿到真实会话 id | 有（插件从宿主取） | 有（hook payload） | 有（hook payload / sqlite） | 有（agent.id） |
-| 打开指定会话 | **已接线**（UIA 通道，见下） | 桌面通道证伪（CLI 已否决） | **已探明**（app-server 协议，见下） | 待验证 |
-| 按 id 发送并回回执 | **已接线**（UIA 通道，见下） | 桌面通道证伪（CLI 已否决） | **已探明**（app-server 协议，见下） | 待验证 |
+| 拿到真实会话 id | 有（插件从宿主取） | 有（hook payload） | 有（hook payload / sqlite） | 有（agent.id，即盘上 `session-<uuid>` 目录名） |
+| 打开指定会话 | **已接线**（UIA 通道，见下） | 桌面通道证伪（CLI 已否决） | **已探明**（app-server 协议，见下） | 不需要（API 注入，见下） |
+| 按 id 发送并回回执 | **已接线**（UIA 通道，见下） | 桌面通道证伪（CLI 已否决） | **已探明**（app-server 协议，见下） | **已探通**（插件进程内 followup，实测见下） |
 
 #### WorkBuddy 系实测（2026-11-07，探针 `rc_probe/wb_open_session.py` / `wb_send_receipt.py`）
 
@@ -208,6 +208,47 @@ Task/WorkItem 的**会话归属**与**可验证投递**，这两块得自己补�
 - 与 Qoder 的本质差异：Qoder CLI 追加的轮次桌面**永不重扫**；ZCode 桌面的
   会话视图就建在共享 db 上，协议投递即落库，闭环预期成立。
 
+#### DSH 系实测（2026-11-07 深夜，插件临时探针 + `rc_probe/dsh_zstd_scan.py`）
+
+- 通道既不走 UI 也不走 CLI：DSH 的扩展单位是 Cordis Host 插件，而 **agents
+  服务就在插件 ctx 上**（`session-controller` 同款 `inject: ['agents',…]`；
+  desktop-host 退出检查也用 `agents.list()`，`apps/desktop-host/src/quit-inspection.ts:31`）。
+- 官方注入面：`Agent` 运行时面有 **`followup(message)`**（「排队一轮普通
+  follow-up 并唤醒 driver」，`packages/core/agent/src/runtime-types.ts`）；ACP 桥
+  测试即同款原型 `agent.followup(createUserMessage({content:[{type:'text',text}],
+  source:{kind:'user'}}))`。Web UI 的正路 `SessionCommands.prompt()`
+  （`packages/api/session-controller/src/commands.ts:317`）就是 resolveAgent →
+  admission → followup，且 `resolveAgent` 对**离线会话会从盘上 resume**
+  （`agent.ts:151`）——接线时照它走，未打开的会话也能派。
+- 网关通道否决（native 侧）：桌面本地口 127.0.0.1:10624 要 HMAC cookie +
+  credentials 存储（`packages/client/connection/src/browser-auth.ts`），外加整套
+  typert Remote RPC——native C++ 复刻太重；插件进程内注入用官方服务面，零协议成本。
+- 探针过程（注入代码为临时改动，验证后已撤）：给 `plugins/deepseek-harness/index.js`
+  加文件触发的 `list`/`inject` 探针（读
+  `%APPDATA%\LIG\AgentRMCNative\dsh-probe.json`，写 `dsh-probe-result.json`），重启
+  DSH 加载；用户自建牺牲会话 `9c08421f…`（default-workspace，空会话）；
+  `agents.get(<id>)` → 手搓 UserMessage（`{id,role:'user',content:[{type:'text'}],
+  source:{kind:'user'}}`，与 ACP 同形，不必 import @deepseek-ai 包）→ `followup()`。
+- **结果全绿**：注入被官方接受（durable 记 `agent/inbox/spliced` + `user/message`，
+  source 落 `kind:"user"`）；轮次跑通（egg-alpha，重试 5 轮 ~57s）；**回执免费**——
+  turn-start / turn-stopping 通知本来就带 session_id，native 落卡绑定正确会话，
+  `stop` 卡 message 即回复正文「收到 AgentRMC-P1-9K3T」；zstd 全库扫描 22 个
+  会话文件，标记只在目标会话，其它会话零变化零泄漏（改前改后全库文件 diff 亦仅
+  目标一个）。
+- 坑（接线时必须处理）：
+  1. 会话库 `session.v4.jsonl.zstd` 是**多帧拼接**：zstandard `decompress()` 只解
+     第一帧，追加轮次全在后续帧——必须 `stream_reader(read_across_frames=True)`
+     跨帧流式读，否则全库扫描零命中假阴性。native 侧回执走插件通知即可，不必读盘。
+  2. 回执节奏由 LLM 决定（本轮 ~57s），SessionDispatch 的回执等待超时不能按
+     WorkBuddy 的秒级算；turn-start 归档会 touch 旧卡（updated_at 刷新、
+     created_at 保留），对账别把它当新卡。
+  3. `agent.id` 带 `session-` 前缀（WorkBuddy 是裸 uuid），正好是盘上目录名，
+     守卫判别可直接对目录。
+  4. 插件里加定时器要 `unref()`，否则测试进程跑完不退出。
+- 待清理（用户裁决）：牺牲会话 `9c08421f…`（含两条「收到」轮次）与其 `review`
+  待验收卡；在跑的 DSH 进程还持着撤码前的探针代码（文件触发、无文件即惰性），
+  下次重启自然回到干净代码。
+
 已定的设计约束：
 
 - 宿主若支持 API／插件命令：新建或指定会话，发送带 `dispatchId`，回执关联到工单。
@@ -289,18 +330,19 @@ Task/WorkItem 的**会话归属**与**可验证投递**，这两块得自己补�
 
 ## 8. 现状与剩余
 
-- 数据面：第 1、2 批已落地并装机验证；第 3 批定向派发的前置能力 **WorkBuddy 系
-  与 Qoder CN（CLI 通道）已探明并实测**（打开指定会话 + 定向发送 + 回执）；
-  DSH 待探，Qoder 桌面 UI 定向打开 / 国际版待补。
+- 数据面：第 1、2 批已落地并装机验证；第 3 批定向派发的前置能力 **WorkBuddy 系、
+  ZCode 系、DSH 已探明并实测**（打开指定会话 / 定向发送 / 回执）；DSH 通道为
+  插件进程内 followup（官方服务面），Qoder 桌面 UI 定向打开 / 国际版待补。
 - 表现面：外壳＋六个页签已落，默认启用；桌宠／气泡保持 Qt。
 - 版本号仍是 `0.4.1`（Native 与插件同号）：按约定等用户明确说「升版」才动。
 - 剩余事项：
   1. 第 3 批：**WorkBuddy 系 UIA 通道已接线并活体验收**；**ZCode 系 app-server
      协议通道已探明并活体验收**（create/send×3/回执全链通，hook 毒化隔离实证，
-     桌面可见性待人工眼见后接线）；Qoder CN 的 CLI 通道实测后被用户否决
-     （桌面不可见），路由休眠；桌面可见通道两候选（deep link、a11y 设置）
-     2026-11-07 深夜均证伪——**Qoder 线等上游**（官方 deeplink 支持按 id 打开
-     会话、renderer a11y 开关或本地会话 API 任一出现再接线）；「续当前会话」
-     模式保持可用；**DSH 仍待验证**。
+     桌面可见性待人工眼见后接线）；**DSH 插件进程内 followup 通道已探明并
+     活体验收**（agents 服务可达、注入/回执/零泄漏全绿，native 侧接线待做）；
+     Qoder CN 的 CLI 通道实测后被用户否决（桌面不可见），路由休眠；桌面可见
+     通道两候选（deep link、a11y 设置）2026-11-07 深夜均证伪——**Qoder 线等
+     上游**（官方 deeplink 支持按 id 打开会话、renderer a11y 开关或本地会话
+     API 任一出现再接线）；「续当前会话」模式保持可用。
   2. 事件流／系统页的真实数据字段如有新增，记得同步给 `webShellState()`。
   3. 美术主题下的外壳观感复检（有探针图，但需人工确认一遍）。

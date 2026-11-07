@@ -2,6 +2,7 @@
 
 #include <QFrame>
 #include <QHash>
+#include <QJsonObject>
 #include <QString>
 
 #include "core/Profiles.h"
@@ -24,11 +25,22 @@ public:
     void refreshInlineStyles();
     int selectedVk() const { return selectedVk_; }
 
+    // WebView 外壳：显示就绪状态 + 动作入口。改键菜单/组合键捕获仍弹 Qt
+    // 原生弹窗（openMenu/captureCombo），网页只把点击送回来。
+    QJsonObject webState();
+    void webSelect(int vk);
+    void webEdit(int vk, const QString &gesture);
+    void webSetPinned(const QString &name);
+    void webSetTakeover(bool on);
+    void webOpenProfiles();
+    void webReload();
+
 signals:
     void mappingsChanged();
     void viewChanged();
     void keySelected(int vk);
     void keyHovered(int vk, bool on);
+    void hintChanged();
 
 private:
     void buildUi();
@@ -70,6 +82,8 @@ private:
     QHash<int, MapKeyRow *> rows_;
     int selectedVk_ = 38;
     QString shownName_;
+    // 底部提示行当前颜色（外壳页要按同一颜色渲染）；flashHint/resetHint 维护。
+    QString hintColor_ = QStringLiteral("#5b6472");
     QTimer *tick_ = nullptr;
     QTimer *hintTimer_ = nullptr;
 };

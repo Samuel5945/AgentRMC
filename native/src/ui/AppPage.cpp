@@ -19,6 +19,20 @@
 #include <QStandardPaths>
 #include <QVBoxLayout>
 
+namespace {
+
+// 底部汇总文案：Qt 页和 WebView 外壳共用，别让两处各写一份。
+QString appSummaryText(int installed, int total) {
+    return QString::fromUtf8(
+               "本机找到 %1 / %2 个 · 语音启动要用本地识别（SenseVoice / Qwen3）；"
+               "转发热键时语音交给前台应用。想用手上的遥控器，"
+               "可以在「按键映射」里把「打开 xx」设成某个键的单击 / 双击 / 长按。")
+        .arg(installed)
+        .arg(total);
+}
+
+}  // namespace
+
 AppPage::AppPage(ProfileStore *store, QWidget *parent)
     : QFrame(parent), store_(store) {
     setObjectName("card");
@@ -184,12 +198,7 @@ void AppPage::rebuild() {
     }
     rows_->addStretch(1);
 
-    summary_->setText(
-        QString::fromUtf8("本机找到 %1 / %2 个 · 语音启动要用本地识别（SenseVoice / Qwen3）；"
-                          "转发热键时语音交给前台应用。想用手上的遥控器，"
-                          "可以在「按键映射」里把「打开 xx」设成某个键的单击 / 双击 / 长按。")
-            .arg(installed)
-            .arg(catalog.size()));
+    summary_->setText(appSummaryText(installed, catalog.size()));
 }
 
 void AppPage::persistCustomApps(const QJsonArray &apps) {
@@ -350,4 +359,77 @@ void AppPage::removeCustomApp(const QString &name, const QString &path) {
         apps.append(value);
     }
     persistCustomApps(apps);
+}
+
+QJsonObject AppPage::webState() {
+    int installed = 0;
+    QJsonArray rows;
+    const QVector<AppEntry> &catalog = AppLauncher::catalog();
+    for (const AppEntry &entry : catalog) {
+        const AppTarget target = AppLauncher::resolve(entry);
+        if (target.found) {
+            ++installed;
+        }
+        rows.append(QJsonObject{
+            {QStringLiteral("id"), entry.id},
+            {QStringLiteral("name"), entry.name},
+            {QStringLiteral("state"),
+             target.found ? target.detail : QString::fromUtf8("没装")},
+            {QStringLiteral("stateTip"),
+             target.found ? target.target
+                          : QString::fromUtf8("开始菜单里没有这个应用的快捷方式")},
+            {QStringLiteral("found"), target.found},
+            {QStringLiteral("custom"),
+             entry.id.startsWith(QStringLiteral("custom:"))},
+            {QStringLiteral("customPath"), entry.customPath},
+        });
+    }
+    return QJsonObject{
+        {QStringLiteral("rows"), rows},
+        {QStringLiteral("summary"), appSummaryText(installed, catalog.size())},
+        {QStringLiteral("voiceLaunch"),
+         store_->uiBool(QStringLiteral("voice_launch"), true)},
+        {QStringLiteral("systemControl"),
+         store_->uiBool(SystemControlSettings::masterKey(), true)},
+    };
+}
+
+void AppPage::webLaunch(const QString &id) {
+    QString name = id;
+    for (const AppEntry &entry : AppLauncher::catalog()) {
+        if (entry.id == id) {
+            name = entry.name;
+            break;
+        }
+    }
+    QString error;
+    const bool ok = AppLauncher::launch(id, &error);
+    emit launched(name, ok, error);
+}
+
+void AppPage::webAddCustom() {
+    addCustomApp();
+}
+
+void AppPage::webRemoveCustom(const QString &name, const QString &path) {
+    removeCustomApp(name, path);
+}
+
+void AppPage::webRescan() {
+    AppLauncher::refreshCache();
+    rebuild();
+}
+
+void AppPage::webSetVoiceLaunch(bool on) {
+    store_->setUiBool(QStringLiteral("voice_launch"), on);
+    if (voiceSwitch_ != nullptr) {
+        voiceSwitch_->setChecked(on);
+    }
+}
+
+void AppPage::webSetSystemControl(bool on) {
+    store_->setUiBool(SystemControlSettings::masterKey(), on);
+    if (systemSwitch_ != nullptr) {
+        systemSwitch_->setChecked(on);
+    }
 }

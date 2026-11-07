@@ -117,6 +117,15 @@ QString cssColor(const QColor &color) {
         .arg(color.alphaF(), 0, 'f', 3);
 }
 
+// 引导页数据：定义在 buildGuidePage 前面（Qt 页和外壳共用），这里先声明，
+// 让前面的 webShellState 也能序列化。
+struct GuideSection {
+    QString title;
+    QVector<QPair<QString, QString>> rows;
+};
+QString guideIntro();
+QVector<GuideSection> guideSections();
+
 class TitleBar final : public QWidget {
 public:
     using QWidget::QWidget;
@@ -588,6 +597,27 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
                     remotePanel_->setLinkedVk(on ? vk : keymapPage_->selectedVk());
                 }
             });
+    // 外壳版：映射/场景/选中/底部提示任何一处变了，重推一次状态（增量，不重载）。
+    connect(keymapPage_, &KeymapPage::mappingsChanged, this, [this] {
+        if (workWeb_ != nullptr) {
+            workWeb_->refresh();
+        }
+    });
+    connect(keymapPage_, &KeymapPage::viewChanged, this, [this] {
+        if (workWeb_ != nullptr) {
+            workWeb_->refresh();
+        }
+    });
+    connect(keymapPage_, &KeymapPage::keySelected, this, [this](int) {
+        if (workWeb_ != nullptr) {
+            workWeb_->refresh();
+        }
+    });
+    connect(keymapPage_, &KeymapPage::hintChanged, this, [this] {
+        if (workWeb_ != nullptr) {
+            workWeb_->refresh();
+        }
+    });
     tabs_->addTab(keymapPage_, QString::fromUtf8("按键映射"));
     appPage_ = new AppPage(store_.get());
     connect(appPage_, &AppPage::launched, this,
@@ -611,9 +641,12 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
             });
     tabs_->addTab(appPage_, QString::fromUtf8("应用"));
     tabs_->addTab(buildGuidePage(), QString::fromUtf8("使用引导"));
-    // 原型：整个右半区（页签栏 + 页面）交给一个 WebView2 画，Qt 只留左侧语音面板。
+    // 整个右半区（页签栏 + 页面）交给一个 WebView2 画，Qt 只留左侧语音面板。
     // 不塞进 QTabWidget：布局那一步把它直接放到 grid 的 1 号位，Qt 页签整块藏起来。
-    if (!qgetenv("AGENTRMC_WORKWEB").isEmpty() && WorkWebView::runtimeAvailable()) {
+    // 默认就走外壳；留 AGENTRMC_WORKWEB=0 回退老页签（现场排查/运行库缺失时用）。
+    const QByteArray workWebFlag = qgetenv("AGENTRMC_WORKWEB");
+    const bool wantWorkWeb = workWebFlag != "0";
+    if (wantWorkWeb && WorkWebView::runtimeAvailable()) {
         auto *shell = new WorkWebView;
         shell->setSources([this] { return webShellState(); },
                           [this](const QJsonObject &action) { handleWebAction(action); });
@@ -627,6 +660,9 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
                         workWeb_->refresh();
                     }
                 });
+    }
+    if (wantWorkWeb && workWeb_ == nullptr) {
+        qWarning("workweb: WebView2 运行库不可用，回退 Qt 页签");
     }
     connect(tabs_, &QTabWidget::currentChanged, this, [this](int index) {
         if (remotePanel_ != nullptr) {
@@ -2016,156 +2052,138 @@ void MainWindow::refreshHealth() {
     refreshSystemPage();
 }
 
-void MainWindow::refreshSystemPage() {
-    if (sysBridge_ == nullptr) {
-        return;
-    }
+// 系统页的显示就绪状态：Qt 标签/表格与 WebView 外壳共用这一份，
+// 文案和对账规则只在这里维护一遍。
+QJsonObject MainWindow::systemState() {
     const bool bridgeOk = bridge_ != nullptr && bridge_->isRunning();
-    sysBridge_->setText(
-        QString::fromUtf8("桥接：%1（127.0.0.1:45915）")
-            .arg(bridgeOk ? QString::fromUtf8("正常")
-                          : QString::fromUtf8("异常")));
     const qint64 secs = startedAt_.secsTo(QDateTime::currentDateTimeUtc());
-    sysUptime_->setText(QString::fromUtf8("运行时长：%1 分 %2 秒")
-                            .arg(secs / 60)
-                            .arg(secs % 60));
-    sysLast_->setText(
-        QString::fromUtf8("最近事件：%1")
-            .arg(lastEventAt_.isValid()
-                     ? lastEventAt_.toLocalTime().toString(
-                           QStringLiteral("MM-dd HH:mm:ss"))
-                     : QStringLiteral("—")));
     const int spool = spoolPendingCount();
-    sysSpool_->setText(QString::fromUtf8("离线待补：%1 条").arg(spool));
-
     QStringList pluginProblems;
     const QJsonObject plugin = pluginHealth(&pluginProblems);
-    if (sysPlugin_ != nullptr) {
-        QString text = QString::fromUtf8("联动插件：内置 %1")
-                           .arg(plugin.value(QStringLiteral("bundled"))
-                                        .toString()
-                                        .isEmpty()
-                                    ? QString::fromUtf8("读不到")
-                                    : plugin.value(QStringLiteral("bundled")).toString());
-        const QJsonArray rows = plugin.value(QStringLiteral("hosts")).toArray();
-        const QJsonArray bundleRows = plugin.value(QStringLiteral("bundles")).toArray();
-        if (rows.isEmpty() && bundleRows.isEmpty()) {
-            text += QString::fromUtf8(" · 本机没有宿主配置家");
-        }
-        // 五家宿主各占一段会把这行撑成一堵墙，而绝大多数时候它们只是「都装齐了」。
-        // 所以按状态分两堆：干净的合并成一句「已同步 A、B、C」，有事的单独说。
-        // DSH 的 bundle 行字段名一样，用同一套规则渲染（未装时说清去哪儿装）。
-        QStringList synced;
-        QStringList pending;
-        auto renderRow = [&](const QJsonObject &row) {
-            const QString name = row.value(QStringLiteral("name")).toString();
-            const bool isBundle =
-                row.value(QStringLiteral("kind")).toString() ==
-                QStringLiteral("bundle");
-            const QString installed =
-                row.value(QStringLiteral("installed")).toString();
-            const QString state = row.value(QStringLiteral("state")).toString();
-            const bool enabled = row.value(QStringLiteral("enabled")).toBool();
-            // 盘上已装齐但进程还跑旧版：只有发通知上报的 loaded 能看出来。
-            const QString loaded = row.value(QStringLiteral("loaded")).toString();
-            const bool staleProcess =
-                !loaded.isEmpty() && loaded != installed;
-            const bool awaiting =
-                row.value(QStringLiteral("awaiting_report")).toBool();
 
-            // 只有「装齐 + 启用 + 进程也是这版 + 没在等上报」才算真同步，
-            // 少任何一条都得单独露出来，别被合并吃掉。
-            if (installed.isEmpty()) {
-                pending << (isBundle
-                                ? QString::fromUtf8("%1 插件未装（装法见「使用引导」）")
-                                      .arg(name)
-                                : QString::fromUtf8("%1 未装").arg(name));
-                return;
-            }
-            if (state == QString::fromUtf8("已装齐") && enabled &&
-                !staleProcess && !awaiting) {
-                synced << (isBundle ? QString::fromUtf8("%1 插件").arg(name) : name);
-                return;
-            }
-            QString line = QString::fromUtf8("%1 %2（%3%4）")
-                               .arg(name, installed, state,
-                                    enabled ? QString()
-                                            : QString::fromUtf8("·未启用"));
-            if (staleProcess) {
-                line += QString::fromUtf8("·进程 %1").arg(loaded);
-            }
-            if (awaiting) {
-                line += QString::fromUtf8("·等新版上报");
-            }
-            pending << line;
-        };
-        for (const QJsonValue &value : rows) {
-            renderRow(value.toObject());
-        }
-        // DSH 的 bundle：多 profile 时只报「装了的那些」（用 profile 名区分）；
-        // 一个都没装才给一行「未装」，否则每个没用过的 profile 都会刷一句。
-        QList<QJsonObject> installedBundles;
-        for (const QJsonValue &value : bundleRows) {
-            const QJsonObject row = value.toObject();
-            if (!row.value(QStringLiteral("installed")).toString().isEmpty()) {
-                installedBundles.append(row);
-            }
-        }
-        if (installedBundles.isEmpty() && !bundleRows.isEmpty()) {
-            const QString name = bundleRows.first()
-                                     .toObject()
-                                     .value(QStringLiteral("name"))
-                                     .toString();
-            pending << QString::fromUtf8("%1 插件未装（装法见「使用引导」）").arg(name);
-        }
-        for (const QJsonObject &row : installedBundles) {
-            QJsonObject named = row;
-            const QString profile = row.value(QStringLiteral("profile")).toString();
-            if (bundleRows.size() > 1 && !profile.isEmpty()) {
-                named.insert(QStringLiteral("name"),
-                             QString::fromUtf8("%1（%2）")
-                                 .arg(row.value(QStringLiteral("name")).toString(),
-                                      profile));
-            }
-            renderRow(named);
-        }
-        if (!synced.isEmpty()) {
-            text += QString::fromUtf8(" · 已同步 %1")
-                        .arg(synced.join(QString::fromUtf8("、")));
-        }
-        for (const QString &line : pending) {
-            text += QString::fromUtf8(" · ") + line;
-        }
-        // 外部桥（OpenSquilla）不占插件版本，单独提一句：用户否则会奇怪
-        // “每天在用的那个 Agent 怎么没出现在这行里”。
-        const QJsonArray bridges = plugin.value(QStringLiteral("bridges")).toArray();
-        for (const QJsonValue &value : bridges) {
-            const QJsonObject bridge = value.toObject();
-            const QString name = bridge.value(QStringLiteral("name")).toString();
-            const bool running = bridge.value(QStringLiteral("running")).toBool();
-            text += QString::fromUtf8(" · %1 外部桥（%2）")
-                        .arg(name, running ? QString::fromUtf8("运行中")
-                                           : QString::fromUtf8("未启动"));
-        }
-        sysPlugin_->setText(text);
-        sysPlugin_->setToolTip(QString::fromUtf8(
-            "这一行对账 Qoder / Qoder CN / ZCode / WorkBuddy AI / WorkBuddy 五家"
-            "已装的插件，外加装在宿主 profile 里的 DeepSeek Harness；"
-            "版本和内置一致的合并成「已同步」，其余单独列。\n"
-            "Qoder 家族把上传的 zip 记成本地插件，插件页的「更新」按钮不会去拉新包；\n"
-            "ZCode 的目录市场源只在宿主自己重扫时才重新拉，重启宿主并不会重扫，"
-            "所以也会停在旧版——这两类由「升级联动插件」代劳。\n"
-            "WorkBuddy 的市场源条目带 autoUpdate，宿主自己就会拉到新版，"
-            "这里只报状态，不动它的注册表。\n"
-            "DeepSeek Harness 的插件是个 bundle 目录（~/.dsh/profiles/<profile> 里"
-            "一条 link 依赖 + dsh.profile.bundles），没有注册表可改："
-            "升它要 pnpm 重装并重启 Host，所以这里只报盘上版本和进程版本，"
-            "装法是「使用引导 → 接入 AI Agent」里那句给 DSH 的 Agent 的话。\n"
-            "OpenSquilla 不同：它没有插件目录，也不能把插件的 zip 塞进去，走的是"
-            "外部桥（技能目录里的 opensquilla-pet-bridge.mjs）向同一个 45915 端口"
-            "发提醒，所以不占插件版本、也不用升级；只报进程在不在。\n"
-            "改完插件重启对应宿主即可；行里的「进程」是此刻真在跑的版本。"));
+    QString pluginText = QString::fromUtf8("联动插件：内置 %1")
+                             .arg(plugin.value(QStringLiteral("bundled"))
+                                          .toString()
+                                          .isEmpty()
+                                      ? QString::fromUtf8("读不到")
+                                      : plugin.value(QStringLiteral("bundled")).toString());
+    const QJsonArray rows = plugin.value(QStringLiteral("hosts")).toArray();
+    const QJsonArray bundleRows = plugin.value(QStringLiteral("bundles")).toArray();
+    if (rows.isEmpty() && bundleRows.isEmpty()) {
+        pluginText += QString::fromUtf8(" · 本机没有宿主配置家");
     }
+    // 五家宿主各占一段会把这行撑成一堵墙，而绝大多数时候它们只是「都装齐了」。
+    // 所以按状态分两堆：干净的合并成一句「已同步 A、B、C」，有事的单独说。
+    // DSH 的 bundle 行字段名一样，用同一套规则渲染（未装时说清去哪儿装）。
+    QStringList synced;
+    QStringList pending;
+    auto renderRow = [&](const QJsonObject &row) {
+        const QString name = row.value(QStringLiteral("name")).toString();
+        const bool isBundle =
+            row.value(QStringLiteral("kind")).toString() ==
+            QStringLiteral("bundle");
+        const QString installed =
+            row.value(QStringLiteral("installed")).toString();
+        const QString state = row.value(QStringLiteral("state")).toString();
+        const bool enabled = row.value(QStringLiteral("enabled")).toBool();
+        // 盘上已装齐但进程还跑旧版：只有发通知上报的 loaded 能看出来。
+        const QString loaded = row.value(QStringLiteral("loaded")).toString();
+        const bool staleProcess =
+            !loaded.isEmpty() && loaded != installed;
+        const bool awaiting =
+            row.value(QStringLiteral("awaiting_report")).toBool();
+
+        // 只有「装齐 + 启用 + 进程也是这版 + 没在等上报」才算真同步，
+        // 少任何一条都得单独露出来，别被合并吃掉。
+        if (installed.isEmpty()) {
+            pending << (isBundle
+                            ? QString::fromUtf8("%1 插件未装（装法见「使用引导」）")
+                                  .arg(name)
+                            : QString::fromUtf8("%1 未装").arg(name));
+            return;
+        }
+        if (state == QString::fromUtf8("已装齐") && enabled &&
+            !staleProcess && !awaiting) {
+            synced << (isBundle ? QString::fromUtf8("%1 插件").arg(name) : name);
+            return;
+        }
+        QString line = QString::fromUtf8("%1 %2（%3%4）")
+                           .arg(name, installed, state,
+                                enabled ? QString()
+                                        : QString::fromUtf8("·未启用"));
+        if (staleProcess) {
+            line += QString::fromUtf8("·进程 %1").arg(loaded);
+        }
+        if (awaiting) {
+            line += QString::fromUtf8("·等新版上报");
+        }
+        pending << line;
+    };
+    for (const QJsonValue &value : rows) {
+        renderRow(value.toObject());
+    }
+    // DSH 的 bundle：多 profile 时只报「装了的那些」（用 profile 名区分）；
+    // 一个都没装才给一行「未装」，否则每个没用过的 profile 都会刷一句。
+    QList<QJsonObject> installedBundles;
+    for (const QJsonValue &value : bundleRows) {
+        const QJsonObject row = value.toObject();
+        if (!row.value(QStringLiteral("installed")).toString().isEmpty()) {
+            installedBundles.append(row);
+        }
+    }
+    if (installedBundles.isEmpty() && !bundleRows.isEmpty()) {
+        const QString name = bundleRows.first()
+                                 .toObject()
+                                 .value(QStringLiteral("name"))
+                                 .toString();
+        pending << QString::fromUtf8("%1 插件未装（装法见「使用引导」）").arg(name);
+    }
+    for (const QJsonObject &row : installedBundles) {
+        QJsonObject named = row;
+        const QString profile = row.value(QStringLiteral("profile")).toString();
+        if (bundleRows.size() > 1 && !profile.isEmpty()) {
+            named.insert(QStringLiteral("name"),
+                         QString::fromUtf8("%1（%2）")
+                             .arg(row.value(QStringLiteral("name")).toString(),
+                                  profile));
+        }
+        renderRow(named);
+    }
+    if (!synced.isEmpty()) {
+        pluginText += QString::fromUtf8(" · 已同步 %1")
+                          .arg(synced.join(QString::fromUtf8("、")));
+    }
+    for (const QString &line : pending) {
+        pluginText += QString::fromUtf8(" · ") + line;
+    }
+    // 外部桥（OpenSquilla）不占插件版本，单独提一句：用户否则会奇怪
+    // “每天在用的那个 Agent 怎么没出现在这行里”。
+    const QJsonArray bridges = plugin.value(QStringLiteral("bridges")).toArray();
+    for (const QJsonValue &value : bridges) {
+        const QJsonObject bridge = value.toObject();
+        const QString name = bridge.value(QStringLiteral("name")).toString();
+        const bool running = bridge.value(QStringLiteral("running")).toBool();
+        pluginText += QString::fromUtf8(" · %1 外部桥（%2）")
+                          .arg(name, running ? QString::fromUtf8("运行中")
+                                             : QString::fromUtf8("未启动"));
+    }
+    const QString pluginTip = QString::fromUtf8(
+        "这一行对账 Qoder / Qoder CN / ZCode / WorkBuddy AI / WorkBuddy 五家"
+        "已装的插件，外加装在宿主 profile 里的 DeepSeek Harness；"
+        "版本和内置一致的合并成「已同步」，其余单独列。\n"
+        "Qoder 家族把上传的 zip 记成本地插件，插件页的「更新」按钮不会去拉新包；\n"
+        "ZCode 的目录市场源只在宿主自己重扫时才重新拉，重启宿主并不会重扫，"
+        "所以也会停在旧版——这两类由「升级联动插件」代劳。\n"
+        "WorkBuddy 的市场源条目带 autoUpdate，宿主自己就会拉到新版，"
+        "这里只报状态，不动它的注册表。\n"
+        "DeepSeek Harness 的插件是个 bundle 目录（~/.dsh/profiles/<profile> 里"
+        "一条 link 依赖 + dsh.profile.bundles），没有注册表可改："
+        "升它要 pnpm 重装并重启 Host，所以这里只报盘上版本和进程版本，"
+        "装法是「使用引导 → 接入 AI Agent」里那句给 DSH 的 Agent 的话。\n"
+        "OpenSquilla 不同：它没有插件目录，也不能把插件的 zip 塞进去，走的是"
+        "外部桥（技能目录里的 opensquilla-pet-bridge.mjs）向同一个 45915 端口"
+        "发提醒，所以不占插件版本、也不用升级；只报进程在不在。\n"
+        "改完插件重启对应宿主即可；行里的「进程」是此刻真在跑的版本。");
 
     QStringList problems = pluginProblems;
     if (!bridgeOk) {
@@ -2175,21 +2193,11 @@ void MainWindow::refreshSystemPage() {
         problems.append(
             QString::fromUtf8("有 %1 条离线通知待补投").arg(spool));
     }
-    sysProblems_->setText(
-        problems.isEmpty()
-            ? QString::fromUtf8("问题：无")
-            : QString::fromUtf8("问题：%1").arg(problems.join(QString::fromUtf8("；"))));
-    sysProblems_->setStyleSheet(
-        problems.isEmpty()
-            ? QStringLiteral("color:%1;")
-                  .arg(ThemeManager::instance().css(QStringLiteral("muted")))
-            : QStringLiteral("color:#f0883e;"));
 
+    QJsonArray workerRows;
     const QJsonArray workers = workersArray();
-    sysWorkers_->setRowCount(workers.size());
-    for (int i = 0; i < workers.size(); ++i) {
-        const QJsonObject worker = workers.at(i).toObject();
-        const QString name = worker.value(QStringLiteral("name")).toString();
+    for (const QJsonValue &value : workers) {
+        const QJsonObject worker = value.toObject();
         const bool foreground =
             worker.value(QStringLiteral("foreground")).toBool();
         const bool window = worker.value(QStringLiteral("window")).toBool();
@@ -2199,32 +2207,94 @@ void MainWindow::refreshSystemPage() {
         if (!lastAt.isValid()) {
             lastAt = QDateTime::fromString(last, Qt::ISODate);
         }
-        const QString lastText =
-            lastAt.isValid()
-                ? lastAt.toLocalTime().toString(QStringLiteral("HH:mm"))
-                : QStringLiteral("—");
         // 进程活着但窗口收起来了要跟「在线」区分开：用户得知道为什么
         // 语音派活没送到它头上（没有可交互窗口就不注入）。
-        const QString state = foreground ? QString::fromUtf8("前台")
-                              : window   ? QString::fromUtf8("在线")
-                                         : QString::fromUtf8("窗口隐藏");
-        const QVector<QPair<QString, QString>> columns = {
-            {name, state},
-            {QString::number(worker.value(QStringLiteral("needs_me")).toInt()),
-             QString::number(worker.value(QStringLiteral("review")).toInt())},
-            {QString::number(worker.value(QStringLiteral("working")).toInt()),
-             lastText},
+        workerRows.append(QJsonObject{
+            {QStringLiteral("name"),
+             worker.value(QStringLiteral("name")).toString()},
+            {QStringLiteral("state"),
+             foreground ? QString::fromUtf8("前台")
+                        : window ? QString::fromUtf8("在线")
+                                 : QString::fromUtf8("窗口隐藏")},
+            {QStringLiteral("foreground"), foreground},
+            {QStringLiteral("needs"),
+             worker.value(QStringLiteral("needs_me")).toInt()},
+            {QStringLiteral("review"),
+             worker.value(QStringLiteral("review")).toInt()},
+            {QStringLiteral("working"),
+             worker.value(QStringLiteral("working")).toInt()},
+            {QStringLiteral("last"),
+             lastAt.isValid()
+                 ? lastAt.toLocalTime().toString(QStringLiteral("HH:mm"))
+                 : QString::fromUtf8("—")},
+        });
+    }
+
+    return QJsonObject{
+        {QStringLiteral("bridge"),
+         QString::fromUtf8("桥接：%1（127.0.0.1:45915）")
+             .arg(bridgeOk ? QString::fromUtf8("正常")
+                           : QString::fromUtf8("异常"))},
+        {QStringLiteral("uptime"),
+         QString::fromUtf8("运行时长：%1 分 %2 秒").arg(secs / 60).arg(secs % 60)},
+        {QStringLiteral("last"),
+         QString::fromUtf8("最近事件：%1")
+             .arg(lastEventAt_.isValid()
+                      ? lastEventAt_.toLocalTime().toString(
+                            QStringLiteral("MM-dd HH:mm:ss"))
+                      : QString::fromUtf8("—"))},
+        {QStringLiteral("spool"),
+         QString::fromUtf8("离线待补：%1 条").arg(spool)},
+        {QStringLiteral("plugin"), pluginText},
+        {QStringLiteral("pluginTip"), pluginTip},
+        {QStringLiteral("problems"),
+         problems.isEmpty()
+             ? QString::fromUtf8("问题：无")
+             : QString::fromUtf8("问题：%1")
+                   .arg(problems.join(QString::fromUtf8("；")))},
+        {QStringLiteral("problemsOk"), problems.isEmpty()},
+        {QStringLiteral("workers"), workerRows},
+    };
+}
+
+void MainWindow::refreshSystemPage() {
+    if (sysBridge_ == nullptr) {
+        return;
+    }
+    const QJsonObject state = systemState();
+    sysBridge_->setText(state.value(QStringLiteral("bridge")).toString());
+    sysUptime_->setText(state.value(QStringLiteral("uptime")).toString());
+    sysLast_->setText(state.value(QStringLiteral("last")).toString());
+    sysSpool_->setText(state.value(QStringLiteral("spool")).toString());
+    sysPlugin_->setText(state.value(QStringLiteral("plugin")).toString());
+    sysPlugin_->setToolTip(state.value(QStringLiteral("pluginTip")).toString());
+    sysProblems_->setText(state.value(QStringLiteral("problems")).toString());
+    sysProblems_->setStyleSheet(
+        state.value(QStringLiteral("problemsOk")).toBool()
+            ? QStringLiteral("color:%1;")
+                  .arg(ThemeManager::instance().css(QStringLiteral("muted")))
+            : QStringLiteral("color:#f0883e;"));
+
+    const QJsonArray workers = state.value(QStringLiteral("workers")).toArray();
+    sysWorkers_->setRowCount(workers.size());
+    for (int i = 0; i < workers.size(); ++i) {
+        const QJsonObject worker = workers.at(i).toObject();
+        const bool foreground =
+            worker.value(QStringLiteral("foreground")).toBool();
+        const QVector<QString> columns = {
+            worker.value(QStringLiteral("name")).toString(),
+            worker.value(QStringLiteral("state")).toString(),
+            QString::number(worker.value(QStringLiteral("needs")).toInt()),
+            QString::number(worker.value(QStringLiteral("review")).toInt()),
+            QString::number(worker.value(QStringLiteral("working")).toInt()),
+            worker.value(QStringLiteral("last")).toString(),
         };
-        int column = 0;
-        for (const auto &pair : columns) {
-            auto *first = new QTableWidgetItem(pair.first);
-            auto *second = new QTableWidgetItem(pair.second);
+        for (int column = 0; column < columns.size(); ++column) {
+            auto *item = new QTableWidgetItem(columns.at(column));
             if (foreground && column == 0) {
-                first->setForeground(QColor("#58a6ff"));
+                item->setForeground(QColor("#58a6ff"));
             }
-            sysWorkers_->setItem(i, column, first);
-            sysWorkers_->setItem(i, column + 1, second);
-            column += 2;
+            sysWorkers_->setItem(i, column, item);
         }
     }
 }
@@ -2240,6 +2310,9 @@ void MainWindow::watchdogTick() {
     trackPluginTransitions();
     refreshHealth();
     HostRuntime::refreshHint();
+    if (workWeb_ != nullptr) {
+        workWeb_->refresh();
+    }
 }
 
 int MainWindow::spoolPendingCount() const {
@@ -2663,13 +2736,28 @@ QJsonObject MainWindow::webThemeJson() {
     return theme;
 }
 
-// WebView2 版外壳要的整份状态：待办队列 + Worker 列表 + 健康行 + 主题 + 事件流，
-// 一次推过去。
+// WebView2 版外壳要的整份状态：待办队列 + Worker 列表 + 健康行 + 主题 + 事件流
+// + 系统/按键映射/应用/引导四页，一次推过去。
 QString MainWindow::webShellState() {
     QJsonObject work;
     if (workItems_ != nullptr) {
         work = QJsonDocument::fromJson(workItems_->toJson().toUtf8()).object();
     }
+    QJsonArray sections;
+    for (const GuideSection &section : guideSections()) {
+        QJsonArray rows;
+        for (const auto &line : section.rows) {
+            rows.append(QJsonArray{line.first, line.second});
+        }
+        sections.append(QJsonObject{{QStringLiteral("title"), section.title},
+                                     {QStringLiteral("rows"), rows}});
+    }
+    const QJsonObject guide{
+        {QStringLiteral("intro"), guideIntro()},
+        {QStringLiteral("sections"), sections},
+        {QStringLiteral("version"), appVersion()},
+        {QStringLiteral("installSentence"), agentBridgeInstallSentence()},
+    };
     const QJsonObject root{
         {QStringLiteral("work"), work},
         {QStringLiteral("workers"), workersArray()},
@@ -2677,11 +2765,19 @@ QString MainWindow::webShellState() {
          QJsonDocument::fromJson(healthJson().toUtf8()).object()},
         {QStringLiteral("theme"), webThemeJson()},
         {QStringLiteral("events"), webEvents_},
+        {QStringLiteral("system"), systemState()},
+        {QStringLiteral("keymap"),
+         keymapPage_ != nullptr ? keymapPage_->webState() : QJsonObject()},
+        {QStringLiteral("apps"),
+         appPage_ != nullptr ? appPage_->webState() : QJsonObject()},
+        {QStringLiteral("guide"), guide},
     };
     return QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Compact));
 }
 
 // 页面上的按钮/双击回到这里：全部转给既有实现，不在页面里另起一套状态机。
+// 改键菜单、组合键捕获、添加/移除应用这类重交互弹 Qt 原生弹窗，网页只负责
+// 把动作送回来；做完统一重推一次状态。
 void MainWindow::handleWebAction(const QJsonObject &action) {
     const QString cmd = action.value(QStringLiteral("cmd")).toString();
     const QString id = action.value(QStringLiteral("id")).toString();
@@ -2691,23 +2787,90 @@ void MainWindow::handleWebAction(const QJsonObject &action) {
     }
     if (cmd == QStringLiteral("clearLog")) {
         clearLog();
-        if (workWeb_ != nullptr) {
-            workWeb_->refresh();
+    } else if (cmd == QStringLiteral("sysRefresh")) {
+        watchdogTick();
+    } else if (cmd == QStringLiteral("sysOpenDir")) {
+        const QString dir = QFileInfo(spoolPath_).absolutePath();
+        if (!dir.isEmpty()) {
+            QDesktopServices::openUrl(QUrl::fromLocalFile(dir));
         }
-        return;
-    }
-    if (workItems_ == nullptr) {
-        return;
-    }
-    if (cmd == QStringLiteral("ack")) {
-        if (workItems_->ack(id)) {
-            appendEvent(QStringLiteral("status"), QString(), QString(),
-                        QString::fromUtf8("待办已标记完成"), 0);
+    } else if (cmd == QStringLiteral("sysUpgrade")) {
+        upgradePlugins();
+    } else if (cmd == QStringLiteral("sysBridge")) {
+        showAgentBridgeDialog();
+    } else if (cmd == QStringLiteral("keyScene")) {
+        if (keymapPage_ != nullptr) {
+            keymapPage_->webSetPinned(action.value(QStringLiteral("name")).toString());
         }
-        refreshWorkItems();
-    } else if (cmd == QStringLiteral("clear")) {
-        workItems_->clearFinished();
-        refreshWorkItems();
+    } else if (cmd == QStringLiteral("keySelect")) {
+        if (keymapPage_ != nullptr) {
+            keymapPage_->webSelect(action.value(QStringLiteral("vk")).toInt());
+        }
+    } else if (cmd == QStringLiteral("keyEdit")) {
+        if (keymapPage_ != nullptr) {
+            keymapPage_->webEdit(action.value(QStringLiteral("vk")).toInt(),
+                                 action.value(QStringLiteral("gesture")).toString());
+        }
+    } else if (cmd == QStringLiteral("keyTakeover")) {
+        if (keymapPage_ != nullptr) {
+            keymapPage_->webSetTakeover(action.value(QStringLiteral("on")).toBool());
+        }
+    } else if (cmd == QStringLiteral("keyProfiles")) {
+        if (keymapPage_ != nullptr) {
+            keymapPage_->webOpenProfiles();
+        }
+    } else if (cmd == QStringLiteral("keyReload")) {
+        if (keymapPage_ != nullptr) {
+            keymapPage_->webReload();
+        }
+    } else if (cmd == QStringLiteral("appOpen")) {
+        if (appPage_ != nullptr) {
+            appPage_->webLaunch(id);
+        }
+    } else if (cmd == QStringLiteral("appAdd")) {
+        if (appPage_ != nullptr) {
+            appPage_->webAddCustom();
+        }
+    } else if (cmd == QStringLiteral("appRemove")) {
+        if (appPage_ != nullptr) {
+            appPage_->webRemoveCustom(
+                action.value(QStringLiteral("name")).toString(),
+                action.value(QStringLiteral("path")).toString());
+        }
+    } else if (cmd == QStringLiteral("appRescan")) {
+        if (appPage_ != nullptr) {
+            appPage_->webRescan();
+        }
+    } else if (cmd == QStringLiteral("appVoice")) {
+        if (appPage_ != nullptr) {
+            appPage_->webSetVoiceLaunch(action.value(QStringLiteral("on")).toBool());
+        }
+    } else if (cmd == QStringLiteral("appSystem")) {
+        if (appPage_ != nullptr) {
+            appPage_->webSetSystemControl(action.value(QStringLiteral("on")).toBool());
+        }
+    } else if (cmd == QStringLiteral("guideSite")) {
+        QDesktopServices::openUrl(
+            QUrl(QStringLiteral("https://ligdesign.win/agentrmc")));
+    } else if (cmd == QStringLiteral("guideGithub")) {
+        QDesktopServices::openUrl(
+            QUrl(QStringLiteral("https://github.com/Samuel5945/AgentRMC")));
+    } else if (cmd == QStringLiteral("guideCopy")) {
+        QApplication::clipboard()->setText(agentBridgeInstallSentence());
+    } else if (workItems_ != nullptr) {
+        if (cmd == QStringLiteral("ack")) {
+            if (workItems_->ack(id)) {
+                appendEvent(QStringLiteral("status"), QString(), QString(),
+                            QString::fromUtf8("待办已标记完成"), 0);
+            }
+            refreshWorkItems();
+        } else if (cmd == QStringLiteral("clear")) {
+            workItems_->clearFinished();
+            refreshWorkItems();
+        }
+    }
+    if (workWeb_ != nullptr) {
+        workWeb_->refresh();
     }
 }
 
@@ -2844,6 +3007,183 @@ QWidget *MainWindow::buildSystemPage() {
     return page;
 }
 
+namespace {
+
+QString guideIntro() {
+    return QString::fromUtf8(
+        "遥控器是可选的：有遥控器就按下面配对；没有也能用语音——先看「没有遥控器」"
+        "这一段。桌宠右键菜单里也能完成同样的操作。");
+}
+
+// 引导全文：Qt 页和 WebView 外壳共用这一份，改文案只改这里。
+QVector<GuideSection> guideSections() {
+    return {
+        {QString::fromUtf8("没有遥控器也能用"),
+         {{QString::fromUtf8("触发"),
+           QString::fromUtf8("Ctrl+Alt+V 全局热键 / 波形语音键 / "
+                             "耳机播放键 / 单击桌宠")},
+          {QString::fromUtf8("识别"),
+           QString::fromUtf8("转发热键（0 模型，交给 Qoder / WorkBuddy）或本地模型"
+                             "（任何输入框都能出字）")},
+          {QString::fromUtf8("对话"),
+           QString::fromUtf8("右键桌宠 → 对话模式：闲聊走 LLM，"
+                             "干活的话交给前台 Agent")},
+          {QString::fromUtf8("提醒"),
+           QString::fromUtf8("装 agentrmc-bridge 插件：等授权、等选方案、任务完成时"
+                             "桌宠气泡 + 语音")},
+          {QString::fromUtf8("入口"),
+           QString::fromUtf8("遥控器形态左栏「语音主界面」/ 托盘「语音面板」/ "
+                             "桌宠右键；左上角波形键直接说话")},
+          {QString::fromUtf8("模型"),
+           QString::fromUtf8("把模型 zip 拖进窗口，或「语音面板 → 模型设置 → "
+                             "导入模型包…」")}}},
+        {QString::fromUtf8("有遥控器：第一次配对"),
+         {{QString::fromUtf8("长按 3 秒"),
+           QString::fromUtf8("同时按住「返回」+「主页」，直到遥控器指示灯快速闪烁")},
+          {QString::fromUtf8("蓝牙设置"),
+           QString::fromUtf8("点遥控器卡片右侧的「蓝牙设置」，在列表里连接遥控器")},
+          {QString::fromUtf8("看状态"),
+           QString::fromUtf8("按一下任意键，卡片上对应键位亮起就说明连上了")},
+          {QString::fromUtf8("以后"),
+           QString::fromUtf8("配对过一次后无需再配对：按一下任意键就会自动回连")}}},
+        {QString::fromUtf8("手势速查"),
+         {{QString::fromUtf8("语音键"),
+           QString::fromUtf8("按住说话、松手结束（Qoder / WorkBuddy 自动切换接法）")},
+          {QString::fromUtf8("方向键"),
+           QString::fromUtf8("浏览内容；导航模式内改为翻页")},
+          {QString::fromUtf8("OK"),
+           QString::fromUtf8("发送消息；鼠标模式内 = 鼠标左键")},
+          {QString::fromUtf8("返回"),
+           QString::fromUtf8("停止 / 返回；双击进入音量·亮度模式")},
+          {QString::fromUtf8("菜单"), QString::fromUtf8("换行；双击进入鼠标模式")},
+          {QString::fromUtf8("主页"),
+           QString::fromUtf8("回到顶部；双击进入导航模式")},
+          {QString::fromUtf8("对焦"), QString::fromUtf8("全屏（走系统原生 F11）")}}},
+        {QString::fromUtf8("模式怎么用"),
+         {{QString::fromUtf8("进入"),
+           QString::fromUtf8("双击对应键，屏幕底部提示「xx模式 开」，并有一声提示音")},
+          {QString::fromUtf8("操作"),
+           QString::fromUtf8("音量/亮度：↑↓ 音量、←→ 屏幕亮度；鼠标：方向键移动、OK 点击；"
+                             "导航：←→ 切换控件、↑↓ 翻页")},
+          {QString::fromUtf8("退出"),
+           QString::fromUtf8("音量/亮度与鼠标模式单击「返回」或「菜单」退出；"
+                             "导航模式单击「主页」退出")},
+          {QString::fromUtf8("自动退出"),
+           QString::fromUtf8("音量/亮度、鼠标模式 12 秒不操作自动退出")},
+          {QString::fromUtf8("接管原生键"),
+           QString::fromUtf8("映射页右下角打开后，当前场景中映射键的原生事件被吞；"
+                             "实体键盘同名键也会按遥控器映射处理，"
+                             "双击键的单击会有一段判定延迟")}}},
+        {QString::fromUtf8("语音怎么用（有/无遥控器都适用）"),
+         {{QString::fromUtf8("触发"),
+           QString::fromUtf8("无遥控器：Ctrl+Alt+V / 波形语音键 / "
+                             "耳机播放键 / 单击桌宠；有遥控器：按住语音键")},
+          {QString::fromUtf8("转发"),
+           QString::fromUtf8("默认，0 模型：把语音键转给当前应用自己的快捷键"
+                             "（Qoder Ctrl+Shift+V / WorkBuddy Ctrl+D）")},
+          {QString::fromUtf8("本地"),
+           QString::fromUtf8("SenseVoice ~230MB / Qwen3-ASR ~1GB：任何输入框都能出字，"
+                             "可离线；模型 zip 拖进窗口或「模型设置」导入")},
+          {QString::fromUtf8("云端"),
+           QString::fromUtf8("不装模型；音频上传到你配置的 OpenAI 兼容 ASR 服务")},
+          {QString::fromUtf8("对话"),
+           QString::fromUtf8("右键桌宠 → 对话模式：闲聊走 LLM，"
+                             "干活的话交给前台 Agent")},
+          {QString::fromUtf8("耳机"),
+           QString::fromUtf8("电脑没在放媒体时，播放/暂停 = 同一个语音开关")}}},
+        {QString::fromUtf8("桌宠右键菜单（只留高频）"),
+         {{QString::fromUtf8("一级"),
+           QString::fromUtf8("开始/停止监听、说一句/结束说话")},
+          {QString::fromUtf8("窗口"),
+           QString::fromUtf8("语音面板、完整界面、隐藏桌宠")},
+          {QString::fromUtf8("其它"),
+           QString::fromUtf8("识别方式、对话、主题、交给哪个 Agent、朗读最近，"
+                             "都在语音面板 / 完整界面里操作")}}},
+        {QString::fromUtf8("打开应用"),
+         {{QString::fromUtf8("怎么说"),
+           QString::fromUtf8("按住语音键说「打开剪映」「打开 Qoder」「打开浏览器」，"
+                             "松手后直接启动，不会再往输入框里贴这几个字")},
+          {QString::fromUtf8("内置"),
+           QString::fromUtf8("浏览器 / Chrome / Edge / Qoder / Qoder CN / WorkBuddy / "
+                             "DeepSeek / Codex / ZCode / 剪映，说「帮我打开…吧」也算")},
+          {QString::fromUtf8("其它应用"),
+           QString::fromUtf8("开始菜单里有的，按名字原样说就能开，例如「打开 WorkBuddy AI」")},
+          {QString::fromUtf8("应用页"),
+           QString::fromUtf8("右侧「应用」页能看到本机装没装、来源在哪，也可以直接点「打开」")},
+          {QString::fromUtf8("遥控器"),
+           QString::fromUtf8("「按键映射」的单击 / 双击 / 长按菜单里有「启动应用」，"
+                             "把常用的绑到键上，不用说话")},
+          {QString::fromUtf8("前提"),
+           QString::fromUtf8("语音启动只在本地识别（SenseVoice / Qwen3）下生效；"
+                             "转发热键时语音是整个交给前台应用的")},
+          {QString::fromUtf8("不想被抢"),
+           QString::fromUtf8("想把「打开剪映」这句话原样打给 Agent，就在「应用」页右下角"
+                             "关掉「语音启动」（默认开）")}}},
+        {QString::fromUtf8("接入 AI Agent（桌宠提醒）"),
+         {{QString::fromUtf8("自动提醒"),
+           QString::fromUtf8("在你干活的那个 Agent（Qoder / ZCode / WorkBuddy / "
+                             "DeepSeek Harness / OpenSquilla）里接上：等你确认、"
+                             "等你选方案、任务结束时，桌宠冒气泡念一句并可以在点气泡时"
+                             "把窗口拉回来")},
+          {QString::fromUtf8("怎么装（Qoder / ZCode / WorkBuddy）"),
+           QString::fromUtf8("点下面「复制安装话术」，把那句话发给正在干活的 Agent，"
+                             "它自己装好并启用——话术里已经带你本机上的位置")},
+          {QString::fromUtf8("DeepSeek Harness 怎么装"),
+           QString::fromUtf8("它的插件不是 zip，是一个 bundle 目录（安装目录 plugins 里的 "
+                             "deepseek-harness）。让 DeepSeek Harness 里的 Agent 用 Plugin "
+                             "管理器装：plugin_manager → install_bundle，target 指这个目录；"
+                             "或手工两步：pnpm 把它 link 进 ~/.dsh/profiles/<profile>，"
+                             "再把 @local/agentrmc-bridge 加进该 profile 的 "
+                             "dsh.profile.bundles。装完必须重启 DeepSeek Harness，"
+                             "Host 才会加载新代码。上面那句话里已经带了这条路径，"
+                             "粘给 DSH 里的 Agent 就行")},
+          {QString::fromUtf8("OpenSquilla 怎么接"),
+           QString::fromUtf8("它没有插件目录，装不了上面的 zip，走的是外部桥："
+                             "把技能目录里的 agentrmc-voice-reminder 技能（含 "
+                             "opensquilla-pet-bridge.mjs）拷到 ~/.agents/skills 下，"
+                             "再把它加进启动项；桥自己订阅 OpenSquilla 的会话事件，"
+                             "转成同一个 45915 端口的 /notify。详见 README「OpenSquilla 接入」")},
+          {QString::fromUtf8("自己动手"),
+           QString::fromUtf8("只需要认一个落点——安装目录里的 plugins 目录，"
+                             "要装的东西全在它里面："
+                             "Qoder 上传 plugins 里的 agentrmc-bridge.zip；"
+                             "ZCode / WorkBuddy 把 plugins 目录本身加进应用市场"
+                             "（它就是目录市场源）；"
+                             "DeepSeek Harness 用 plugin_manager 装 "
+                             "plugins 里的 deepseek-harness 子目录")},
+          {QString::fromUtf8("怎么升级"),
+           QString::fromUtf8("Qoder 把上传的包记成本地插件，插件页那个「更新」按钮不拉新包，"
+                             "而且 Qoder 和 Qoder CN 是两个独立 app、各装各的。"
+                             "升级去「系统」页看「联动插件」那一行：落后的话点"
+                             "「升级联动插件」，两家一起指到内置版本；改完要重启对应的 "
+                             "app 才真加载新代码（那行里的「进程」就是此刻真在跑的版本）")},
+          {QString::fromUtf8("WorkBuddy 怎么升"),
+           QString::fromUtf8("不用点「升级联动插件」——那个按钮只认 Qoder 家族。"
+                             "WorkBuddy / ZCode 的市场源是安装目录下的 plugins 目录"
+                             "（目录源、自动更新），宿主自己会拉到新版；"
+                             "改完重启宿主就生效。注意 WorkBuddy 和 WorkBuddy AI "
+                             "是两份独立安装，各读各的配置家（.workbuddy / .workbuddy-ai），"
+                             "要升就得两家各自刷新")},
+          {QString::fromUtf8("DeepSeek Harness 怎么升"),
+           QString::fromUtf8("也不走「升级联动插件」：它是装在 DSH profile 里的 bundle，"
+                             "升它要 pnpm 重装 + 重启 Host，改注册表做不到。"
+                             "让 DSH 里的 Agent 重新 install_bundle 一次"
+                             "（或把 profile 里那条 link 指到新目录），再重启 DeepSeek Harness；"
+                             "「系统」页那行的「进程」能看到它此刻真在跑的版本")}}},
+        {QString::fromUtf8("已知限制"),
+         {{QString::fromUtf8("电源 / 音量"),
+           QString::fromUtf8("这两个键走红外，电脑收不到，无法映射")},
+          {QString::fromUtf8("未开接管"),
+           QString::fromUtf8("遥控器按键仍会原生送达前台，映射动作和原生动作可能同时生效")},
+          {QString::fromUtf8("双击判定"),
+           QString::fromUtf8("两次按下间隔 0.45 秒以内才算双击，慢速连点会当成两次单击")},
+          {QString::fromUtf8("任务栏闪"),
+           QString::fromUtf8("开始/结束录音时任务栏闪一下，是 Windows 麦克风指示器")}}},
+    };
+}
+
+}  // namespace
+
 QWidget *MainWindow::buildGuidePage() {
     auto *page = new QWidget;
     auto *lay = new QVBoxLayout(page);
@@ -2866,10 +3206,6 @@ QWidget *MainWindow::buildGuidePage() {
     cl->setContentsMargins(18, 16, 18, 16);
     cl->setSpacing(16);
 
-    struct Line {
-        const char *key;
-        const char *text;
-    };
     const auto addSectionQ = [cl](const QString &name,
                                   const QVector<QPair<QString, QString>> &lines) {
         auto *box = new QWidget;
@@ -2883,144 +3219,18 @@ QWidget *MainWindow::buildGuidePage() {
         cl->addWidget(box);
         return box;
     };
-    const auto addSection = [addSectionQ](const QString &name,
-                                          const QVector<Line> &lines) {
-        QVector<QPair<QString, QString>> text;
-        for (const Line &line : lines) {
-            text.append({QString::fromUtf8(line.key),
-                         QString::fromUtf8(line.text)});
-        }
-        addSectionQ(name, text);
-    };
 
-    auto *intro = new QLabel(QString::fromUtf8(
-        "遥控器是可选的：有遥控器就按下面配对；没有也能用语音——先看「没有遥控器」"
-        "这一段。桌宠右键菜单里也能完成同样的操作。"));
+    auto *intro = new QLabel(guideIntro());
     intro->setObjectName("secBody");
     intro->setWordWrap(true);
     cl->addWidget(intro);
 
-    addSection(QString::fromUtf8("没有遥控器也能用"),
-               {{"触发", "Ctrl+Alt+V 全局热键 / 波形语音键 / "
-                         "耳机播放键 / 单击桌宠"},
-                {"识别", "转发热键（0 模型，交给 Qoder / WorkBuddy）或本地模型"
-                         "（任何输入框都能出字）"},
-                {"对话", "右键桌宠 → 对话模式：闲聊走 LLM，"
-                         "干活的话交给前台 Agent"},
-                {"提醒", "装 agentrmc-bridge 插件：等授权、等选方案、任务完成时"
-                         "桌宠气泡 + 语音"},
-                {"入口", "遥控器形态左栏「语音主界面」/ 托盘「语音面板」/ "
-                         "桌宠右键；左上角波形键直接说话"},
-                {"模型", "把模型 zip 拖进窗口，或「语音面板 → 模型设置 → "
-                         "导入模型包…」"}});
-    addSection(QString::fromUtf8("有遥控器：第一次配对"),
-               {{"长按 3 秒", "同时按住「返回」+「主页」，直到遥控器指示灯快速闪烁"},
-                {"蓝牙设置", "点遥控器卡片右侧的「蓝牙设置」，在列表里连接遥控器"},
-                {"看状态", "按一下任意键，卡片上对应键位亮起就说明连上了"},
-                {"以后", "配对过一次后无需再配对：按一下任意键就会自动回连"}});
-    addSection(QString::fromUtf8("手势速查"),
-               {{"语音键", "按住说话、松手结束（Qoder / WorkBuddy 自动切换接法）"},
-                {"方向键", "浏览内容；导航模式内改为翻页"},
-                {"OK", "发送消息；鼠标模式内 = 鼠标左键"},
-                {"返回", "停止 / 返回；双击进入音量·亮度模式"},
-                {"菜单", "换行；双击进入鼠标模式"},
-                {"主页", "回到顶部；双击进入导航模式"},
-                {"对焦", "全屏（走系统原生 F11）"}});
-    addSection(QString::fromUtf8("模式怎么用"),
-               {{"进入", "双击对应键，屏幕底部提示「xx模式 开」，并有一声提示音"},
-                {"操作", "音量/亮度：↑↓ 音量、←→ 屏幕亮度；鼠标：方向键移动、OK 点击；"
-                         "导航：←→ 切换控件、↑↓ 翻页"},
-                {"退出", "音量/亮度与鼠标模式单击「返回」或「菜单」退出；"
-                         "导航模式单击「主页」退出"},
-                {"自动退出", "音量/亮度、鼠标模式 12 秒不操作自动退出"},
-                {"接管原生键", "映射页右下角打开后，当前场景中映射键的原生事件被吞；"
-                               "实体键盘同名键也会按遥控器映射处理，"
-                               "双击键的单击会有一段判定延迟"}});
-    addSection(QString::fromUtf8("语音怎么用（有/无遥控器都适用）"),
-               {{"触发", "无遥控器：Ctrl+Alt+V / 波形语音键 / "
-                         "耳机播放键 / 单击桌宠；有遥控器：按住语音键"},
-                {"转发", "默认，0 模型：把语音键转给当前应用自己的快捷键"
-                         "（Qoder Ctrl+Shift+V / WorkBuddy Ctrl+D）"},
-                {"本地", "SenseVoice ~230MB / Qwen3-ASR ~1GB：任何输入框都能出字，"
-                         "可离线；模型 zip 拖进窗口或「模型设置」导入"},
-                {"云端", "不装模型；音频上传到你配置的 OpenAI 兼容 ASR 服务"},
-                {"对话", "右键桌宠 → 对话模式：闲聊走 LLM，"
-                         "干活的话交给前台 Agent"},
-                {"耳机", "电脑没在放媒体时，播放/暂停 = 同一个语音开关"}});
-    addSection(QString::fromUtf8("桌宠右键菜单（只留高频）"),
-               {{"一级", "开始/停止监听、说一句/结束说话"},
-                {"窗口", "语音面板、完整界面、隐藏桌宠"},
-                {"其它", "识别方式、对话、主题、交给哪个 Agent、朗读最近，"
-                         "都在语音面板 / 完整界面里操作"}});
-    addSection(QString::fromUtf8("打开应用"),
-               {{"怎么说", "按住语音键说「打开剪映」「打开 Qoder」「打开浏览器」，"
-                          "松手后直接启动，不会再往输入框里贴这几个字"},
-                {"内置", "浏览器 / Chrome / Edge / Qoder / Qoder CN / WorkBuddy / "
-                         "DeepSeek / Codex / ZCode / 剪映，说「帮我打开…吧」也算"},
-                {"其它应用", "开始菜单里有的，按名字原样说就能开，例如「打开 WorkBuddy AI」"},
-                {"应用页", "右侧「应用」页能看到本机装没装、来源在哪，也可以直接点「打开」"},
-                {"遥控器", "「按键映射」的单击 / 双击 / 长按菜单里有「启动应用」，"
-                           "把常用的绑到键上，不用说话"},
-                {"前提", "语音启动只在本地识别（SenseVoice / Qwen3）下生效；"
-                         "转发热键时语音是整个交给前台应用的"},
-                {"不想被抢", "想把「打开剪映」这句话原样打给 Agent，就在「应用」页右下角"
-                            "关掉「语音启动」（默认开）"}});
-    guideAgentSection_ = addSectionQ(QString::fromUtf8("接入 AI Agent（桌宠提醒）"),
-               {{QString::fromUtf8("自动提醒"),
-                 QString::fromUtf8("在你干活的那个 Agent（Qoder / ZCode / WorkBuddy / "
-                                   "DeepSeek Harness / OpenSquilla）里接上：等你确认、"
-                                   "等你选方案、任务结束时，桌宠冒气泡念一句并可以在点气泡时"
-                                   "把窗口拉回来")},
-                {QString::fromUtf8("怎么装（Qoder / ZCode / WorkBuddy）"),
-                 QString::fromUtf8("点下面「复制安装话术」，把那句话发给正在干活的 Agent，"
-                                   "它自己装好并启用——话术里已经带你本机上的位置")},
-                {QString::fromUtf8("DeepSeek Harness 怎么装"),
-                 QString::fromUtf8("它的插件不是 zip，是一个 bundle 目录（安装目录 plugins 里的 "
-                                   "deepseek-harness）。让 DeepSeek Harness 里的 Agent 用 Plugin "
-                                   "管理器装：plugin_manager → install_bundle，target 指这个目录；"
-                                   "或手工两步：pnpm 把它 link 进 ~/.dsh/profiles/<profile>，"
-                                   "再把 @local/agentrmc-bridge 加进该 profile 的 "
-                                   "dsh.profile.bundles。装完必须重启 DeepSeek Harness，"
-                                   "Host 才会加载新代码。上面那句话里已经带了这条路径，"
-                                   "粘给 DSH 里的 Agent 就行")},
-                {QString::fromUtf8("OpenSquilla 怎么接"),
-                 QString::fromUtf8("它没有插件目录，装不了上面的 zip，走的是外部桥："
-                                   "把技能目录里的 agentrmc-voice-reminder 技能（含 "
-                                   "opensquilla-pet-bridge.mjs）拷到 ~/.agents/skills 下，"
-                                   "再把它加进启动项；桥自己订阅 OpenSquilla 的会话事件，"
-                                   "转成同一个 45915 端口的 /notify。详见 README「OpenSquilla 接入」")},
-                {QString::fromUtf8("自己动手"),
-                 QString::fromUtf8("只需要认一个落点——安装目录里的 plugins 目录，"
-                                   "要装的东西全在它里面："
-                                   "Qoder 上传 plugins 里的 agentrmc-bridge.zip；"
-                                   "ZCode / WorkBuddy 把 plugins 目录本身加进应用市场"
-                                   "（它就是目录市场源）；"
-                                   "DeepSeek Harness 用 plugin_manager 装 "
-                                   "plugins 里的 deepseek-harness 子目录")},
-                {QString::fromUtf8("怎么升级"),
-                 QString::fromUtf8("Qoder 把上传的包记成本地插件，插件页那个「更新」按钮不拉新包，"
-                                   "而且 Qoder 和 Qoder CN 是两个独立 app、各装各的。"
-                                   "升级去「系统」页看「联动插件」那一行：落后的话点"
-                                   "「升级联动插件」，两家一起指到内置版本；改完要重启对应的 "
-                                   "app 才真加载新代码（那行里的「进程」就是此刻真在跑的版本）")},
-                {QString::fromUtf8("WorkBuddy 怎么升"),
-                 QString::fromUtf8("不用点「升级联动插件」——那个按钮只认 Qoder 家族。"
-                                   "WorkBuddy / ZCode 的市场源是安装目录下的 plugins 目录"
-                                   "（目录源、自动更新），宿主自己会拉到新版；"
-                                   "改完重启宿主就生效。注意 WorkBuddy 和 WorkBuddy AI "
-                                   "是两份独立安装，各读各的配置家（.workbuddy / .workbuddy-ai），"
-                                   "要升就得两家各自刷新")},
-                {QString::fromUtf8("DeepSeek Harness 怎么升"),
-                 QString::fromUtf8("也不走「升级联动插件」：它是装在 DSH profile 里的 bundle，"
-                                   "升它要 pnpm 重装 + 重启 Host，改注册表做不到。"
-                                   "让 DSH 里的 Agent 重新 install_bundle 一次"
-                                   "（或把 profile 里那条 link 指到新目录），再重启 DeepSeek Harness；"
-                                   "「系统」页那行的「进程」能看到它此刻真在跑的版本")}});
-    addSection(QString::fromUtf8("已知限制"),
-               {{"电源 / 音量", "这两个键走红外，电脑收不到，无法映射"},
-                {"未开接管", "遥控器按键仍会原生送达前台，映射动作和原生动作可能同时生效"},
-                {"双击判定", "两次按下间隔 0.45 秒以内才算双击，慢速连点会当成两次单击"},
-                {"任务栏闪", "开始/结束录音时任务栏闪一下，是 Windows 麦克风指示器"}});
+    for (const GuideSection &section : guideSections()) {
+        QWidget *box = addSectionQ(section.title, section.rows);
+        if (section.title == QString::fromUtf8("接入 AI Agent（桌宠提醒）")) {
+            guideAgentSection_ = box;
+        }
+    }
 
     auto *links = new QHBoxLayout;
     auto *site = new QPushButton(QString::fromUtf8("官网  ↗"));

@@ -95,6 +95,8 @@ private:
     QString webShellState();
     // 外壳页的配色：把当前主题的 token 翻成 CSS 写法（含字号倍率）。
     QJsonObject webThemeJson();
+    // 系统页显示就绪状态：Qt 标签/表格与外壳共用，文案只维护一遍。
+    QJsonObject systemState();
     void handleWebAction(const QJsonObject &action);
     QString selectedWorkId() const;
     QJsonArray workersArray() const;
@@ -171,7 +173,7 @@ private:
 
     std::unique_ptr<ProfileStore> store_;
     std::unique_ptr<WorkItemStore> workItems_;
-    // 原型开关（AGENTRMC_WORKWEB=1）：待办页交给 WebView2 渲染时非空。
+    // 右半区默认交给 WebView2 渲染（AGENTRMC_WORKWEB=0 或运行库缺失时回退 Qt 页签）。
     WorkWebView *workWeb_ = nullptr;
     // 外壳版事件流：Qt 侧 logList_ 只有合成好的文本，这里多存一份 kind，
     // 页面按 kind 上色。和 logList_ 同生命周期——内存账，清空/重启即没。

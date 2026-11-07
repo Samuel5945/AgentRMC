@@ -1,6 +1,7 @@
 #include "core/WorkItems.h"
 
 #include <QCoreApplication>
+#include <QDateTime>
 #include <QFile>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -359,11 +360,19 @@ int main(int argc, char *argv[]) {
         if (!file.open(QIODevice::WriteOnly)) {
             check("dup fixture writable", false);
         } else {
-            static const char *kDup = R"JSON({"version":1,"items":[
-{"id":"N","source":"hook","agent_exe":"Qoder.exe","session_id":"dup","project":"D:/repo","kind":"progress","stage":"needs-me","title":"Qoder","message":"新的那条","raise":"Qoder.exe","dedupe_key":"kn","created_at":"2026-11-06T09:59:00.000Z","updated_at":"2026-11-06T09:59:00.000Z","attention_since":"2026-11-06T09:59:00.000Z","done":false},
-{"id":"O","source":"hook","agent_exe":"Qoder.exe","session_id":"dup","project":"D:/repo","kind":"permission","stage":"needs-me","title":"Qoder","message":"老的那条","raise":"Qoder.exe","dedupe_key":"ko","created_at":"2026-11-06T09:00:00.000Z","updated_at":"2026-11-06T09:00:00.000Z","attention_since":"2026-11-06T09:00:00.000Z","done":false}
+            // 时间相对当前生成：合并窗口只有 30 分钟，写死日期会在第二天
+            // 变成「两张都太旧」而误报（2026-11-07 实测）。
+            const QDateTime nowUtc = QDateTime::currentDateTimeUtc();
+            const QString fresh = nowUtc.addSecs(-60).toString(Qt::ISODateWithMs);
+            const QString older = nowUtc.addSecs(-3600).toString(Qt::ISODateWithMs);
+            static const char *kDupTmpl = R"JSON({"version":1,"items":[
+{"id":"N","source":"hook","agent_exe":"Qoder.exe","session_id":"dup","project":"D:/repo","kind":"progress","stage":"needs-me","title":"Qoder","message":"新的那条","raise":"Qoder.exe","dedupe_key":"kn","created_at":"__FRESH__","updated_at":"__FRESH__","attention_since":"__FRESH__","done":false},
+{"id":"O","source":"hook","agent_exe":"Qoder.exe","session_id":"dup","project":"D:/repo","kind":"permission","stage":"needs-me","title":"Qoder","message":"老的那条","raise":"Qoder.exe","dedupe_key":"ko","created_at":"__OLDER__","updated_at":"__OLDER__","attention_since":"__OLDER__","done":false}
 ]})JSON";
-            file.write(kDup);
+            QString kDup = QString::fromUtf8(kDupTmpl);
+            kDup.replace(QStringLiteral("__FRESH__"), fresh);
+            kDup.replace(QStringLiteral("__OLDER__"), older);
+            file.write(kDup.toUtf8());
             file.close();
             WorkItemStore dup(dupFile);
             const bool loaded = dup.load();

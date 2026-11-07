@@ -60,6 +60,7 @@ print(f"点击 图像({x},{y}) -> 屏幕({sx},{sy})")
 user32.SetCursorPos(sx, sy)
 time.sleep(0.15)
 user32.mouse_event(0x0002, 0, 0, 0, 0)  # LEFTDOWN
+time.sleep(0.08)  # 真人点击约 80–150ms；零间隔偶尔会被 Chromium 当成长按外的杂讯
 user32.mouse_event(0x0004, 0, 0, 0, 0)  # LEFTUP
 time.sleep(0.6)
 

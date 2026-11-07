@@ -42,6 +42,14 @@ rem 配置会残留并被分发出去（2026-11-04 实测泄露过一枚 API key
 copy /y "%ROOT%\config.json" "%ROOT%\native\build\Release\" >nul
 copy /y "%ROOT%\profiles.json" "%ROOT%\native\build\Release\" >nul
 
+rem WebView2 loader 必须躺在 exe 旁边：开发态还能从源码树 .webview2-sdk 往上找，
+rem 装好的程序旁边没有源码树，缺它就静默回退 Qt 页签（2026-11-07 实测）。
+if exist "%ROOT%\native\.webview2-sdk\runtimes\win-x64\native\WebView2Loader.dll" (
+    copy /y "%ROOT%\native\.webview2-sdk\runtimes\win-x64\native\WebView2Loader.dll" "%ROOT%\native\build\Release\" >nul
+) else (
+    echo [warn] WebView2Loader.dll not found in native\.webview2-sdk - shell will fall back to Qt tabs
+)
+
 rem Themes are loose folders next to the exe so users can drop in new ones.
 if exist "%ROOT%\themes" robocopy "%ROOT%\themes" "%ROOT%\native\build\Release\themes" /E /NFL /NDL /NJH /NJS >nul
 rem ZCode 联动插件（agentrmc-bridge）随包分发，装完 AgentRMC 就地可用。

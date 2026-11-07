@@ -583,6 +583,74 @@ QString WorkWebView::htmlFor(const QString &stateJson) const {
  .ev{padding:5px 6px;border-radius:6px;font-size:var(--f11);line-height:1.5;
    white-space:pre-wrap;word-break:break-word}
  .ev:hover{background:var(--w6)}
+ /* 系统页：几行读数 + Worker 表 + 底部按钮。表头/行用 grid 对齐。 */
+ .lines{flex:0 0 auto;font-size:var(--f11);color:var(--muted);line-height:1.75;
+   word-break:break-word}
+ .wtable{flex:1 1 auto;min-height:0;overflow-y:auto;margin-top:6px;
+   scrollbar-width:none;font-size:var(--f11)}
+ .wtable::-webkit-scrollbar{width:0;height:0}
+ .wrow{display:grid;grid-template-columns:1.3fr .8fr .5fr .7fr .6fr .55fr;
+   gap:6px;padding:5px 6px;border-bottom:1px solid var(--w8);align-items:center}
+ .wrow.head{color:var(--muted2);font-size:var(--f10);border-bottom:1px solid var(--w14)}
+ .wrow:nth-child(even){background:var(--w6)}
+ .wrow .wfg{color:var(--accent)}
+ /* 按键映射：场景行 + 键位/手势表 + 底部提示和接管开关。 */
+ .keyhead{flex:0 0 auto;display:flex;align-items:flex-start;gap:8px}
+ .scene{display:flex;align-items:baseline;gap:6px;min-width:0;flex:1}
+ .dot{width:6px;height:6px;border-radius:3px;flex:0 0 auto;align-self:center}
+ .scname{font-weight:600;font-size:var(--f12);color:var(--text);white-space:nowrap}
+ .scrule{font-size:var(--f10);color:var(--muted2);overflow:hidden;
+   text-overflow:ellipsis;white-space:nowrap}
+ .maphead{display:flex;gap:8px;padding:6px 11px 2px 7px;font-size:var(--f10);
+   color:var(--muted2)}
+ .maphead .k{width:88px;flex:0 0 88px}
+ .maphead .g{flex:1}
+ .mapgtitle{display:flex;align-items:center;gap:8px;padding:6px 2px 2px;
+   font-size:var(--f10);color:var(--muted2)}
+ .hair2{flex:1;height:1px;background:var(--w14)}
+ .keyrow{display:flex;align-items:center;gap:8px;padding:2px 4px;
+   border-bottom:1px solid var(--w6);border-radius:6px}
+ .keyrow.sel{background:var(--a26)}
+ .keycell{width:88px;flex:0 0 88px;display:flex;align-items:center;gap:7px;
+   padding-left:3px;cursor:default;overflow:hidden}
+ .keycell .glyph{width:16px;text-align:center;color:var(--muted);flex:0 0 auto}
+ .keycell .kname{font-size:var(--f11);color:var(--text-dim);white-space:nowrap;
+   overflow:hidden;text-overflow:ellipsis}
+ .gcell{flex:1;min-width:0;padding:3px 8px;border-radius:6px;cursor:default}
+ .gcell.edit:hover{background:var(--w6)}
+ .gcell .t{font-size:var(--f11);color:var(--text-soft);white-space:nowrap;
+   overflow:hidden;text-overflow:ellipsis}
+ .gcell .e{font-size:var(--f10);color:var(--muted2);white-space:nowrap;
+   overflow:hidden;text-overflow:ellipsis}
+ .gcell.off .t{color:var(--muted)}
+ /* 开关：和 Qt ToggleSwitch 同形状的胶囊。 */
+ .sw{width:36px;height:19px;border-radius:10px;border:1px solid var(--w18);
+   background:var(--w10);position:relative;padding:0;cursor:default;flex:0 0 auto}
+ .sw::after{content:"";position:absolute;left:2px;top:2px;width:13px;height:13px;
+   border-radius:50%;background:var(--muted);transition:left .12s ease}
+ .sw.on{background:var(--a36);border-color:var(--a64)}
+ .sw.on::after{left:19px;background:var(--accent)}
+ .swlabel{font-size:var(--f10);color:var(--muted2);white-space:nowrap}
+ /* 应用页 */
+ .sectitle{font-size:var(--f12);font-weight:700;color:var(--text)}
+ .mutedline{font-size:var(--f11);color:var(--muted);line-height:1.6}
+ .approw{display:flex;align-items:center;gap:10px;padding:5px 9px;border-radius:6px}
+ .approw:hover{background:var(--w6)}
+ .approw .aname{width:92px;flex:0 0 92px;font-size:var(--f11);color:var(--text);
+   white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+ .approw .astate{flex:1;min-width:0;font-size:var(--f11);color:var(--muted);
+   white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+ .approw .astate.miss{color:var(--faint)}
+ /* 使用引导：整页内部滚（同 Qt QScrollArea），行是 92px 键 + 说明。 */
+ .guide{flex:1 1 auto;min-height:0;overflow-y:auto;padding-right:4px;
+   scrollbar-width:none}
+ .guide::-webkit-scrollbar{width:0;height:0}
+ .gsec{margin-bottom:14px}
+ .ghead{font-weight:600;font-size:var(--f11);color:var(--text);margin-bottom:6px}
+ .grow{display:flex;gap:8px;font-size:var(--f11);line-height:1.65;margin-bottom:5px}
+ .gk{width:92px;flex:0 0 92px;color:var(--muted2)}
+ .gt{flex:1;color:var(--text-dim);word-break:break-word}
+ .links{display:flex;align-items:center;gap:8px;margin-top:12px;flex-wrap:wrap}
  .empty{flex:1 1 auto;padding:48px 16px;text-align:center}
  .empty h3{font-size:var(--f12);margin:0 0 6px;font-weight:600;color:var(--text)}
  .empty p{font-size:var(--f11);color:var(--muted);margin:0 0 12px;line-height:1.6;
@@ -617,7 +685,7 @@ QString WorkWebView::htmlFor(const QString &stateJson) const {
   <h3>没有需要你处理的事</h3>
   <p>Agent 等你确认、或任务做完时，这里会自动出现一条。
 先给 Qoder / ZCode / WorkBuddy 装上 agentrmc-bridge 插件。</p>
-  <button class="btn" id="guide">看怎么接入 Agent</button>
+  <button class="btn" id="workGuide">看怎么接入 Agent</button>
 </div>
 <div id="events" class="page" hidden>
   <div class="head">
@@ -632,7 +700,57 @@ QString WorkWebView::htmlFor(const QString &stateJson) const {
 排查「按了没反应」时先看这一页。</p>
   </div>
 </div>
-<div id="placeholder" class="placeholder" hidden></div>
+<div id="system" class="page" hidden>
+  <div class="head"><span class="sectitle">系统健康</span></div>
+  <div class="lines" id="sysLines" style="margin-top:8px"></div>
+  <div class="wtable" id="sysWorkers"></div>
+  <div class="foot" style="border-top:0;padding:8px 0 4px">
+    <button class="btn" id="sysRefresh">刷新</button>
+    <button class="btn" id="sysBridge" title="一键复制安装话术：粘给任意一个正在干活的 Agent，它自己按所在宿主装好。顺便看各家装没装、进程里跑的是哪一版。">接入 Agent</button>
+    <button class="btn" id="sysUpgrade" title="升级 Qoder / Qoder CN / ZCode 三家已装的插件。WorkBuddy AI / WorkBuddy 只在这里报状态：它们的市场源带自动更新，宿主自己拉新版，重启宿主生效。">升级联动插件</button>
+    <button class="btn" id="sysOpenDir">打开数据目录</button>
+  </div>
+</div>
+<div id="keymap" class="page" hidden>
+  <div class="keyhead">
+    <div class="scene">
+      <span class="dot" id="kmDot"></span>
+      <span class="scname" id="kmName"></span>
+      <span class="scrule" id="kmRule"></span>
+    </div>
+    <select id="kmScene" title="跟随前台：切窗口自动换映射；选具体场景：固定预览这个场景"></select>
+    <button class="btn" id="kmProfiles" title="直接编辑 profiles.json">高级配置</button>
+    <button class="btn" id="kmReload">重新加载</button>
+  </div>
+  <div class="maphead"><span class="k">键位</span><span class="g">单击</span><span class="g">双击</span><span class="g">长按</span></div>
+  <div class="list" id="kmList" style="margin-top:2px"></div>
+  <div class="foot">
+    <span class="hint" id="kmHint">点击手势格改键 · 自动保存</span>
+    <span class="swlabel" title="打开后当前前台场景生效：吞掉映射键原生事件，再按映射注入；实体键盘同名键也会按映射处理；双击键的单击延迟约 0.3 秒">接管原生键</span>
+    <button class="sw" id="kmTakeover"></button>
+  </div>
+</div>
+<div id="apps" class="page" hidden>
+  <div class="head">
+    <span class="sectitle">应用启动</span>
+    <span class="spacer"></span>
+    <button class="ghost" id="apAdd" title="加一个自定义应用：填名字和一个 exe/快捷方式/网址路径，之后说「打开 名字」就能启动">添加应用</button>
+    <button class="ghost" id="apRescan" title="装好或删掉应用后点这里，重新扫一遍开始菜单">重新扫描</button>
+  </div>
+  <div class="mutedline" style="margin-top:6px">说「打开剪映」「打开 Qoder」「打开浏览器」就启动，不用再打字；开始菜单里的其它应用按名字说也能开（例如「打开 WorkBuddy AI」）。</div>
+  <div class="hair" style="margin-top:8px"></div>
+  <div class="list" id="apList"></div>
+  <div class="foot" style="flex-wrap:wrap">
+    <span class="hint" id="apSummary" style="white-space:normal;line-height:1.5"></span>
+    <span class="swlabel" title="开着：本地识别出的「打开 xx」直接启动应用，不再贴进输入框；想把这句话原样打给 Agent，就关掉它">语音启动</span>
+    <button class="sw" id="apVoice"></button>
+    <span class="swlabel" title="开着：说「音量调到 50」「亮度暗一点」「下一首」「关屏幕」直接执行，不再贴进输入框；关机/重启/睡眠/休眠要再说一句「确认关机」这样的口令才动手">语音系统控制</span>
+    <button class="sw" id="apSystem"></button>
+  </div>
+</div>
+<div id="guide" class="page" hidden>
+  <div class="guide" id="guBody"></div>
+</div>
 <div class="foot" id="foot">
   <span class="hint" id="hint"></span>
   <button class="btn" id="raise" disabled>回到 Agent</button>
@@ -650,6 +768,7 @@ const COLOR = {'needs-me':'#f0883e','review':'#3fb950','working':'#58a6ff'};
 // 状态灰（muted token）、其余（按键等）用 text.dim。阶段色一样两边硬编码同值。
 const EVCOLOR = {error:'#f85149',voice:'#3fb950',system:'#3fb950',status:'var(--muted)'};
 let evSeen = 0;
+let SYSTEM = {}, KEYMAP = {}, APPS = {}, GUIDE = {};
 const LABEL = {'needs-me':'等你处理','review':'待验收','working':'进行中'};
 const TABS = ['待我处理','事件流','系统','按键映射','应用','使用引导'];
 let activeTab = 0, selected = '', filterExe = '';
@@ -703,6 +822,8 @@ function rank(s){return s==='needs-me'?0:s==='review'?1:s==='working'?2:3;}
 // 点击就静默失效（实测踩过）。
 function post(cmd,id){window.chrome.webview.postMessage(
   id?{cmd:cmd,id:id}:{cmd:cmd});}
+// 带附加字段的动作（改键、开关、场景…）走这个；同样必须 post 对象。
+function postObj(obj){window.chrome.webview.postMessage(obj);}
 function visible(){return (WORK.items||[]).filter(i=>!i.done).filter(i=>{
   if(!filterExe) return true;
   return (i.agent_exe||'').toLowerCase()===filterExe.toLowerCase() ||
@@ -722,16 +843,27 @@ function stageColor(it){
 function stageLabel(it){
   return isStale(it)?'状态待确认':(LABEL[it.stage]||'待办');}
 function renderTabs(){
-  const el=$('tabs'); el.replaceChildren();
+  const el=$('tabs');
+  // 只建一次，之后原地改状态：5 秒一次的刷新若在按下/松开之间重建 DOM，
+  // 这次点击就落在被替换掉的节点上，丢一次（实测偶尔点页签没反应）。
+  if(el.children.length!==TABS.length){
+    el.replaceChildren();
+    TABS.forEach((name,i)=>{
+      const b=document.createElement('button');
+      b.className='tab';
+      b.textContent=name;
+      b.addEventListener('click',()=>{activeTab=i;render();});
+      el.append(b);});
+  }
   TABS.forEach((name,i)=>{
-    const b=document.createElement('button');
-    b.className='tab'+(i===activeTab?' active':'');
-    b.textContent=name;
-    if(i===0 && WORK.attention_count){
-      const c=document.createElement('span');c.className='count';
-      c.textContent=WORK.attention_count;b.append(c);}
-    b.addEventListener('click',()=>{activeTab=i;render();});
-    el.append(b);});
+    const b=el.children[i];
+    b.classList.toggle('active',i===activeTab);
+    let c=b.querySelector('.count');
+    if(i===0&&WORK.attention_count){
+      if(!c){c=document.createElement('span');c.className='count';b.append(c);}
+      c.textContent=WORK.attention_count;
+    }else if(c){c.remove();}
+  });
 }
 function renderChips(){
   const el=$('chips'); el.replaceChildren();
@@ -810,18 +942,181 @@ function renderEvents(){
   list.scrollTop=grew?list.scrollHeight:keep;
   evSeen=EVENTS.length;
 }
+function renderSystem(){
+  const s=SYSTEM||{};
+  const el=$('sysLines'); el.replaceChildren();
+  ['bridge','uptime','last','spool'].forEach(k=>{
+    const d=document.createElement('div'); d.textContent=s[k]||''; el.append(d);});
+  const pl=document.createElement('div'); pl.textContent=s.plugin||'';
+  pl.title=s.pluginTip||''; el.append(pl);
+  const pr=document.createElement('div'); pr.textContent=s.problems||'';
+  if(!s.problemsOk) pr.style.color='#f0883e'; el.append(pr);
+  const t=$('sysWorkers'); t.replaceChildren();
+  const head=document.createElement('div'); head.className='wrow head';
+  ['Worker','状态','待你','待验收','进行中','最近'].forEach(x=>{
+    const c=document.createElement('span'); c.textContent=x; head.append(c);});
+  t.append(head);
+  (s.workers||[]).forEach(w=>{
+    const row=document.createElement('div'); row.className='wrow';
+    const n=document.createElement('span'); n.textContent=w.name||'';
+    if(w.foreground) n.className='wfg';
+    const st=document.createElement('span'); st.textContent=w.state||'';
+    const a=document.createElement('span'); a.textContent=w.needs||0;
+    const b=document.createElement('span'); b.textContent=w.review||0;
+    const c=document.createElement('span'); c.textContent=w.working||0;
+    const d=document.createElement('span'); d.textContent=w.last||'—';
+    row.append(n,st,a,b,c,d); t.append(row);});
+}
+function renderKeymap(){
+  const k=KEYMAP||{};
+  // 场景行：跟随前台绿点、固定场景黄点（和 Qt refreshScene 同色）。
+  $('kmDot').style.background = k.pinned ? '#d29922' : '#3fb950';
+  $('kmName').textContent = k.sceneName||'—';
+  $('kmRule').textContent = k.sceneRule||'';
+  $('kmRule').title = k.sceneRuleTip||'';
+  // 场景下拉只在选项真的变了时重建：每 5 秒一次的刷新不该把正开着的下拉关掉。
+  const sel=$('kmScene');
+  const sig=(k.pinned||'')+'|'+((k.scenes||[]).join(','));
+  if(sel.dataset.sig!==sig){
+    sel.dataset.sig=sig;
+    sel.replaceChildren();
+    const auto=document.createElement('option'); auto.value='';
+    auto.textContent='跟随前台'; sel.append(auto);
+    (k.scenes||[]).forEach(n=>{
+      const o=document.createElement('option'); o.value=n; o.textContent=n;
+      sel.append(o);});
+    sel.onchange=()=>postObj({cmd:'keyScene',name:sel.value});
+  }
+  sel.value=k.pinned||'';
+  const list=$('kmList'); const keep=list.scrollTop; list.replaceChildren();
+  (k.groups||[]).forEach(g=>{
+    const t=document.createElement('div'); t.className='mapgtitle';
+    const l=document.createElement('span'); l.textContent=g.title||'';
+    const h=document.createElement('span'); h.className='hair2';
+    t.append(l,h); list.append(t);
+    (g.rows||[]).forEach(r=>{
+      const row=document.createElement('div');
+      row.className='keyrow'+(r.vk===k.selected?' sel':'');
+      const kc=document.createElement('div'); kc.className='keycell';
+      const gph=document.createElement('span'); gph.className='glyph';
+      gph.textContent=r.glyph||'';
+      const kn=document.createElement('span'); kn.className='kname';
+      kn.textContent=r.name||'';
+      kc.append(gph,kn);
+      kc.onclick=()=>postObj({cmd:'keySelect',vk:r.vk});
+      row.append(kc);
+      [['single'],['double'],['hold']].forEach(([g2])=>{
+        const c=r[g2]||{};
+        const cell=document.createElement('div');
+        cell.className='gcell'+(c.editable?' edit':'');
+        const tt=document.createElement('div'); tt.className='t';
+        tt.textContent=c.title||'';
+        const ee=document.createElement('div'); ee.className='e';
+        ee.textContent=c.effect||'';
+        if(!c.title || c.title==='—') cell.classList.add('off');
+        cell.title=c.tip||'';
+        cell.append(tt,ee);
+        // 只有可改的格子才回传；语音键/对焦键这些固定行和 Qt 一样不给点。
+        if(c.editable) cell.onclick=()=>postObj({cmd:'keyEdit',vk:r.vk,gesture:g2});
+        row.append(cell);
+      });
+      list.append(row);
+    });
+  });
+  list.scrollTop=keep;
+  const hint=$('kmHint'); hint.textContent=k.hint||'';
+  hint.style.color=k.hintColor||'';
+  const sw=$('kmTakeover');
+  sw.classList.toggle('on',!!k.takeover);
+  sw.onclick=()=>postObj({cmd:'keyTakeover',on:!k.takeover});
+}
+function renderApps(){
+  const a=APPS||{};
+  const list=$('apList'); const keep=list.scrollTop; list.replaceChildren();
+  (a.rows||[]).forEach(r=>{
+    const row=document.createElement('div'); row.className='approw';
+    const n=document.createElement('span'); n.className='aname';
+    n.textContent=r.name||'';
+    const s=document.createElement('span');
+    s.className='astate'+(r.found?'':' miss');
+    s.textContent=r.state||''; s.title=r.stateTip||'';
+    const open=document.createElement('button'); open.className='btn';
+    open.textContent='打开'; open.disabled=!r.found;
+    open.title='现在打开一次（语音说「打开 '+(r.name||'')+'」同样有效）';
+    open.onclick=()=>postObj({cmd:'appOpen',id:r.id});
+    row.append(n,s,open);
+    if(r.custom){
+      const del=document.createElement('button'); del.className='btn';
+      del.textContent='删';
+      del.title='从自定义应用里移除（不影响应用本身）';
+      del.onclick=()=>postObj({cmd:'appRemove',name:r.name,path:r.customPath});
+      row.append(del);
+    }
+    list.append(row);
+  });
+  list.scrollTop=keep;
+  $('apSummary').textContent=a.summary||'';
+  const v=$('apVoice');
+  v.classList.toggle('on',!!a.voiceLaunch);
+  v.onclick=()=>postObj({cmd:'appVoice',on:!a.voiceLaunch});
+  const sy=$('apSystem');
+  sy.classList.toggle('on',!!a.systemControl);
+  sy.onclick=()=>postObj({cmd:'appSystem',on:!a.systemControl});
+}
+function renderGuide(){
+  const g=GUIDE||{};
+  const body=$('guBody'); const keep=body.scrollTop; body.replaceChildren();
+  const intro=document.createElement('div'); intro.className='mutedline';
+  intro.style.marginBottom='14px'; intro.textContent=g.intro||'';
+  body.append(intro);
+  (g.sections||[]).forEach(sec=>{
+    const box=document.createElement('div'); box.className='gsec';
+    const h=document.createElement('div'); h.className='ghead';
+    h.textContent=sec.title||''; box.append(h);
+    (sec.rows||[]).forEach(pair=>{
+      const r=document.createElement('div'); r.className='grow';
+      const kk=document.createElement('div'); kk.className='gk';
+      kk.textContent=pair[0]||'';
+      const vv=document.createElement('div'); vv.className='gt';
+      vv.textContent=pair[1]||'';
+      r.append(kk,vv); box.append(r);
+    });
+    body.append(box);
+  });
+  const links=document.createElement('div'); links.className='links';
+  const mk=(label,fn)=>{const b=document.createElement('button');
+    b.className='btn'; b.textContent=label; b.onclick=fn; return b;};
+  links.append(mk('官网  ↗',()=>postObj({cmd:'guideSite'})));
+  links.append(mk('GitHub  ↗',()=>postObj({cmd:'guideGithub'})));
+  const copy=mk('复制安装话术',()=>{
+    postObj({cmd:'guideCopy'});
+    copy.textContent='已复制 ✓ 去粘给 Agent';
+    setTimeout(()=>{copy.textContent='复制安装话术';},2600);
+  });
+  links.append(copy);
+  const v=document.createElement('span'); v.className='mutedline';
+  v.style.marginLeft='8px'; v.textContent='当前版本 v'+(g.version||'');
+  links.append(v);
+  body.append(links);
+  body.scrollTop=keep;
+}
 function render(){
   renderTabs();
   const workView=activeTab===0;
   $('work').hidden=!workView;
   $('foot').hidden=!workView;
   $('events').hidden=activeTab!==1;
+  $('system').hidden=activeTab!==2;
+  $('keymap').hidden=activeTab!==3;
+  $('apps').hidden=activeTab!==4;
+  $('guide').hidden=activeTab!==5;
   $('empty').hidden=true;
-  $('placeholder').hidden=true;
   if(activeTab===1){renderEvents();return;}
+  if(activeTab===2){renderSystem();return;}
+  if(activeTab===3){renderKeymap();return;}
+  if(activeTab===4){renderApps();return;}
+  if(activeTab===5){renderGuide();return;}
   if(!workView){
-    $('placeholder').hidden=false;
-    $('placeholder').textContent='「'+TABS[activeTab]+'」还没搬过来（下一步）';
     return;
   }
   const rows=sorted();
@@ -849,7 +1144,16 @@ $('clear').onclick=()=>post('clear');
 $('evClear').onclick=()=>post('clearLog');
 $('raise').onclick=()=>post('open',selected);
 $('ack').onclick=()=>post('ack',selected);
-$('guide').onclick=()=>{activeTab=5;render();};
+$('workGuide').onclick=()=>{activeTab=5;render();};
+// 系统/映射/应用页的动作按钮：状态机全在 Qt 侧，这里只发命令。
+$('sysRefresh').onclick=()=>postObj({cmd:'sysRefresh'});
+$('sysBridge').onclick=()=>postObj({cmd:'sysBridge'});
+$('sysUpgrade').onclick=()=>postObj({cmd:'sysUpgrade'});
+$('sysOpenDir').onclick=()=>postObj({cmd:'sysOpenDir'});
+$('kmProfiles').onclick=()=>postObj({cmd:'keyProfiles'});
+$('kmReload').onclick=()=>postObj({cmd:'keyReload'});
+$('apAdd').onclick=()=>postObj({cmd:'appAdd'});
+$('apRescan').onclick=()=>postObj({cmd:'appRescan'});
 document.addEventListener('keydown',e=>{
   // 快捷键只属于待办页：Qt 侧事件流是 NoSelection/NoFocus，别的页也不接。
   if(activeTab!==0 || !selected) return;
@@ -861,6 +1165,10 @@ function adopt(s){
   WORK=STATE.work||{items:[]};
   WORKERS=STATE.workers||[];
   EVENTS=STATE.events||[];
+  SYSTEM=STATE.system||{};
+  KEYMAP=STATE.keymap||{};
+  APPS=STATE.apps||{};
+  GUIDE=STATE.guide||{};
   now=Date.now();
   applyTheme(STATE.theme||{});
   render();

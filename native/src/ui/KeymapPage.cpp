@@ -731,7 +731,9 @@ void KeymapPage::flashHint(const QString &text, const QString &color) {
     footHint_->setStyleSheet(
         QStringLiteral("QLabel#mapFoot { color: %1; font-size: %2px; }")
             .arg(color, QString::number(ThemeManager::scaledPx(10))));
+    hintColor_ = color;
     hintTimer_->start(2600);
+    emit hintChanged();
 }
 
 void KeymapPage::resetHint() {
@@ -739,6 +741,8 @@ void KeymapPage::resetHint() {
     footHint_->setStyleSheet(
         QStringLiteral("QLabel#mapFoot { color: #5b6472; font-size: %1px; }")
             .arg(ThemeManager::scaledPx(10)));
+    hintColor_ = QStringLiteral("#5b6472");
+    emit hintChanged();
 }
 
 void KeymapPage::refreshInlineStyles() {
@@ -770,6 +774,80 @@ void KeymapPage::reloadProfiles() {
     refreshAll();
     flashHint(QStringLiteral("按键映射已重新加载"),
               QStringLiteral("#7ee2a8"));
+}
+
+QJsonObject KeymapPage::webState() {
+    const Profile &profile = store_->current(false);
+    QJsonArray scenes;
+    for (const QString &name : store_->names()) {
+        scenes.append(name);
+    }
+    const auto summary = ProfileStore::matchSummary(profile);
+    const auto cellJson = [](const MapCellData &cell) {
+        return QJsonObject{{QStringLiteral("title"), cell.title},
+                           {QStringLiteral("effect"), cell.effect},
+                           {QStringLiteral("tip"), cell.tip},
+                           {QStringLiteral("editable"), cell.editable}};
+    };
+    QJsonArray groups;
+    for (const auto &group : mapGroups()) {
+        QJsonArray rows;
+        for (int vk : group.second) {
+            rows.append(QJsonObject{
+                {QStringLiteral("vk"), vk},
+                {QStringLiteral("glyph"), glyphs().value(vk)},
+                {QStringLiteral("name"), names().value(vk)},
+                {QStringLiteral("single"), cellJson(singleCell(vk, profile))},
+                {QStringLiteral("double"), cellJson(doubleCell(vk, profile))},
+                {QStringLiteral("hold"), cellJson(holdCell(vk, profile))},
+            });
+        }
+        groups.append(QJsonObject{{QStringLiteral("title"), group.first},
+                                  {QStringLiteral("rows"), rows}});
+    }
+    return QJsonObject{
+        {QStringLiteral("pinned"), store_->pinned()},
+        {QStringLiteral("scenes"), scenes},
+        {QStringLiteral("sceneName"), profile.name},
+        {QStringLiteral("sceneRule"), QStringLiteral("· ") + summary.first},
+        {QStringLiteral("sceneRuleTip"), summary.second},
+        {QStringLiteral("groups"), groups},
+        {QStringLiteral("selected"), selectedVk_},
+        {QStringLiteral("takeover"), store_->uiBool(
+                                        QStringLiteral("native_takeover"),
+                                        false)},
+        {QStringLiteral("hint"),
+         footHint_ != nullptr ? footHint_->text() : QString()},
+        {QStringLiteral("hintColor"), hintColor_},
+    };
+}
+
+void KeymapPage::webSelect(int vk) {
+    selectRow(vk);
+}
+
+void KeymapPage::webEdit(int vk, const QString &gesture) {
+    selectRow(vk);
+    // 原生菜单弹在网页点击处（QCursor::pos() 就是刚才那一下的位置）。
+    openMenu(vk, gesture);
+}
+
+void KeymapPage::webSetPinned(const QString &name) {
+    store_->setPinned(name);
+    refreshAll();
+}
+
+void KeymapPage::webSetTakeover(bool on) {
+    store_->setUiBool(QStringLiteral("native_takeover"), on);
+    syncTakeoverUi();
+}
+
+void KeymapPage::webOpenProfiles() {
+    openProfiles();
+}
+
+void KeymapPage::webReload() {
+    reloadProfiles();
 }
 
 const Profile &KeymapPage::currentProfile() {

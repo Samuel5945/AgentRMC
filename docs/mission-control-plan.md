@@ -64,8 +64,8 @@ Task/WorkItem 的**会话归属**与**可验证投递**，这两块得自己补�
 | 能力 | WorkBuddy 系 | Qoder 系 | DSH |
 |---|---|---|---|
 | 拿到真实会话 id | 有（插件从宿主取） | 有（hook payload） | 有（agent.id） |
-| 打开指定会话 | **已验证**（两变体，见下） | 待验证 | 待验证 |
-| 按 id 发送并回回执 | **已验证**（两变体，见下） | 待验证 | 待验证 |
+| 打开指定会话 | **已接线**（UIA 通道，见下） | 桌面通道待探（CLI 已否决） | 待验证 |
+| 按 id 发送并回回执 | **已接线**（UIA 通道，见下） | 桌面通道待探（CLI 已否决） | 待验证 |
 
 #### WorkBuddy 系实测（2026-11-07，探针 `rc_probe/wb_open_session.py` / `wb_send_receipt.py`）
 
@@ -87,6 +87,74 @@ Task/WorkItem 的**会话归属**与**可验证投递**，这两块得自己补�
   5. 剪贴板是共享资源：用前保存、用后还原。
 - 探针留下三个无害会话（classic `566902ff…` / `abd603af…`，AI `42bca911…`，
   标题含「链路探针」），宿主只回了「收到」类短句；要不要删由用户定。
+- **路由已接线（2026-11-07 晚）**：`core/UiDispatch` 把上述机制做成异步状态机
+  （唤醒→等树→滚顶/分组双 toggle→点行→读回证明→粘贴读回→Enter），
+  `SessionDispatch` 负责守卫（会话库自报身份、10s 活动闸、同会话在途、
+  **UI 投递全局串行**）与回执轮询（jsonl 新增 user 行含派发原文）；回执落账
+  把工单转进行中。活体 harness 对自建牺牲会话 `9b3f70f0…` 全链通过
+  （`LIVE RECEIPT … WorkBuddy.exe`），桌面可见。外壳派发行按
+  `dispatch.supported` 只对 WorkBuddy 两变体开放。
+- 接线时实测补的坑：① Chromium 全量 a11y 树要在前台被查询后才建，named<15
+  就等一拍重扫，别拿空树滚侧栏；② 分组开关是 toggle，不知展开/折叠就点一次找
+  一遍再点回来找一遍；③ 聊天区顶部有时渲染首句气泡而非 ai-title，证明要两者
+  都认；④ WorkBuddy 的 user 记录 role/content 在顶层、part 叫 input_text、正文
+  外包 system-reminder 与 user_query，取标题要剥包装；⑤ 纯 Core 测试 harness
+  默认 DPI unaware，GetWindowRect 与 UIA 坐标不一致，harness 起手要设 PMv2
+  （主程序走 Qt Widgets 无此问题）；⑥ 聊天区标题实测在 rel y≈97，证明区域下界
+  卡 y>100 会把标题切掉、只剩气泡（多轮会话停底部时顶部是最新一条），误报
+  「读回不符」——区域放宽到 y>60；⑦ 拒绝/回执通知要绑定当次派发的卡 id，
+  否则旧拒绝原因会挂在新选中的卡下面误导人。
+
+#### Qoder 系实测（2026-11-07，探针 `rc_probe/qoder_send_receipt.py`）
+
+- **桌面 UI 自动化不通**：Qoder CN 主窗 UIA 树只有标题栏三个按钮，renderer
+  accessibility 默认不开（WorkBuddy 会开，Qoder 不会）；不重启加 flag 拿不到树，
+  而重启会打断正在跑的会话，不做。
+- **CLI 与桌面共用会话库**：`~/.qoder-cn/projects/<slug>/<id>.jsonl`；
+  `qoderclicn --list-sessions` 能列出桌面会话（含当前会话），标题取首条用户消息。
+  记录类型是 `user` / `assistant`（带 `sessionId`），**没有 ai-title 行**。
+- 发送与回执（**重做轮，2026-11-07 晚**）：`--session-id <新uuid> --tools "" -p`
+  发探针1，jsonl 落 `user` 行回执；`--resume <id> -p` 问「上一条探针标记」答对
+  原标记 → 证明 resume 载入的就是该会话；回执2 落同一文件、其它会话零泄漏
+  （`TARGETED_SEND OK / NO_LEAK True`）。
+- **上一轮探针有事故，结论以重做轮为准**：`--tools ""` 只禁模型工具，插件 hook
+  照跑——探针会话的 Stop 经 agentrmc-bridge 落进真实待办库（`06a433cc` 一条
+  done 卡）。重做轮隔离四件套：`--settings '{"disableAllHooks":true}'` 关全部
+  hook、`--strict-mcp-config` + 空 mcpServers 关 MCP、cwd 用临时目录（会话落在
+  临时项目 slug）、跑前后对真实 work-items.json 做 sha1+mtime 断言
+  （`REAL_STORE_UNTOUCHED True`）；结束自删本轮探针会话文件。
+- 坑：
+  1. 从 Qoder 桌面派生的 shell 里跑 CLI 会带 `QODER_AGENT_SDK_ENTRYPOINT` 等
+     环境变量，CLI 报 `sdk_invalid_args` 拒绝启动——派发实现必须先清掉
+     （native 侧 `d214d6f` 已在启动时洗掉继承的 QODER* 会话变量）；
+  2. `--tools` 是**变长参数**：`--tools "" <prompt>` 会把 prompt 吞掉，CLI 静默
+     rc=42；必须写成 `--tools "" -p <prompt>` 让选项终止变长收集；
+  3. `--config-dir <临时配置家>` 会丢登录态（同样静默 rc=42），不能用来隔离；
+     隔离靠 disableAllHooks + 空 MCP + 临时 cwd，不动配置家。
+- **用户裁决（2026-11-07 晚）：CLI 不适合作派回路径**——送达与回执都成立，但
+  Qoder CN 桌面端对 CLI 追加的轮次毫无反应（会话按工作区归堆、桌面不重扫），
+  人回不去那条会话，闭环不成立。路由里 CLI 通道已休眠
+  （`SessionDispatch::configHomeFor` 全宿主返回空，外壳派发行按
+  `dispatch.supported` 隐藏），守卫/回执/草稿骨架保留待桌面通道。
+- **未决设计点**：桌面可见通道候选——① `qoder-cn://` deep link 打开会话 +
+  观察 jsonl 尾部记录证明当前会话后盲粘贴（不改用户设置）；② 开
+  `editor.accessibilitySupport` 让 UIA 树暴露后走 WorkBuddy 同款 UIA 路
+  （改用户设置，需点头）。两者都未探明。
+- 国际版：本机有 app 无 CLI（`~/.qoder/bin` 只有工具二进制）、桌面进程不在，
+  **未实测**；会话库格式与 CN 同族，装 CLI 后按同一路径补探。
+- 残留：上一轮事故留下会话 `06a433cc…` 与待办库里一条 done 探针卡，可删；
+  重做轮自建的探针会话已自清，真实待办库指纹跑前后一致。
+- **回复内容上卡（2026-11-07 晚）**：stop 落账时读该会话 jsonl 最后一条
+  assistant 正文（`SessionDispatch::lastReply`，剥包装/压空白/截 60 字）替换
+  通用收尾文案进待办卡，并在事件流记「会话回复：…」；「等你回话/选方案/确认/
+  模型出错」这类要人动手的文案保留原语义。实测 WorkBuddy 卡从「做完了，等你
+  回来看」变成回复正文「收到」。Qoder 系因通道休眠暂不生效（configHome 为空）。
+- **现有派活老路端到端实测（2026-11-07 晚，`rc_probe/dispatch_e2e.py`）**：
+  用户新建牺牲会话 `899a6b7c…` 并停在前台，走外壳左栏语音形态「打字框+发送」
+  真实入口派发带标记探针 → 标记落在该会话 jsonl、宿主回「收到」、AgentRMC
+  建 voice 工单并绑定该 session（stop 合并翻篇）、本会话零泄漏。即
+  **「续当前会话」模式对 Qoder CN 可用**；定向任意会话（第 3 批路由）仍未接线，
+  国际版未验。护栏：发送前断言前台为 Qoder 系，发送后断言目标回执+本会话无标记。
 
 已定的设计约束：
 
@@ -170,11 +238,12 @@ Task/WorkItem 的**会话归属**与**可验证投递**，这两块得自己补�
 ## 8. 现状与剩余
 
 - 数据面：第 1、2 批已落地并装机验证；第 3 批定向派发的前置能力 **WorkBuddy 系
-  已探明并实测**（打开指定会话 + 定向发送 + 回执），Qoder 系 / DSH 待探。
+  与 Qoder CN（CLI 通道）已探明并实测**（打开指定会话 + 定向发送 + 回执）；
+  DSH 待探，Qoder 桌面 UI 定向打开 / 国际版待补。
 - 表现面：外壳＋六个页签已落，默认启用；桌宠／气泡保持 Qt。
 - 版本号仍是 `0.4.1`（Native 与插件同号）：按约定等用户明确说「升版」才动。
 - 剩余事项：
-  1. 第 3 批：WorkBuddy 系已验证（见 §3 实测小节）；**Qoder 系 / DSH 仍待验证**，
-     验完再决定路由与排队策略。
+  1. 第 3 批：**WorkBuddy 系 UIA 通道已接线并活体验收**；Qoder CN 的 CLI 通道
+     实测后被用户否决（桌面不可见），路由休眠待桌面通道；**DSH 仍待验证**。
   2. 事件流／系统页的真实数据字段如有新增，记得同步给 `webShellState()`。
   3. 美术主题下的外壳观感复检（有探针图，但需人工确认一遍）。

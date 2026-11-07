@@ -13,6 +13,7 @@
 #include "core/VoiceSettings.h"
 
 #include <QApplication>
+#include <QJsonArray>
 #include <QClipboard>
 #include <QCloseEvent>
 #include <QFontMetrics>
@@ -699,4 +700,42 @@ void VoiceWindow::submitTyped() {
     setTranscript(text);
     pushHistory(text, 0);
     emit typedSubmitted(text);
+}
+
+QJsonObject VoiceWindow::webState() const {
+    QJsonArray hist;
+    for (int i = 0; i < history_->count(); ++i) {
+        const QListWidgetItem *item = history_->item(i);
+        hist.append(QJsonObject{
+            {QStringLiteral("t"), item->text()},
+            {QStringLiteral("full"), item->data(Qt::UserRole).toString()}});
+    }
+    return QJsonObject{
+        {QStringLiteral("transcript"), transcriptFull_},
+        {QStringLiteral("history"), hist},
+        {QStringLiteral("readLastEnabled"), !lastText_.isEmpty()},
+        {QStringLiteral("stateLineVisible"), !hintSeen_},
+        {QStringLiteral("chatMode"),
+         store_->uiBool(QStringLiteral("pet_chat"), false)},
+        {QStringLiteral("picker"), picker_->webState()}};
+}
+
+void VoiceWindow::webReadLast() {
+    if (lastText_.isEmpty()) {
+        toast_->showText(QString::fromUtf8("还没有可朗读的内容"));
+        return;
+    }
+    emit speakRequested(lastText_);
+}
+
+void VoiceWindow::webSelectAgent(const QString &exe) {
+    picker_->webSelectAgent(exe);
+}
+
+void VoiceWindow::webSelectMode(const QString &mode) {
+    picker_->webSelectMode(mode);
+}
+
+void VoiceWindow::webRefreshPicker() {
+    picker_->refresh();
 }

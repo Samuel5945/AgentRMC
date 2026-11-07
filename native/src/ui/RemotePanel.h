@@ -20,6 +20,10 @@ public:
     void setEntries(const QVector<Entry> &entries);
     void setModeKeys(const QSet<int> &keys);
     void setLinkedVk(int vk);
+    // 整窗外壳读同一份账画遥控器图例，别另算一遍映射文案。
+    QVector<Entry> entries() const { return entries_; }
+    QSet<int> modeKeys() const { return modeKeys_; }
+    int linkedVk() const { return linkedVk_; }
     void flash(int vk);
     QString actionFor(int vk) const;
     QString labelFor(int vk) const;

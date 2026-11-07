@@ -7,6 +7,7 @@
 #include "ui/RemotePanel.h"
 #include "ui/ThemeDialog.h"
 #include "ui/Toast.h"
+#include "ui/TtsSettingsDialog.h"
 #include "ui/VoicePet.h"
 #include "ui/VoiceSettingsDialog.h"
 #include "ui/DispatchPicker.h"
@@ -449,8 +450,15 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
             &MainWindow::onVoiceState);
     voiceLevelTimer_ = new QTimer(this);
     connect(voiceLevelTimer_, &QTimer::timeout, this, [this] {
+        const double level = voiceRecording_ ? voice_->micLevel() : 0.0;
         if (voiceKey_ != nullptr) {
-            voiceKey_->setLevel(voiceRecording_ ? voice_->micLevel() : 0.0);
+            voiceKey_->setLevel(level);
+        }
+        if (workWeb_ != nullptr) {
+            // 波形 20Hz 走轻量通道：整页 refresh 会重建 DOM，扛不住这个频率。
+            workWeb_->pushLive(QJsonObject{
+                {QStringLiteral("level"), level},
+                {QStringLiteral("recording"), voiceRecording_}});
         }
     });
     voiceLevelTimer_->start(50);
@@ -541,9 +549,11 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
     auto *outer = new QVBoxLayout(root);
     outer->setContentsMargins(0, 0, 0, 0);
     outer->setSpacing(0);
-    outer->addWidget(buildHeader());
+    headerBar_ = buildHeader();
+    outer->addWidget(headerBar_);
 
     auto *body = new QWidget;
+    leftBody_ = body;
     auto *grid = new QHBoxLayout(body);
     grid->setContentsMargins(14, 12, 14, 14);
     grid->setSpacing(12);
@@ -571,6 +581,12 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
             [this] { setLeftPanel(false); });
     connect(embeddedVoice_, &VoiceWindow::typedSubmitted, this,
             [this](const QString &text) { voice_->submitTyped(text); });
+    connect(embeddedVoice_, &VoiceWindow::speakRequested, this,
+            [this](const QString &text) {
+                if (voicePet_ != nullptr) {
+                    voicePet_->speak(text);
+                }
+            });
     leftLay->addWidget(leftStack_, 0);
     setLeftPanel(store_->uiBool(QStringLiteral("voice_mode"), false) ||
                  store_->uiBool(QStringLiteral("left_panel_voice"), false));
@@ -684,10 +700,14 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
     }
     refreshWorkItems();
     if (workWeb_ != nullptr) {
-        // 外壳版：整个右半区就是那一个 WebView2，Qt 的页签整块藏起来
-        // （页签在 HTML 里画）。不放进 QTabWidget 里，省得被 currentIndex 拉回去。
+        // 整窗外壳：顶栏/左栏/页签全由 HTML 画，Qt chrome 藏起来但控件仍活着
+        // 当状态机（语音/遥控器/映射的状态都从它们读）。混渲染会让 Qt  backing
+        // store 发虚（用户实测），所以画面只留 WebView2 一条管线。
         tabs_->hide();
-        grid->addWidget(workWeb_, 1);
+        headerBar_->hide();
+        leftBody_->hide();
+        workWeb_->setMinimumSize(1000, 560);
+        outer->addWidget(workWeb_, 1);
     } else {
         grid->addWidget(tabs_, 1);
     }
@@ -757,6 +777,12 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
     connect(voicePet_, &VoicePet::chatReplied, this, [this](const QString &text) {
         if (voiceWindow_ != nullptr) {
             voiceWindow_->showChatReply(text);
+        }
+        if (embeddedVoice_ != nullptr) {
+            embeddedVoice_->showChatReply(text);
+        }
+        if (workWeb_ != nullptr) {
+            workWeb_->refresh();
         }
         appendEvent(QStringLiteral("voice"), QString(), QString(),
                     QString::fromUtf8("鲸鱼娘：%1").arg(text), 0);
@@ -2771,6 +2797,13 @@ QString MainWindow::webShellState() {
         {QStringLiteral("apps"),
          appPage_ != nullptr ? appPage_->webState() : QJsonObject()},
         {QStringLiteral("guide"), guide},
+        {QStringLiteral("header"),
+         QJsonObject{
+             {QStringLiteral("listening"),
+              engine_ != nullptr && engine_->isRunning()},
+             {QStringLiteral("recording"), voiceRecording_},
+             {QStringLiteral("maximized"), isMaximized() || isFullScreen()}}},
+        {QStringLiteral("left"), leftShellState()},
     };
     return QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Compact));
 }
@@ -2778,6 +2811,89 @@ QString MainWindow::webShellState() {
 // 页面上的按钮/双击回到这里：全部转给既有实现，不在页面里另起一套状态机。
 // 改键菜单、组合键捕获、添加/移除应用这类重交互弹 Qt 原生弹窗，网页只负责
 // 把动作送回来；做完统一重推一次状态。
+QJsonObject MainWindow::voiceCardState() {
+    const VoiceOptions options = voice_->options();
+    const bool hintSeen =
+        store_->uiBool(QStringLiteral("voice_hint_seen"), false);
+    QJsonObject o{
+        {QStringLiteral("backend"), voiceBackendKey(options.backend)},
+        {QStringLiteral("status"), voice_->statusText()},
+        {QStringLiteral("transcript"), lastTranscript_},
+        {QStringLiteral("testEnabled"),
+         options.backend != VoiceBackend::Hotkey}};
+    if (options.backend == VoiceBackend::Hotkey) {
+        o.insert(QStringLiteral("kind"), QStringLiteral("accent"));
+        o.insert(QStringLiteral("foot"),
+                 QStringLiteral("0 模型 · 跟随前台场景转发"));
+        o.insert(QStringLiteral("footVisible"), !hintSeen);
+    } else if (options.backend == VoiceBackend::CloudAsr) {
+        const bool ready = voice_->modelReady();
+        o.insert(QStringLiteral("kind"),
+                 ready ? QStringLiteral("dim") : QStringLiteral("warn"));
+        o.insert(QStringLiteral("foot"),
+                 QStringLiteral("云端转写 · 音频将上传到所填服务"));
+        o.insert(QStringLiteral("footVisible"), true);
+    } else if (voice_->modelReady()) {
+        o.insert(QStringLiteral("kind"), QStringLiteral("dim"));
+        o.insert(QStringLiteral("foot"),
+                 QStringLiteral("本地转写 · 音频不出本机"));
+        o.insert(QStringLiteral("footVisible"), !hintSeen);
+    } else {
+        o.insert(QStringLiteral("kind"), QStringLiteral("drop"));
+        o.insert(QStringLiteral("status"),
+                 QStringLiteral("⇣  把模型包（.zip）拖到这里导入"));
+        o.insert(QStringLiteral("foot"),
+                 QStringLiteral("未安装模型 · 拖入模型包，或点「模型设置」"));
+        o.insert(QStringLiteral("footVisible"), true);
+    }
+    return o;
+}
+
+QJsonObject MainWindow::remoteCardState() {
+    QJsonArray entries;
+    if (remotePanel_ != nullptr) {
+        for (const RemotePanel::Entry &e : remotePanel_->entries()) {
+            entries.append(QJsonObject{
+                {QStringLiteral("vk"), e.vk},
+                {QStringLiteral("glyph"), e.glyph},
+                {QStringLiteral("label"), e.label},
+                {QStringLiteral("action"), e.action},
+                {QStringLiteral("infrared"), e.infrared}});
+        }
+    }
+    QJsonArray modeKeys;
+    if (remotePanel_ != nullptr) {
+        for (int vk : remotePanel_->modeKeys()) {
+            modeKeys.append(vk);
+        }
+    }
+    return QJsonObject{
+        {QStringLiteral("badge"),
+         remoteBadge_ != nullptr ? remoteBadge_->text()
+                                 : QString::fromUtf8("待机")},
+        {QStringLiteral("state"),
+         remoteState_ != nullptr ? remoteState_->text() : QString()},
+        {QStringLiteral("listening"),
+         engine_ != nullptr && engine_->isRunning()},
+        {QStringLiteral("entries"), entries},
+        {QStringLiteral("modeKeys"), modeKeys},
+        {QStringLiteral("linkedVk"),
+         remotePanel_ != nullptr ? remotePanel_->linkedVk() : 0}};
+}
+
+QJsonObject MainWindow::leftShellState() {
+    return QJsonObject{
+        {QStringLiteral("form"),
+         leftStack_ != nullptr && leftStack_->currentIndex() == 1},
+        {QStringLiteral("voice"), voiceCardState()},
+        {QStringLiteral("picker"),
+         cardPicker_ != nullptr ? cardPicker_->webState() : QJsonObject()},
+        {QStringLiteral("remote"), remoteCardState()},
+        {QStringLiteral("vpage"),
+         embeddedVoice_ != nullptr ? embeddedVoice_->webState()
+                                   : QJsonObject()}};
+}
+
 void MainWindow::handleWebAction(const QJsonObject &action) {
     const QString cmd = action.value(QStringLiteral("cmd")).toString();
     const QString id = action.value(QStringLiteral("id")).toString();
@@ -2857,6 +2973,105 @@ void MainWindow::handleWebAction(const QJsonObject &action) {
             QUrl(QStringLiteral("https://github.com/Samuel5945/AgentRMC")));
     } else if (cmd == QStringLiteral("guideCopy")) {
         QApplication::clipboard()->setText(agentBridgeInstallSentence());
+    } else if (cmd == QStringLiteral("winMin")) {
+        showMinimized();
+    } else if (cmd == QStringLiteral("winMax") ||
+               cmd == QStringLiteral("winMaxToggle")) {
+        toggleMaximize();
+    } else if (cmd == QStringLiteral("winClose")) {
+        close();
+    } else if (cmd == QStringLiteral("winDrag")) {
+        if (auto *handle = windowHandle()) {
+            handle->startSystemMove();
+        }
+    } else if (cmd == QStringLiteral("listen")) {
+        toggleListening();
+    } else if (cmd == QStringLiteral("update")) {
+        checkUpdates(true);
+    } else if (cmd == QStringLiteral("theme")) {
+        openThemeDialog();
+    } else if (cmd == QStringLiteral("guide")) {
+        showGuide();
+    } else if (cmd == QStringLiteral("vBackend")) {
+        const QString key = action.value(QStringLiteral("key")).toString();
+        store_->updateVoice(QJsonObject{{QStringLiteral("backend"), key}});
+        voice_->reload();
+        lastTranscript_.clear();
+        refreshVoiceUi();
+        refreshRemoteCard();
+        if (key == QStringLiteral("api") && !voice_->modelReady()) {
+            toast_->showText(QString::fromUtf8(
+                "云端 ASR 还没配好：语音设置 → 云端 ASR 填模型和 Key"), 3600);
+        }
+        appendEvent(QStringLiteral("status"), QString(), QString(),
+                    QStringLiteral("语音后端切换为 ") + key, 0);
+    } else if (cmd == QStringLiteral("vTest")) {
+        voice_->startTest();
+    } else if (cmd == QStringLiteral("vSettings")) {
+        openVoiceSettings();
+    } else if (cmd == QStringLiteral("vMain")) {
+        showVoicePanel();
+    } else if (cmd == QStringLiteral("vWave")) {
+        if (engine_ == nullptr || !engine_->isRunning()) {
+            toast_->showText(QString::fromUtf8(
+                "还没开始监听：点右上角「未监听」胶囊开启"));
+        } else {
+            voice_->mediaToggle();
+        }
+    } else if (cmd == QStringLiteral("pkAgent")) {
+        const QString exe = action.value(QStringLiteral("id")).toString();
+        if (cardPicker_ != nullptr) {
+            cardPicker_->webSelectAgent(exe);
+            cardPicker_->refresh();
+        }
+        if (embeddedVoice_ != nullptr) {
+            embeddedVoice_->webSelectAgent(exe);
+            embeddedVoice_->webRefreshPicker();
+        }
+    } else if (cmd == QStringLiteral("pkMode")) {
+        const QString mode = action.value(QStringLiteral("id")).toString();
+        if (cardPicker_ != nullptr) {
+            cardPicker_->webSelectMode(mode);
+        }
+        if (embeddedVoice_ != nullptr) {
+            embeddedVoice_->webSelectMode(mode);
+        }
+    } else if (cmd == QStringLiteral("leftForm")) {
+        setLeftPanel(action.value(QStringLiteral("voice")).toBool());
+    } else if (cmd == QStringLiteral("bt")) {
+        if (!QDesktopServices::openUrl(
+                QUrl(QStringLiteral("ms-settings:bluetooth")))) {
+            appendEvent(QStringLiteral("error"), QString(), QString(),
+                        QString::fromUtf8("打不开系统蓝牙设置"), 0);
+        }
+    } else if (cmd == QStringLiteral("readLast")) {
+        if (embeddedVoice_ != nullptr) {
+            embeddedVoice_->webReadLast();
+        }
+    } else if (cmd == QStringLiteral("vTyped")) {
+        const QString text = action.value(QStringLiteral("text")).toString();
+        if (!text.trimmed().isEmpty()) {
+            voice_->submitTyped(text);
+        }
+    } else if (cmd == QStringLiteral("copy")) {
+        QApplication::clipboard()->setText(
+            action.value(QStringLiteral("text")).toString());
+        toast_->showText(QString::fromUtf8("已复制"), 1500);
+    } else if (cmd == QStringLiteral("chatToggle")) {
+        const bool on = action.value(QStringLiteral("on")).toBool();
+        store_->setUiBool(QStringLiteral("pet_chat"), on);
+        voice_->setChatMode(on);
+        toast_->showText(on ? QString::fromUtf8(
+                                  "对话模式开：说话会得到模型的语音回复，不再粘贴")
+                            : QString::fromUtf8("已退出对话模式"), 3000);
+    } else if (cmd == QStringLiteral("tts")) {
+        auto *dialog = new TtsSettingsDialog(store_.get(), this);
+        connect(dialog, &TtsSettingsDialog::saved, this, [this] {
+            voice_->reload();
+            refreshVoiceUi();
+        });
+        dialog->exec();
+        dialog->deleteLater();
     } else if (workItems_ != nullptr) {
         if (cmd == QStringLiteral("ack")) {
             if (workItems_->ack(id)) {
@@ -3428,6 +3643,9 @@ void MainWindow::changeEvent(QEvent *event) {
         maximizeBtn_->setText(isMaximized() || isFullScreen()
                                   ? QString::fromUtf8("❐")
                                   : QString::fromUtf8("□"));
+        if (workWeb_ != nullptr) {
+            workWeb_->refresh();
+        }
     }
     QMainWindow::changeEvent(event);
 }
@@ -3620,6 +3838,9 @@ void MainWindow::updateListenUi() {
         voicePet_->setListening(running);
     }
     updateTrayState();
+    if (workWeb_ != nullptr) {
+        workWeb_->refresh();
+    }
 }
 
 void MainWindow::refreshVoiceKey() {
@@ -3710,6 +3931,9 @@ void MainWindow::refreshVoiceUi() {
     if (voiceTest_ != nullptr) {
         // 只随识别方式变；录音中不再闪烁变灰（那会让人以为按钮被按了）。
         voiceTest_->setEnabled(options.backend != VoiceBackend::Hotkey);
+    }
+    if (workWeb_ != nullptr) {
+        workWeb_->refresh();
     }
 }
 
@@ -3884,6 +4108,9 @@ void MainWindow::refreshRemoteCard() {
          QString::fromUtf8("红外"), true},
     };
     remotePanel_->setEntries(entries);
+    if (workWeb_ != nullptr) {
+        workWeb_->refresh();
+    }
 }
 
 void MainWindow::applyRemoteMode(const QString &badge, const QSet<int> &keys,
@@ -3893,6 +4120,9 @@ void MainWindow::applyRemoteMode(const QString &badge, const QSet<int> &keys,
     }
     if (remotePanel_ != nullptr) {
         remotePanel_->setModeKeys(on ? keys : QSet<int>());
+    }
+    if (workWeb_ != nullptr) {
+        workWeb_->refresh();
     }
 }
 
@@ -4069,6 +4299,9 @@ void MainWindow::onEngineEvent(const QString &kind, const QString &name,
     if (kind == QStringLiteral("key") && vk != 0) {
         if (remotePanel_ != nullptr) {
             remotePanel_->flash(vk);
+        }
+        if (workWeb_ != nullptr) {
+            workWeb_->pushLive(QJsonObject{{QStringLiteral("lit"), vk}});
         }
         if (remoteState_ != nullptr && remotePanel_ != nullptr) {
             const QString text = name.isEmpty() ? detail : name;

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QJsonObject>
 #include <QWidget>
 
 class QComboBox;
@@ -17,6 +18,10 @@ public:
     void refresh();
     // 一次性新任务被消费后：派活下拉回到默认。
     void refreshMode();
+    // 整窗外壳：下拉内容/选中态序列化，选择走与 combo 相同的持久化路径。
+    QJsonObject webState() const;
+    void webSelectAgent(const QString &exe);
+    void webSelectMode(const QString &mode);
 
 private:
     ProfileStore *store_ = nullptr;

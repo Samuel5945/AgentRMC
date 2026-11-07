@@ -4,6 +4,7 @@
 #include "core/Profiles.h"
 
 #include <QComboBox>
+#include <QJsonArray>
 #include <QHBoxLayout>
 #include <QSignalBlocker>
 
@@ -111,4 +112,39 @@ void DispatchPicker::refreshMode() {
                   "下次派活开新任务 = 一次性：这一句开新任务，交付后自动回到续当前会话\n"
                   "开新任务怎么开：Qoder 系走 Ctrl+N，WorkBuddy 系走 UIA\n"
                   "没登记键位的宿主：两种模式都粘当前焦点"));
+}
+
+QJsonObject DispatchPicker::webState() const {
+    QJsonArray agents;
+    for (int i = 0; i < agent_->count(); ++i) {
+        agents.append(QJsonObject{
+            {QStringLiteral("id"), agent_->itemData(i).toString()},
+            {QStringLiteral("name"), agent_->itemText(i)}});
+    }
+    QJsonArray modes;
+    for (int i = 0; i < mode_->count(); ++i) {
+        modes.append(QJsonObject{
+            {QStringLiteral("id"), mode_->itemData(i).toString()},
+            {QStringLiteral("name"), mode_->itemText(i)}});
+    }
+    return QJsonObject{
+        {QStringLiteral("agents"), agents},
+        {QStringLiteral("agent"), agent_->currentData().toString()},
+        {QStringLiteral("modes"), modes},
+        {QStringLiteral("mode"), mode_->currentData().toString()},
+        {QStringLiteral("modeEnabled"), mode_->isEnabled()}};
+}
+
+void DispatchPicker::webSelectAgent(const QString &exe) {
+    const int index = agent_->findData(exe);
+    if (index >= 0) {
+        agent_->setCurrentIndex(index);
+    }
+}
+
+void DispatchPicker::webSelectMode(const QString &mode) {
+    const int index = mode_->findData(mode);
+    if (index >= 0) {
+        mode_->setCurrentIndex(index);
+    }
 }

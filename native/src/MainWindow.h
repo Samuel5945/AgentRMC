@@ -97,6 +97,10 @@ private:
     QJsonObject webThemeJson();
     // 系统页显示就绪状态：Qt 标签/表格与外壳共用，文案只维护一遍。
     QJsonObject systemState();
+    // 整窗外壳：顶栏 + 左栏两形态的状态，与 Qt 控件读同一份数据。
+    QJsonObject voiceCardState();
+    QJsonObject remoteCardState();
+    QJsonObject leftShellState();
     void handleWebAction(const QJsonObject &action);
     QString selectedWorkId() const;
     QJsonArray workersArray() const;
@@ -189,6 +193,9 @@ private:
     KeymapPage *keymapPage_ = nullptr;
     AppPage *appPage_ = nullptr;
     QTabWidget *tabs_ = nullptr;
+    // 整窗外壳启用时这两块 Qt  chrome 藏起来（控件仍活着当状态机），画面全由 web 画。
+    QWidget *headerBar_ = nullptr;
+    QWidget *leftBody_ = nullptr;
     QListWidget *workList_ = nullptr;
     QLabel *workCount_ = nullptr;
     QLabel *chipNeeds_ = nullptr;

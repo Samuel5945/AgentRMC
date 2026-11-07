@@ -454,6 +454,18 @@ void WorkWebView::refresh() {
     pushState(provider_ ? provider_() : QStringLiteral("{}"));
 }
 
+void WorkWebView::pushLive(const QJsonObject &live) {
+    if (!documentReady_ || d_->webview == nullptr) {
+        return;
+    }
+    const QString json = QString::fromUtf8(
+        QJsonDocument(live).toJson(QJsonDocument::Compact));
+    const QString script = QStringLiteral("window.__setLive(")
+                           + jsEscape(json) + QStringLiteral(");");
+    d_->webview->ExecuteScript(reinterpret_cast<LPCWSTR>(script.utf16()),
+                               nullptr);
+}
+
 // 首帧只能整页给（NavigateToString 没有「换个 body」的写法）；文档一旦好了，
 // 后面一律 ExecuteScript 只喂数据。整页重载会把选中态、滚动位置、hover 全冲掉
 // （实测：标为已处理之后列表回到顶部、按钮变灰），事件一密还会闪。
@@ -565,8 +577,7 @@ QString WorkWebView::htmlFor(const QString &stateJson) const {
  .list{flex:1 1 auto;min-height:0;overflow-y:auto;margin-top:6px;
    scrollbar-width:none}
  .list::-webkit-scrollbar{width:0;height:0}
- .row{position:relative;padding:8px 12px 8px 21px;border-bottom:1px solid var(--w8);
-   cursor:default}
+ .row{position:relative;padding:8px 12px 8px 21px;cursor:default}
  .row:hover{background:var(--w6)}
  .row.sel{background:var(--a36)}
  .bar{position:absolute;left:9px;top:12px;width:3px;height:32px;border-radius:2px}
@@ -601,15 +612,15 @@ QString WorkWebView::htmlFor(const QString &stateJson) const {
  .scname{font-weight:600;font-size:var(--f12);color:var(--text);white-space:nowrap}
  .scrule{font-size:var(--f10);color:var(--muted2);overflow:hidden;
    text-overflow:ellipsis;white-space:nowrap}
- .maphead{display:flex;gap:8px;padding:6px 11px 2px 7px;font-size:var(--f10);
-   color:var(--muted2)}
+ .maphead{display:flex;gap:8px;padding:6px 11px 6px 7px;font-size:var(--f10);
+   color:var(--muted2);border-bottom:1px solid var(--w10)}
  .maphead .k{width:88px;flex:0 0 88px}
  .maphead .g{flex:1}
  .mapgtitle{display:flex;align-items:center;gap:8px;padding:6px 2px 2px;
    font-size:var(--f10);color:var(--muted2)}
  .hair2{flex:1;height:1px;background:var(--w14)}
  .keyrow{display:flex;align-items:center;gap:8px;padding:2px 4px;
-   border-bottom:1px solid var(--w6);border-radius:6px}
+   border-radius:6px}
  .keyrow.sel{background:var(--a26)}
  .keycell{width:88px;flex:0 0 88px;display:flex;align-items:center;gap:7px;
    padding-left:3px;cursor:default;overflow:hidden}
@@ -655,8 +666,8 @@ QString WorkWebView::htmlFor(const QString &stateJson) const {
  .empty h3{font-size:var(--f12);margin:0 0 6px;font-weight:600;color:var(--text)}
  .empty p{font-size:var(--f11);color:var(--muted);margin:0 0 12px;line-height:1.6;
    white-space:pre-line}
- .foot{flex:0 0 auto;display:flex;align-items:center;gap:8px;padding:8px 0 12px;
-   border-top:1px solid var(--w16)}
+ .foot{flex:0 0 auto;display:flex;align-items:center;gap:8px;padding:8px 0 12px}
+ .hair{height:1px;background:var(--w10)}
  .hint{font-size:var(--f11);color:var(--ghost);margin-right:auto}
  .btn{border:1px solid var(--w18);background:transparent;color:var(--text-dim);
    font-size:var(--f11);border-radius:9px;padding:6px 12px;cursor:default}
@@ -664,10 +675,158 @@ QString WorkWebView::htmlFor(const QString &stateJson) const {
  .btn.primary{background:var(--accent);border-color:transparent;color:var(--on-accent);
    font-weight:600;padding:6px 14px}
  .btn.primary:hover{background:var(--accent-hover)}
- .btn:disabled{color:var(--faint);background:var(--w8);border-color:transparent}
+ .btn:disabled{color:var(--faint);background:transparent;border-color:var(--w10)}
+ .btn.primary:disabled{background:var(--w8);border-color:transparent}
  .placeholder{flex:1 1 auto;padding:40px;text-align:center;color:var(--muted);
    font-size:var(--f12)}
+
+ /* ---------- 整窗外壳：顶栏 + 左栏（Qt chrome 藏起来后由这里画） ---------- */
+ #topbar{flex:0 0 44px;display:flex;align-items:center;gap:10px;
+   padding:8px 10px 4px 16px}
+ .brandlogo{width:22px;height:22px;border-radius:6px;background:var(--accent);
+   color:var(--on-accent);font-weight:700;font-size:var(--f12);
+   display:flex;align-items:center;justify-content:center;flex:0 0 22px}
+ .brand{font-size:var(--f13);font-weight:700;color:var(--text)}
+ .pill{display:flex;align-items:center;gap:6px;padding:3px 11px 3px 9px;
+   border-radius:13px;border:1px solid var(--w14);background:var(--w6);
+   color:var(--muted);font-size:var(--f11);cursor:default}
+ .pill.on{color:#3fb950;font-weight:600}
+ .dot{width:6px;height:6px;border-radius:3px;background:var(--line);flex:0 0 6px}
+ .dot.on{background:#3fb950}
+ .hbtn{border:0;background:transparent;color:var(--text-dim);
+   font-size:var(--f11);padding:2px 6px;cursor:default}
+ .hbtn:hover{color:var(--accent)}
+ .hbtn.boxed{border:1px solid var(--w18);border-radius:8px;padding:4px 10px}
+ .hbtn.boxed:hover{background:var(--w8);color:var(--text)}
+ .hbtn:disabled{color:var(--faint)}
+ .winbtn{width:28px;height:24px;border:0;border-radius:6px;background:transparent;
+   color:var(--text-dim);font-size:var(--f11);cursor:default;flex:0 0 28px}
+ .winbtn:hover{background:var(--w10);color:var(--text)}
+ .winbtn.close:hover{background:var(--danger);color:#fff}
+ #main{flex:1 1 auto;min-height:0;display:flex;gap:12px;padding:12px 14px 14px}
+ #left{flex:0 0 286px;width:286px;min-height:0;display:flex;flex-direction:column}
+ #lremote{flex:1;min-height:0;display:flex;flex-direction:column;gap:12px}
+ .panel{display:flex;flex-direction:column;gap:8px;min-height:0;
+   padding:13px 16px;border-radius:16px;border:1px solid var(--w18);
+   background:linear-gradient(180deg,var(--surface),var(--surface2))}
+ #vcard{flex:1 1 auto}
+ #rcard{flex:0 0 auto;max-height:392px}
+ #lvoice{flex:1 1 auto}
+ .lhead{display:flex;align-items:center;gap:8px;flex:0 0 auto}
+ .ltitle{font-size:var(--f11);font-weight:700;color:var(--muted);
+   letter-spacing:1px}
+ .lhead .spacer{margin-left:auto}
+ .vstate{border:1px solid var(--w14);background:var(--w6);border-radius:10px;
+   padding:8px;font-size:var(--f11);color:var(--text-dim);min-height:48px;
+   display:flex;flex-direction:column;justify-content:center;gap:2px;
+   word-break:break-word}
+ .vstate.accent{color:var(--accent)}
+ .vstate.warn{color:var(--warn)}
+ .vstate.drop{border:1px dashed var(--a64);background:var(--a26);
+   color:var(--accent)}
+ .vstate .tr{color:var(--text)}
+ .tools{display:flex;gap:6px;flex:0 0 auto}
+ .wave{height:40px;flex:0 0 40px;border-radius:10px;border:1px solid var(--w18);
+   background:var(--w8);display:flex;align-items:center;justify-content:center;
+   gap:2px;cursor:default;overflow:hidden;padding:0}
+ .wave.on{background:var(--a26);border-color:var(--a64)}
+ .wave.rec{background:rgba(63,185,80,.14);border-color:rgba(63,185,80,.45)}
+ .wave i{width:3px;border-radius:2px;background:var(--muted);height:6px}
+ .wave.on i{background:var(--accent)}
+ .wave.rec i{background:#3fb950}
+ .picker{display:flex;gap:6px;flex:0 0 auto}
+ .picker select{flex:1;min-width:0}
+ .lfoot{font-size:var(--f10);color:var(--muted);flex:0 0 auto}
+ .badge{font-size:var(--f10);color:var(--muted2);background:var(--w8);
+   border:1px solid var(--w14);padding:2px 8px;border-radius:8px}
+ .rbody{display:flex;gap:10px;flex:1 1 auto;min-height:0}
+ .rdev{flex:0 0 92px;width:92px;height:268px;background:#0b0e14;
+   border-radius:14px;position:relative}
+ .rk{position:absolute;width:22px;height:22px;border-radius:50%;
+   background:#161d2a;border:1px solid #232c3b;color:#8f98a3;
+   display:flex;align-items:center;justify-content:center;font-size:10px}
+ .rk.vol{width:12px;height:34px;border-radius:6px}
+ .rk.mode{border-color:var(--a64);color:var(--accent)}
+ .rk.lit{border-color:var(--accent);color:var(--accent);background:var(--a26)}
+ .rlegend{flex:1;min-width:0;display:flex;flex-direction:column;gap:5px;
+   font-size:var(--f10);overflow:hidden}
+ .rl{display:flex;gap:6px;align-items:baseline;color:var(--text-dim);
+   white-space:nowrap;overflow:hidden}
+ .rl .g{flex:0 0 14px;width:14px;text-align:center;color:var(--muted)}
+ .rl .a{overflow:hidden;text-overflow:ellipsis}
+ .rl.ir{color:var(--muted)}
+ .rl.lit{color:var(--accent)}
+ .rfoot{display:flex;align-items:center;gap:7px;font-size:var(--f10);
+   color:var(--muted);flex:0 0 auto}
+ .rfoot .spacer{margin-left:auto}
+ .vline{font-size:var(--f10);color:var(--muted);flex:0 0 auto}
+ .vtrans{border:1px solid var(--w14);background:var(--w6);border-radius:10px;
+   padding:8px;font-size:var(--f11);color:var(--text);word-break:break-word;
+   cursor:default;max-height:96px;overflow:hidden;flex:0 0 auto}
+ .vhist{flex:1 1 auto;min-height:0;overflow-y:auto;scrollbar-width:none;
+   display:flex;flex-direction:column;gap:2px}
+ .vhist::-webkit-scrollbar{width:0;height:0}
+ .vh{font-size:var(--f11);color:var(--text-dim);padding:4px 6px;border-radius:6px;
+   word-break:break-word;cursor:default;flex:0 0 auto}
+ .vh:hover{background:var(--w6)}
+ .vempty{flex:1 1 auto;display:flex;align-items:center;justify-content:center;
+   color:var(--muted);font-size:var(--f11);text-align:center}
+ .vdock{display:flex;flex-direction:column;gap:6px;flex:0 0 auto}
+ .vrow{display:flex;gap:6px}
+ .vrow input{flex:1;min-width:0;font-size:var(--f11);color:var(--text);
+   background:var(--raised);border:1px solid var(--line);border-radius:8px;
+   padding:5px 8px;font-family:inherit}
+ .vrow input::placeholder{color:var(--muted2)}
+ .btn.toggled{background:var(--a26);border-color:var(--a64);color:var(--accent)}
+ #right{flex:1 1 auto;min-width:0;min-height:0;display:flex;
+   flex-direction:column}
+ #right .tabs{padding:0 2px}
+ #right .card{margin:10px 0 0}
 </style></head><body>
+<div id="topbar">
+  <span class="brandlogo">A</span><span class="brand">AgentRMC</span>
+  <span class="spacer" style="margin-left:auto"></span>
+  <button class="pill" id="listenPill" title="监听开关：点击开始 / 停止监听"><span class="dot" id="listenDot"></span><span id="listenText">未监听</span></button>
+  <button class="hbtn" id="hUpdate" title="检查是否有新版本">检查更新</button>
+  <button class="hbtn" id="hTheme" title="切换主题、调卡片不透明度与背景压暗">主题</button>
+  <button class="hbtn boxed" id="hGuide" title="分步引导：没有遥控器怎么用、怎么配对、怎么接入 Agent">新手引导</button>
+  <button class="winbtn" id="wMin">—</button>
+  <button class="winbtn" id="wMax">□</button>
+  <button class="winbtn close" id="wClose">✕</button>
+</div>
+<div id="main">
+<div id="left">
+  <div id="lremote">
+    <div class="panel" id="vcard">
+      <div class="lhead"><span class="ltitle">语音</span><span class="spacer"></span><select id="vBackend" title="语音怎么识别：转发当前应用的快捷键，或本地 / 云端模型"></select></div>
+      <div class="vstate" id="vState"></div>
+      <div class="tools"><button class="btn" id="vTest" title="录 3 秒并转写一次，用来确认本地模型是否正常">试一句</button><button class="btn" id="vSettings">模型设置</button><button class="btn" id="vMain" title="切到无遥控器的简洁语音界面：波形键一键说话">语音主界面</button></div>
+      <button class="wave" id="vWave" title="语音键：点击说话，再点结束"></button>
+      <div class="picker"><select id="pkAgent"></select><select id="pkMode"></select></div>
+      <div class="lfoot" id="vFoot"></div>
+    </div>
+    <div class="panel" id="rcard">
+      <div class="lhead"><span class="ltitle">遥控器</span><span class="spacer"></span><button class="btn" id="toVoice" title="把这块换成语音主界面（打字/说话都行）">语音</button><span class="badge" id="rBadge">待机</span></div>
+      <div class="rbody"><div class="rdev" id="rDev"></div><div class="rlegend" id="rLegend"></div></div>
+      <div class="rfoot"><span class="dot" id="rDot"></span><span id="rState"></span><span class="spacer"></span><button class="btn" id="btSet" title="打开 Windows 蓝牙设置">蓝牙设置</button></div>
+    </div>
+  </div>
+  <div class="panel" id="lvoice" hidden>
+    <div class="lhead"><span class="dot" id="vDot2"></span><span class="ltitle" style="color:var(--text);letter-spacing:0">语音</span><span class="spacer"></span><button class="hbtn" id="readLast" title="用桌宠的 TTS 念出最近一条转写">朗读最近</button><button class="hbtn" id="vTest2" title="录 3 秒并转写一次，用来确认本地模型是否正常">试一句</button><button class="hbtn" id="toRemote" title="把左栏这块切回遥控器卡">遥控器</button></div>
+    <button class="wave" id="vWave2" title="语音键：点击说话，再点结束"></button>
+    <div class="picker"><select id="pkAgent2"></select><select id="pkMode2"></select></div>
+    <div class="vline" id="vLine">点击开始 · 再点结束</div>
+    <div class="vtrans" id="vTrans" title="点击复制"></div>
+    <div class="vhist" id="vHist"></div>
+    <div class="vempty" id="vEmpty">说完的话会攒在这里 · 点击复制</div>
+    <div class="vdock">
+      <div class="vrow"><input type="text" id="vTyped" placeholder="打字说一句话，Enter 发送"><button class="btn" id="vSend">发送</button></div>
+      <select id="vBackend2"></select>
+      <div class="vrow"><button class="btn" id="chatBtn" title="桌宠对话模式：说话发给模型聊，回复用 TTS 念出来">对话</button><button class="btn" id="ttsBtn" title="桌宠语音反馈：Base URL / API Key / TTS 模型自填">语音反馈</button><button class="btn" id="vSettings2">模型设置</button></div>
+    </div>
+  </div>
+</div>
+<div id="right">
 <div class="tabs" id="tabs"></div>
 <div class="card">
 <div id="work" class="page">
@@ -757,6 +916,8 @@ QString WorkWebView::htmlFor(const QString &stateJson) const {
   <button class="btn primary" id="ack" disabled>标为已处理</button>
 </div>
 </div>
+</div>
+</div>
 <script>
 // 首帧的状态嵌在文档里；之后 Qt 只调 window.__setState(json) 换数据，不重载文档。
 let STATE = )HTML")
@@ -769,6 +930,7 @@ const COLOR = {'needs-me':'#f0883e','review':'#3fb950','working':'#58a6ff'};
 const EVCOLOR = {error:'#f85149',voice:'#3fb950',system:'#3fb950',status:'var(--muted)'};
 let evSeen = 0;
 let SYSTEM = {}, KEYMAP = {}, APPS = {}, GUIDE = {};
+let HEADER = {}, LEFT = {};
 const LABEL = {'needs-me':'等你处理','review':'待验收','working':'进行中'};
 const TABS = ['待我处理','事件流','系统','按键映射','应用','使用引导'];
 let activeTab = 0, selected = '', filterExe = '';
@@ -1101,6 +1263,8 @@ function renderGuide(){
   body.scrollTop=keep;
 }
 function render(){
+  renderTop();
+  renderLeft();
   renderTabs();
   const workView=activeTab===0;
   $('work').hidden=!workView;
@@ -1140,6 +1304,187 @@ function render(){
   list.scrollTop=keep;
   renderFoot();
 }
+
+// ---------- 整窗 chrome：顶栏 ----------
+function renderTop(){
+  const on=!!HEADER.listening;
+  $('listenPill').className='pill'+(on?' on':'');
+  $('listenDot').className='dot'+(on?' on':'');
+  $('listenText').textContent=on?'监听中':'未监听';
+  $('wMax').textContent=HEADER.maximized?'❐':'□';
+}
+// ---------- 左栏：下拉原地更新，开着下拉时不被 5 秒刷新关掉 ----------
+function setSel(el,opts,value,enabled){
+  const sig=JSON.stringify(opts);
+  if(el.dataset.sig!==sig){
+    el.dataset.sig=sig;
+    el.replaceChildren();
+    opts.forEach(o=>{const op=document.createElement('option');
+      op.value=o.id;op.textContent=o.name;el.append(op);});
+  }
+  if(enabled!==undefined) el.disabled=!enabled;
+  if(document.activeElement!==el && el.value!==value) el.value=value;
+}
+const BACKENDS=[{id:'hotkey',name:'转发热键 · 0 模型'},
+  {id:'sensevoice',name:'本地 SenseVoice'},{id:'qwen3',name:'本地 Qwen3-ASR'},
+  {id:'api',name:'云端 ASR（需联网）'}];
+// 遥控器实体：键位坐标照 RemotePanel 的排布，灯态走 mode/lit/linked 三层。
+const RPOS={0:[35,10,'○'],122:[35,40,'◎'],116:[35,70,'●'],38:[35,100,'↑'],
+  37:[12,130,'←'],13:[35,130,'OK'],39:[58,130,'→'],40:[35,160,'↓'],
+  27:[12,192,'↩'],93:[35,192,'☰'],36:[58,192,'⌂'],vol:[40,224,'']};
+function buildRemote(){
+  const dev=$('rDev');
+  if(dev.children.length) return;
+  Object.keys(RPOS).forEach(k=>{
+    const [x,y,g]=RPOS[k];
+    const b=document.createElement('span');
+    b.className='rk'+(k==='vol'?' vol':'');
+    b.dataset.vk=k;
+    b.style.left=x+'px';b.style.top=y+'px';
+    b.textContent=g;
+    dev.append(b);});
+}
+function waveBars(el){
+  if(el.children.length) return;
+  for(let i=0;i<40;i++){const b=document.createElement('i');el.append(b);}
+}
+function paintWave(el,level,rec,on){
+  waveBars(el);
+  el.className='wave'+(rec?' rec':(on?' on':''));
+  const t=Date.now()/90;
+  [...el.children].forEach((b,i)=>{
+    const idle=4+Math.round(10*Math.abs(Math.sin(i*0.55)));
+    const h=rec?Math.max(3,Math.round(3+level*30*
+      (0.35+0.65*Math.abs(Math.sin(i*0.5+t))))):idle;
+    b.style.height=h+'px';});
+}
+let litVk=0, litUntil=0;
+function renderLeft(){
+  const L=LEFT, V=L.voice||{}, P=L.picker||{}, R=L.remote||{}, W=L.vpage||{};
+  $('lremote').hidden=!!L.form;
+  $('lvoice').hidden=!L.form;
+  // 语音卡
+  setSel($('vBackend'),BACKENDS,V.backend||'hotkey');
+  setSel($('vBackend2'),BACKENDS,V.backend||'hotkey');
+  const st=$('vState');
+  st.className='vstate'+(V.kind&&V.kind!=='dim'?' '+V.kind:'');
+  st.replaceChildren();
+  const s1=document.createElement('span');s1.textContent=V.status||'';st.append(s1);
+  if(V.transcript){const tr=document.createElement('span');tr.className='tr';
+    tr.textContent=V.transcript.length>40?V.transcript.slice(0,40)+'…':V.transcript;
+    tr.title=V.transcript;st.append(tr);}
+  $('vTest').disabled=!V.testEnabled;
+  $('vTest2').disabled=!V.testEnabled;
+  $('vFoot').textContent=V.foot||'';
+  $('vFoot').hidden=!V.footVisible;
+  setSel($('pkAgent'),P.agents||[],P.agent||'');
+  setSel($('pkMode'),P.modes||[],P.mode||'',P.modeEnabled);
+  setSel($('pkAgent2'),(W.picker||{}).agents||[],(W.picker||{}).agent||'');
+  setSel($('pkMode2'),(W.picker||{}).modes||[],(W.picker||{}).mode||'',
+         (W.picker||{}).modeEnabled);
+  paintWave($('vWave'),0,false,!!HEADER.listening);
+  paintWave($('vWave2'),0,false,!!HEADER.listening);
+  // 遥控器卡
+  $('rBadge').textContent=R.badge||'待机';
+  $('rState').textContent=R.state||'';
+  $('rDot').className='dot'+(R.listening?' on':'');
+  buildRemote();
+  const mode=new Set(R.modeKeys||[]);
+  const lit=Date.now()<litUntil?litVk:0;
+  [...$('rDev').children].forEach(b=>{
+    const vk=b.dataset.vk==='vol'?0:+b.dataset.vk;
+    b.className='rk'+(b.dataset.vk==='vol'?' vol':'')+
+      (mode.has(vk)?' mode':'')+((lit&&lit===vk)?' lit':'');});
+  const leg=$('rLegend');
+  const entries=R.entries||[];
+  const lsig=JSON.stringify(entries)+ '|' + lit;
+  if(leg.dataset.sig!==lsig){
+    leg.dataset.sig=lsig;
+    leg.replaceChildren();
+    entries.forEach(e=>{
+      const r=document.createElement('div');
+      r.className='rl'+(e.infrared?' ir':'')+((lit&&lit===e.vk)?' lit':'');
+      const g=document.createElement('span');g.className='g';
+      // Qt 侧话筒/喇叭是矢量图标：web 用同形 SVG，别拿 VOL 三个字母挤图标列。
+      if(e.glyph==='VOL'){g.innerHTML='<svg width="12" height="10" viewBox="0 0 12 10"><path d="M1 3.5h2.5L7 1v8L3.5 6.5H1z" fill="currentColor"/><path d="M8.5 3a3 3 0 0 1 0 4" stroke="currentColor" fill="none"/></svg>';}
+      else if(!e.glyph){g.innerHTML='<svg width="10" height="12" viewBox="0 0 10 12"><rect x="3" y="0.5" width="4" height="6.5" rx="2" fill="currentColor"/><path d="M1.5 5.5v1a3.5 3.5 0 0 0 7 0v-1M5 10v1.5" stroke="currentColor" fill="none"/></svg>';}
+      else{g.textContent=e.glyph;}
+      const a=document.createElement('span');a.className='a';
+      a.textContent=e.action||'';a.title=(e.label||'')+' · '+(e.action||'');
+      r.append(g,a);leg.append(r);});
+  }
+  // 语音形态
+  $('vDot2').className='dot'+(HEADER.listening?' on':'');
+  $('readLast').disabled=!W.readLastEnabled;
+  $('vLine').hidden=!W.stateLineVisible;
+  const vt=$('vTrans');
+  vt.textContent=W.transcript||'';
+  vt.dataset.full=W.transcript||'';
+  const hist=W.history||[];
+  $('vHist').hidden=!hist.length;
+  $('vEmpty').hidden=!!hist.length;
+  const hs=JSON.stringify(hist);
+  if($('vHist').dataset.sig!==hs){
+    $('vHist').dataset.sig=hs;
+    const keep=$('vHist').scrollTop;
+    $('vHist').replaceChildren();
+    hist.forEach(h=>{const d=document.createElement('div');d.className='vh';
+      d.textContent=h.t;d.title='点击复制';
+      d.onclick=()=>postObj({cmd:'copy',text:h.full});
+      $('vHist').append(d);});
+    $('vHist').scrollTop=keep;
+  }
+  $('chatBtn').className='btn'+(W.chatMode?' toggled':'');
+}
+// 20Hz 轻量通道：只动波形和按键灯，不重排页面。
+window.__setLive=function(l){
+  if(l.level!==undefined||l.recording!==undefined){
+    const rec=l.recording!==undefined?l.recording:HEADER.recording;
+    const lv=l.level||0;
+    paintWave($('vWave'),lv,rec,!!HEADER.listening);
+    paintWave($('vWave2'),lv,rec,!!HEADER.listening);
+  }
+  if(l.lit){litVk=l.lit;litUntil=Date.now()+350;renderLeft();}
+};
+// ---------- chrome 接线 ----------
+$('listenPill').onclick=()=>postObj({cmd:'listen'});
+$('hUpdate').onclick=()=>postObj({cmd:'update'});
+$('hTheme').onclick=()=>postObj({cmd:'theme'});
+$('hGuide').onclick=()=>postObj({cmd:'guide'});
+$('wMin').onclick=()=>postObj({cmd:'winMin'});
+$('wMax').onclick=()=>postObj({cmd:'winMax'});
+$('wClose').onclick=()=>postObj({cmd:'winClose'});
+$('topbar').addEventListener('mousedown',e=>{
+  if(e.target.closest('button,select')) return;
+  postObj({cmd:'winDrag'});});
+$('topbar').addEventListener('dblclick',e=>{
+  if(e.target.closest('button,select')) return;
+  postObj({cmd:'winMaxToggle'});});
+$('vBackend').onchange=e=>postObj({cmd:'vBackend',key:e.target.value});
+$('vBackend2').onchange=e=>postObj({cmd:'vBackend',key:e.target.value});
+$('vTest').onclick=()=>postObj({cmd:'vTest'});
+$('vTest2').onclick=()=>postObj({cmd:'vTest'});
+$('vSettings').onclick=()=>postObj({cmd:'vSettings'});
+$('vSettings2').onclick=()=>postObj({cmd:'vSettings'});
+$('vMain').onclick=()=>postObj({cmd:'vMain'});
+$('vWave').onclick=()=>postObj({cmd:'vWave'});
+$('vWave2').onclick=()=>postObj({cmd:'vWave'});
+$('pkAgent').onchange=e=>postObj({cmd:'pkAgent',id:e.target.value});
+$('pkMode').onchange=e=>postObj({cmd:'pkMode',id:e.target.value});
+$('pkAgent2').onchange=e=>postObj({cmd:'pkAgent',id:e.target.value});
+$('pkMode2').onchange=e=>postObj({cmd:'pkMode',id:e.target.value});
+$('toVoice').onclick=()=>postObj({cmd:'leftForm',voice:true});
+$('toRemote').onclick=()=>postObj({cmd:'leftForm',voice:false});
+$('btSet').onclick=()=>postObj({cmd:'bt'});
+$('readLast').onclick=()=>postObj({cmd:'readLast'});
+$('vTrans').onclick=()=>postObj({cmd:'copy',text:$('vTrans').dataset.full||''});
+$('vSend').onclick=()=>{const t=$('vTyped').value;
+  if(t.trim()){postObj({cmd:'vTyped',text:t});$('vTyped').value='';}};
+$('vTyped').addEventListener('keydown',e=>{
+  if(e.key==='Enter'){const t=e.target.value;
+    if(t.trim()){postObj({cmd:'vTyped',text:t});e.target.value='';}}});
+$('chatBtn').onclick=()=>postObj({cmd:'chatToggle',on:!((LEFT.vpage||{}).chatMode)});
+$('ttsBtn').onclick=()=>postObj({cmd:'tts'});
 $('clear').onclick=()=>post('clear');
 $('evClear').onclick=()=>post('clearLog');
 $('raise').onclick=()=>post('open',selected);
@@ -1165,6 +1510,8 @@ function adopt(s){
   WORK=STATE.work||{items:[]};
   WORKERS=STATE.workers||[];
   EVENTS=STATE.events||[];
+  HEADER=STATE.header||{};
+  LEFT=STATE.left||{};
   SYSTEM=STATE.system||{};
   KEYMAP=STATE.keymap||{};
   APPS=STATE.apps||{};

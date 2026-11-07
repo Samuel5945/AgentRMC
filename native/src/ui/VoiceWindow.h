@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QComboBox>
+#include <QJsonObject>
 #include <QImage>
 #include <QLabel>
 #include <QLineEdit>
@@ -59,6 +60,12 @@ public:
     void showChatReply(const QString &text);
     // 派活模式被消费（一次性新任务交付后）时由主窗调用，下拉回到默认项。
     void refreshDispatchMode();
+    // 整窗外壳：转写/历史/按钮态序列化；朗读最近走与页眉按钮同一条路。
+    QJsonObject webState() const;
+    void webReadLast();
+    void webSelectAgent(const QString &exe);
+    void webSelectMode(const QString &mode);
+    void webRefreshPicker();
 
 private:
     void copyText(const QString &text);

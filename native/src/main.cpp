@@ -27,6 +27,10 @@
 
 int main(int argc, char *argv[]) {
     QApplication app(argc, argv);
+    // 启动时照常取系统字体/调色板，之后不再跟桌面设置联动：配色全由
+    // ThemeManager 管，而 Qt 自己收到深浅色变更（注册表通知/WM_SETTINGCHANGE）
+    // 会拿全局 QSS repolish 整窗，实测卡 UI 线程 0.6~2 秒，跟随系统反被它拖慢。
+    QApplication::setDesktopSettingsAware(false);
     QApplication::setApplicationName("AgentRMCNative");
     QApplication::setOrganizationName("LIG");
     QApplication::setApplicationVersion(AGENTRMC_VERSION);

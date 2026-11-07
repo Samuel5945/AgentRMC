@@ -42,6 +42,9 @@ signals:
     void keyHovered(int vk, bool on);
     void hintChanged();
 
+protected:
+    void showEvent(QShowEvent *event) override;
+
 private:
     void buildUi();
     void rebuildCombo();
@@ -86,4 +89,5 @@ private:
     QString hintColor_ = QStringLiteral("#5b6472");
     QTimer *tick_ = nullptr;
     QTimer *hintTimer_ = nullptr;
+    bool inlineStylesDirty_ = false;
 };

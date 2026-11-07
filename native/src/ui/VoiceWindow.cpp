@@ -445,14 +445,12 @@ VoiceWindow::VoiceWindow(VoiceController *voice, ProfileStore *store,
     });
     connect(&ThemeManager::instance(), &ThemeManager::themeChanged, this,
             [this](const Theme &) {
-                // 面板底/麦克风/Toast 是自绘的，不吃 QSS：换配色模式要自己重画。
-                refreshStatusDot();
-                refreshHistoryEmpty();
-                // 字号倍率也走这条：转写框的行高跟着字体走，换主题要重量。
-                layoutTranscript();
-                mic_->update();
-                toast_->update();
-                update();
+                // 嵌入态在外壳模式下藏着：自绘重画留到露脸时（showEvent）。
+                if (!isVisible()) {
+                    themePaintDirty_ = true;
+                    return;
+                }
+                refreshThemePaint();
             });
     connect(voice_, &VoiceController::eventReady, this,
             [this](const QString &kind, const QString &text) {
@@ -667,6 +665,21 @@ void VoiceWindow::showEvent(QShowEvent *event) {
     picker_->refresh();
     QWidget::showEvent(event);
     layoutTranscript();
+    if (themePaintDirty_) {
+        themePaintDirty_ = false;
+        refreshThemePaint();
+    }
+}
+
+void VoiceWindow::refreshThemePaint() {
+    // 面板底/麦克风/Toast 是自绘的，不吃 QSS：换配色模式要自己重画。
+    refreshStatusDot();
+    refreshHistoryEmpty();
+    // 字号倍率也走这条：转写框的行高跟着字体走，换主题要重量。
+    layoutTranscript();
+    mic_->update();
+    toast_->update();
+    update();
 }
 
 void VoiceWindow::resizeEvent(QResizeEvent *event) {

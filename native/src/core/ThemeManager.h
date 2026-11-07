@@ -115,7 +115,9 @@ public:
     QString css(const QString &token) const;
 
     // 跟随系统：Windows 切换深浅色会广播 WM_SETTINGCHANGE，这里收到后
-    // 若当前是 auto 且主题吃配色模式就重算并刷新。
+    // 若当前是 auto 且主题吃配色模式就重算并刷新。广播是串行等所有顶层窗
+    // 应答的、注册表变更通知也慢（本机实测 1.6~2.7 秒），所以另有
+    // watchSystemScheme 的短轮询兜底，共用 applySystemSchemeIfChanged。
     bool nativeEventFilter(const QByteArray &eventType, void *message,
                            qintptr *result) override;
 
@@ -166,6 +168,8 @@ private:
     // 配色来自主题、形象字段来自 characterId_ 指向的包（或清空）。
     Theme composeCharacter(Theme base) const;
     void applyQss();
+    void watchSystemScheme();
+    void applySystemSchemeIfChanged();
 
     ProfileStore *store_ = nullptr;
     QList<ThemeInfo> infos_;
@@ -175,6 +179,8 @@ private:
     // 空 = 跟随主题；none = 无形象；其余 = 形象包 id。持久化在 ui.character。
     QString characterId_;
     bool nativeFilterInstalled_ = false;
+    // 轮询上一次看到的系统偏好，没变就不重算主题。
+    bool systemLightSeen_ = false;
     // -1 = 跟随主题。用户拖过滑块才有值。
     int cardAlpha_ = -1;
     qreal backdropDim_ = -1.0;

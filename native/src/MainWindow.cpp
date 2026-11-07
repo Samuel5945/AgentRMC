@@ -513,6 +513,11 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
     // 重刷带不上它们：切浅色/深色或换主题时再刷一遍。只改色，不碰热键注册那些副作用。
     connect(&ThemeManager::instance(), &ThemeManager::themeChanged, this,
             [this](const Theme &) {
+                // 外壳模式下顶栏/左栏这些 Qt 控件全藏着，重刷它们一次要几百
+                // 毫秒（setStyleSheet 会 repolish 整窗）；网页自己从 token 换色。
+                if (workWeb_ != nullptr) {
+                    return;
+                }
                 const bool running = engine_ != nullptr && engine_->isRunning();
                 const QString line =
                     ThemeManager::instance().css(QStringLiteral("line"));
@@ -673,7 +678,9 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
         connect(&ThemeManager::instance(), &ThemeManager::themeChanged, this,
                 [this] {
                     if (workWeb_ != nullptr) {
-                        workWeb_->refresh();
+                        // 只推 theme 这一块：整份 state 要序列化六个页（实测
+                        // ~500ms），换色用不着惊动它们。
+                        workWeb_->pushTheme(webThemeJson());
                     }
                 });
     }
@@ -2981,9 +2988,16 @@ void MainWindow::handleWebAction(const QJsonObject &action) {
     } else if (cmd == QStringLiteral("winClose")) {
         close();
     } else if (cmd == QStringLiteral("winDrag")) {
-        if (auto *handle = windowHandle()) {
-            handle->startSystemMove();
-        }
+#ifdef Q_OS_WIN
+        // startSystemMove() 只是 PostMessage(SC_MOVE)，从 WebView2 的 COM 回调里
+        // 发出去等排到时 Chromium 已经把鼠标抓回子窗口，移动循环起不来（实测返回
+        // true 但窗口纹丝不动）。同步发 WM_NCLBUTTONDOWN 当场进系统拖动循环。
+        POINT pt{};
+        GetCursorPos(&pt);
+        ReleaseCapture();
+        SendMessageW(reinterpret_cast<HWND>(winId()), WM_NCLBUTTONDOWN, HTCAPTION,
+                     MAKELPARAM(pt.x, pt.y));
+#endif
     } else if (cmd == QStringLiteral("listen")) {
         toggleListening();
     } else if (cmd == QStringLiteral("update")) {
@@ -4421,6 +4435,17 @@ bool MainWindow::nativeEvent(const QByteArray &eventType, void *message,
     if (msg != nullptr && msg->message == WM_DISPLAYCHANGE && system_ != nullptr) {
         system_->invalidateMonitors();
         return QMainWindow::nativeEvent(eventType, message, result);
+    }
+    // 跨屏拖拽换 DPI：逻辑尺寸不变就没有 resizeEvent，widget 级 DPI 事件也
+    // 不一定送到外壳控件（实测子 HWND 停在旧屏物理尺寸，页面被裁）。顶层的
+    // 位置/DPI 消息最可靠；延后一拍等 Qt 把几何和倍率更新完再重喂物理边界。
+    if (msg != nullptr && workWeb_ != nullptr &&
+        (msg->message == WM_WINDOWPOSCHANGED || msg->message == WM_DPICHANGED)) {
+        QTimer::singleShot(0, this, [this] {
+            if (workWeb_ != nullptr) {
+                workWeb_->syncBounds();
+            }
+        });
     }
     return QMainWindow::nativeEvent(eventType, message, result);
 }

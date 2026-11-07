@@ -160,7 +160,15 @@ KeymapPage::KeymapPage(ProfileStore *store, QWidget *parent)
 
     // 换主题 / 拖字体滑块：内联样式的 px 和颜色重算一遍。
     connect(&ThemeManager::instance(), &ThemeManager::themeChanged, this,
-            [this](const Theme &) { refreshInlineStyles(); });
+            [this](const Theme &) {
+                // 藏着的时候别刷：setStyleSheet 会 repolish 整窗（几百毫秒），
+                // 外壳模式下这页永远不露脸；回退模式切回来时 showEvent 补刷。
+                if (!isVisible()) {
+                    inlineStylesDirty_ = true;
+                    return;
+                }
+                refreshInlineStyles();
+            });
 
     tick_ = new QTimer(this);
     tick_->setInterval(300);
@@ -743,6 +751,14 @@ void KeymapPage::resetHint() {
             .arg(ThemeManager::scaledPx(10)));
     hintColor_ = QStringLiteral("#5b6472");
     emit hintChanged();
+}
+
+void KeymapPage::showEvent(QShowEvent *event) {
+    QFrame::showEvent(event);
+    if (inlineStylesDirty_) {
+        inlineStylesDirty_ = false;
+        refreshInlineStyles();
+    }
 }
 
 void KeymapPage::refreshInlineStyles() {

@@ -33,6 +33,10 @@ public:
     // 高频小状态（麦克风电平/录音态/按键灯）：只 ExecuteScript 更新对应节点，
     // 不走 refresh 的整页重排，20Hz 也扛得住。
     void pushLive(const QJsonObject &live);
+    // 换主题/配色模式只推 theme 对象：整份 state 序列化太贵，换色用不着。
+    void pushTheme(const QJsonObject &theme);
+    // WebView2 的边界是物理像素：跨屏换 DPI 时主窗拿原生消息催一次重喂。
+    void syncBounds();
     bool ready() const { return webviewReady(); }
 
     // loader 在、且这台机器装了 WebView2 运行时？装不上就退回 Qt 页，
@@ -54,7 +58,6 @@ private:
     // 每刷一次就重载整页，选中态和滚动都会被冲掉（实测），事件一密还闪。
     void pushState(const QString &stateJson);
     void executeState(const QString &stateJson);
-    void syncBounds();  // WebView2 的边界是物理像素，且要等布局出来
     QString htmlFor(const QString &itemsJson) const;
     bool webviewReady() const;
 

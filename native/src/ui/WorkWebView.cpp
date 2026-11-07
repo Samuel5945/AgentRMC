@@ -466,6 +466,19 @@ void WorkWebView::pushLive(const QJsonObject &live) {
                                nullptr);
 }
 
+void WorkWebView::pushTheme(const QJsonObject &theme) {
+    if (!documentReady_ || d_->webview == nullptr) {
+        refresh();
+        return;
+    }
+    const QString json = QString::fromUtf8(
+        QJsonDocument(theme).toJson(QJsonDocument::Compact));
+    const QString script = QStringLiteral("window.__setTheme(")
+                           + jsEscape(json) + QStringLiteral(");");
+    d_->webview->ExecuteScript(reinterpret_cast<LPCWSTR>(script.utf16()),
+                               nullptr);
+}
+
 // 首帧只能整页给（NavigateToString 没有「换个 body」的写法）；文档一旦好了，
 // 后面一律 ExecuteScript 只喂数据。整页重载会把选中态、滚动位置、hover 全冲掉
 // （实测：标为已处理之后列表回到顶部、按钮变灰），事件一密还会闪。
@@ -1521,6 +1534,7 @@ function adopt(s){
   render();
 }
 window.__setState=adopt;
+window.__setTheme=applyTheme;
 adopt(STATE);
 </script></body></html>)HTML");
 }

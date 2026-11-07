@@ -77,6 +77,7 @@ private:
     void refreshHint();
     void refreshHistoryEmpty();
     void refreshStatusDot();
+    void refreshThemePaint();
     void submitTyped();
 
     VoiceController *voice_ = nullptr;
@@ -103,6 +104,7 @@ private:
     bool listening_ = false;
     bool recording_ = false;
     bool embedded_ = false;
+    bool themePaintDirty_ = false;
     // 操作说明只给首次使用的人看；用过一次收掉，悬浮提示兜底。
     bool hintSeen_ = false;
 

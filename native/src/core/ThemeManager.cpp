@@ -567,27 +567,47 @@ bool ThemeManager::nativeEventFilter(const QByteArray &eventType, void *message,
                 reinterpret_cast<const wchar_t *>(msg->lParam));
             if (area == QStringLiteral("ImmersiveColorSet")) {
                 // 延后一拍：别在系统消息回调里直接 setStyleSheet 重刷整窗。
-                QTimer::singleShot(0, this, [this] {
-                    if (scheme_ != QStringLiteral("auto") ||
-                        (current_.id != QStringLiteral("classic") &&
-                         !current_.hasLightVariant())) {
-                        return;
-                    }
-                    const Theme rebuilt = composeCharacter(loadTheme(current_.id));
-                    if (rebuilt.palette.value(QStringLiteral("bg")) !=
-                            current_.palette.value(QStringLiteral("bg")) ||
-                        rebuilt.mainBackground != current_.mainBackground ||
-                        rebuilt.panelBackground != current_.panelBackground) {
-                        current_ = rebuilt;
-                        applyQss();
-                        emit themeChanged(current_);
-                    }
-                });
+                QTimer::singleShot(0, this, [this] { applySystemSchemeIfChanged(); });
             }
         }
     }
 #endif
     return false;
+}
+
+void ThemeManager::applySystemSchemeIfChanged() {
+    systemLightSeen_ = systemPrefersLight();
+    if (scheme_ != QStringLiteral("auto") ||
+        (current_.id != QStringLiteral("classic") && !current_.hasLightVariant())) {
+        return;
+    }
+    const Theme rebuilt = composeCharacter(loadTheme(current_.id));
+    if (rebuilt.palette.value(QStringLiteral("bg")) !=
+            current_.palette.value(QStringLiteral("bg")) ||
+        rebuilt.mainBackground != current_.mainBackground ||
+        rebuilt.panelBackground != current_.panelBackground) {
+        current_ = rebuilt;
+        // 先广播再刷 QSS：网页和桌宠只读 token，先换色；全局 QSS 的重排
+        // （实测 ~200ms）放在后面，别让看得见的换色等它。
+        emit themeChanged(current_);
+        applyQss();
+    }
+}
+
+void ThemeManager::watchSystemScheme() {
+    // 本机实测两条事件路都慢：WM_SETTINGCHANGE 是串行等所有顶层窗应答的
+    // 广播（~2.7s），RegNotifyChangeKeyValue 也要 ~1.6s 才置事件。读一个
+    // DWORD 是微秒级，直接短轮询，把感知延迟压在一个间隔以内。
+    systemLightSeen_ = systemPrefersLight();
+    auto *timer = new QTimer(this);
+    timer->setInterval(250);
+    connect(timer, &QTimer::timeout, this, [this] {
+        if (systemPrefersLight() == systemLightSeen_) {
+            return;
+        }
+        applySystemSchemeIfChanged();
+    });
+    timer->start();
 }
 
 void ThemeManager::applyQss() {
@@ -758,6 +778,7 @@ void ThemeManager::init(ProfileStore *store) {
         qApp->installNativeEventFilter(this);
         nativeFilterInstalled_ = true;
     }
+    watchSystemScheme();
 }
 
 void ThemeManager::setTheme(const QString &id) {

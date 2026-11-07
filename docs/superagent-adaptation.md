@@ -8,6 +8,7 @@
   - 仓库 `deepseek-ai/dsh-superagent-prototype`（MIT，研究原型，DeepSeek Harness bundle，GitHub + 可选飞书）
     <https://github.com/deepseek-ai/dsh-superagent-prototype>
 - 结论先说：**这套东西的重点不是换模型，而是把 AgentRMC 从「通知壳 + 语音输入」升级成桌面上的「注意力 Router」。** 不建议在 AgentRMC 里再造一个 Agent 运行时；宿主 Agent 继续当 Worker，AgentRMC 负责 Trigger、Ticket、Attention、路由和回跳。
+- 后续进展（2026-11-07）见 [mission-control-plan.md](mission-control-plan.md)：会话身份／待办显示已落地，定向派发 WorkBuddy 系已接线并活体验收，Qoder 线桌面通道证伪待上游，UI 已定案为「Qt 壳 + 一个 WebView2 铺右半区」。本文中的 Phase 划分以此文档为准。
 
 ---
 

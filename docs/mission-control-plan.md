@@ -136,12 +136,27 @@ Task/WorkItem 的**会话归属**与**可验证投递**，这两块得自己补�
   人回不去那条会话，闭环不成立。路由里 CLI 通道已休眠
   （`SessionDispatch::configHomeFor` 全宿主返回空，外壳派发行按
   `dispatch.supported` 隐藏），守卫/回执/草稿骨架保留待桌面通道。
-- **未决设计点**：桌面可见通道候选——① `qoder-cn://` deep link 打开会话 +
-  观察 jsonl 尾部记录证明当前会话后盲粘贴（不改用户设置）；② 开
-  `editor.accessibilitySupport` 让 UIA 树暴露后走 WorkBuddy 同款 UIA 路
-  （改用户设置，需点头）。两者都未探明。
-- 国际版：本机有 app 无 CLI（`~/.qoder/bin` 只有工具二进制）、桌面进程不在，
-  **未实测**；会话库格式与 CN 同族，装 CLI 后按同一路径补探。
+- **桌面可见通道两候选均已证伪（2026-11-07 深夜，Qoder CN 0.5.6 = 官方最新）**：
+  ① deep link——`qoder-cn://` 协议已注册且主进程有 open-url →
+  `deepLinkMainService`，但路由器只注册 3 个 handler（asar 逆向，与
+  [官方文档](https://docs.qoder.com/user-guide/deeplink)一致）：
+  discussion/issue/invite（云端协作对象，UUID+token 校验）、`mcp.add`、
+  `extension.install`，**没有「按 session id 打开已有会话」的路由**；
+  官方的 `/chat?text=…&isNewChat=false` 也只能预填「新建或当前」聊天且永不自动
+  发送，CN 包里连这 3 个 chat 系 handler 都没有（CN 把 `aicoding.aicoding-deeplink`
+  hostname 整体委托给 IDE 配套，重写为 `qoder-work-cn://`）；
+  ② a11y 设置——`editor.accessibilitySupport` 在 CN 0.5.6 asar 里 **0 命中**，
+  也没有 `setAccessibilitySupportEnabled`：Qoder 不是 VS Code workbench，
+  没有这个设置可开。唯一能让 renderer 出树的是 `--force-renderer-accessibility`
+  启动参数（Electron 核心开关），但须重启应用、打断在跑的会话，此前已裁决不做。
+- 本地 IPC 亦非会话控制面：`~/.qoder-cn/mcp-router.json`（127.0.0.1:8628，
+  `X-Api-Key` sha256 认证）是给外部 agent 代理 MCP server 的**反方向**通道；
+  `remote-control-broker/` 是 Qoder 自家云端遥控的 local↔remote 会话绑定
+  （`qs_…` 云会话 id），入口在他们的云，本地无调用面。
+- UIA 复检（`rc_probe/qoder_recheck_uia.py`，只读）：CN 与国际版主窗都仍是
+  7 元素荒树（6 Pane + 1 Window）。
+- 国际版：本机有 app 无 CLI（`~/.qoder/bin` 只有工具二进制）；桌面 UIA 复检
+  同样荒树，deep link 表未逆向（同族，预计一致）；定向派发结论与 CN 相同。
 - 残留：上一轮事故留下会话 `06a433cc…` 与待办库里一条 done 探针卡，可删；
   重做轮自建的探针会话已自清，真实待办库指纹跑前后一致。
 - **回复内容上卡（2026-11-07 晚）**：stop 落账时读该会话 jsonl 最后一条
@@ -244,6 +259,9 @@ Task/WorkItem 的**会话归属**与**可验证投递**，这两块得自己补�
 - 版本号仍是 `0.4.1`（Native 与插件同号）：按约定等用户明确说「升版」才动。
 - 剩余事项：
   1. 第 3 批：**WorkBuddy 系 UIA 通道已接线并活体验收**；Qoder CN 的 CLI 通道
-     实测后被用户否决（桌面不可见），路由休眠待桌面通道；**DSH 仍待验证**。
+     实测后被用户否决（桌面不可见），路由休眠；桌面可见通道两候选（deep link、
+     a11y 设置）2026-11-07 深夜均证伪——**Qoder 线等上游**（官方 deeplink 支持
+     按 id 打开会话、renderer a11y 开关或本地会话 API 任一出现再接线）；
+     「续当前会话」模式保持可用；**DSH 仍待验证**。
   2. 事件流／系统页的真实数据字段如有新增，记得同步给 `webShellState()`。
   3. 美术主题下的外壳观感复检（有探针图，但需人工确认一遍）。

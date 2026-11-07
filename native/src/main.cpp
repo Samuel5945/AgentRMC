@@ -25,7 +25,51 @@
 #include "ui/VoicePet.h"
 #include "ui/VoiceSettingsDialog.h"
 
+namespace {
+
+// 宿主会话环境隔离：AgentRMC 可能是从某个宿主的会话里被拉起来的（比如
+// 用户在 Qoder CN 里让 agent 起桌宠），进程环境会带着那套会话变量
+// （QODER_PRODUCT_ID / QODER_CONFIG_DIR / QODER_SEARCH_HOST_PID 等）。
+// 之后从这里启动的每一个应用都原样继承——国际版 Qoder 拿到 qoder-cn
+// 身份会在主进程直接拒绝启动（「产物内联的产品是 qoder，当前运行身份是
+// qoder-cn」弹窗），待办/应用页怎么点都撞；开始菜单能点是因为 Explorer
+// 的环境是干净的。所以进程一起来先把这些变量从自己的环境里摘掉，
+// 之后的子进程（待办启动、语音启动、注入 cmd）一并干净。列表按前缀
+// 匹配、大小写不敏感；新宿主再出现同类冲突时往 kPrefixes 里加前缀。
+void scrubHostSessionEnv() {
+    static const QStringList kPrefixes = {QStringLiteral("QODER"),
+                                          QStringLiteral("__QODER_")};
+    wchar_t *block = GetEnvironmentStringsW();
+    if (block == nullptr) {
+        return;
+    }
+    QStringList victims;
+    for (const wchar_t *p = block; *p != L'\0'; p += wcslen(p) + 1) {
+        const wchar_t *eq = wcschr(p, L'=');
+        if (eq == nullptr) {
+            continue;
+        }
+        const QString upper =
+            QString::fromWCharArray(p, int(eq - p)).toUpper();
+        for (const QString &prefix : kPrefixes) {
+            if (upper.startsWith(prefix)) {
+                victims.append(QString::fromWCharArray(p, int(eq - p)));
+                break;
+            }
+        }
+    }
+    FreeEnvironmentStringsW(block);
+    // 值传 nullptr = 从进程环境块删除；子进程继承的就是洗过的这份。
+    for (const QString &name : victims) {
+        SetEnvironmentVariableW(reinterpret_cast<const wchar_t *>(name.utf16()),
+                                nullptr);
+    }
+}
+
+}  // namespace
+
 int main(int argc, char *argv[]) {
+    scrubHostSessionEnv();
     QApplication app(argc, argv);
     // 启动时照常取系统字体/调色板，之后不再跟桌面设置联动：配色全由
     // ThemeManager 管，而 Qt 自己收到深浅色变更（注册表通知/WM_SETTINGCHANGE）

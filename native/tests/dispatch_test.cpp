@@ -1,5 +1,6 @@
 #include "core/SessionDispatch.h"
 #include "core/UiDispatch.h"
+#include "core/AgentWindow.h"
 #include "core/ZcodeDispatch.h"
 
 #include <QByteArray>
@@ -244,6 +245,15 @@ int main(int argc, char *argv[]) {
               SessionDispatch::supportsZcodeChannel(QStringLiteral("ZCode.exe")) &&
               !SessionDispatch::supportsZcodeChannel(
                   QStringLiteral("WorkBuddy.exe")));
+    // 桥有些宿主不带 raise（ZCode stop hook）：落卡前按显示名反查白名单
+    // exe，否则卡上 agent_exe 为空，外壳派发行永远不亮。
+    check("exeForDisplayName: ZCode backfill + unknown empty",
+          AgentWindow::exeForDisplayName(QStringLiteral("ZCode")) ==
+              QStringLiteral("ZCode.exe") &&
+              AgentWindow::exeForDisplayName(QStringLiteral("DeepSeek Harness")) ==
+                  QStringLiteral("DeepSeek Harness.exe") &&
+              AgentWindow::exeForDisplayName(QStringLiteral("不存在宿主"))
+                  .isEmpty());
     {
         qputenv("AGENTRMC_ZCODE_HOME",
                 (dir.path() + QStringLiteral("/zc")).toUtf8());

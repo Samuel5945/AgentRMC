@@ -15,6 +15,11 @@ QStringList knownExes();
 // 未知名字去掉 .exe 原样返回，给菜单/气泡用，避免把裸 exe 名甩给用户。
 QString displayName(const QString &exe);
 
+// 反查：agent 显示名（桥 hook 的 title，如「ZCode」）→ 白名单 exe。有些宿主的
+// hook 不带 raise（ZCode 的 stop hook 就没带），待办卡 agent_exe 为空会让外壳
+// 的派发行（supported.includes(agent_exe)）永远不亮，落卡前用它补上。
+QString exeForDisplayName(const QString &name);
+
 // 找到就返回该进程映像名，都不在返回空串。preferred 非空时优先试它。
 QString detectAgentExe(const QString &preferred = QString());
 

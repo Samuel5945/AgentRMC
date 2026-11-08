@@ -2587,6 +2587,12 @@ void MainWindow::handleNotify(const QString &kind, const QString &title,
     if (!pluginVersion.isEmpty() && !title.isEmpty()) {
         pluginLoaded_.insert(title, pluginVersion);
     }
+    // 有些宿主的 hook 不带 raise（ZCode 的 stop hook 就没带）：按显示名反查
+    // 白名单 exe 补上，否则待办卡 agent_exe 为空，外壳派发行永远不亮。
+    QString raiseExe = raise;
+    if (raiseExe.isEmpty() && !title.isEmpty()) {
+        raiseExe = AgentWindow::exeForDisplayName(title);
+    }
     if (kind == QStringLiteral("turn-start")) {
         // 同一 session 已经开始新对话：上一轮的 review 视为已看到，直接归档。
         if (workItems_ != nullptr && !sessionId.isEmpty() &&
@@ -2607,7 +2613,7 @@ void MainWindow::handleNotify(const QString &kind, const QString &title,
             // 一条回复正文，待办卡直接能读结果；要人动手的文案保留原语义。
             // ZCode 会话（configHome 为空）走派发通道记下的回复。
             QString reply = SessionDispatch::lastReply(
-                SessionDispatch::configHomeFor(raise), sessionId);
+                SessionDispatch::configHomeFor(raiseExe), sessionId);
             if (reply.isEmpty()) {
                 reply = dispatchReplyBySession_.value(sessionId);
             }
@@ -2622,8 +2628,8 @@ void MainWindow::handleNotify(const QString &kind, const QString &title,
                             QStringLiteral("会话回复：%1").arg(reply), 0);
             }
         }
-        workItems_->upsert(QStringLiteral("hook"), raise, sessionId, project,
-                           kind, title, cardMessage, raise, eventId);
+        workItems_->upsert(QStringLiteral("hook"), raiseExe, sessionId, project,
+                           kind, title, cardMessage, raiseExe, eventId);
         refreshWorkItems();
     }
     if (replay) {

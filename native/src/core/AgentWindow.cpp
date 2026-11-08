@@ -129,6 +129,25 @@ QString displayName(const QString &exe) {
     return name;
 }
 
+QString exeForDisplayName(const QString &name) {
+    static const QVector<QPair<QString, QString>> kNames = {
+        {QStringLiteral("WorkBuddyAI.exe"), QStringLiteral("WorkBuddy AI")},
+        {QStringLiteral("WorkBuddy.exe"), QStringLiteral("WorkBuddy")},
+        {QStringLiteral("CodeBuddy.exe"), QStringLiteral("CodeBuddy")},
+        {QStringLiteral("ZCode.exe"), QStringLiteral("ZCode")},
+        {QStringLiteral("Qoder.exe"), QStringLiteral("Qoder")},
+        {QStringLiteral("Qoder CN.exe"), QStringLiteral("Qoder CN")},
+        {QStringLiteral("DeepSeek Harness.exe"), QStringLiteral("DeepSeek Harness")},
+        {QStringLiteral("OpenSquilla.exe"), QStringLiteral("OpenSquilla")},
+    };
+    for (const auto &entry : kNames) {
+        if (entry.second.compare(name, Qt::CaseInsensitive) == 0) {
+            return entry.first;
+        }
+    }
+    return QString();
+}
+
 QString detectAgentExe(const QString &preferred) {
     if (!preferred.isEmpty() && windowFor(preferred) != nullptr) {
         return preferred;

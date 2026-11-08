@@ -417,6 +417,23 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
                                 .arg(dispatchId.left(8), reason), 0);
                 refreshWorkItems();
             });
+    connect(dispatch_, &SessionDispatch::zcodeTurnFinished, this,
+            [this](const QString &dispatchId, const QString &exe,
+                   const QString &sid, const QString &proj,
+                   const QString &reply) {
+                // 回执只代表送达；这里补 turn 跑完的结果。回复写进卡（空＝
+                // 超时/turn 失败，卡维持进行中，等 hook 或人工结账）。
+                dispatchReplyBySession_.insert(sid, reply);
+                if (reply.isEmpty() || workItems_ == nullptr) {
+                    return;
+                }
+                workItems_->upsert(QStringLiteral("dispatch"), exe, sid, proj,
+                                   QStringLiteral("progress"),
+                                   AgentWindow::displayName(exe), reply, exe);
+                appendEvent(QStringLiteral("status"), QString(), QString(),
+                            QStringLiteral("派发回复：%1").arg(reply), 0);
+                refreshWorkItems();
+            });
     spoolPath_ = workDir + "/pending-events.jsonl";
     startedAt_ = QDateTime::currentDateTimeUtc();
     // 主题在窗口构建前应用：渲染 QSS + 载入 ui.theme 指向的主题。
@@ -2588,8 +2605,12 @@ void MainWindow::handleNotify(const QString &kind, const QString &title,
         if (kind == QStringLiteral("stop") && !sessionId.isEmpty()) {
             // 通用收尾文案（"做完了，等你回来看"）没有信息量：换成该会话最后
             // 一条回复正文，待办卡直接能读结果；要人动手的文案保留原语义。
-            const QString reply = SessionDispatch::lastReply(
+            // ZCode 会话（configHome 为空）走派发通道记下的回复。
+            QString reply = SessionDispatch::lastReply(
                 SessionDispatch::configHomeFor(raise), sessionId);
+            if (reply.isEmpty()) {
+                reply = dispatchReplyBySession_.value(sessionId);
+            }
             const bool actionable =
                 message.startsWith(QStringLiteral("等你回话")) ||
                 message.startsWith(QStringLiteral("等你选方案")) ||
@@ -2851,9 +2872,11 @@ QString MainWindow::itemIdForSession(const QString &sessionId) const {
 QJsonArray MainWindow::supportedDispatchExes() const {
     QJsonArray out;
     for (const QString &exe : AgentWindow::knownExes()) {
-        // WorkBuddy 系走 UIA（configHomeFor 非空）；DSH 走插件通道。
+        // WorkBuddy 系走 UIA（configHomeFor 非空）；DSH 走插件通道；ZCode 走
+        // 自带 app-server 协议通道。
         if (!SessionDispatch::configHomeFor(exe).isEmpty() ||
-            SessionDispatch::supportsPluginChannel(exe)) {
+            SessionDispatch::supportsPluginChannel(exe) ||
+            SessionDispatch::supportsZcodeChannel(exe)) {
             out.append(exe);
         }
     }

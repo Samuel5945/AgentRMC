@@ -187,6 +187,9 @@ private:
     QString dispatchDraftId_;
     QString dispatchDraftText_;
     QHash<QString, QString> dispatchSessionById_;
+    // ZCode 派发 turn 的回复正文（会话 id → 回复）：stop hook 落卡时若已知
+    // 回复，直接用正文替代通用收尾文案。
+    QHash<QString, QString> dispatchReplyBySession_;
     // 右半区默认交给 WebView2 渲染（AGENTRMC_WORKWEB=0 或运行库缺失时回退 Qt 页签）。
     WorkWebView *workWeb_ = nullptr;
     // 外壳版事件流：Qt 侧 logList_ 只有合成好的文本，这里多存一份 kind，

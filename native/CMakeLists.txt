@@ -14,7 +14,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 
-find_package(Qt6 6.8 REQUIRED COMPONENTS Widgets Network)
+find_package(Qt6 6.8 REQUIRED COMPONENTS Widgets Network Sql)
 qt_standard_project_setup()
 
 qt_add_executable(AgentRMCNative
@@ -32,6 +32,8 @@ qt_add_executable(AgentRMCNative
     src/core/SessionDispatch.h
     src/core/UiDispatch.cpp
     src/core/UiDispatch.h
+    src/core/ZcodeDispatch.cpp
+    src/core/ZcodeDispatch.h
     src/core/AgentWindow.cpp
     src/core/AgentWindow.h
     src/core/HostNewTask.cpp
@@ -144,7 +146,7 @@ target_include_directories(AgentRMCNative PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/.webview2-sdk/build/native/include)
 # powrprof = 睡眠/休眠，wbemuuid + oleaut32 = 笔记本背光的 WMI 回退。
 set(AGENTRMC_SYSTEM_LIBS powrprof wbemuuid oleaut32)
-target_link_libraries(AgentRMCNative PRIVATE Qt6::Widgets Qt6::Network winmm
+target_link_libraries(AgentRMCNative PRIVATE Qt6::Widgets Qt6::Network Qt6::Sql winmm
     shell32 ole32 UIAutomationCore.lib ${AGENTRMC_SYSTEM_LIBS})
 target_compile_options(AgentRMCNative PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
 target_compile_definitions(AgentRMCNative PRIVATE AGENTRMC_VERSION="${PROJECT_VERSION}")
@@ -334,11 +336,13 @@ add_executable(AgentRMCDispatchTest
     src/core/SessionDispatch.h
     src/core/UiDispatch.cpp
     src/core/UiDispatch.h
+    src/core/ZcodeDispatch.cpp
+    src/core/ZcodeDispatch.h
     src/core/AgentWindow.cpp
     src/core/AgentWindow.h
 )
 target_include_directories(AgentRMCDispatchTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
-target_link_libraries(AgentRMCDispatchTest PRIVATE Qt6::Core shell32 ole32
+target_link_libraries(AgentRMCDispatchTest PRIVATE Qt6::Core Qt6::Sql shell32 ole32
     user32 UIAutomationCore.lib)
 target_compile_options(AgentRMCDispatchTest PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
 

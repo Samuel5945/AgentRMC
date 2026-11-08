@@ -1,5 +1,6 @@
 #include "core/SessionDispatch.h"
 #include "core/UiDispatch.h"
+#include "core/ZcodeDispatch.h"
 
 #include <QByteArray>
 #include <QCoreApplication>
@@ -7,6 +8,8 @@
 #include <QDir>
 #include <QFile>
 #include <QJsonObject>
+#include <QSqlDatabase>
+#include <QSqlQuery>
 #include <QTemporaryDir>
 #include <QTimer>
 
@@ -229,6 +232,145 @@ int main(int argc, char *argv[]) {
               gotFail && failedWhy == QStringLiteral("会话不在活表"));
         dsh.pluginAck(QStringLiteral("nonexistent"), true, QString());
         check("plugin channel: unknown dispatch id ignored", true);
+    }
+
+    // —— ZCode 通道：app-server 协议（2026-11-08 探针定案）——
+    // 会话索引 = ~/.zcode/cli/db/db.sqlite（只读）；守卫全在 native：会话缺失 /
+    // 账号套餐模型 / 活动门。测试用 AGENTRMC_ZCODE_HOME 指到临时目录，自建
+    // 同构 sqlite，不碰真实会话库。
+    check("zcode channel: supported only for ZCode.exe",
+          ZcodeDispatch::supports(QStringLiteral("ZCode.exe")) &&
+              !ZcodeDispatch::supports(QStringLiteral("WorkBuddy.exe")) &&
+              SessionDispatch::supportsZcodeChannel(QStringLiteral("ZCode.exe")) &&
+              !SessionDispatch::supportsZcodeChannel(
+                  QStringLiteral("WorkBuddy.exe")));
+    {
+        qputenv("AGENTRMC_ZCODE_HOME",
+                (dir.path() + QStringLiteral("/zc")).toUtf8());
+        QDir().mkpath(dir.path() + QStringLiteral("/zc/cli/db"));
+        const QString dbPath =
+            dir.path() + QStringLiteral("/zc/cli/db/db.sqlite");
+        {
+            QSqlDatabase db = QSqlDatabase::addDatabase(
+                QStringLiteral("QSQLITE"), QStringLiteral("test-db"));
+            db.setDatabaseName(dbPath);
+            if (db.open()) {
+                QSqlQuery q(db);
+                q.exec(QStringLiteral(
+                    "CREATE TABLE session (id TEXT, directory TEXT, "
+                    "time_updated TEXT, time_deleted TEXT)"));
+                q.exec(QStringLiteral(
+                    "CREATE TABLE session_entry (session_id TEXT, type TEXT, "
+                    "data TEXT)"));
+                const QString zs =
+                    QStringLiteral("11111111-2222-4333-8444-555555555555");
+                const QString acctSid =
+                    QStringLiteral("22222222-3333-4444-8555-666666666666");
+                const QString recentSid =
+                    QStringLiteral("33333333-4444-4555-8666-777777777777");
+                // 个人供应商 + 老时间：守卫全过。
+                q.prepare(QStringLiteral(
+                    "INSERT INTO session VALUES (?, ?, ?, NULL)"));
+                q.addBindValue(zs);
+                q.addBindValue(QStringLiteral("D:/repo"));
+                q.addBindValue(QStringLiteral("1000000000000"));
+                q.exec();
+                // 账号套餐模型。
+                q.prepare(QStringLiteral(
+                    "INSERT INTO session VALUES (?, ?, ?, NULL)"));
+                q.addBindValue(acctSid);
+                q.addBindValue(QStringLiteral("D:/repo"));
+                q.addBindValue(QStringLiteral("1000000000000"));
+                q.exec();
+                // 刚活动过（活动门）。
+                q.prepare(QStringLiteral(
+                    "INSERT INTO session VALUES (?, ?, ?, NULL)"));
+                q.addBindValue(recentSid);
+                q.addBindValue(QStringLiteral("D:/repo"));
+                q.addBindValue(QString::number(QDateTime::currentMSecsSinceEpoch()));
+                q.exec();
+                q.prepare(QStringLiteral(
+                    "INSERT INTO session_entry VALUES (?, ?, ?)"));
+                q.addBindValue(zs);
+                q.addBindValue(QStringLiteral("runtime/model_selection"));
+                q.addBindValue(QStringLiteral(
+                    R"({"modelSelection":{"providerId":"p1","modelId":"m1","options":{"reasoningLevel":"max"}}})"));
+                q.exec();
+                q.prepare(QStringLiteral(
+                    "INSERT INTO session_entry VALUES (?, ?, ?)"));
+                q.addBindValue(acctSid);
+                q.addBindValue(QStringLiteral("runtime/model_selection"));
+                q.addBindValue(QStringLiteral(
+                    R"({"modelSelection":{"providerId":"account:zai-start-plan","modelId":"GLM-5.3-Flash"}})"));
+                q.exec();
+                q.prepare(QStringLiteral(
+                    "INSERT INTO session_entry VALUES (?, ?, ?)"));
+                q.addBindValue(recentSid);
+                q.addBindValue(QStringLiteral("runtime/model_selection"));
+                q.addBindValue(QStringLiteral(
+                    R"({"modelSelection":{"providerId":"p1","modelId":"m1"}})"));
+                q.exec();
+                // 已删除会话：不算归属。
+                q.prepare(QStringLiteral(
+                    "INSERT INTO session VALUES (?, ?, ?, ?)"));
+                q.addBindValue(
+                    QStringLiteral("44444444-5555-4666-8777-888888888888"));
+                q.addBindValue(QStringLiteral("D:/repo"));
+                q.addBindValue(QStringLiteral("1000000000000"));
+                q.addBindValue(QStringLiteral("1000000001000"));
+                q.exec();
+                db.close();
+            }
+            QSqlDatabase::removeDatabase(QStringLiteral("test-db"));
+        }
+
+        const QString zs =
+            QStringLiteral("11111111-2222-4333-8444-555555555555");
+        const QString acctSid =
+            QStringLiteral("22222222-3333-4444-8555-666666666666");
+        QString zdir;
+        QJsonObject sel;
+        qint64 ztime = 0;
+        check("zcode sessionRecord: hit with model",
+              ZcodeDispatch::sessionRecord(zs, &zdir, &sel, &ztime) &&
+                  zdir == QStringLiteral("D:/repo") &&
+                  sel.value(QStringLiteral("modelId")).toString() ==
+                      QStringLiteral("m1") &&
+                  sel.value(QStringLiteral("options"))
+                          .toObject()
+                          .value(QStringLiteral("reasoningLevel"))
+                          .toString() == QStringLiteral("max"));
+        check("zcode sessionRecord: unknown id refused",
+              !ZcodeDispatch::sessionRecord(
+                  QStringLiteral("99999999-0000-4000-8000-000000000000"),
+                  &zdir, &sel, &ztime));
+
+        SessionDispatch zd;
+        check("zcode dispatch: unknown session refused (proof before send)",
+              !zd.dispatch(QStringLiteral("ZCode.exe"),
+                           QStringLiteral("99999999-0000-4000-8000-000000000000"),
+                           QString(), QStringLiteral("task"), &reason) &&
+                  reason.contains(QStringLiteral("证明不了")));
+        check("zcode dispatch: account-plan model refused",
+              !zd.dispatch(QStringLiteral("ZCode.exe"), acctSid, QString(),
+                           QStringLiteral("task"), &reason) &&
+                  reason.contains(QStringLiteral("账号套餐模型")));
+        // 刚活动过：活动门拦（可能正在跑）。
+        check("zcode dispatch: activity guard",
+              !zd.dispatch(QStringLiteral("ZCode.exe"),
+                           QStringLiteral("33333333-4444-4555-8666-777777777777"),
+                           QString(), QStringLiteral("task"), &reason) &&
+                  reason.contains(QStringLiteral("仍有写入")));
+        // 个人供应商 + 老会话：守卫全过，走到 exe 解析。AGENTRMC_ZCODE_EXE
+        // 指到不存在的路径 → 拒在「找不到入口」，不真 spawn。
+        qputenv("AGENTRMC_ZCODE_EXE",
+                (dir.path() + QStringLiteral("/no/ZCode.exe")).toUtf8());
+        check("zcode dispatch: stale session passes guards, fails on exe",
+              !zd.dispatch(QStringLiteral("ZCode.exe"), zs, QString(),
+                           QStringLiteral("task"), &reason) &&
+                  reason.contains(QStringLiteral("app-server 入口")));
+        qunsetenv("AGENTRMC_ZCODE_EXE");
+        qunsetenv("AGENTRMC_ZCODE_HOME");
     }
 
     // 活体 harness（默认不跑）：AGENTRMC_DISPATCH_LIVE=<session id> 时真派一条

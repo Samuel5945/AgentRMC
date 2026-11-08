@@ -1,6 +1,7 @@
 #include "core/SessionDispatch.h"
 
 #include "core/UiDispatch.h"
+#include "core/ZcodeDispatch.h"
 
 #include <QDateTime>
 #include <QDir>
@@ -74,6 +75,10 @@ bool SessionDispatch::supportsPluginChannel(const QString &agentExe) {
     // 轮询取件。2026-11-07 探针全链活体验收：followup 注入 / 回执 / 零泄漏。
     return agentExe.compare(QStringLiteral("DeepSeek Harness.exe"),
                             Qt::CaseInsensitive) == 0;
+}
+
+bool SessionDispatch::supportsZcodeChannel(const QString &agentExe) {
+    return ZcodeDispatch::supports(agentExe);
 }
 
 bool SessionDispatch::userTextOf(const QByteArray &line, QString *text) {
@@ -286,10 +291,100 @@ bool SessionDispatch::dispatch(const QString &agentExe, const QString &sessionId
         }
         return true;
     }
+    if (supportsZcodeChannel(agentExe)) {
+        // ZCode 通道：会话索引是共享 SQLite（只读），投递走自带 app-server 协议。
+        // 账号套餐模型外部实例拿不到供应商（凭据在桌面登录态里，用户裁决不破解），
+        // 直接拒。
+        QString directory;
+        QJsonObject model;
+        qint64 timeUpdated = 0;
+        if (!ZcodeDispatch::sessionRecord(sessionId, &directory, &model,
+                                          &timeUpdated)) {
+            return refuse(
+                QStringLiteral("目标会话不在 ZCode 会话库，证明不了归属，未发"));
+        }
+        if (pending_.contains(sessionId)) {
+            return refuse(QStringLiteral("该会话已有派发在途，等回执后再派"));
+        }
+        if (model.isEmpty()) {
+            return refuse(QStringLiteral("读不到该会话当前模型，拒绝盲发"));
+        }
+        if (model.value(QStringLiteral("providerId")).toString()
+                .startsWith(QStringLiteral("account:"))) {
+            return refuse(
+                QStringLiteral("该会话用账号套餐模型，外部派发暂不支持（等 ZCode "
+                               "上游开放），可换个人供应商模型会话再派"));
+        }
+        const qint64 idle = timeUpdated > 0
+                                ? QDateTime::currentMSecsSinceEpoch() - timeUpdated
+                                : -1;
+        if (idle >= 0 && idle < kActivityGuardMs) {
+            return refuse(QStringLiteral("目标会话 %1 秒内仍有写入，可能正在跑，稍后再派")
+                              .arg(kActivityGuardMs / 1000));
+        }
+        const QString zexe = ZcodeDispatch::zcodeExeFromRegistry();
+        if (zexe.isEmpty()) {
+            return refuse(QStringLiteral("找不到 ZCode 桌面端（注册表无 zcode 协议）"));
+        }
+        const QString cjs = ZcodeDispatch::cjsPathFor(zexe);
+        if (!QFileInfo::exists(cjs)) {
+            return refuse(QStringLiteral("找不到 ZCode 的 app-server 入口：%1").arg(cjs));
+        }
+
+        Pending p;
+        p.dispatchId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+        p.agentExe = agentExe;
+        p.sessionId = sessionId;
+        p.project = project;
+        p.text = text;
+        p.channel = Channel::Zcode;
+        p.clock.start();
+        if (dispatchIdOut != nullptr) {
+            *dispatchIdOut = p.dispatchId;
+        }
+        pending_.insert(sessionId, p);
+        if (!timer_->isActive()) {
+            timer_->start();
+        }
+        auto *z = new ZcodeDispatch(this);
+        zcodeJobs_.append(z);
+        connect(z, &QObject::destroyed, this,
+                [this, z] { zcodeJobs_.removeAll(z); });
+        ZcodeDispatch::Job job;
+        job.dispatchId = p.dispatchId;
+        job.sessionId = sessionId;
+        job.text = text;
+        job.modelSelection = model;
+        job.zcodeExe = zexe;
+        connect(z, &ZcodeDispatch::sent, this,
+                [this, sid = sessionId](const QString &id) {
+                    auto it = pending_.find(sid);
+                    if (it == pending_.end()) {
+                        return;
+                    }
+                    const Pending done = it.value();
+                    pending_.erase(it);
+                    emit receipt(id, done.agentExe, done.sessionId, done.project,
+                                 done.text);
+                });
+        connect(z, &ZcodeDispatch::failed, this,
+                [this, sid = sessionId](const QString &id, const QString &why) {
+                    pending_.remove(sid);
+                    emit failed(id, why);
+                });
+        connect(z, &ZcodeDispatch::turnFinished, this,
+                [this, exe = agentExe, sid = sessionId, proj = project](
+                    const QString &id, const QString &reply) {
+                    emit zcodeTurnFinished(id, exe, sid, proj, reply);
+                });
+        z->start(job);
+        return true;
+    }
+
     const QString home = configHomeFor(agentExe);
     if (home.isEmpty()) {
         return refuse(
-            QStringLiteral("该宿主未接定向派发（当前仅 WorkBuddy 系 / DSH）"));
+            QStringLiteral("该宿主未接定向派发（当前仅 WorkBuddy 系 / DSH / ZCode）"));
     }
     QString path, cwd, title, altTitle;
     if (!findSession(home, sessionId, &path, &cwd, &title, &altTitle)) {
@@ -441,6 +536,10 @@ void SessionDispatch::poll() {
             continue;
         }
         Pending p = it.value();
+        if (p.channel == Channel::Zcode) {
+            // ZCode 通道：回执/失败走 ZcodeDispatch 信号，这里不读会话库。
+            continue;
+        }
         if (p.channel == Channel::Plugin) {
             // 插件通道不读会话库：回执走 ack。取件窗口超时 = 插件没在跑。
             if (p.clock.elapsed() > kPluginAckTimeoutMs) {

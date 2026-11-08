@@ -37,6 +37,7 @@
 //
 // 退出码：0 正常；1 网关连不上（--selftest 时为桥连不上）。
 
+import { randomUUID } from "node:crypto";
 import {
   appendFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync,
 } from "node:fs";
@@ -159,6 +160,7 @@ if (flag("selftest")) {
 }
 
 let ws = null;
+let gatewayUp = false;
 let callSeq = 0;
 const pending = new Map();
 const subscribed = new Set();
@@ -222,6 +224,7 @@ async function refreshSessions() {
 // 会重置计数（见 onmessage）；握手本身黑洞则由 helloTimer 兜底。
 function forceReconnect(reason) {
   log(`forcing reconnect: ${reason}`);
+  gatewayUp = false;
   const old = ws;
   ws = null;
   if (old) {
@@ -245,8 +248,10 @@ function renderTemplate(tpl, sessionKey, replyText) {
   const title = sessionTitles.get(sessionKey)
     || String(sessionKey).split(":").pop()?.slice(0, 24) || "这个会话";
   let out = tpl.replaceAll("{session}", title);
-  out = out.replaceAll("{text}", replyText || "");
-  return out;
+  if (tpl.includes("{text}")) return out.replaceAll("{text}", replyText || "");
+  // --relay 且模板没写 {text}：回复正文附在模板后（卡面带回复正文，
+  // 2026-11-08 用户定）；空回复不附，permission 等不带空尾巴。
+  return replyText ? `${out} 回复：${replyText}` : out;
 }
 
 function eventKind(evName) {
@@ -349,6 +354,7 @@ function connect() {
     }
     if (f.type === "hello-ok") {
       if (helloTimer) { clearTimeout(helloTimer); helloTimer = null; }
+      gatewayUp = true;
       log(`connected ${CFG.gateway} (protocol ${f.protocol ?? "?"})`);
       reconnectDelay = 1000;
       refreshSessions();
@@ -367,6 +373,7 @@ function connect() {
 
   ws.onclose = () => {
     if (helloTimer) { clearTimeout(helloTimer); helloTimer = null; }
+    gatewayUp = false;
     if (shuttingDown) return;
     if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = null; }
     subscribed.clear();
@@ -377,6 +384,90 @@ function connect() {
 
   ws.onerror = () => { /* onclose 会接管重连 */ };
 }
+
+// —— 定向派发通道（2026-11-08 接线）：native 队列 → 本桥轮询取件 →
+// 网关 sessions.send 注入 → ack 回执。受理是 durable admission（网关
+// turn_ingress_receipts 落账），ack ok 就是「确实到了那条会话」的回执；
+// 守卫在取件后：sessions.resolve 命中活表才注入（裁决 6），拒绝原因走
+// ack ok:false，原生端按派发失败上卡。与 DSH 插件同款通道；桥在技能目录，
+// 不占插件版本。--no-dispatch 可关。
+let dispatchBusy = false;
+let dispatchLogAt = 0;
+const dispatchWarn = (msg) => {
+  const now = Date.now();
+  if (now - dispatchLogAt > 60000) { dispatchLogAt = now; log(msg); }
+};
+async function pollDispatches() {
+  if (dispatchBusy || flag("no-dispatch")) return;
+  dispatchBusy = true;
+  try {
+    const res = await fetch(`${CFG.bridge}/dispatch/pending?exe=OpenSquilla.exe`, {
+      signal: AbortSignal.timeout(5000),
+    });
+    if (res.status !== 200) return; // 旧原生端没有这条路由：安静跳过
+    let items;
+    try { items = JSON.parse(await res.text()); } catch { return; }
+    if (!Array.isArray(items) || items.length === 0) return;
+    for (const item of items) {
+      const dispatchId = String(item?.dispatch_id || "");
+      const sessionId = String(item?.session_id || "");
+      const text = String(item?.text || "");
+      let error = "";
+      if (!dispatchId || !sessionId || !text) {
+        error = "取件缺字段（dispatch_id/session_id/text）";
+      } else if (!gatewayUp) {
+        error = "网关没连上，未注入";
+      } else {
+        try {
+          await call("sessions.resolve", { key: sessionId });
+        } catch {
+          error = `会话 ${sessionId.slice(0, 24)}… 不在活表（resolve 拒绝），未注入`;
+        }
+        if (!error) {
+          const cmid = randomUUID().replaceAll("-", "");
+          try {
+            const accepted = await call("sessions.send", {
+              key: sessionId,
+              message: text,
+              attachments: [],
+              client_message_id: cmid,
+              _source: {
+                caller_kind: "cli", channel_kind: "cli",
+                channel_id: "cli:agentrmc-bridge", source_kind: "cli",
+                source_name: "agentrmc-bridge", client_message_id: cmid,
+              },
+            }, 30000);
+            if (!accepted || !(accepted.turn_id || accepted.task_id)) {
+              error = "网关受理缺 turn_id，视为未送达";
+            }
+          } catch (e) {
+            error = "sessions.send 被拒：" + e.message;
+          }
+        }
+      }
+      try {
+        await fetch(`${CFG.bridge}/dispatch/ack`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json; charset=utf-8" },
+          body: JSON.stringify({
+            dispatch_id: dispatchId, ok: error === "", ...(error ? { error } : {}),
+          }),
+          signal: AbortSignal.timeout(5000),
+        });
+      } catch (e) {
+        // ack 发不回去：原生端 60s 取件超时会兜底取消，节流记一笔。
+        dispatchWarn("dispatch ack failed: " + e.message);
+      }
+      log(`DISPATCH ${dispatchId.slice(0, 8)} sess=${sessionId} ok=${error === ""}${error ? " " + error : ""}`);
+    }
+  } catch (e) {
+    // 原生端没开：轮询失败保持安静，60s 记一次。
+    dispatchWarn("dispatch poll failed: " + e.message);
+  } finally {
+    dispatchBusy = false;
+  }
+}
+setInterval(pollDispatches, 1500);
 
 process.on("SIGINT", () => {
   shuttingDown = true;

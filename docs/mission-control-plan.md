@@ -304,6 +304,45 @@ Task/WorkItem 的**会话归属**与**可验证投递**，这两块得自己补�
 - 离线 resume 未接：`resolveAgent` 对离线会话会从盘上 resume，但 composition/
   presets 那套在插件里复制不划算——V1 只派活会话，不在活表就拒绝（裁决 6）。
 
+#### OpenSquilla 系实测与接线（2026-11-08，探针 `rc_probe/osquilla_dispatch_probe.mjs` / `osquilla_dispatch_e2e.py`）
+
+- **通道是网关 WS RPC**（合法宿主 API，与 ZCode app-server 同类）：桥本来就有
+  operator.admin 握手（`connect.challenge → connect → hello-ok`），只用了
+  `sessions.list` / `sessions.messages.subscribe` 做反向提醒；正向探明
+  `sessions.create {agentId,kind,displayName}` → `{key}`、`sessions.send
+  {key,message,client_message_id,_source}` → 受理返回 `turn_id`、
+  `sessions.resolve {key}` 定向归属证明。会话 key 形如
+  `agent:main:webchat:<id>` / `agent:main:cli:<id>`。
+- **活体探针全绿**：牺牲会话 `agent:main:cli:344fb256`，send 受理 → turn 真跑
+  （回「收到」）→ 读回标记命中 → 全库零泄漏（`TARGETED_SEND OK / NO_LEAK true`）。
+- **坑①：state home 跟配置走**。桌面网关（:18791）的会话库是
+  `%APPDATA%\@opensquilla\desktop-electron\opensquilla\state\sessions.db`
+  （**SQLite**，`transcript_entries` / `turn_ingress_receipts`）；`~/.opensquilla`
+  是另一个 gateway 实例的家，去那里读回/扫零泄漏会假阴性（首轮探针踩过）。
+  读回与零泄漏断言一律走只读 SQLite 或 RPC，不猜目录。
+- **坑②：`sessions.list` 带 cursor 分页**，不适合做归属守卫；用
+  `sessions.resolve {key}`（命中返回记录、未知报错）。
+- **接线（复用 DSH 插件通道模式）**：`SessionDispatch::supportsPluginChannel`
+  对 `OpenSquilla.exe` 开放；native 只做 `agent:` 前缀哨兵 + 同会话在途闸；
+  **`takePluginDispatches` 补按 exe 过滤**（原先不滤——DSH 与 OpenSquilla 同在
+  Plugin 通道会互领件，测试有双宿主混合取件断言）。桥侧 1.5s 取件 →
+  resolve 守卫 → send → `POST /dispatch/ack`；ack ok = durable admission 成立
+  （与 DSH followup 同级回执）；`--no-dispatch` 可关。桥测试 14/14、native
+  dispatch 测试全绿。
+- **端到端活体验收**（`osquilla_dispatch_e2e.py`，外壳真实入口）：UIA 选中探针卡
+  → dpText 粘贴带标记指令 → 「派回会话」→ 卡转 working 且 message 即派发原文
+  （ack 回执落账）→ 轮次真跑 → 卡转 review；SQLite 全库扫描标记只在牺牲会话，
+  零泄漏。**E2E PASS**。
+- **坑③：工具 call 派生的进程活不过该 call**（桥 README 早有记录，这次应用也
+  踩到）：手动 `Start-Process` 拉起的应用/桥在 call 结束后被连进程树端掉。
+  桥靠**计划任务看门狗**自愈拉活；应用验收时用一次性计划任务拉起（验完删任务）。
+- **坑④：`ensure-bridge.ps1` 必须带 UTF-8 BOM**：PS 5.1 无 BOM 按 GBK 读，中文
+  注释乱码炸语法（仓库原件漏了 BOM，已补；voice-reminder.ps1 本来就有）。
+- 已知边界：OpenSquilla 卡面回复文案走桥模板（configHome 为空，`lastReply`
+  不读它的 SQLite）；**看门狗与开机自启默认带 `--relay`**（2026-11-08 用户定：
+  卡面带回复正文），模板没写 `{text}` 时自动附「回复：…」前 80 字。牺牲会话
+  留着，要不要删由用户定。
+
 已定的设计约束：
 
 - 宿主若支持 API／插件命令：新建或指定会话，发送带 `dispatchId`，回执关联到工单。
@@ -385,8 +424,9 @@ Task/WorkItem 的**会话归属**与**可验证投递**，这两块得自己补�
 
 ## 8. 现状与剩余
 
-- 数据面：第 1、2 批已落地并装机验证；第 3 批定向派发 **WorkBuddy 系、DSH 已
-  接线并活体验收**，ZCode 系已探明待接线；Qoder 桌面 UI 定向打开 / 国际版待补。
+- 数据面：第 1、2 批已落地并装机验证；第 3 批定向派发 **WorkBuddy 系、DSH、
+  OpenSquilla 已接线并活体验收**（OpenSquilla 2026-11-08，网关 RPC 通道，
+  e2e PASS），ZCode 系已探明待接线；Qoder 桌面 UI 定向打开 / 国际版待补。
 - 表现面：外壳＋六个页签已落，默认启用；桌宠／气泡保持 Qt。
 - 版本号仍是 `0.4.1`（Native 与插件同号）：按约定等用户明确说「升版」才动。
 - 剩余事项：
@@ -394,7 +434,9 @@ Task/WorkItem 的**会话归属**与**可验证投递**，这两块得自己补�
      协议通道已探明并活体验收**（create/send×3/回执全链通，hook 毒化隔离实证，
      桌面可见性待人工眼见后接线）；**DSH 插件进程内 followup 通道已接线并
      端到端活体验收**（native 队列 + 插件轮询注入 + ack 回执落账 + zstd 零泄漏，
-     `rc_probe/dsh_dispatch_e2e.py`）；
+     `rc_probe/dsh_dispatch_e2e.py`）；**OpenSquilla 网关 RPC 通道已接线并端到端
+     活体验收**（桥取件 + resolve 守卫 + sessions.send + ack 回执 + SQLite 零泄漏，
+     `rc_probe/osquilla_dispatch_e2e.py`）；
      Qoder CN 的 CLI 通道实测后被用户否决（桌面不可见），路由休眠；桌面可见
      通道两候选（deep link、a11y 设置）2026-11-07 深夜均证伪——**Qoder 线等
      上游**（官方 deeplink 支持按 id 打开会话、renderer a11y 开关或本地会话

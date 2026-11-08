@@ -1,4 +1,4 @@
-# 桌宠联动桥看门狗：桥不在就拉起来，桥卡死就杀掉重启，留一行日志好查"什么时候死的"。
+﻿# 桌宠联动桥看门狗：桥不在就拉起来，桥卡死就杀掉重启，留一行日志好查"什么时候死的"。
 # 由计划任务每 5 分钟调用；也可手动跑一次。
 # 路径按脚本自身目录（$PSScriptRoot）取，整个目录挪走/拷给别人都能直接用。
 $ErrorActionPreference = 'SilentlyContinue'
@@ -41,7 +41,7 @@ if (-not (Test-Path $bridge) -or -not (Test-Path $vbs)) {
 }
 
 Log "DOWN detected, restarting (previous alive count=$($running.Count))"
-wscript.exe $vbs $node $bridge --log $log | Out-Null
+wscript.exe $vbs $node $bridge --relay --log $log | Out-Null
 
 Start-Sleep -Seconds 6
 $after = @(Get-CimInstance Win32_Process -Filter "Name='node.exe'" |

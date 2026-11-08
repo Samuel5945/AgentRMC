@@ -21,6 +21,7 @@ release/
 # ---------- 探测输出（运行时生成）----------
 rc_probe/*
 !rc_probe/*.py
+!rc_probe/*.mjs
 
 # ---------- 本地数据 ----------
 .workbuddy-ai/

@@ -2878,8 +2878,8 @@ QString MainWindow::itemIdForSession(const QString &sessionId) const {
 QJsonArray MainWindow::supportedDispatchExes() const {
     QJsonArray out;
     for (const QString &exe : AgentWindow::knownExes()) {
-        // WorkBuddy 系走 UIA（configHomeFor 非空）；DSH 走插件通道；ZCode 走
-        // 自带 app-server 协议通道。
+        // WorkBuddy 系走 UIA（configHomeFor 非空）；DSH / OpenSquilla 走插件
+        // 通道；ZCode 走自带 app-server 协议通道。
         if (!SessionDispatch::configHomeFor(exe).isEmpty() ||
             SessionDispatch::supportsPluginChannel(exe) ||
             SessionDispatch::supportsZcodeChannel(exe)) {

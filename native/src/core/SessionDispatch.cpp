@@ -73,7 +73,12 @@ QString SessionDispatch::cliPathFor(const QString &configHome) {
 bool SessionDispatch::supportsPluginChannel(const QString &agentExe) {
     // DSH 桌面装的 agentrmc-bridge Host 插件在 DSH 进程里，通过 AgentBridge
     // 轮询取件。2026-11-07 探针全链活体验收：followup 注入 / 回执 / 零泄漏。
+    // OpenSquilla 走同款通道：技能目录里的 pet-bridge 轮询取件 → 网关
+    // sessions.send 注入（durable admission）→ ack 回执。2026-11-08 探针
+    // 全链活体验收：受理 turn_id / SQLite 读回 / 全库零泄漏。
     return agentExe.compare(QStringLiteral("DeepSeek Harness.exe"),
+                            Qt::CaseInsensitive) == 0 ||
+           agentExe.compare(QStringLiteral("OpenSquilla.exe"),
                             Qt::CaseInsensitive) == 0;
 }
 
@@ -264,10 +269,18 @@ bool SessionDispatch::dispatch(const QString &agentExe, const QString &sessionId
         return refuse(QStringLiteral("待办未关联会话，不能定向派发"));
     }
     if (supportsPluginChannel(agentExe)) {
-        // DSH：会话库是 zstd 多帧压缩，native 读不了；归属证明在插件侧做
-        // （agents.get 命中才 followup，拒绝带原因走 ack）。native 只做格式
-        // 哨兵：DSH 的 agent.id 就是盘上 session-<uuid> 目录名。
-        if (!sessionId.startsWith(QStringLiteral("session-"))) {
+        // 会话库 native 读不了（DSH zstd 多帧 / OpenSquilla SQLite）；归属
+        // 证明在桥/插件侧做（活表命中才注入，拒绝带原因走 ack）。native 只
+        // 做格式哨兵：DSH 的 agent.id 是盘上 session-<uuid> 目录名；
+        // OpenSquilla 的会话 key 形如 agent:main:webchat:<id>。
+        const bool osq = agentExe.compare(QStringLiteral("OpenSquilla.exe"),
+                                          Qt::CaseInsensitive) == 0;
+        if (osq && !sessionId.startsWith(QStringLiteral("agent:"))) {
+            return refuse(QStringLiteral(
+                "OpenSquilla 会话 key 应为 agent:<agent>:<channel>:<id>，"
+                "这张卡的归属可疑，未发"));
+        }
+        if (!osq && !sessionId.startsWith(QStringLiteral("session-"))) {
             return refuse(
                 QStringLiteral("DSH 会话 id 应为 session-<uuid>，这张卡的归属可疑，未发"));
         }
@@ -383,8 +396,8 @@ bool SessionDispatch::dispatch(const QString &agentExe, const QString &sessionId
 
     const QString home = configHomeFor(agentExe);
     if (home.isEmpty()) {
-        return refuse(
-            QStringLiteral("该宿主未接定向派发（当前仅 WorkBuddy 系 / DSH / ZCode）"));
+        return refuse(QStringLiteral(
+            "该宿主未接定向派发（当前仅 WorkBuddy 系 / DSH / ZCode / OpenSquilla）"));
     }
     QString path, cwd, title, altTitle;
     if (!findSession(home, sessionId, &path, &cwd, &title, &altTitle)) {
@@ -492,6 +505,11 @@ QJsonArray SessionDispatch::takePluginDispatches(const QString &agentExe) {
         if (it->channel != Channel::Plugin || it->pluginHanded) {
             continue;
         }
+        // 多宿主共用 Plugin 通道（DSH + OpenSquilla）：取件必须按 exe 过滤，
+        // 否则 DSH 插件会把 OpenSquilla 的派发领走（2026-11-08 接线时补）。
+        if (it->agentExe.compare(agentExe, Qt::CaseInsensitive) != 0) {
+            continue;
+        }
         // 一次取件标记一次：ack 或超时前不会重复下发，防止插件重连后双注入。
         it->pluginHanded = true;
         QJsonObject o;
@@ -513,12 +531,12 @@ void SessionDispatch::pluginAck(const QString &dispatchId, bool ok,
         const Pending p = it.value();
         pending_.erase(it);
         if (ok) {
-            // followup 同步落 durable inbox：这就是「确实到了那条会话」的回执，
-            // 与 WorkBuddy 的 jsonl user 行同级。
+            // 注入同步落 durable 账（DSH inbox / OpenSquilla ingress receipt）：
+            // 这就是「确实到了那条会话」的回执，与 WorkBuddy jsonl user 行同级。
             emit receipt(p.dispatchId, p.agentExe, p.sessionId, p.project, p.text);
         } else {
             emit failed(p.dispatchId,
-                        error.isEmpty() ? QStringLiteral("DSH 插件拒绝注入")
+                        error.isEmpty() ? QStringLiteral("桥/插件拒绝注入")
                                         : error);
         }
         break;
@@ -544,11 +562,17 @@ void SessionDispatch::poll() {
             // 插件通道不读会话库：回执走 ack。取件窗口超时 = 插件没在跑。
             if (p.clock.elapsed() > kPluginAckTimeoutMs) {
                 const QString id = p.dispatchId;
+                const bool osq = p.agentExe.compare(
+                                     QStringLiteral("OpenSquilla.exe"),
+                                     Qt::CaseInsensitive) == 0;
                 pending_.erase(it);
                 emit failed(id,
-                            QStringLiteral(
-                                "DSH 插件没来取件（DeepSeek Harness 没开或插件"
-                                "过旧），派发取消"));
+                            osq ? QStringLiteral(
+                                      "OpenSquilla 桥没来取件（OpenSquilla 没开或"
+                                      "桥过旧），派发取消")
+                                : QStringLiteral(
+                                      "DSH 插件没来取件（DeepSeek Harness 没开或插件"
+                                      "过旧），派发取消"));
             }
             continue;
         }

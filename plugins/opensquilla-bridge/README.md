@@ -17,6 +17,14 @@ opensquilla-pet-bridge.mjs
         │  POST /notify {event:stop|permission|turn-start, title, message, raise, session_id}
         ▼
 AgentBridge :45915  →  气泡 + TTS + 把 OpenSquilla 窗口拉回前台
+
+反方向（定向派发，2026-11-08）：
+AgentBridge :45915  GET /dispatch/pending?exe=OpenSquilla.exe（桥 1.5s 轮询取件）
+        ▼
+opensquilla-pet-bridge.mjs  →  sessions.resolve 守卫 → sessions.send 注入
+        │  POST /dispatch/ack {dispatch_id, ok, error}
+        ▼
+原生端回执落账（ack ok = durable admission 成立）→ 工单转进行中
 ```
 
 > **session_id 必须带**：原生端靠它把同一会话的旧「待验收」归档、把新事件并进
@@ -87,11 +95,12 @@ schtasks /Create /F /TN OpenSquillaPetBridgeWatchdog /SC MINUTE /MO 5 /TR "wscri
 | `--no-raise` | 只出声/冒泡，不抢前台 |
 | `--include-cron` | 也提醒 cron 会话（默认关，避免自激刷屏） |
 | `--msg-stop/--msg-permission/--msg-plan` | 文案模板，支持 `{session}` `{text}` |
-| `--relay` | 把回复正文前 80 字也带进气泡（默认只报「这轮跑完了」） |
+| `--relay` | 回复正文前 80 字附进卡面/气泡：模板写 `{text}` 就替换，没写自动附「回复：…」（空回复不附）。看门狗与开机自启默认带它（2026-11-08 用户定：卡面带回复正文） |
 | `--log <path>` | 落日志；默认不写 |
 | `--heartbeat-file <path>` | 心跳文件位置，默认 `%TEMP%\pet-bridge.heartbeat`（看门狗读同一个） |
 | `--refresh <ms>` / `--call-timeout <ms>` / `--hello-timeout <ms>` | 探针周期 / 单次调用超时 / 握手限时，默认 30000 / 15000 / 20000 |
 | `--selftest` | 只发一条测试通知就退出 |
+| `--no-dispatch` | 关掉定向派发取件（只保留事件提醒） |
 
 免打扰：`New-Item "$env:TEMP\opensquilla-pet-bridge.pause"`，恢复就删掉它。
 
@@ -107,6 +116,21 @@ schtasks /Create /F /TN OpenSquillaPetBridgeWatchdog /SC MINUTE /MO 5 /TR "wscri
 - `AgentWindow::knownExes()` 认 `OpenSquilla.exe` —— 这样它的待办才有人认领
   （否则 `/work-items` 里有、`/workers` 里没有，`open_count` 对不上）；
 - `pluginHealth` 里单独一段 `bridges`，只报「装没装 / 进程在不在」，不参与版本对账。
+
+## 定向派发（2026-11-08 接线）
+
+外壳待办卡的「派回会话」对 OpenSquilla 开放：原生端把指令排进队列，桥每 1.5s
+取件，先 `sessions.resolve {key}` 证明会话在活表（证明不了就不发，拒绝原因走
+ack ok:false），再 `sessions.send {key, message, client_message_id, _source}`
+注入。网关受理是 durable admission（`turn_ingress_receipts` 落账、返回
+`turn_id`），ack ok 即「确实到了那条会话」的回执，与 DSH followup 同级。
+会话 key 形如 `agent:main:webchat:<id>`；native 侧只做 `agent:` 前缀哨兵 +
+同会话在途闸，取件按 exe 过滤（DSH 插件领不走 OpenSquilla 的件）。
+
+探针：`rc_probe/osquilla_dispatch_probe.mjs`（`--list` 只读 / `--send` 牺牲会话
+全链）。实测坑：**桌面网关的 state home 跟配置走**（`%APPDATA%\@opensquilla\
+desktop-electron\opensquilla\state`，会话库是 SQLite `sessions.db`）；
+`~/.opensquilla` 是另一个实例的家，去那里读回会假阴性。
 
 ## 已知边界
 

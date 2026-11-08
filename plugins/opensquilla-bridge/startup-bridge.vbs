@@ -6,4 +6,4 @@ Dim node, bridge, log
 node   = "node.exe"
 bridge = "C:\Users\PC\.agents\skills\agentrmc-voice-reminder\scripts\opensquilla-pet-bridge.mjs"
 log    = "C:\Users\PC\AppData\Local\Temp\pet-bridge.log"
-sh.Run """" & node & """ """ & bridge & """ --log """ & log & """", 0, False
+sh.Run """" & node & """ """ & bridge & """ --relay --log """ & log & """", 0, False

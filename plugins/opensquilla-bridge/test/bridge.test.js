@@ -11,6 +11,8 @@
 //      15s 内两条 turn-start 都要落盘（幂等归档信号不去重）。
 //   C) spool 上限守卫：超 1MB 丢最旧留最新。
 //   D) --selftest：通 exit 0，不通 exit 1，且自检不落盘（探针不该污染补投队列）。
+//   E) 定向派发：取件 → sessions.resolve 守卫 → sessions.send 注入 → ack 回执；
+//      resolve 拒绝 / send 拒绝走 ack ok:false；--no-dispatch 不取件。
 
 import assert from 'node:assert';
 import crypto from 'node:crypto';
@@ -102,6 +104,9 @@ function decodeFrame(buf) {
 
 const sockets = new Set();
 let currentSend = null;
+const resolveReject = new Set(); // 这些 key 的 sessions.resolve 回 error
+let sendReject = false;          // sessions.send 回 error
+const sentMessages = [];         // 桥真注入的 sessions.send params
 let gatewayReady = false; // 收到 sessions.list 应答 = hello-ok 已被桥处理
 let upgrades = 0;
 let blackholeUpgrade = 0; // 这条连接只握手、不应答 sessions.list（模拟半开）
@@ -141,6 +146,20 @@ gateway.on('upgrade', (req, socket) => {
       if (msg.type !== 'req') continue;
       if (msg.method === 'connect') {
         send({ type: 'hello-ok', protocol: 3 });
+      } else if (msg.method === 'sessions.resolve') {
+        const key = msg.params && msg.params.key;
+        if (resolveReject.has(key)) {
+          send({ type: 'res', id: msg.id, ok: false, error: { code: 'NOT_FOUND', message: 'unknown session' } });
+        } else {
+          send({ type: 'res', id: msg.id, ok: true, payload: { key } });
+        }
+      } else if (msg.method === 'sessions.send') {
+        sentMessages.push(msg.params);
+        if (sendReject) {
+          send({ type: 'res', id: msg.id, ok: false, error: { code: 'REJECTED', message: 'busy' } });
+        } else {
+          send({ type: 'res', id: msg.id, ok: true, payload: { status: 'accepted', turn_id: 't-' + sentMessages.length, key: msg.params && msg.params.key } });
+        }
       } else if (msg.method === 'sessions.list') {
         if (myUpgrade === blackholeUpgrade) continue; // 半开：收得到请求，永不回应
         gatewayReady = true;
@@ -163,10 +182,28 @@ function inject(eventName, sessionKey, extra = {}) {
 
 // ------------------------------------------------------- 假 AgentBridge
 const received = [];
+const acks = [];
+let pendingItems = [];   // /dispatch/pending 一次性吐完（模拟 take-once）
+let pendingGets = 0;
 const fakeBridge = http.createServer((req, res) => {
+  if (req.method === 'GET' && req.url.startsWith('/dispatch/pending')) {
+    pendingGets += 1;
+    const items = pendingItems;
+    pendingItems = [];
+    res.statusCode = 200;
+    res.setHeader('Content-Type', 'application/json');
+    res.end(JSON.stringify(items));
+    return;
+  }
   let body = '';
   req.on('data', (chunk) => { body += chunk; });
   req.on('end', () => {
+    if (req.url === '/dispatch/ack') {
+      acks.push(JSON.parse(body));
+      res.statusCode = 204;
+      res.end();
+      return;
+    }
     received.push({ url: req.url, body: JSON.parse(body) });
     res.statusCode = 204;
     res.end();
@@ -269,6 +306,27 @@ await check('免打扰：done 被吞，turn-start 照发（人回来开新轮就
     fs.rmSync(PAUSE, { force: true });
     await stopBridge(handle);
   }
+});
+
+await check('--relay：模板没写 {text} 也附回复正文；不带 --relay 不附', async () => {
+  received.length = 0;
+  const handle = spawnBridge(BRIDGE, path.join(TMP, 'spool-relay'), ['--relay']);
+  try {
+    await waitFor(() => gatewayReady, '网关就绪');
+    inject('session.event.done', 's-relay', { message: '收到' });
+    await waitFor(() => received.length >= 1, 'relay stop 通知');
+    assert.ok(received[0].body.message.includes('回复：收到'),
+      'relay 应附回复正文，实际：' + received[0].body.message);
+  } finally { await stopBridge(handle); }
+  received.length = 0;
+  const plain = spawnBridge(BRIDGE, path.join(TMP, 'spool-relay2'));
+  try {
+    await waitFor(() => gatewayReady, '网关就绪');
+    inject('session.event.done', 's-plain', { message: '收到' });
+    await waitFor(() => received.length >= 1, 'plain stop 通知');
+    assert.ok(!received[0].body.message.includes('回复：'),
+      '不带 --relay 不该附回复');
+  } finally { await stopBridge(plain); }
 });
 
 // ------------------------------------------------------------ B) 桥死了
@@ -374,6 +432,73 @@ await check('--selftest：桥通 exit 0；桥死 exit 1 且不落盘（探针不
   });
   assert.strictEqual(await exitOf(bad), 1);
   assert.deepStrictEqual(spooled(dir), [], '自检失败不该落盘');
+});
+
+// ------------------------------------------------------------ E) 定向派发
+await check('dispatch：取件 → resolve 守卫 → sessions.send → ack ok', async () => {
+  const handle = spawnBridge(BRIDGE, path.join(TMP, 'spool-e1'));
+  try {
+    await waitFor(() => gatewayReady, '网关就绪');
+    pendingItems = [{ dispatch_id: 'd1', session_id: 'agent:main:webchat:t1', text: '探针指令' }];
+    await waitFor(() => acks.length >= 1, 'ack 回执');
+    assert.strictEqual(acks[0].dispatch_id, 'd1');
+    assert.strictEqual(acks[0].ok, true);
+    assert.strictEqual(sentMessages.length, 1);
+    assert.strictEqual(sentMessages[0].key, 'agent:main:webchat:t1');
+    assert.strictEqual(sentMessages[0].message, '探针指令');
+    assert.ok(sentMessages[0].client_message_id, '带 client_message_id');
+  } finally { await stopBridge(handle); }
+});
+
+await check('dispatch：resolve 拒绝未知会话 → ack ok:false 且不注入', async () => {
+  resolveReject.add('agent:main:webchat:gone');
+  const before = sentMessages.length;
+  const handle = spawnBridge(BRIDGE, path.join(TMP, 'spool-e2'));
+  try {
+    await waitFor(() => gatewayReady, '网关就绪');
+    pendingItems = [{ dispatch_id: 'd2', session_id: 'agent:main:webchat:gone', text: 'x' }];
+    await waitFor(() => acks.some((a) => a.dispatch_id === 'd2'), '拒绝 ack');
+    const ack = acks.find((a) => a.dispatch_id === 'd2');
+    assert.strictEqual(ack.ok, false);
+    assert.ok(ack.error.includes('活表'), '拒绝原因该提活表：' + ack.error);
+    assert.strictEqual(sentMessages.length, before, '证明不了归属就不发');
+  } finally {
+    resolveReject.clear();
+    await stopBridge(handle);
+  }
+});
+
+await check('dispatch：send 被拒 → ack ok:false 带网关原因', async () => {
+  sendReject = true;
+  const handle = spawnBridge(BRIDGE, path.join(TMP, 'spool-e3'));
+  try {
+    await waitFor(() => gatewayReady, '网关就绪');
+    pendingItems = [{ dispatch_id: 'd3', session_id: 'agent:main:webchat:t3', text: 'x' }];
+    await waitFor(() => acks.some((a) => a.dispatch_id === 'd3'), '拒绝 ack');
+    const ack = acks.find((a) => a.dispatch_id === 'd3');
+    assert.strictEqual(ack.ok, false);
+    assert.ok(ack.error.includes('sessions.send'), '原因该带 send 拒绝：' + ack.error);
+  } finally {
+    sendReject = false;
+    await stopBridge(handle);
+  }
+});
+
+await check('dispatch：--no-dispatch 不取件', async () => {
+  const getsBefore = pendingGets;
+  const acksBefore = acks.length;
+  const handle = spawnBridge(BRIDGE, path.join(TMP, 'spool-e4'), ['--no-dispatch']);
+  try {
+    await waitFor(() => gatewayReady, '网关就绪');
+    pendingItems = [{ dispatch_id: 'd4', session_id: 'agent:main:webchat:t4', text: 'x' }];
+    await sleep(2000); // 超过一个 1.5s 轮询周期
+    assert.strictEqual(pendingGets, getsBefore, '不该来取件');
+    assert.strictEqual(acks.length, acksBefore);
+    assert.strictEqual(pendingItems.length, 1, '队列原样留着');
+  } finally {
+    pendingItems = [];
+    await stopBridge(handle);
+  }
 });
 
 // ------------------------------------------------------------ 收尾

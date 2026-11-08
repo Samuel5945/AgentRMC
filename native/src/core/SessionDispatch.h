@@ -12,10 +12,11 @@ class ZcodeDispatch;
 
 // 第 3 批定向派发路由：把指令派回待办绑定的那条会话，并拿「确实到了」的回执。
 // WorkBuddy 系走桌面可见 UIA 通道；DSH 走插件进程内通道（native 下发 → DSH 插件
-// 轮询取件 → agent.followup() 注入 → ack 回执）；ZCode 走自带 app-server 协议
-// 通道（spawn → resume → send，见 ZcodeDispatch）；Qoder 系 CLI --resume 已被
-// 用户否决（桌面不可见），configHomeFor 返回空＝通道休眠。证明不了归属就不发，
-// 绝不降级瞎发（裁决 6）。
+// 轮询取件 → agent.followup() 注入 → ack 回执）；OpenSquilla 走同款插件通道
+// （pet-bridge 取件 → 网关 sessions.send 注入 → ack 回执）；ZCode 走自带
+// app-server 协议通道（spawn → resume → send，见 ZcodeDispatch）；Qoder 系
+// CLI --resume 已被用户否决（桌面不可见），configHomeFor 返回空＝通道休眠。
+// 证明不了归属就不发，绝不降级瞎发（裁决 6）。
 class SessionDispatch final : public QObject {
     Q_OBJECT
 
@@ -47,8 +48,9 @@ public:
                   const QString &project, const QString &text, QString *reason,
                   QString *dispatchIdOut = nullptr);
 
-    // —— DSH 插件通道（AgentBridge 转发）——
-    // 插件轮询：取走该宿主尚未下发的派发（Pending 标记 handed，等 ack/超时）。
+    // —— 插件通道（DSH / OpenSquilla，AgentBridge 转发）——
+    // 桥/插件轮询：取走该宿主（按 exe 过滤）尚未下发的派发（Pending 标记
+    // handed，等 ack/超时）。
     QJsonArray takePluginDispatches(const QString &agentExe);
     // 插件应答：ok=true = followup 已被接受（durable inbox 落账，投递成立 →
     // receipt）；false = 插件侧守卫拒绝（reason 给用户 → failed）。

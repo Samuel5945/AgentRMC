@@ -235,6 +235,57 @@ int main(int argc, char *argv[]) {
         check("plugin channel: unknown dispatch id ignored", true);
     }
 
+    // —— OpenSquilla 插件通道：同款取件/ack，哨兵 agent: 前缀（2026-11-08）——
+    // 桥在技能目录（pet-bridge），取件后 sessions.resolve 守卫 → 网关
+    // sessions.send 注入；native 不读它的 SQLite 会话库。
+    check("plugin channel: OpenSquilla supported, configHome stays empty",
+          SessionDispatch::supportsPluginChannel(QStringLiteral("OpenSquilla.exe")) &&
+              SessionDispatch::configHomeFor(QStringLiteral("OpenSquilla.exe"))
+                  .isEmpty());
+    {
+        const QString osqSid = QStringLiteral("agent:main:webchat:probe0001");
+        const QString dshSid2 =
+            QStringLiteral("session-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee");
+        SessionDispatch mix;
+        QString osqRid, dshRid;
+        check("osq channel: bare uuid refused (id format sentinel)",
+              !mix.dispatch(QStringLiteral("OpenSquilla.exe"),
+                            QStringLiteral("09f054f8-2076-4553-ac71-76d06838dae6"),
+                            QString(), QStringLiteral("task"), &reason) &&
+                  reason.contains(QStringLiteral("可疑")));
+        check("osq channel: agent: key accepted",
+              mix.dispatch(QStringLiteral("OpenSquilla.exe"), osqSid, QString(),
+                           QStringLiteral("OSQ 指令"), &reason, &osqRid));
+        check("dsh channel: session- key accepted alongside",
+              mix.dispatch(QStringLiteral("DeepSeek Harness.exe"), dshSid2,
+                           QString(), QStringLiteral("DSH 指令"), &reason, &dshRid));
+        // 双宿主同在 Plugin 通道：取件必须按 exe 过滤，互不领走。
+        const QJsonArray osqTaken =
+            mix.takePluginDispatches(QStringLiteral("OpenSquilla.exe"));
+        check("plugin channel: take filtered by exe (osq only)",
+              osqTaken.size() == 1 &&
+                  osqTaken.at(0).toObject()
+                          .value(QStringLiteral("session_id")).toString() == osqSid &&
+                  osqTaken.at(0).toObject()
+                          .value(QStringLiteral("dispatch_id")).toString() == osqRid);
+        const QJsonArray dshTaken =
+            mix.takePluginDispatches(QStringLiteral("DeepSeek Harness.exe"));
+        check("plugin channel: take filtered by exe (dsh only)",
+              dshTaken.size() == 1 &&
+                  dshTaken.at(0).toObject()
+                          .value(QStringLiteral("session_id")).toString() == dshSid2);
+        bool osqReceipt = false;
+        QObject::connect(&mix, &SessionDispatch::receipt,
+                         [&](const QString &, const QString &exe,
+                             const QString &sid, const QString &, const QString &) {
+                             osqReceipt =
+                                 exe == QLatin1String("OpenSquilla.exe") && sid == osqSid;
+                         });
+        mix.pluginAck(osqRid, true, QString());
+        check("osq channel: ack ok → receipt with OpenSquilla exe", osqReceipt);
+        mix.pluginAck(dshRid, true, QString());
+    }
+
     // —— ZCode 通道：app-server 协议（2026-11-08 探针定案）——
     // 会话索引 = ~/.zcode/cli/db/db.sqlite（只读）；守卫全在 native：会话缺失 /
     // 账号套餐模型 / 活动门。测试用 AGENTRMC_ZCODE_HOME 指到临时目录，自建

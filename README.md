@@ -672,6 +672,12 @@ Copy-Item "$dst\startup-bridge.vbs" "$env:APPDATA\Microsoft\Windows\Start Menu\P
 等选方案（`session.event.plan_presentation`）——分别对应桌宠的 `stop` 与 `permission`，
 和插件走的是同一条路。
 
+**定向派发（2026-11-08）**：反方向也接通——外壳待办卡的「派回会话」对
+OpenSquilla 开放：native 入队 → 桥 1.5s 取件 → `sessions.resolve` 证明归属 →
+网关 `sessions.send` 注入 → ack 回执落账（durable admission）。探针与端到端
+验收见 `rc_probe/osquilla_dispatch_probe.mjs` / `osquilla_dispatch_e2e.py`，
+机制与坑位见该目录 README 和 `docs/mission-control-plan.md`。
+
 **原生端为什么要改两处**：`AgentWindow::knownExes()` 得认 `OpenSquilla.exe`，否则
 它的待办会进 `/work-items` 却没人认领（`/workers` 里没有它，`open_count` 对不上）；
 而它又**不能**塞进 `PluginUpgrade.cpp` 的 `kFamily`——那张表每一项都指向一个插件

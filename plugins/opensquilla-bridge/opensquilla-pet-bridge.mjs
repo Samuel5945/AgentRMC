@@ -17,7 +17,8 @@
 //   node opensquilla-pet-bridge.mjs --include-cron --log out.log
 //   node opensquilla-pet-bridge.mjs --selftest            # 只测一次 /notify，不连网关
 //
-// 文案模板（{session}=会话标题，{text}=回复开头，仅 --relay 时用）：
+// 文案模板（{session}=会话标题，泛标题 WebChat 回落项目目录名；{text}=回复开头，
+// 仅 --relay 时用；默认文案宿主名开头，与 hooks 系同口径）：
 //   --msg-stop "..."        默认：「{session}」这轮跑完了，回来看看
 //   --msg-permission "..."  默认：有个操作在等你确认
 //   --msg-plan "..."        默认：「{session}」方案出来了，等你选一个
@@ -66,9 +67,10 @@ const CFG = {
     "heartbeat-file",
     path.join(process.env.TEMP || process.env.TMP || ".", "pet-bridge.heartbeat"),
   ),
-  msgStop: opt("msg-stop", "「{session}」这轮跑完了，回来看看"),
-  msgPermission: opt("msg-permission", "有个操作在等你确认"),
-  msgPlan: opt("msg-plan", "「{session}」方案出来了，等你选一个"),
+  // 默认文案与 hooks 系同口径：宿主名开头（用户 2026-11-08 指出开头不该是 WebChat）。
+  msgStop: opt("msg-stop", "OpenSquilla：这轮跑完了，回来看看"),
+  msgPermission: opt("msg-permission", "OpenSquilla：有个操作在等你确认"),
+  msgPlan: opt("msg-plan", "OpenSquilla：「{session}」方案出来了，等你选一个"),
   pauseFile: opt(
     "pause-file",
     `${process.env.TEMP || process.env.TMP || "."}\\opensquilla-pet-bridge.pause`,
@@ -135,6 +137,10 @@ function buildPayload(kind, message, sessionKey) {
   if (CFG.raise) body.raise = CFG.raise;
   // 会话归属：native 端靠它做「同会话旧验收归档」和工单合并。
   if (sessionKey) body.session_id = sessionKey;
+  // 项目归属：与 hooks 同口径报原样路径，外壳行身份取目录名（Agentrmc 等）。
+  // 不带它卡行只能兜底「会话 <短 id>」（2026-11-08 用户指出）。
+  const project = sessionKey ? sessionProjects.get(sessionKey) : "";
+  if (project) body.project = project;
   return body;
 }
 
@@ -203,6 +209,8 @@ async function refreshSessions() {
       if (!key) continue;
       const title = s.display_name || s.displayName || s.title || s.subject || "";
       if (title) sessionTitles.set(key, String(title).slice(0, 40));
+      const ws = s.workspace || s.workspaceDisplayPath || s.workspaceLabel || "";
+      if (ws) sessionProjects.set(key, String(ws).slice(0, 200));
       if (subscribed.has(key)) continue;
       if (!CFG.includeCron && key.startsWith("cron:")) continue;
       await subscribeKey(key);
@@ -243,10 +251,19 @@ function forceReconnect(reason) {
 
 // 会话标题缓存：done/plan 事件的模板里用 {session}，比念整段回复友好。
 const sessionTitles = new Map();
+// 会话工作区缓存：sessions.list 的 workspace/workspaceLabel，/notify 带 project。
+const sessionProjects = new Map();
+
+// {session} 取值：会话标题；泛标题 WebChat 不念，回落项目目录名（Agentrmc 等）。
+function sessionLabel(sessionKey) {
+  const t = (sessionTitles.get(sessionKey) || "").trim();
+  if (t && t.toLowerCase() !== "webchat") return t;
+  const p = sessionProjects.get(sessionKey) || "";
+  return p.split(/[\\/]/).filter(Boolean).pop() || "这个会话";
+}
 
 function renderTemplate(tpl, sessionKey, replyText) {
-  const title = sessionTitles.get(sessionKey)
-    || String(sessionKey).split(":").pop()?.slice(0, 24) || "这个会话";
+  const title = sessionLabel(sessionKey);
   let out = tpl.replaceAll("{session}", title);
   if (tpl.includes("{text}")) return out.replaceAll("{text}", replyText || "");
   // --relay 且模板没写 {text}：回复正文附在模板后（卡面带回复正文，
@@ -315,7 +332,15 @@ async function onFrame(frame) {
   }
 
   const rawText = (p.message || p.text || "").toString().trim();
-  const text = renderTemplate(mapped.tpl, sessionKey, CFG.relay ? rawText.slice(0, 80) : "").slice(0, 200);
+  const reply = CFG.relay ? rawText.slice(0, 80) : "";
+  let tpl = mapped.tpl;
+  // stop 有回复正文：与 hooks 系同口径「宿主名：正文」，回复当主文案
+  //（用户 2026-11-08 指出主文案不该是收尾句）；自定义 --msg-stop 不干预；
+  // 没回复才念收尾句「这轮跑完了，回来看看」。
+  if (mapped.kind === "stop" && reply && !flag("msg-stop") && !tpl.includes("{text}")) {
+    tpl = "OpenSquilla：{text}";
+  }
+  const text = renderTemplate(tpl, sessionKey, reply).slice(0, 200);
   try {
     await notifyPet(mapped.kind, text, sessionKey === "?" ? "" : sessionKey);
     log(`NOTIFY ${mapped.kind} sess=${sessionKey} raise=${CFG.raise || "(none)"} msg=${text.slice(0, 40)}`);

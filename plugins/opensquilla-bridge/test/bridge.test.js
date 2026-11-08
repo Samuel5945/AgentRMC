@@ -163,7 +163,10 @@ gateway.on('upgrade', (req, socket) => {
       } else if (msg.method === 'sessions.list') {
         if (myUpgrade === blackholeUpgrade) continue; // 半开：收得到请求，永不回应
         gatewayReady = true;
-        send({ type: 'res', id: msg.id, ok: true, payload: [] });
+        send({ type: 'res', id: msg.id, ok: true, payload: [
+          { key: 's-proj', display_name: 'Proj 会话', workspace: 'D:/repo/Agentrmc', workspaceLabel: 'Agentrmc' },
+          { key: 's-webchat', display_name: 'WebChat', workspace: 'D:/repo/Agentrmc', workspaceLabel: 'Agentrmc' },
+        ] });
       } else {
         send({ type: 'res', id: msg.id, ok: true, payload: {} });
       }
@@ -308,16 +311,27 @@ await check('免打扰：done 被吞，turn-start 照发（人回来开新轮就
   }
 });
 
-await check('--relay：模板没写 {text} 也附回复正文；不带 --relay 不附', async () => {
+await check('--relay：有回复时回复当主文案；不带 --relay 念收尾句', async () => {
   received.length = 0;
   const handle = spawnBridge(BRIDGE, path.join(TMP, 'spool-relay'), ['--relay']);
   try {
     await waitFor(() => gatewayReady, '网关就绪');
     inject('session.event.done', 's-relay', { message: '收到' });
     await waitFor(() => received.length >= 1, 'relay stop 通知');
-    assert.ok(received[0].body.message.includes('回复：收到'),
-      'relay 应附回复正文，实际：' + received[0].body.message);
+    assert.strictEqual(received[0].body.message, 'OpenSquilla：收到',
+      '回复该当主文案（hooks 同口径），实际：' + received[0].body.message);
   } finally { await stopBridge(handle); }
+  received.length = 0;
+  const custom = spawnBridge(BRIDGE, path.join(TMP, 'spool-relay3'),
+    ['--relay', '--msg-stop', '「{session}」完']);
+  try {
+    await waitFor(() => gatewayReady, '网关就绪');
+    await sleep(200);
+    inject('session.event.done', 's-webchat', { message: '收到' });
+    await waitFor(() => received.length >= 1, '自定义模板 stop');
+    assert.strictEqual(received[0].body.message, '「Agentrmc」完 回复：收到',
+      '自定义模板不干预，回复附尾');
+  } finally { await stopBridge(custom); }
   received.length = 0;
   const plain = spawnBridge(BRIDGE, path.join(TMP, 'spool-relay2'));
   try {
@@ -327,6 +341,46 @@ await check('--relay：模板没写 {text} 也附回复正文；不带 --relay �
     assert.ok(!received[0].body.message.includes('回复：'),
       '不带 --relay 不该附回复');
   } finally { await stopBridge(plain); }
+});
+
+await check('project：sessions.list 的 workspace 透传进 /notify；未知会话不带', async () => {
+  received.length = 0;
+  const handle = spawnBridge(BRIDGE, path.join(TMP, 'spool-proj'));
+  try {
+    await waitFor(() => gatewayReady, '网关就绪');
+    await sleep(200); // 等桥处理完 sessions.list 应答、缓存 workspace
+    inject('session.event.done', 's-proj');
+    await waitFor(() => received.length >= 1, '带 project 的 stop');
+    assert.strictEqual(received[0].body.session_id, 's-proj');
+    assert.strictEqual(received[0].body.project, 'D:/repo/Agentrmc');
+    inject('session.event.done', 's-unknown');
+    await waitFor(() => received.length >= 2, '未知会话 stop');
+    assert.ok(!('project' in received[1].body), '未知会话不该瞎带 project');
+  } finally { await stopBridge(handle); }
+});
+
+await check('文案：默认宿主名开头；{session} 泛标题回落项目目录名', async () => {
+  received.length = 0;
+  const handle = spawnBridge(BRIDGE, path.join(TMP, 'spool-label'));
+  try {
+    await waitFor(() => gatewayReady, '网关就绪');
+    await sleep(200);
+    inject('session.event.done', 's-webchat');
+    await waitFor(() => received.length >= 1, '默认 stop');
+    assert.ok(received[0].body.message.startsWith('OpenSquilla：'),
+      '默认文案该宿主名开头，实际：' + received[0].body.message);
+    assert.ok(!received[0].body.message.includes('WebChat'), '泛标题不该念');
+  } finally { await stopBridge(handle); }
+  received.length = 0;
+  const custom = spawnBridge(BRIDGE, path.join(TMP, 'spool-label2'),
+    ['--msg-stop', '「{session}」跑完了']);
+  try {
+    await waitFor(() => gatewayReady, '网关就绪');
+    await sleep(200);
+    inject('session.event.done', 's-webchat');
+    await waitFor(() => received.length >= 1, '自定义 stop');
+    assert.strictEqual(received[0].body.message, '「Agentrmc」跑完了');
+  } finally { await stopBridge(custom); }
 });
 
 // ------------------------------------------------------------ B) 桥死了

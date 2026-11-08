@@ -14,7 +14,7 @@ OpenSquilla 网关 :18791 (ws)
         │  session.event.done / approval_required / plan_presentation / turn_committed
         ▼
 opensquilla-pet-bridge.mjs
-        │  POST /notify {event:stop|permission|turn-start, title, message, raise, session_id}
+        │  POST /notify {event:stop|permission|turn-start, title, message, raise, session_id, project}
         ▼
 AgentBridge :45915  →  气泡 + TTS + 把 OpenSquilla 窗口拉回前台
 
@@ -29,7 +29,11 @@ opensquilla-pet-bridge.mjs  →  sessions.resolve 守卫 → sessions.send 注�
 
 > **session_id 必须带**：原生端靠它把同一会话的旧「待验收」归档、把新事件并进
 > 同一张工单。不带的话每个会话每跑完一轮就多一条重复待办（2026-11-03 踩过：
-> 同一个 WebChat 会话攒了 3 条一模一样的「待验收」）。`turn_committed` 发的
+> 同一个 WebChat 会话攒了 3 条一模一样的「待验收」）。
+>
+> **project 同样要带**：桥缓存 `sessions.list` 的 `workspace/workspaceLabel`，
+> 与 hooks 同口径报原样路径；外壳行身份取目录名（如 `Agentrmc`）。不带它
+> 卡行只能兜底「会话 <短 id>」（2026-11-08 用户指出后补）。`turn_committed` 发的
 > turn-start 则是「人已经回来开新轮」的静默归档信号，不出声、不建卡，也不吃
 > 15s 去重——连开两轮时第二轮的归档必须照发，不然旧验收卡多挂一轮。
 
@@ -94,8 +98,8 @@ schtasks /Create /F /TN OpenSquillaPetBridgeWatchdog /SC MINUTE /MO 5 /TR "wscri
 | `--raise <exe>` | 点提醒时拉哪个窗口的进程映像名，默认 `OpenSquilla.exe` |
 | `--no-raise` | 只出声/冒泡，不抢前台 |
 | `--include-cron` | 也提醒 cron 会话（默认关，避免自激刷屏） |
-| `--msg-stop/--msg-permission/--msg-plan` | 文案模板，支持 `{session}` `{text}` |
-| `--relay` | 回复正文前 80 字附进卡面/气泡：模板写 `{text}` 就替换，没写自动附「回复：…」（空回复不附）。看门狗与开机自启默认带它（2026-11-08 用户定：卡面带回复正文） |
+| `--msg-stop/--msg-permission/--msg-plan` | 文案模板，支持 `{session}` `{text}`。默认宿主名开头（「OpenSquilla：…」，与 hooks 系同口径）；`{session}` 取会话标题，泛标题 WebChat 回落项目目录名 |
+| `--relay` | 卡面/气泡带回复正文（前 80 字）。stop 有回复时默认主文案就是回复（「OpenSquilla：收到」，hooks 同口径），没回复才念收尾句；自定义 `--msg-stop` 不干预（没写 `{text}` 时回复附尾）。看门狗与开机自启默认带它（2026-11-08 用户定） |
 | `--log <path>` | 落日志；默认不写 |
 | `--heartbeat-file <path>` | 心跳文件位置，默认 `%TEMP%\pet-bridge.heartbeat`（看门狗读同一个） |
 | `--refresh <ms>` / `--call-timeout <ms>` / `--hello-timeout <ms>` | 探针周期 / 单次调用超时 / 握手限时，默认 30000 / 15000 / 20000 |

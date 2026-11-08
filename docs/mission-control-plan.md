@@ -338,10 +338,21 @@ Task/WorkItem 的**会话归属**与**可验证投递**，这两块得自己补�
   桥靠**计划任务看门狗**自愈拉活；应用验收时用一次性计划任务拉起（验完删任务）。
 - **坑④：`ensure-bridge.ps1` 必须带 UTF-8 BOM**：PS 5.1 无 BOM 按 GBK 读，中文
   注释乱码炸语法（仓库原件漏了 BOM，已补；voice-reminder.ps1 本来就有）。
+- **项目归属（2026-11-08 用户指出后补）**：桥缓存 `sessions.list` 的
+  `workspace/workspaceLabel`，`/notify` 与 hooks 同口径带 `project`（原样路径），
+  外壳行身份取目录名（`Agentrmc`），修掉「会话 <短 id>」兜底。native 本就认
+  `project` 字段，零改动；桥测试有透传/未知会话不带两断言。
+- **文案口径（2026-11-08 用户指出开头不该是 WebChat）**：默认模板宿主名开头
+  （「OpenSquilla：…」，对齐 hooks 系「宿主名：正文」）；`{session}` 取会话标题，
+  泛标题 WebChat 不念、回落项目目录名。卡面加粗抬头本就是宿主名，消息开头此前
+  误用会话标题才冒出 WebChat。**stop 有回复时回复当主文案**（用户再指出主文案
+  不该是收尾句「这轮跑完了」）：「OpenSquilla：收到」，没回复才念收尾句；
+  自定义 `--msg-stop` 不干预。
 - 已知边界：OpenSquilla 卡面回复文案走桥模板（configHome 为空，`lastReply`
   不读它的 SQLite）；**看门狗与开机自启默认带 `--relay`**（2026-11-08 用户定：
   卡面带回复正文），模板没写 `{text}` 时自动附「回复：…」前 80 字。牺牲会话
-  留着，要不要删由用户定。
+  `agent:main:cli:344fb256` 经用户裁决于 2026-11-08 删除（`sessions.delete`，
+  sessions/transcript/ingress 级联零残留）。
 
 已定的设计约束：
 

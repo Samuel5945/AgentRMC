@@ -390,6 +390,11 @@ bool SessionDispatch::dispatch(const QString &agentExe, const QString &sessionId
                     const QString &id, const QString &reply) {
                     emit zcodeTurnFinished(id, exe, sid, proj, reply);
                 });
+        connect(z, &ZcodeDispatch::interactionSkipped, this,
+                [this, exe = agentExe, sid = sessionId, proj = project](
+                    const QString &id, const QString &what) {
+                    emit zcodeInteractionSkipped(id, exe, sid, proj, what);
+                });
         z->start(job);
         return true;
     }
@@ -522,14 +527,16 @@ QJsonArray SessionDispatch::takePluginDispatches(const QString &agentExe) {
     return out;
 }
 
-void SessionDispatch::pluginAck(const QString &dispatchId, bool ok,
+bool SessionDispatch::pluginAck(const QString &dispatchId, bool ok,
                                 const QString &error) {
+    bool handled = false;
     for (auto it = pending_.begin(); it != pending_.end(); ++it) {
         if (it->dispatchId != dispatchId) {
             continue;
         }
         const Pending p = it.value();
         pending_.erase(it);
+        handled = true;
         if (ok) {
             // 注入同步落 durable 账（DSH inbox / OpenSquilla ingress receipt）：
             // 这就是「确实到了那条会话」的回执，与 WorkBuddy jsonl user 行同级。
@@ -544,6 +551,7 @@ void SessionDispatch::pluginAck(const QString &dispatchId, bool ok,
     if (pending_.isEmpty() && timer_->isActive()) {
         timer_->stop();
     }
+    return handled;
 }
 
 void SessionDispatch::poll() {

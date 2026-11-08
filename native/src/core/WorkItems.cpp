@@ -455,6 +455,27 @@ bool WorkItemStore::closeOtherStates(const QString &sessionId,
     return changed;
 }
 
+bool WorkItemStore::updateLiveMessage(const QString &sessionId,
+                                      const QString &message) {
+    if (sessionId.isEmpty()) {
+        return false;
+    }
+    const QDateTime now = QDateTime::currentDateTimeUtc();
+    bool hit = false;
+    for (WorkItem &item : items_) {
+        if (item.done || item.sessionId != sessionId) {
+            continue;
+        }
+        item.message = message;
+        item.updatedAt = now;
+        hit = true;
+    }
+    if (hit) {
+        save();
+    }
+    return hit;
+}
+
 bool WorkItemStore::ack(const QString &id) {
     for (WorkItem &item : items_) {
         if (item.id != id) {

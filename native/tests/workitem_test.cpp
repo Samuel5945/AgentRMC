@@ -434,6 +434,23 @@ int main(int argc, char *argv[]) {
                   fix.items().size() == 1);
     }
 
+    {
+        // 2026-11-08 审查复现：派发轮晚到的 turnFinished 若走 upsert(progress)，
+        // 会把 hook 已经推到「待验收」的卡降回进行中（注意力列表里消失）。
+        // 晚到回复只能补正文，档位不动。
+        WorkItemStore late(dir.path() + "/late-reply.json");
+        const WorkItem review = late.upsert("hook", "ZCode.exe", "zlate", "D:/repo",
+                                            "stop", "ZCode", "做完了", "ZCode.exe");
+        const bool patched = late.updateLiveMessage("zlate", "本轮正文：收到");
+        check("late dispatch reply patches the review card without demoting it",
+              patched && late.items().size() == 1 &&
+                  late.items().first().stage == QStringLiteral("review") &&
+                  late.items().first().message == QStringLiteral("本轮正文：收到") &&
+                  late.attentionCount() == 1);
+        check("late dispatch reply for an unknown session is a no-op",
+              !late.updateLiveMessage("nobody", "x"));
+    }
+
     std::printf(failures == 0 ? "\nALL PASS\n" : "\n%d FAILED\n", failures);
     return failures == 0 ? 0 : 1;
 }

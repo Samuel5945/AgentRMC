@@ -9,9 +9,11 @@
 
 // ZCode 桌面（Electron）定向派回通道：spawn 自带 app-server（ZCode.exe
 // resources/glm/zcode.cjs app-server --stdio，ELECTRON_RUN_AS_NODE=1），走 ndjson
-// 双向协议：resume → send（modelSelection 带该会话当前值，from==to 零切换）→
-// 确认落库（sent＝回执）→ 保活轮 assistant 正文（turnFinished，给待办卡上回复）。
-// 发完必须确认落库再收尾——落库是异步的，提前 kill 消息就丢了（2026-11-08 实测）。
+// 双向协议：resume → 记事件基线 → send（modelSelection 带该会话当前值，from==to
+// 零切换）→ 确认落库（sent＝回执）→ 轮 session/events 等 turn.completed
+// （payload.response＝整轮最终正文）。首条 assistant 正文常是「我先看看」，
+// 不能当完成信号，否则会截断还在跑的轮次。授权/提问请求按协议明确拒绝并提醒。
+// 落库是异步的：必须确认自己的 user 行出现再收尾，提前 kill 消息就丢了。
 // 对话区可见性：进程内驻留不热刷新，重开 ZCode 全量可见；UX 以卡片为中心。
 // 配方来源：rc_probe/zcode_appserver_probe.py / zcode_dispatch_probe.py 与
 // docs/mission-control-plan.md 的 ZCode 系实测节。
@@ -50,9 +52,13 @@ signals:
     void sent(const QString &dispatchId);  // 消息已确认落库＝投递回执
     void failed(const QString &dispatchId, const QString &reason);
     void turnFinished(const QString &dispatchId, const QString &reply);
+    // 派发轮遇到授权/提问：外部通道没有代答 UI，已按拒绝/婉拒回给 app-server。
+    // 通知一次就够（同轮后续请求照样拒，但不再刷屏）。
+    void interactionSkipped(const QString &dispatchId, const QString &what);
 
 private:
-    enum class Stage { Spawn, Ready, Resume, Send, Persist, Turn };
+    enum class Stage { Spawn, Ready, Resume, Baseline, Send, Persist, Turn };
+    qint64 scaled(qint64 baseMs) const;
     void onReadyRead();
     void handleLine(const QByteArray &line);
     void request(const QString &method, const QJsonObject &params);
@@ -72,6 +78,12 @@ private:
     int awaitingId_ = -1;
     QElapsedTimer stageClock_;
     QElapsedTimer pollClock_;
+    // 事件序号基线：发消息前记下最后一条事件的 seq，之后只看它之后的事件，
+    // 用 turn.completed / turn.failed 判整轮终态（首条正文可能只是「我先看看」）。
+    qint64 baselineSeq_ = 0;
+    QString pendingTurnId_;
+    double timeScale_ = 1.0;
+    bool interactionNotified_ = false;
     bool sent_ = false;
     bool done_ = false;
 };

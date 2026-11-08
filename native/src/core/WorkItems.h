@@ -74,6 +74,9 @@ public:
                     const QString &message);
 
     bool ack(const QString &id);
+    // 只改活卡的正文（不碰档位）：派发轮晚到的回复补到已经「待验收/等你处理」
+    // 的卡上，别把注意力状态降回进行中。没有活卡返回 false。
+    bool updateLiveMessage(const QString &sessionId, const QString &message);
     bool resolveSession(const QString &sessionId,
                         const QString &keepId = QString(),
                         bool includeReview = false);

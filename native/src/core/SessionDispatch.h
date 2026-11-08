@@ -54,7 +54,9 @@ public:
     QJsonArray takePluginDispatches(const QString &agentExe);
     // 插件应答：ok=true = followup 已被接受（durable inbox 落账，投递成立 →
     // receipt）；false = 插件侧守卫拒绝（reason 给用户 → failed）。
-    void pluginAck(const QString &dispatchId, bool ok, const QString &error);
+    // 返回 false = 不认识的 dispatch_id（重启丢账/重复 ack）：调用方要回 404，
+    // 别把无效回执当成功。
+    bool pluginAck(const QString &dispatchId, bool ok, const QString &error);
 
 signals:
     void receipt(const QString &dispatchId, const QString &agentExe,
@@ -66,6 +68,12 @@ signals:
     void zcodeTurnFinished(const QString &dispatchId, const QString &agentExe,
                            const QString &sessionId, const QString &project,
                            const QString &reply);
+    // ZCode：派发轮遇到授权/提问，外部通道已代为拒绝（what＝授权请求/提问）。
+    void zcodeInteractionSkipped(const QString &dispatchId,
+                                 const QString &agentExe,
+                                 const QString &sessionId,
+                                 const QString &project,
+                                 const QString &what);
 
 private:
     enum class Channel { Ui, Cli, Plugin, Zcode };

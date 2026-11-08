@@ -200,6 +200,102 @@ function toolUseId(hook) {
   return String(hook.tool_use_id || hook.toolUseId || '').trim();
 }
 
+// 问题内容指纹：没有 tool_use_id 的老宿主只能靠它区分「同一会话的两道题」。
+// 同一弹窗的两条信号 payload 一致 → 指纹一致；不同题 → 指纹不同。
+// 没有 tool_input（或空对象）返回 ''，此时退回落旧的会话级键。
+function questionHash(hook) {
+  const input = hook.tool_input || hook.toolInput;
+  if (input === undefined || input === null) return '';
+  let raw = '';
+  try {
+    raw = JSON.stringify(input);
+  } catch {
+    return '';
+  }
+  if (!raw || raw === '{}' || raw === '[]' || raw === '""') return '';
+  let h = 5381;
+  for (let i = 0; i < raw.length; i += 1) {
+    h = ((h << 5) + h + raw.charCodeAt(i)) | 0;
+  }
+  return (h >>> 0).toString(36);
+}
+
+// 「等你选方案」的三层账本：
+//   tool:<tool_use_id>       有 id 时按弹窗认（最准）
+//   solo:<scope>:<hash>      没 id 时按「会话 + 问题内容」认（不吞同会话下一题）
+//   pair:<scope>:<hash>      同一弹窗另一条信号的一次性配对键（内容匹配才认）
+function askKeys(hook) {
+  const tid = toolUseId(hook);
+  const scope = askedScopeKey(hook);
+  const hash = questionHash(hook);
+  return {
+    tid,
+    scope,
+    hash,
+    ident: tid ? `tool:${tid}` : (hash ? `solo:${scope}:${hash}` : `solo:${scope}`),
+    pair: hash ? `pair:${scope}:${hash}` : '',
+  };
+}
+
+// pair 只认「同一弹窗两条信号」的间隔：它们前后脚到（都在弹窗/作答那一刻）。
+// 用短窗消费，过期的配对键不认——同内容的下一道新题才不会被上一题的键吞掉。
+const PAIR_TTL_MS = 2 * 60 * 1000;
+
+function consumePair(pair) {
+  if (!pair) return false;
+  try {
+    const all = loadAsked();
+    const at = Number(all[pair] || 0);
+    if (!(at > 0 && Date.now() - at < PAIR_TTL_MS)) return false;
+    delete all[pair];
+    saveAsked(all);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// true = 这个弹窗已经喊过了（调用方静默退出）。
+function questionAlreadyAsked(hook) {
+  const { ident, scope, pair } = askKeys(hook);
+  if (seenKey(ident)) return true;
+  // prompt 准点信号喊过：答完后的晚到回声，消费掉那笔账，并把本信号的
+  // 身份记下来——同一 tool_use_id 再被派发一次时不能再喊（2026-11-08 审查）。
+  if (consumeKey(`prompt:${scope}`)) {
+    rememberKeys([ident]);
+    return true;
+  }
+  if (consumePair(pair)) {
+    rememberKeys([ident]);
+    return true;
+  }
+  return false;
+}
+
+function rememberAsked(hook) {
+  const { ident, pair } = askKeys(hook);
+  rememberKeys(pair ? [ident, pair] : [ident]);
+}
+
+// 新轮开始：清掉本会话的题账（solo/pair）和过期的 prompt 准点信号。
+// tool:<id> 是弹窗唯一 id，跨轮也不会撞，留着做 30 分钟兜底。
+function clearScopeAskKeys(scope) {
+  try {
+    const all = loadAsked();
+    let changed = false;
+    for (const key of Object.keys(all)) {
+      if (key.startsWith(`solo:${scope}:`) || key === `solo:${scope}` ||
+          key.startsWith(`pair:${scope}:`) || key === `prompt:${scope}`) {
+        delete all[key];
+        changed = true;
+      }
+    }
+    if (changed) saveAsked(all);
+  } catch {
+    // 清不掉最多多喊一声。
+  }
+}
+
 function askedScopeKey(hook) {
   const sid = String(hook.session_id || hook.sessionId || '').trim();
   if (sid) return sid;
@@ -395,22 +491,20 @@ process.stdin.on('end', () => {
     // matcher 万一不被宿主执行，这里再判一次 tool_name 兜底——PreToolUse 每个工具
     // 都会触发，认不出来就静默，绝不能把授权提醒刷成屏。
     if (tool !== 'AskUserQuestion') process.exit(0);
-    // 去重认「弹窗」不认「会话」（2026-11-04 加固）：
-    // 1) 同一 tool_use_id 喊过了 → 同一弹窗的重复派发，吞掉（session 给得
-    //    一不一致都认它）；
-    // 2) prompt 准点信号喊过了 → 我是答完后的晚到回声，消费掉那笔账，吞掉；
-    // 3) 老宿主不给 tool_use_id → 退回 scope 键（维持旧行为）。
-    // 绝不能按 session 记 30 分钟：同一会话连问多题时，第二题起全被吞
+    // 去重认「弹窗」不认「会话」（2026-11-04 加固，2026-11-08 补内容维度）：
+    // 1) 同一 tool_use_id 喊过了 → 同一弹窗的重复派发，吞掉；
+    // 2) prompt 准点信号喊过了 → 我是答完后的晚到回声；消费掉那笔账，
+    //    并把本信号的身份记下（同一 id 再派发不能重喊）；
+    // 3) 同一弹窗的另一条信号已经喊过 → pair 配对键吞掉；
+    // 4) 老宿主不给 tool_use_id → 按「会话 + 问题内容」认；没有内容才退到
+    //    会话级键，且新轮（turn-start）会清账。
+    // 绝不能只按 session 记 30 分钟：同一会话连问多题时第二题起全被吞
     // （实测 55f51dbc 会话 7 问只喊了 2 声，中间 5 题静默卡住）。
-    const tid = toolUseId(hook);
-    const scope = askedScopeKey(hook);
-    if (tid && seenKey(`tool:${tid}`)) process.exit(0);
-    if (consumeKey(`prompt:${scope}`)) process.exit(0);
-    if (!tid && seenKey(`solo:${scope}`)) process.exit(0);
+    if (questionAlreadyAsked(hook)) process.exit(0);
     outEvent = 'permission';
     message = '等你选方案';
     speech = `${agent} 在等你选方案`;
-    rememberKeys([tid ? `tool:${tid}` : `solo:${scope}`]);
+    rememberAsked(hook);
   } else if (event === 'permission') {
     const detail = String(input.file_path || input.path || input.command || input.url || '');
     const short = detail.length > 60 ? detail.slice(0, 57) + '…' : detail;
@@ -418,14 +512,11 @@ process.stdin.on('end', () => {
       // 少数宿主会把方案选择当成授权请求；念中文比念工具名顺。
       // ZCode 起主路是 PreToolUse(AskUserQuestion)→question（弹窗那一刻就发），
       // PermissionRequest 若也跟一条，后到的按同一弹窗去重吞掉——与 question
-      // 分支共用 tool:/solo: 账本，两边谁先到谁喊，另一条静默。
-      const tid = toolUseId(hook);
-      const scope = askedScopeKey(hook);
-      if (tid && seenKey(`tool:${tid}`)) process.exit(0);
-      if (!tid && seenKey(`solo:${scope}`)) process.exit(0);
+      // 分支共用同一套账本，两边谁先到谁喊，另一条静默。
+      if (questionAlreadyAsked(hook)) process.exit(0);
       message = '等你选方案';
       speech = `${agent} 在等你选方案`;
-      rememberKeys([tid ? `tool:${tid}` : `solo:${scope}`]);
+      rememberAsked(hook);
     } else {
       message = `等你确认${tool ? ' ' + tool : ''}${short ? '：' + short : ''}`;
       speech = `${agent} 在等你点确认`;
@@ -445,8 +536,10 @@ process.stdin.on('end', () => {
   } else if (event === 'turn-start') {
     // 新一轮对话开始：原生端把同 session 的旧 review 自动归档，不出声。
     // 顺手清掉上一次的「出错」账：他改口重问、那一轮正常结束后该念「做完了」，
-    // 不能被上一轮出错的去重窗口吞掉。
+    // 不能被上一轮出错的去重窗口吞掉。同会话的题账（solo/pair/prompt）也清：
+    // 新轮的问题该照喊。
     consumeKey(`error:${askedScopeKey(hook)}`);
+    clearScopeAskKeys(askedScopeKey(hook));
     outEvent = 'turn-start';
     message = '';
   } else {

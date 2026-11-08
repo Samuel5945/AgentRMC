@@ -6,13 +6,16 @@
 //
 // 覆盖：
 //   A) 桥活着：done→stop 带 session_id；15s 内重复 done 去重；plan→question；
-//      免打扰时 done 被吞但 turn-start 照发；turn-start 不吃 15s 去重。
+//      免打扰时 done 被吞但 turn-start 照发；turn-start 不吃 15s 去重；
+//      跨轮 done 不被上一轮的去重账吞；同会话两次审批各提醒；
+//      sessions.list 游标翻页（第二页会话也有 project）。
 //   B) 桥死了：done/turn-start 落盘 pending-events.jsonl，与 hooks 同格式；
 //      15s 内两条 turn-start 都要落盘（幂等归档信号不去重）。
 //   C) spool 上限守卫：超 1MB 丢最旧留最新。
 //   D) --selftest：通 exit 0，不通 exit 1，且自检不落盘（探针不该污染补投队列）。
 //   E) 定向派发：取件 → sessions.resolve 守卫 → sessions.send 注入 → ack 回执；
-//      resolve 拒绝 / send 拒绝走 ack ok:false；--no-dispatch 不取件。
+//      resolve 拒绝 / send 拒绝走 ack ok:false；send 超时说「送达未知」且
+//      client_message_id 由 dispatch_id 派生；--no-dispatch 不取件。
 
 import assert from 'node:assert';
 import crypto from 'node:crypto';
@@ -106,7 +109,9 @@ const sockets = new Set();
 let currentSend = null;
 const resolveReject = new Set(); // 这些 key 的 sessions.resolve 回 error
 let sendReject = false;          // sessions.send 回 error
+let sendHang = false;            // sessions.send 收下但不回（模拟受理后丢回复）
 const sentMessages = [];         // 桥真注入的 sessions.send params
+const listCalls = [];            // sessions.list 的 params（验证翻页）
 let gatewayReady = false; // 收到 sessions.list 应答 = hello-ok 已被桥处理
 let upgrades = 0;
 let blackholeUpgrade = 0; // 这条连接只握手、不应答 sessions.list（模拟半开）
@@ -155,6 +160,7 @@ gateway.on('upgrade', (req, socket) => {
         }
       } else if (msg.method === 'sessions.send') {
         sentMessages.push(msg.params);
+        if (sendHang) continue; // 受理了但回复丢了：桥的超时口径必须说「送达未知」
         if (sendReject) {
           send({ type: 'res', id: msg.id, ok: false, error: { code: 'REJECTED', message: 'busy' } });
         } else {
@@ -163,10 +169,26 @@ gateway.on('upgrade', (req, socket) => {
       } else if (msg.method === 'sessions.list') {
         if (myUpgrade === blackholeUpgrade) continue; // 半开：收得到请求，永不回应
         gatewayReady = true;
-        send({ type: 'res', id: msg.id, ok: true, payload: [
+        listCalls.push(msg.params || {});
+        const page1 = [
           { key: 's-proj', display_name: 'Proj 会话', workspace: 'D:/repo/Agentrmc', workspaceLabel: 'Agentrmc' },
           { key: 's-webchat', display_name: 'WebChat', workspace: 'D:/repo/Agentrmc', workspaceLabel: 'Agentrmc' },
-        ] });
+        ];
+        if (msg.params && msg.params.view === 'session-list-v1') {
+          if (msg.params.cursor === 'c1') {
+            send({ type: 'res', id: msg.id, ok: true, payload: {
+              sessions: [{ key: 's-page2', display_name: 'Page2', workspace: 'D:/repo/Page2', workspaceLabel: 'Page2' }],
+              count: 1, ts: Date.now(),
+            } });
+          } else {
+            send({ type: 'res', id: msg.id, ok: true, payload: {
+              sessions: page1, count: 2, ts: Date.now(), nextCursor: 'c1', hasMore: true,
+            } });
+          }
+        } else {
+          // 老网关：单页数组。
+          send({ type: 'res', id: msg.id, ok: true, payload: page1 });
+        }
       } else {
         send({ type: 'res', id: msg.id, ok: true, payload: {} });
       }
@@ -278,6 +300,38 @@ await check('15s 内重复 done 去重；plan_presentation → question', async 
   } finally { await stopBridge(handle); }
 });
 
+await check('done → 新轮 → done：跨轮完成不被 15s 窗口吞掉', async () => {
+  received.length = 0;
+  const handle = spawnBridge(BRIDGE, path.join(TMP, 'spool-rounds'));
+  try {
+    await waitFor(() => gatewayReady, '网关就绪');
+    inject('session.event.done', 's-round');
+    await waitFor(() => received.length >= 1, '轮1完成');
+    inject('session.event.turn_committed', 's-round');
+    await waitFor(() => received.length >= 2, '轮2开始');
+    inject('session.event.done', 's-round');
+    await waitFor(() => received.length >= 3, '轮2完成');
+    assert.deepStrictEqual(
+      received.map((r) => r.body.event),
+      ['stop', 'turn-start', 'stop'],
+      '两轮的完成都要提醒');
+  } finally { await stopBridge(handle); }
+});
+
+await check('同会话两次审批（approval_id 不同）都提醒，event_id 透传', async () => {
+  received.length = 0;
+  const handle = spawnBridge(BRIDGE, path.join(TMP, 'spool-approvals'));
+  try {
+    await waitFor(() => gatewayReady, '网关就绪');
+    inject('session.event.approval_required', 's-appr', { approval_id: 'a1' });
+    await waitFor(() => received.length >= 1, '审批1');
+    inject('session.event.approval_required', 's-appr', { approval_id: 'a2' });
+    await waitFor(() => received.length >= 2, '审批2');
+    assert.strictEqual(received[1].body.event, 'permission');
+    assert.strictEqual(received[1].body.event_id, 'a2');
+  } finally { await stopBridge(handle); }
+});
+
 await check('turn-start 不吃 15s 去重：连发两条都到', async () => {
   received.length = 0;
   const handle = spawnBridge(BRIDGE, path.join(TMP, 'spool-a3'));
@@ -356,6 +410,19 @@ await check('project：sessions.list 的 workspace 透传进 /notify；未知会
     inject('session.event.done', 's-unknown');
     await waitFor(() => received.length >= 2, '未知会话 stop');
     assert.ok(!('project' in received[1].body), '未知会话不该瞎带 project');
+  } finally { await stopBridge(handle); }
+});
+
+await check('sessions.list 翻页：第二页会话也订阅并缓存 project', async () => {
+  received.length = 0;
+  const handle = spawnBridge(BRIDGE, path.join(TMP, 'spool-page'));
+  try {
+    await waitFor(() => gatewayReady, '网关就绪');
+    await waitFor(() => listCalls.some((p) => p.cursor === 'c1'), '第二页请求');
+    await sleep(150); // 等第二页处理完
+    inject('session.event.done', 's-page2');
+    await waitFor(() => received.length >= 1, 'page2 stop');
+    assert.strictEqual(received[0].body.project, 'D:/repo/Page2');
   } finally { await stopBridge(handle); }
 });
 
@@ -501,7 +568,30 @@ await check('dispatch：取件 → resolve 守卫 → sessions.send → ack ok',
     assert.strictEqual(sentMessages[0].key, 'agent:main:webchat:t1');
     assert.strictEqual(sentMessages[0].message, '探针指令');
     assert.ok(sentMessages[0].client_message_id, '带 client_message_id');
+    assert.strictEqual(sentMessages[0].client_message_id, 'agentrmc-d1',
+      '幂等标识应由 dispatch_id 派生，重试才认得出是同一件');
   } finally { await stopBridge(handle); }
+});
+
+await check('dispatch：send 超时 → ack 口径是送达未知（不是被拒）', async () => {
+  sendHang = true;
+  const before = sentMessages.length;
+  const handle = spawnBridge(BRIDGE, path.join(TMP, 'spool-e5'),
+    ['--send-timeout', '400']);
+  try {
+    await waitFor(() => gatewayReady, '网关就绪');
+    pendingItems = [{ dispatch_id: 'd-hang', session_id: 'agent:main:webchat:h1', text: 'x' }];
+    await waitFor(() => acks.some((a) => a.dispatch_id === 'd-hang'), '超时 ack');
+    const ack = acks.find((a) => a.dispatch_id === 'd-hang');
+    assert.strictEqual(ack.ok, false);
+    assert.ok(ack.error.includes('送达未知'),
+      '超时可能是已受理没回信，不能说「被拒」：' + ack.error);
+    assert.strictEqual(sentMessages.length, before + 1);
+    assert.strictEqual(sentMessages[before].client_message_id, 'agentrmc-dhang');
+  } finally {
+    sendHang = false;
+    await stopBridge(handle);
+  }
 });
 
 await check('dispatch：resolve 拒绝未知会话 → ack ok:false 且不注入', async () => {

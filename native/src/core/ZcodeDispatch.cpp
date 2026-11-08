@@ -15,6 +15,8 @@
 #include <QSqlQuery>
 #include <QVariant>
 
+#include <algorithm>
+
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
@@ -31,6 +33,12 @@ constexpr qint64 kPersistTimeoutMs = 45000;
 constexpr qint64 kTurnTimeoutMs = 600000;
 constexpr qint64 kPersistPollMs = 1500;
 constexpr qint64 kTurnPollMs = 3000;
+// 授权/提问请求：外部派发没有代答 UI，明确拒绝并把原因回给模型/用户，
+// 不能挂在 -32000「不支持」上让模型以为工具自己坏了。
+const char kDenyPermissionReason[] =
+    "AgentRMC 定向派发通道不代答授权；请在 ZCode 桌面端处理";
+const char kDeclineInputReason[] =
+    "AgentRMC 定向派发通道不代答提问；请在 ZCode 桌面端处理";
 
 QJsonObject parseLine(const QByteArray &line) {
     return QJsonDocument::fromJson(line).object();
@@ -148,6 +156,13 @@ bool ZcodeDispatch::sessionRecord(const QString &sessionId, QString *directory,
 
 void ZcodeDispatch::start(const Job &job) {
     job_ = job;
+    const double rawScale =
+        qEnvironmentVariable("AGENTRMC_ZCODE_TIME_SCALE", QStringLiteral("1"))
+            .toDouble();
+    timeScale_ = std::clamp(rawScale, 0.001, 1.0);
+    baselineSeq_ = 0;
+    pendingTurnId_.clear();
+    interactionNotified_ = false;
     stage_ = Stage::Spawn;
     stageClock_.start();
     pollClock_.start();
@@ -201,7 +216,10 @@ void ZcodeDispatch::handleLine(const QByteArray &line) {
     if (obj.contains(QStringLiteral("method"))) {
         if (obj.contains(QStringLiteral("id"))) {
             // server→client 请求：偏好请求必须成功应答（只填必填字段，其余走
-            // 默认），其它一律回错误（桌面端超时路径同样是回错误，服务端容忍）。
+            // 默认）。授权/提问在外部派发里没有代答 UI：按协议回明确拒绝，
+            // 不能挂在 -32000「不支持」上——模型会把它当成工具自己坏了，而
+            // 人也不知道这一轮其实卡在等人。拒绝原因会进模型上下文，整轮照常
+            // 收尾上卡；同时发一次提醒，告诉人「要回 ZCode 桌面处理」。
             const QString method = obj.value(QStringLiteral("method")).toString();
             QJsonObject reply;
             if (method == QStringLiteral("session/requestRuntimePreferences")) {
@@ -209,6 +227,32 @@ void ZcodeDispatch::handleLine(const QByteArray &line) {
                                      QJsonObject{{QStringLiteral(
                                          "nativeSearchEnhancementsEnabled"),
                                                   false}}}};
+            } else if (method ==
+                       QStringLiteral("interaction/requestPermission")) {
+                reply = QJsonObject{
+                    {QStringLiteral("result"),
+                     QJsonObject{{QStringLiteral("decision"),
+                                  QStringLiteral("deny")},
+                                 {QStringLiteral("reason"),
+                                  QString::fromUtf8(kDenyPermissionReason)}}}};
+                if (!interactionNotified_) {
+                    interactionNotified_ = true;
+                    emit interactionSkipped(job_.dispatchId,
+                                            QStringLiteral("授权请求"));
+                }
+            } else if (method ==
+                       QStringLiteral("interaction/requestUserInput")) {
+                reply = QJsonObject{
+                    {QStringLiteral("result"),
+                     QJsonObject{{QStringLiteral("action"),
+                                  QStringLiteral("decline")},
+                                 {QStringLiteral("reason"),
+                                  QString::fromUtf8(kDeclineInputReason)}}}};
+                if (!interactionNotified_) {
+                    interactionNotified_ = true;
+                    emit interactionSkipped(job_.dispatchId,
+                                            QStringLiteral("提问"));
+                }
             } else {
                 reply = QJsonObject{
                     {QStringLiteral("error"),
@@ -249,7 +293,9 @@ void ZcodeDispatch::request(const QString &method, const QJsonObject &params) {
     frame.insert(QStringLiteral("method"), method);
     frame.insert(QStringLiteral("params"), params);
     awaitingId_ = id;
-    stageClock_.restart();
+    // 只重置轮询节拍，不碰阶段时钟：阶段超时必须按「进入阶段」起算。
+    // 每次轮询都重启阶段时钟＝超时永远不触发（2026-11-08 审查实测）。
+    pollClock_.restart();
     process_->write((QJsonDocument(frame).toJson(QJsonDocument::Compact) + "\n"));
 }
 
@@ -263,7 +309,28 @@ void ZcodeDispatch::evaluate(const QJsonObject &response) {
                      .arg(error.value(QStringLiteral("message")).toString()));
             return;
         }
+        // 发消息前先记事件序号基线：终态（turn.completed / turn.failed）只能
+        // 从基线之后的事件里认，否则历史轮次的终态会把这一轮提前判完。
+        stage_ = Stage::Baseline;
+        stageClock_.restart();
+        request(QStringLiteral("session/events"),
+                QJsonObject{{QStringLiteral("sessionId"), job_.sessionId},
+                            {QStringLiteral("limit"), 1}});
+        return;
+    case Stage::Baseline:
+        if (!error.isEmpty() || !result.contains(QStringLiteral("events"))) {
+            fail(QStringLiteral("读不到 ZCode 会话事件基线：%1")
+                     .arg(error.value(QStringLiteral("message")).toString()));
+            return;
+        }
+        for (const QJsonValue &v :
+             result.value(QStringLiteral("events")).toArray()) {
+            baselineSeq_ = qMax(
+                baselineSeq_,
+                qint64(v.toObject().value(QStringLiteral("seq")).toDouble()));
+        }
         stage_ = Stage::Send;
+        stageClock_.restart();
         request(QStringLiteral("session/send"),
                 QJsonObject{{QStringLiteral("sessionId"), job_.sessionId},
                             {QStringLiteral("content"), job_.text},
@@ -280,41 +347,62 @@ void ZcodeDispatch::evaluate(const QJsonObject &response) {
         stage_ = Stage::Persist;
         pollClock_.restart();
         return;
-    case Stage::Persist:
-    case Stage::Turn: {
+    case Stage::Persist: {
         if (!error.isEmpty()) {
             return;  // 读回执偶发失败：下一轮再试。
         }
         const QJsonArray messages = result.value(QStringLiteral("messages")).toArray();
-        int ourIndex = -1;
-        for (int i = messages.size() - 1; i >= 0; --i) {
-            const QJsonObject msg = messages.at(i).toObject();
-            if (textOfMessage(msg).contains(job_.text)) {
-                ourIndex = i;
+        bool persisted = false;
+        for (const QJsonValue &v : messages) {
+            if (textOfMessage(v.toObject()).contains(job_.text)) {
+                persisted = true;
                 break;
             }
         }
-        if (ourIndex < 0) {
+        if (!persisted) {
             return;  // 还没落库。
         }
-        if (!sent_) {
-            sent_ = true;
-            stage_ = Stage::Turn;
-            pollClock_.restart();
-            emit sent(job_.dispatchId);
+        sent_ = true;
+        stage_ = Stage::Turn;
+        stageClock_.restart();
+        pollClock_.restart();
+        emit sent(job_.dispatchId);
+        return;
+    }
+    case Stage::Turn: {
+        // 整轮终态只看事件流：首条 assistant 正文常常是「我先检查一下」，
+        // 拿它当完成会把人话截断、还会 kill 掉还在跑的 app-server。
+        if (!error.isEmpty()) {
+            return;
         }
-        if (stage_ == Stage::Turn) {
-            for (int i = ourIndex + 1; i < messages.size(); ++i) {
-                const QJsonObject msg = messages.at(i).toObject();
-                if ((msg.value(QStringLiteral("info")).toObject()
-                         .value(QStringLiteral("role")).toString() ==
-                     QStringLiteral("assistant"))) {
-                    const QString text = textOfMessage(msg);
-                    if (!text.trimmed().isEmpty()) {
-                        finishTurn(text);
-                        return;
-                    }
+        const QJsonArray events = result.value(QStringLiteral("events")).toArray();
+        for (const QJsonValue &v : events) {
+            const QJsonObject ev = v.toObject();
+            const QString type = ev.value(QStringLiteral("type")).toString();
+            const QString turnId = ev.value(QStringLiteral("turnId")).toString();
+            const QJsonObject payload = ev.value(QStringLiteral("payload")).toObject();
+            if (type == QStringLiteral("turn.started")) {
+                // send 在已有活跃轮次时会被拒，所以基线后的第一轮就是我们的。
+                if (pendingTurnId_.isEmpty()) {
+                    pendingTurnId_ = turnId;
                 }
+                continue;
+            }
+            if (pendingTurnId_.isEmpty() || turnId != pendingTurnId_) {
+                continue;
+            }
+            if (type == QStringLiteral("turn.completed")) {
+                finishTurn(payload.value(QStringLiteral("response")).toString());
+                return;
+            }
+            if (type == QStringLiteral("turn.failed")) {
+                const QString why = payload.value(QStringLiteral("error"))
+                                        .toObject()
+                                        .value(QStringLiteral("message"))
+                                        .toString();
+                fail(QStringLiteral("ZCode 轮次失败：%1（消息已送达）")
+                         .arg(why.isEmpty() ? QStringLiteral("未知原因") : why));
+                return;
             }
         }
         return;
@@ -342,36 +430,55 @@ void ZcodeDispatch::tick() {
         }
         return;
     case Stage::Resume:
-        if (elapsed > kResumeTimeoutMs) {
+        if (elapsed > scaled(kResumeTimeoutMs)) {
             fail(QStringLiteral("ZCode resume 超时"));
         }
         return;
+    case Stage::Baseline:
+        if (elapsed > scaled(kSendTimeoutMs)) {
+            fail(QStringLiteral("读取 ZCode 会话事件基线超时"));
+            return;
+        }
+        if (awaitingId_ < 0 && pollClock_.elapsed() >= scaled(kPersistPollMs)) {
+            request(QStringLiteral("session/events"),
+                    QJsonObject{{QStringLiteral("sessionId"), job_.sessionId},
+                                {QStringLiteral("limit"), 1}});
+        }
+        return;
     case Stage::Send:
-        if (elapsed > kSendTimeoutMs) {
+        if (elapsed > scaled(kSendTimeoutMs)) {
             fail(QStringLiteral("ZCode send 超时"));
         }
         return;
     case Stage::Persist:
-        if (elapsed > kPersistTimeoutMs) {
+        if (elapsed > scaled(kPersistTimeoutMs)) {
             fail(QStringLiteral("派发消息落库确认超时"));
             return;
         }
-        if (awaitingId_ < 0 && pollClock_.elapsed() >= kPersistPollMs) {
+        if (awaitingId_ < 0 && pollClock_.elapsed() >= scaled(kPersistPollMs)) {
             request(QStringLiteral("session/messages"),
                     QJsonObject{{QStringLiteral("sessionId"), job_.sessionId}});
         }
         return;
     case Stage::Turn:
-        if (elapsed > kTurnTimeoutMs) {
+        if (elapsed > scaled(kTurnTimeoutMs)) {
             finishTurn(QString());
             return;
         }
-        if (awaitingId_ < 0 && pollClock_.elapsed() >= kTurnPollMs) {
-            request(QStringLiteral("session/messages"),
-                    QJsonObject{{QStringLiteral("sessionId"), job_.sessionId}});
+        if (awaitingId_ < 0 && pollClock_.elapsed() >= scaled(kTurnPollMs)) {
+            request(QStringLiteral("session/events"),
+                    QJsonObject{{QStringLiteral("sessionId"), job_.sessionId},
+                                {QStringLiteral("afterSeq"), baselineSeq_},
+                                {QStringLiteral("limit"), 200}});
         }
         return;
     }
+}
+
+qint64 ZcodeDispatch::scaled(qint64 baseMs) const {
+    // 测试用时间倍率（AGENTRMC_ZCODE_TIME_SCALE，默认 1）。测试取 0.02：
+    // spawn 400ms 够 node 起来，persist 900ms 能跑出多次轮询再撞超时。
+    return qMax<qint64>(1, qint64(double(baseMs) * timeScale_));
 }
 
 void ZcodeDispatch::fail(const QString &reason) {

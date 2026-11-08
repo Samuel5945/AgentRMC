@@ -556,6 +556,80 @@ check('prompt 喊过后，带 tool_use_id 的迟到 question 也被吞', () => {
   assert.notStrictEqual(next, null, 'prompt 的账被消费后，新题照常喊');
 });
 
+// —— 2026-11-08 审查补的三条边角 ——
+check('prompt 消费后记住 tool_use_id: 同一弹窗再派发不再喊', () => {
+  const s = installInto('.workbuddy-ai');
+  const early = dryRun(s, 'prompt', JSON.stringify({
+    session_id: 'w-tid2',
+    notification_type: 'permission_prompt',
+    message: 'needs your permission to use AskUserQuestion',
+  }));
+  assert.strictEqual(early.payload.message, '等你选方案');
+  assert.strictEqual(dryRun(s, 'question', JSON.stringify({
+    session_id: 'w-tid2', tool_name: 'AskUserQuestion', tool_use_id: 'call-w3',
+  })), null, 'prompt 已喊，迟到的 question 消费掉那笔账');
+  assert.strictEqual(dryRun(s, 'question', JSON.stringify({
+    session_id: 'w-tid2', tool_name: 'AskUserQuestion', tool_use_id: 'call-w3',
+  })), null, '同一 tool_use_id 再派发必须静默');
+});
+
+check('无 tool_use_id: 同会话两道不同内容的问题都喊，重复同一题才吞', () => {
+  const s = installInto('.qoder-cn');
+  const q1 = dryRun(s, 'question', JSON.stringify({
+    session_id: 'noid-content', tool_name: 'AskUserQuestion',
+    tool_input: { questions: [{ question: '用 A 还是 B？' }] },
+  }));
+  assert.strictEqual(q1.payload.message, '等你选方案');
+  const q2 = dryRun(s, 'question', JSON.stringify({
+    session_id: 'noid-content', tool_name: 'AskUserQuestion',
+    tool_input: { questions: [{ question: '要不要顺便改文档？' }] },
+  }));
+  assert.notStrictEqual(q2, null, '第二道不同内容的题必须喊');
+  const again = dryRun(s, 'question', JSON.stringify({
+    session_id: 'noid-content', tool_name: 'AskUserQuestion',
+    tool_input: { questions: [{ question: '用 A 还是 B？' }] },
+  }));
+  assert.strictEqual(again, null, '同一内容重复派发要吞');
+});
+
+check('无 id 且无内容: turn-start 清账，新轮的题不被上一轮吞', () => {
+  const s = installInto('.qoder');
+  const q1 = dryRun(s, 'question', JSON.stringify({
+    session_id: 'noid-turn', tool_name: 'AskUserQuestion',
+  }));
+  assert.strictEqual(q1.payload.message, '等你选方案');
+  assert.strictEqual(dryRun(s, 'question', JSON.stringify({
+    session_id: 'noid-turn', tool_name: 'AskUserQuestion',
+  })), null, '同一会话同一内容的回声要吞');
+  dryRun(s, 'turn-start', JSON.stringify({ session_id: 'noid-turn' }));
+  const q2 = dryRun(s, 'question', JSON.stringify({
+    session_id: 'noid-turn', tool_name: 'AskUserQuestion',
+  }));
+  assert.notStrictEqual(q2, null, '新轮开始后题账要清');
+});
+
+check('一有一无 tool_use_id: 同一道题只喊一声（两个方向）', () => {
+  const s = installInto('.workbuddy-ai');
+  const input = { questions: [{ question: '部署到测试环境还是生产？' }] };
+  const withId = dryRun(s, 'question', JSON.stringify({
+    session_id: 'asym-1', tool_name: 'AskUserQuestion',
+    tool_use_id: 'asym-a', tool_input: input,
+  }));
+  assert.strictEqual(withId.payload.message, '等你选方案');
+  assert.strictEqual(dryRun(s, 'permission', JSON.stringify({
+    session_id: 'asym-1', tool_name: 'AskUserQuestion', tool_input: input,
+  })), null, '带 id 先喊，无 id 回声要吞');
+
+  const noIdFirst = dryRun(s, 'permission', JSON.stringify({
+    session_id: 'asym-2', tool_name: 'AskUserQuestion', tool_input: input,
+  }));
+  assert.strictEqual(noIdFirst.payload.message, '等你选方案');
+  assert.strictEqual(dryRun(s, 'question', JSON.stringify({
+    session_id: 'asym-2', tool_name: 'AskUserQuestion',
+    tool_use_id: 'asym-b', tool_input: input,
+  })), null, '无 id 先喊，带 id 回声也要吞');
+});
+
 // 语音和气泡要念/显示两回事：「等你确认 Bash：D:\path」看着有用，念出来是噪音；
 // 而语音少了宿主名就分不清是谁在等。speech 只给语音，缺省才退回念 message。
 check('speech 与 message 分开: 语音短文案带宿主名，气泡留工具名和路径', () => {

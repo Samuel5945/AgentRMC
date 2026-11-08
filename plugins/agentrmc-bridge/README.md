@@ -163,6 +163,13 @@ WorkBuddy **故意没挂**：它那家 harness 里 `StopFailure` 是在「Stop �
 `PermissionRequest` 走同一套 `tool_use_id` 账本互斥去重（谁先到谁喊），老配置里那条
 PermissionRequest 留作兜底不删。
 
+**去重账本是三层（2026-11-08 审查加固）**：`tool:<tool_use_id>` 认弹窗；没 id 的老宿主按
+`solo:<会话>:<问题内容指纹>` 认，同会话两道不同题各喊各的（不再按会话压 30 分钟）；
+`pair:<会话>:<内容指纹>` 是一次性配对键，让「一条带 id、一条不带 id」的同一弹窗只喊一声。
+`UserPromptSubmit`（turn-start）会清掉该会话的 solo/pair/prompt 账——新轮的题照喊。
+「消费 prompt 准点信号」时会把本次 `tool_use_id` 记下，同一弹窗再被派发不会重喊。
+无 id 且无内容的信号没有任何可区分信息，只能维持会话级兜底（实际宿主都带 tool_input）。
+
 
 Qoder 同时导出 `${QODER_PLUGIN_ROOT}` 和 `${CLAUDE_PLUGIN_ROOT}`，也认 manifest 里的
 `mcpServers`，所以只有清单目录名和 hooks 那份必须分开。两条链路的 hook 事件名一致

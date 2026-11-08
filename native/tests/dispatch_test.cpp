@@ -7,14 +7,20 @@
 #include <QCoreApplication>
 #include <QDateTime>
 #include <QDir>
+#include <QElapsedTimer>
 #include <QFile>
+#include <QJsonArray>
+#include <QJsonDocument>
 #include <QJsonObject>
 #include <QSqlDatabase>
 #include <QSqlQuery>
+#include <QStandardPaths>
 #include <QTemporaryDir>
+#include <QThread>
 #include <QTimer>
 
 #include <cstdio>
+#include <functional>
 
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -231,8 +237,8 @@ int main(int argc, char *argv[]) {
         dsh.pluginAck(rid, false, QStringLiteral("会话不在活表"));
         check("plugin channel: ack failure → failed with plugin reason",
               gotFail && failedWhy == QStringLiteral("会话不在活表"));
-        dsh.pluginAck(QStringLiteral("nonexistent"), true, QString());
-        check("plugin channel: unknown dispatch id ignored", true);
+        check("plugin channel: unknown dispatch id reported as not handled",
+              !dsh.pluginAck(QStringLiteral("nonexistent"), true, QString()));
     }
 
     // —— OpenSquilla 插件通道：同款取件/ack，哨兵 agent: 前缀（2026-11-08）——
@@ -432,6 +438,204 @@ int main(int argc, char *argv[]) {
                   reason.contains(QStringLiteral("app-server 入口")));
         qunsetenv("AGENTRMC_ZCODE_EXE");
         qunsetenv("AGENTRMC_ZCODE_HOME");
+    }
+
+    // —— ZCode app-server 状态机：真 node 跑 mock 服务端（不碰真实会话）——
+    // mock = 临时目录里的 ZCode.exe（node.exe 副本）+ resources/glm/zcode.cjs。
+    // 覆盖三条审查实测的漏洞：首条正文当完成、交互请求被 -32000 吞、轮询重置
+    // 阶段时钟导致超时不触发。
+    {
+        const QString node = QStandardPaths::findExecutable(QStringLiteral("node"));
+        if (node.isEmpty()) {
+            std::printf("SKIP zcode mock: node not found on PATH\n");
+        } else {
+            const auto waitUntil = [](const std::function<bool()> &pred, int ms) {
+                QElapsedTimer t;
+                t.start();
+                while (!pred() && t.elapsed() < ms) {
+                    QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+                    QThread::msleep(5);
+                }
+                return pred();
+            };
+            const auto runMock = [&](const QString &mode, bool *turnOk,
+                                     bool *interactionDenied, bool *interactionDeclined,
+                                     bool *skippedOnce, bool *persistTimedOut,
+                                     bool *notTruncated, int *msgPolls) {
+                QTemporaryDir ztmp;
+                const QString root = ztmp.path();
+                const QString exe = root + QStringLiteral("/ZCode.exe");
+                const QString cjsDir = root + QStringLiteral("/resources/glm");
+                QDir().mkpath(cjsDir);
+                *turnOk = *interactionDenied = *interactionDeclined = false;
+                *skippedOnce = *persistTimedOut = *notTruncated = false;
+                *msgPolls = 0;
+                if (!QFile::copy(node, exe)) {
+                    std::printf("SKIP zcode mock: cannot copy node.exe\n");
+                    return;
+                }
+                QFile scenario(cjsDir + QStringLiteral("/scenario.json"));
+                scenario.open(QIODevice::WriteOnly);
+                scenario.write(QStringLiteral(R"({"mode":"%1"})").arg(mode).toUtf8());
+                scenario.close();
+                QFile mock(cjsDir + QStringLiteral("/zcode.cjs"));
+                mock.open(QIODevice::WriteOnly);
+                mock.write(QStringLiteral(R"JS(
+const fs = require('fs');
+const path = require('path');
+const dir = __dirname;
+const scenario = JSON.parse(fs.readFileSync(path.join(dir, 'scenario.json'), 'utf8'));
+let msgPolls = 0, evPolls = 0, interactionsSent = false;
+function out(o) { process.stdout.write(JSON.stringify(o) + '\n'); }
+function result(id, r) { out({ id: id, result: r }); }
+out({ method: 'startup/storageState', params: { phase: 'ready' } });
+process.stdin.setEncoding('utf8');
+let buf = '';
+process.stdin.on('data', (chunk) => {
+  buf += chunk;
+  for (;;) {
+    const nl = buf.indexOf('\n');
+    if (nl < 0) break;
+    const line = buf.slice(0, nl); buf = buf.slice(nl + 1);
+    if (!line.trim()) continue;
+    const f = JSON.parse(line);
+    if (f.method === undefined) {
+      if (f.id === 501 || f.id === 502) {
+        fs.appendFileSync(path.join(dir, 'interactions.jsonl'), JSON.stringify(f) + '\n');
+      }
+      continue;
+    }
+    if (f.method === 'session/resume') { result(f.id, { sessionId: 'mock' }); continue; }
+    if (f.method === 'session/send') { result(f.id, {}); continue; }
+    if (f.method === 'session/messages') {
+      msgPolls += 1;
+      fs.writeFileSync(path.join(dir, 'msgpolls.txt'), String(msgPolls));
+      if (scenario.mode === 'no-persist') { result(f.id, { messages: [] }); continue; }
+      result(f.id, { messages: [
+        { info: { role: 'user' }, parts: [{ type: 'text', text: '派发探针任务' }] },
+        { info: { role: 'assistant' }, parts: [{ type: 'text', text: '我先检查一下' }] },
+      ] });
+      continue;
+    }
+    if (f.method === 'session/events') {
+      if (f.params && f.params.afterSeq !== undefined) {
+        evPolls += 1;
+        fs.writeFileSync(path.join(dir, 'evpolls.txt'), String(evPolls));
+        if (scenario.mode === 'interaction' && !interactionsSent) {
+          interactionsSent = true;
+          out({ id: 501, method: 'interaction/requestPermission', params: {
+            sessionId: 'mock', requestId: 'r1', toolCallId: 'c1', toolName: 'Bash',
+            riskLevel: 'high', reason: 'run tests', input: {},
+            options: [{ optionId: 'allow', kind: 'allow_once', name: 'Allow',
+                        response: { decision: 'allow' } }] } });
+          out({ id: 502, method: 'interaction/requestUserInput', params: {
+            sessionId: 'mock', requestId: 'r2', prompt: 'which?', questions: [] } });
+        }
+        if (evPolls === 1) {
+          result(f.id, { events: [
+            { seq: 8, type: 'turn.started', turnId: 't1', payload: { input: 'task' } },
+            { seq: 9, type: 'message.upserted', turnId: 't1', payload: {} },
+          ] });
+        } else {
+          result(f.id, { events: [
+            { seq: 10, type: 'turn.completed', turnId: 't1',
+              payload: { response: '最终答复：完成' } },
+          ] });
+        }
+        continue;
+      }
+      result(f.id, { events: [{ seq: 7, type: 'message.upserted', payload: {} }] });
+      continue;
+    }
+    result(f.id, {});
+  }
+});
+process.stdin.on('end', () => process.exit(0));
+)JS").toUtf8());
+                mock.close();
+                qputenv("AGENTRMC_ZCODE_TIME_SCALE", "0.02");
+                ZcodeDispatch zd;
+                QString reply;
+                QString failWhy;
+                int skipped = 0;
+                QObject::connect(&zd, &ZcodeDispatch::turnFinished,
+                                 [&](const QString &, const QString &text) {
+                                     reply = text;
+                                 });
+                QObject::connect(&zd, &ZcodeDispatch::failed,
+                                 [&](const QString &, const QString &why) {
+                                     failWhy = why;
+                                 });
+                QObject::connect(&zd, &ZcodeDispatch::interactionSkipped,
+                                 [&](const QString &, const QString &) { ++skipped; });
+                ZcodeDispatch::Job job;
+                job.dispatchId = QStringLiteral("mock-dispatch");
+                job.sessionId = QStringLiteral("mock-session");
+                job.text = QStringLiteral("派发探针任务");
+                job.modelSelection = QJsonObject{{QStringLiteral("providerId"),
+                                                  QStringLiteral("mock")}};
+                job.zcodeExe = exe;
+                zd.start(job);
+                const bool finished = waitUntil(
+                    [&] { return !reply.isEmpty() || !failWhy.isEmpty(); }, 8000);
+                if (!finished) {
+                    failWhy = QStringLiteral("mock 8s 内无终态");
+                }
+                if (!failWhy.isEmpty() && !persistTimedOut) {
+                    std::printf("  mock[%s] reason=%s\n", mode.toUtf8().constData(),
+                                failWhy.toUtf8().constData());
+                }
+                *turnOk = failWhy.isEmpty();
+                *persistTimedOut = failWhy.contains(QStringLiteral("落库确认超时"));
+                *notTruncated = reply == QStringLiteral("最终答复：完成");
+                QFile polls(cjsDir + QStringLiteral("/msgpolls.txt"));
+                if (polls.open(QIODevice::ReadOnly)) {
+                    *msgPolls = polls.readAll().toInt();
+                }
+                QFile interactions(cjsDir + QStringLiteral("/interactions.jsonl"));
+                if (interactions.open(QIODevice::ReadOnly)) {
+                    for (const QByteArray &line : interactions.readAll().split('\n')) {
+                        const QJsonObject f = QJsonDocument::fromJson(line).object();
+                        const QJsonObject res = f.value(QStringLiteral("result")).toObject();
+                        if (f.value(QStringLiteral("id")).toInt() == 501 &&
+                            res.value(QStringLiteral("decision")).toString() ==
+                                QStringLiteral("deny")) {
+                            *interactionDenied = true;
+                        }
+                        if (f.value(QStringLiteral("id")).toInt() == 502 &&
+                            res.value(QStringLiteral("action")).toString() ==
+                                QStringLiteral("decline")) {
+                            *interactionDeclined = true;
+                        }
+                    }
+                }
+                *skippedOnce = skipped == 1;
+                qunsetenv("AGENTRMC_ZCODE_TIME_SCALE");
+            };
+
+            bool turnOk = false, denied = false, declined = false, skipped = false;
+            bool timedOut = false, notTruncated = false;
+            int msgPolls = 0;
+            runMock(QStringLiteral("turn"), &turnOk, &denied, &declined, &skipped,
+                    &timedOut, &notTruncated, &msgPolls);
+            check("zcode mock: turn.completed carries the final reply",
+                  turnOk && notTruncated);
+            check("zcode mock: intermediate assistant text does not finish the turn",
+                  turnOk && notTruncated && msgPolls >= 1);
+
+            runMock(QStringLiteral("interaction"), &turnOk, &denied, &declined,
+                    &skipped, &timedOut, &notTruncated, &msgPolls);
+            check("zcode mock: permission request answered with explicit deny",
+                  denied);
+            check("zcode mock: user-input request answered with explicit decline",
+                  declined);
+            check("zcode mock: interaction noticed exactly once", skipped);
+
+            runMock(QStringLiteral("no-persist"), &turnOk, &denied, &declined,
+                    &skipped, &timedOut, &notTruncated, &msgPolls);
+            check("zcode mock: persist timeout still fires while polling",
+                  timedOut && msgPolls >= 3);
+        }
     }
 
     // 活体 harness（默认不跑）：AGENTRMC_DISPATCH_LIVE=<session id> 时真派一条

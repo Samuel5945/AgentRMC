@@ -427,11 +427,47 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
                 if (reply.isEmpty() || workItems_ == nullptr) {
                     return;
                 }
-                workItems_->upsert(QStringLiteral("dispatch"), exe, sid, proj,
-                                   QStringLiteral("progress"),
-                                   AgentWindow::displayName(exe), reply, exe);
                 appendEvent(QStringLiteral("status"), QString(), QString(),
                             QStringLiteral("派发回复：%1").arg(reply), 0);
+                // hook 可能已把这张卡推进到「待验收/等你处理」：晚到的回复
+                // 只能补正文，不能把注意力档位降回进行中——那会让待验收卡
+                // 从列表里消失，人以为活还没干完（2026-11-08 审查实测）。
+                const WorkItem *live = nullptr;
+                for (const WorkItem &it : workItems_->items()) {
+                    if (!it.done && it.sessionId == sid) {
+                        live = &it;
+                        break;
+                    }
+                }
+                if (live == nullptr) {
+                    return;  // 人已经结账：别再翻出来
+                }
+                if (live->stage == QStringLiteral("working")) {
+                    workItems_->upsert(QStringLiteral("dispatch"), exe, sid, proj,
+                                       QStringLiteral("progress"),
+                                       AgentWindow::displayName(exe), reply, exe);
+                } else {
+                    workItems_->updateLiveMessage(sid, reply);
+                }
+                refreshWorkItems();
+            });
+    connect(dispatch_, &SessionDispatch::zcodeInteractionSkipped, this,
+            [this](const QString &dispatchId, const QString &exe,
+                   const QString &sid, const QString &proj, const QString &what) {
+                // 外部通道没有代答 UI：授权/提问已按协议拒绝。授权提醒本身
+                // 由宿主的 hook 负责（spawn 的 app-server 也跑 hooks），这里
+                // 只把「这一轮为什么可能没做成」写进事件流和派发提示。
+                Q_UNUSED(exe);
+                Q_UNUSED(proj);
+                dispatchNotice_ =
+                    QStringLiteral("派发轮遇到%1，外部通道已代为拒绝；要它继续请回 "
+                                   "ZCode 桌面处理")
+                        .arg(what);
+                dispatchNoticeId_ = itemIdForSession(sid);
+                appendEvent(QStringLiteral("status"), QString(), QString(),
+                            QStringLiteral("派发交互：%1（%2…）")
+                                .arg(dispatchNotice_, dispatchId.left(8)),
+                            0);
                 refreshWorkItems();
             });
     spoolPath_ = workDir + "/pending-events.jsonl";
@@ -922,11 +958,11 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
             if (dispatch_ == nullptr) {
                 return false;
             }
-            dispatch_->pluginAck(
+            // 不认识的 dispatch_id 要回 404：重启丢账/重复 ack 不能当成功。
+            return dispatch_->pluginAck(
                 payload.value(QStringLiteral("dispatch_id")).toString(),
                 payload.value(QStringLiteral("ok")).toBool(),
                 payload.value(QStringLiteral("error")).toString());
-            return true;
         });
         connect(bridge, &AgentBridge::notify, this,
                 [this](const QString &kind, const QString &title,
@@ -2557,6 +2593,9 @@ QJsonObject MainWindow::reportWorkItem(const QJsonObject &payload) {
         if (!last.isValid() || last.secsTo(now) > 120) {
             announceWork(kind, title, message, message, raise, sessionId, false);
             attentionAnnounced_.insert(key, now);
+            // 记一笔「blocked 已喊过」：同一件事的 question hook 可能晚到，
+            // 按弹窗身份消费一次，别让下一道新题跟着被吞。
+            blockedAnnounced_.insert(key, now);
         }
     } else if (kind == QStringLiteral("stop")) {
         // 先念再记账：紧接着到的 hook stop 会看到这笔账，不再念第二遍。
@@ -2595,6 +2634,10 @@ void MainWindow::handleNotify(const QString &kind, const QString &title,
     }
     if (kind == QStringLiteral("turn-start")) {
         // 同一 session 已经开始新对话：上一轮的 review 视为已看到，直接归档。
+        // 上一轮缓存的派发回复也要清：新一轮若没回复，不能拿旧正文顶上。
+        if (!sessionId.isEmpty()) {
+            dispatchReplyBySession_.remove(sessionId);
+        }
         if (workItems_ != nullptr && !sessionId.isEmpty() &&
             workItems_->resolveReviews(sessionId)) {
             refreshWorkItems();
@@ -2680,7 +2723,8 @@ void MainWindow::handleNotify(const QString &kind, const QString &title,
     const bool planChoice =
         kind == QStringLiteral("question") ||
         message.startsWith(QString::fromUtf8("等你选方案"));
-    announceWork(kind, title, message, spoken, raise, sessionId, planChoice);
+    announceWork(kind, title, message, spoken, raise, sessionId, planChoice,
+                 eventId);
 }
 
 // 只负责「喊人」：事件流一行、记宿主、气泡 + 语音 + 要不要抢前台。
@@ -2689,7 +2733,7 @@ void MainWindow::handleNotify(const QString &kind, const QString &title,
 void MainWindow::announceWork(const QString &kind, const QString &title,
                               const QString &message, const QString &spoken,
                               const QString &raise, const QString &sessionId,
-                              bool planChoice) {
+                              bool planChoice, const QString &eventId) {
     appendEvent(QStringLiteral("status"), QString(), QString(),
                 spoken.isEmpty() || spoken == message
                     ? title + QStringLiteral(" · ") + message
@@ -2726,16 +2770,45 @@ void MainWindow::announceWork(const QString &kind, const QString &title,
         // 迟到。Agent 若已经用 pet_work_update(blocked) 提前喊过，这里就不再喊
         // 第二声——工单上面已经更新过了，喊重复只会让人以为又出了新问题。
         const QString askKey = sessionId.isEmpty() ? title : sessionId;
-        const QDateTime announced = attentionAnnounced_.value(askKey);
-        const bool lateQuestion =
-            planChoice && announced.isValid() &&
-            announced.secsTo(QDateTime::currentDateTimeUtc()) <= 180;
-        if (lateQuestion) {
-            return;
-        }
+        const QDateTime now = QDateTime::currentDateTimeUtc();
         if (planChoice) {
-            attentionAnnounced_.insert(askKey,
-                                       QDateTime::currentDateTimeUtc());
+            // 同一弹窗只喊一次：认 tool_use_id。同会话连问两道题时 id 不同，
+            // 第二题照喊——按会话压 180s 会把第二题吞掉（2026-11-08 审查实测）。
+            if (!eventId.isEmpty()) {
+                const QDateTime seen = announcedPlanIds_.value(eventId);
+                if (seen.isValid() && seen.secsTo(now) < 1800) {
+                    return;
+                }
+            } else {
+                // 老宿主不给 id：退回按会话压 180s（维持旧行为，宁多喊不吞新题
+                // 依赖宿主补 id；OpenSquilla 桥已改成带事件身份）。
+                const QDateTime announced = attentionAnnounced_.value(askKey);
+                if (announced.isValid() && announced.secsTo(now) <= 180) {
+                    return;
+                }
+            }
+            // MCP 已报 blocked 并喊过：这一条是同一件事的晚到回声，只压一次。
+            const QDateTime blockedAt = blockedAnnounced_.take(askKey);
+            if (blockedAt.isValid() && blockedAt.secsTo(now) <= 180) {
+                if (!eventId.isEmpty()) {
+                    announcedPlanIds_.insert(eventId, now);
+                }
+                return;
+            }
+            if (!eventId.isEmpty()) {
+                if (announcedPlanIds_.size() > 64) {
+                    for (auto it = announcedPlanIds_.begin();
+                         it != announcedPlanIds_.end();) {
+                        if (it.value().secsTo(now) > 1800) {
+                            it = announcedPlanIds_.erase(it);
+                        } else {
+                            ++it;
+                        }
+                    }
+                }
+                announcedPlanIds_.insert(eventId, now);
+            }
+            attentionAnnounced_.insert(askKey, now);
         }
         // 等确认要把人喊回来：气泡停久一点 + 语音，桌宠收起也照念；
         // 收起又没 TTS 时退回托盘，别让提醒凭空消失。
@@ -3238,6 +3311,8 @@ void MainWindow::handleWebAction(const QJsonObject &action) {
                                            item->project, text, &reason,
                                            &dispatchId)) {
                 dispatchSessionById_.insert(dispatchId, item->sessionId);
+                // 新一轮派发：旧回复立刻作废，别让本轮 stop 拿到上一轮正文。
+                dispatchReplyBySession_.remove(item->sessionId);
                 dispatchNotice_ = QStringLiteral("已派往会话 %1，等回执…")
                                       .arg(item->sessionId.left(8));
                 dispatchNoticeId_ = id;

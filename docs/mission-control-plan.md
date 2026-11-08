@@ -240,6 +240,19 @@ Task/WorkItem 的**会话归属**与**可验证投递**，这两块得自己补�
   `sess_4beb6ff2…` 留着可删。
 - 与 Qoder 的本质差异：Qoder CLI 追加的轮次桌面**永不重扫**；ZCode 落库即持久，
   重启应用全量可见（会话运行时进程内驻留不重读）——闭环成立，UX 以卡片为中心。
+- **终态与交互（2026-11-08 审查加固，mock 状态机回归锁定）**：整轮完成只认
+  `session/events` 里的 `turn.completed`（`payload.response` 即最终正文）/
+  `turn.failed`——首条 assistant 正文常是「我先检查一下」，拿它当完成会截断
+  还在跑的轮次并 kill 后端。发消息前先记事件 seq 基线（`limit:1` 取最后一条），
+  只认基线之后、且 `turnId` 与首条 `turn.started` 一致的事件。授权/提问请求
+  （`interaction/requestPermission` / `interaction/requestUserInput`）**按协议明确
+  拒绝**（`{decision:"deny"}` / `{action:"decline"}`）而不是回 -32000「不支持」，
+  同时发一次 `interactionSkipped`：人知道「这一轮卡在等人、要回 ZCode 桌面处理」，
+  模型也不会把「没人能答」误当成工具坏了。阶段时钟只在进入阶段时重置（轮询
+  重置会让超时永不触发），轮询节拍单独计时。
+- **卡片口径**：派发轮晚到的回复只补正文、不把 hook 已推进的「待验收/等你处理」
+  降回进行中；回复缓存按会话在 turn-start / 新派发时清空，不拿上一轮正文冒充；
+  未知 `dispatch_id` 的 ack 回 404（不能把无效回执当成功）。
 
 #### DSH 系实测（2026-11-07 深夜，插件临时探针 + `rc_probe/dsh_zstd_scan.py`）
 

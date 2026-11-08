@@ -126,8 +126,19 @@ await hello.promise;
 log(`connected ${GATEWAY}`);
 
 if (flag("list") || !flag("send")) {
-  const list = await call("sessions.list", {});
-  const arr = Array.isArray(list) ? list : (list.sessions || list.items || []);
+  // sessions.list 是游标分页（view=session-list-v1）；只取首页会漏会话。
+  const arr = [];
+  let cursor = "";
+  for (let page = 0; page < 20; page++) {
+    const params = { view: "session-list-v1", limit: 200 };
+    if (cursor) params.cursor = cursor;
+    const res = await call("sessions.list", params);
+    if (Array.isArray(res)) { arr.push(...res); break; }
+    arr.push(...(res?.sessions || res?.items || res?.keys || []));
+    const next = res?.nextCursor || res?.next_cursor || "";
+    if (!next || next === cursor) break;
+    cursor = next;
+  }
   log(`sessions: ${arr.length}`);
   for (const s of arr) {
     log(`  key=${s.key || s.session_key || s.id}  title=${s.display_name || s.displayName || s.title || ""}  kind=${s.kind || ""}`);

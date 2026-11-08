@@ -122,11 +122,12 @@ private:
     // 是要人动手的，走和 hook 同一条提醒通道（气泡 + 语音）。
     QJsonObject reportWorkItem(const QJsonObject &payload);
     // 只喊人、不写工单：事件流一行 + 记宿主 + 气泡/语音/抢前台。
-    // planChoice=「等选方案」类提醒，参与 180s 迟到去重；blocked 自带节流，传 false。
+    // planChoice=「等选方案」类提醒；eventId（hook 的 tool_use_id）按弹窗去重，
+    // 没有 id 的老宿主才退回按会话 180s 压。blocked 自带节流，传 planChoice=false。
     void announceWork(const QString &kind, const QString &title,
                       const QString &message, const QString &spoken,
                       const QString &raise, const QString &sessionId,
-                      bool planChoice);
+                      bool planChoice, const QString &eventId = QString());
     // 联动插件版本对账：{"bundled":内置版,"hosts":[每家 name/installed/loaded/
     // enabled/running/state],"bridges":[不走插件包的外部接入]}。loaded 是 hook
     // 报上来的「此刻真在跑的那版」，注册表只能说盘上装成哪版。需要动手的成因
@@ -202,6 +203,11 @@ private:
     QHash<QString, QDateTime> attentionAnnounced_;
     // Agent 已经替 hook 报过 ready 并念过了：紧接着到的 stop 不再念第二遍。
     QHash<QString, QDateTime> readyAnnounced_;
+    // 已经喊过的「等选方案」弹窗（key = tool_use_id）。同一弹窗的两条信号只喊
+    // 一次；不同弹窗（同会话连问两道题）各喊各的——按会话压会把第二题吞掉。
+    QHash<QString, QDateTime> announcedPlanIds_;
+    // MCP 报 blocked 并已喊过的时间：晚到的 question hook 回声只压一次。
+    QHash<QString, QDateTime> blockedAnnounced_;
     InputEngine *engine_ = nullptr;
     KeymapPage *keymapPage_ = nullptr;
     AppPage *appPage_ = nullptr;

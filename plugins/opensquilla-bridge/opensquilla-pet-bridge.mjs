@@ -38,7 +38,6 @@
 //
 // 退出码：0 正常；1 网关连不上（--selftest 时为桥连不上）。
 
-import { randomUUID } from "node:crypto";
 import {
   appendFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync,
 } from "node:fs";
@@ -62,6 +61,9 @@ const CFG = {
   relay: flag("relay"),
   refreshMs: Number(opt("refresh", "30000")),
   callTimeoutMs: Number(opt("call-timeout", "15000")),
+  // sessions.send 的受理比普通 RPC 慢（网关要落 ingress 账），单给一个上限；
+  // 超时口径是「送达未知」，不是被拒。测试可调小。
+  sendTimeoutMs: Number(opt("send-timeout", "30000")),
   helloTimeoutMs: Number(opt("hello-timeout", "20000")),
   heartbeatFile: opt(
     "heartbeat-file",
@@ -92,19 +94,50 @@ function touchHeartbeat() {
   try { writeFileSync(CFG.heartbeatFile, String(Date.now()), "utf8"); } catch { /* 写不进就算了 */ }
 }
 
-// 同一会话同一种提醒，15s 内只发一次（done 和 chat.done 会前后脚到）。
+// 同一会话同一件事，15s 内只发一次（done 和 chat.done 会前后脚到）。
+// 但「同一会话」不等于「同一件事」：连续两轮完成、连续两次审批都必须各喊一次。
+// 事件自带身份（approval_id / turn_id / stream_seq…）时按身份去重；没有身份
+// 的老事件才退回会话级窗口。新轮开始（turn_committed）还要清掉该会话的账。
 const DEDUPE_MS = 15000;
 const recent = new Map();
-const dedupe = (key) => {
+
+function eventIdentity(p) {
+  const id = p?.event_id ?? p?.eventId ?? p?.approval_id ?? p?.approvalId ??
+    p?.request_id ?? p?.requestId ?? p?.turn_id ?? p?.turnId ??
+    p?.task_id ?? p?.taskId;
+  if (id !== undefined && id !== null && String(id).trim()) {
+    return String(id).trim();
+  }
+  const seq = p?.stream_seq ?? p?.streamSeq;
+  return seq === undefined || seq === null ? "" : `seq:${seq}`;
+}
+
+const dedupe = (sessionKey, kind, p) => {
   const now = Date.now();
+  const identity = eventIdentity(p);
+  // 带身份：只按身份判重，不同轮/不同请求互不牵连；同时刷新会话级水位，
+  // 让随后不带身份的 chat.done 之类回声仍被压掉（回声只查会话级键）。
+  const key = identity
+    ? `${sessionKey}|${kind}|${identity}`
+    : `${sessionKey}|${kind}`;
   const last = recent.get(key) || 0;
   if (now - last < DEDUPE_MS) return false;
   recent.set(key, now);
+  if (identity) recent.set(`${sessionKey}|${kind}`, now);
   if (recent.size > 200) {
     for (const [k, t] of recent) if (now - t > DEDUPE_MS) recent.delete(k);
   }
   return true;
 };
+
+// 新轮开始：该会话上一轮的完成/审批账全部作废。否则 done(轮1) →
+// turn_committed(轮2) → done(轮2) 里第二条 done 会被 15s 窗口吞掉。
+function resetSessionDedupe(sessionKey) {
+  const prefix = `${sessionKey}|`;
+  for (const key of [...recent.keys()]) {
+    if (key.startsWith(prefix)) recent.delete(key);
+  }
+}
 
 // 离线补投：与 hooks/DSH 同址同格式（pending-events.jsonl 一行一条 JSON），
 // 原生端 importSpool() 启动/每 5 秒补投，补投只落工单不出声、不抢前台。
@@ -132,11 +165,14 @@ function spool(payload) {
   } catch { /* 落盘也失败就彻底放弃：通知不能挡会话 */ }
 }
 
-function buildPayload(kind, message, sessionKey) {
+function buildPayload(kind, message, sessionKey, eventId = "") {
   const body = { event: kind, title: "OpenSquilla", message };
   if (CFG.raise) body.raise = CFG.raise;
   // 会话归属：native 端靠它做「同会话旧验收归档」和工单合并。
   if (sessionKey) body.session_id = sessionKey;
+  // 事件身份：native 端按它区分同一会话里的不同弹窗/不同轮次。不带的话
+  // 原生会退回「同会话 180s 只喊一次」，第二道题会被第一道吞掉。
+  if (eventId) body.event_id = eventId;
   // 项目归属：与 hooks 同口径报原样路径，外壳行身份取目录名（Agentrmc 等）。
   // 不带它卡行只能兜底「会话 <短 id>」（2026-11-08 用户指出）。
   const project = sessionKey ? sessionProjects.get(sessionKey) : "";
@@ -144,11 +180,11 @@ function buildPayload(kind, message, sessionKey) {
   return body;
 }
 
-async function notifyPet(kind, message, sessionKey) {
+async function notifyPet(kind, message, sessionKey, eventId = "") {
   const res = await fetch(`${CFG.bridge}/notify`, {
     method: "POST",
     headers: { "Content-Type": "application/json; charset=utf-8" },
-    body: JSON.stringify(buildPayload(kind, message, sessionKey)),
+    body: JSON.stringify(buildPayload(kind, message, sessionKey, eventId)),
     signal: AbortSignal.timeout(5000),
   });
   if (res.status !== 204) throw new Error(`bridge returned ${res.status}`);
@@ -195,15 +231,37 @@ function subscribeKey(key) {
     .catch((e) => log(`subscribe failed ${key}: ${e.message}`));
 }
 
+// sessions.list 是游标分页（v4 契约：view=session-list-v1 → nextCursor）。
+// 只取首页会漏掉后面的会话：既订阅不到，project 也缓存不上（2026-11-08 审查）。
+// 老网关不认识 view 会退回落单页数组，照样能用。
+async function listAllSessions() {
+  const out = [];
+  let cursor = "";
+  for (let page = 0; page < 20; page += 1) {
+    const params = { view: "session-list-v1", limit: 200 };
+    if (cursor) params.cursor = cursor;
+    const res = await call("sessions.list", params);
+    if (Array.isArray(res)) {
+      out.push(...res);
+      break;
+    }
+    const arr = res?.sessions || res?.items || res?.keys || [];
+    out.push(...arr);
+    const next = res?.nextCursor || res?.next_cursor || "";
+    if (!next || next === cursor) break;
+    cursor = next;
+  }
+  return out;
+}
+
 async function refreshSessions() {
   // 防重入：订阅多时一轮可能超过 refresh 周期，探针不许叠着跑，
   // 否则半开判定会被并发的超时计数刷乱。
   if (refreshing) return;
   refreshing = true;
   try {
-    const list = await call("sessions.list", {});
+    const arr = await listAllSessions();
     probeFailures = 0;
-    const arr = Array.isArray(list) ? list : (list.sessions || list.items || []);
     for (const s of arr) {
       const key = s.key || s.session_key || s.id;
       if (!key) continue;
@@ -310,9 +368,13 @@ async function onFrame(frame) {
 
   const sessionKey = p.session_key || p.key || "?";
   if (!CFG.includeCron && String(sessionKey).startsWith("cron:")) return;
-  // turn-start 是幂等归档信号，不吃 15s 去重：连开两轮时第二轮也要发，
-  // 不然上一轮的「待验收」要等本轮 stop 才被顺带归档，多挂一轮。
-  if (mapped.kind !== "turn-start" && !dedupe(`${sessionKey}|${mapped.kind}`)) return;
+  const identity = eventIdentity(p);
+  if (mapped.kind === "turn-start") {
+    // 新轮开始：清掉该会话上一轮的完成/审批账（归档信号本身不去重）。
+    if (sessionKey !== "?") resetSessionDedupe(sessionKey);
+  } else if (!dedupe(sessionKey, mapped.kind, p)) {
+    return;
+  }
 
   if (mapped.kind === "turn-start") {
     if (sessionKey === "?") return;
@@ -341,12 +403,13 @@ async function onFrame(frame) {
     tpl = "OpenSquilla：{text}";
   }
   const text = renderTemplate(tpl, sessionKey, reply).slice(0, 200);
+  const target = sessionKey === "?" ? "" : sessionKey;
   try {
-    await notifyPet(mapped.kind, text, sessionKey === "?" ? "" : sessionKey);
+    await notifyPet(mapped.kind, text, target, identity);
     log(`NOTIFY ${mapped.kind} sess=${sessionKey} raise=${CFG.raise || "(none)"} msg=${text.slice(0, 40)}`);
   } catch (e) {
     // AgentRMC 没在跑：落盘等补投，别把提醒丢了（与 hooks/DSH 同一条通路）。
-    spool(buildPayload(mapped.kind, text, sessionKey === "?" ? "" : sessionKey));
+    spool(buildPayload(mapped.kind, text, target, identity));
     log(`notify failed (${mapped.kind}): ${e.message} — 已落盘等补投`);
   }
 }
@@ -422,6 +485,9 @@ const dispatchWarn = (msg) => {
   const now = Date.now();
   if (now - dispatchLogAt > 60000) { dispatchLogAt = now; log(msg); }
 };
+// 超时/重连 = 不知道对面收没收到（可能已被网关受理）；真实的 RPC 拒绝会带
+// 网关错误对象（NOT_FOUND / busy…）。两种必须给用户不同的口径。
+const isUncertain = (msg) => /timeout|reconnect/i.test(String(msg));
 async function pollDispatches() {
   if (dispatchBusy || flag("no-dispatch")) return;
   dispatchBusy = true;
@@ -445,11 +511,16 @@ async function pollDispatches() {
       } else {
         try {
           await call("sessions.resolve", { key: sessionId });
-        } catch {
-          error = `会话 ${sessionId.slice(0, 24)}… 不在活表（resolve 拒绝），未注入`;
+        } catch (e) {
+          const msg = (e && e.message) || String(e);
+          error = isUncertain(msg)
+            ? `会话 ${sessionId.slice(0, 24)}… 归属未确认：${msg}（未注入）`
+            : `会话 ${sessionId.slice(0, 24)}… 不在活表（resolve 拒绝），未注入`;
         }
         if (!error) {
-          const cmid = randomUUID().replaceAll("-", "");
+          // 幂等标识由 dispatch_id 派生：同一件重取/重试都带同一个
+          // client_message_id，网关能认重；随机 id 会让重试变成第二条消息。
+          const cmid = `agentrmc-${dispatchId.replaceAll("-", "")}`;
           try {
             const accepted = await call("sessions.send", {
               key: sessionId,
@@ -461,12 +532,15 @@ async function pollDispatches() {
                 channel_id: "cli:agentrmc-bridge", source_kind: "cli",
                 source_name: "agentrmc-bridge", client_message_id: cmid,
               },
-            }, 30000);
+            }, CFG.sendTimeoutMs);
             if (!accepted || !(accepted.turn_id || accepted.task_id)) {
-              error = "网关受理缺 turn_id，视为未送达";
+              error = "送达未知：网关受理应答缺 turn_id，未确认（可能已受理）";
             }
           } catch (e) {
-            error = "sessions.send 被拒：" + e.message;
+            const msg = (e && e.message) || String(e);
+            error = isUncertain(msg)
+              ? `送达未知：${msg}（网关可能已受理，先去会话里确认再重派）`
+              : "sessions.send 被拒：" + msg;
           }
         }
       }

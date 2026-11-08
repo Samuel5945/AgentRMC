@@ -36,6 +36,15 @@ opensquilla-pet-bridge.mjs  →  sessions.resolve 守卫 → sessions.send 注�
 > 卡行只能兜底「会话 <短 id>」（2026-11-08 用户指出后补）。`turn_committed` 发的
 > turn-start 则是「人已经回来开新轮」的静默归档信号，不出声、不建卡，也不吃
 > 15s 去重——连开两轮时第二轮的归档必须照发，不然旧验收卡多挂一轮。
+>
+> **去重按「事件身份」不按会话**（2026-11-08 审查加固）：事件带 `approval_id` /
+> `turn_id` / `stream_seq` 时，同会话的两次审批、两轮完成各提醒各的；`turn_committed`
+> 会清掉该会话的上一轮账，`done → 新轮 → done` 的第二条完成不会被 15s 窗口吞掉。
+> 身份还会作为 `event_id` 透传给原生端，让「同一会话第二道题」不被 180s 迟到去重压掉。
+>
+> **`sessions.list` 要翻页**：v4 契约是 `view:"session-list-v1"` + `cursor` →
+> `nextCursor/hasMore`。只取首页会漏会话（订阅不到、project 也缓存不上），桥会
+> 逐页取全（最多 20 页，防死循环）；老网关不认 view 时退回落单页数组。
 
 > **离线补投**：AgentRMC 没开时通知不丢——落盘到与 hooks/DSH 同址同格式的
 > `%APPDATA%\LIG\AgentRMCNative\pending-events.jsonl`（`AGENTRMC_SPOOL_DIR`
@@ -130,6 +139,12 @@ ack ok:false），再 `sessions.send {key, message, client_message_id, _source}`
 `turn_id`），ack ok 即「确实到了那条会话」的回执，与 DSH followup 同级。
 会话 key 形如 `agent:main:webchat:<id>`；native 侧只做 `agent:` 前缀哨兵 +
 同会话在途闸，取件按 exe 过滤（DSH 插件领不走 OpenSquilla 的件）。
+
+**幂等与口径（2026-11-08 审查加固）**：`client_message_id` 由 `dispatch_id` 派生
+（`agentrmc-<id>`），同一件重取/重试网关能认重，不再每条随机 UUID。`sessions.send`
+超时或被强制重连时**不等于被拒**——可能网关已受理只是回复丢了，ack 写「送达未知：
+…（可能已受理，先去会话里确认再重派）」；只有网关明确回错误才是「被拒」。
+`--send-timeout`（默认 30s）单独控制受理等待。
 
 探针：`rc_probe/osquilla_dispatch_probe.mjs`（`--list` 只读 / `--send` 牺牲会话
 全链）。实测坑：**桌面网关的 state home 跟配置走**（`%APPDATA%\@opensquilla\

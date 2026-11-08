@@ -216,7 +216,7 @@
 |---|---|---|---|
 | 本机通知桥 | `127.0.0.1:45915` 提供 `POST /notify`、`POST /speak`、`GET /state`，纯回环、无鉴权 | `native/src/core/AgentBridge.*` | 已实现 |
 | 等工具授权提醒 | hooks 发 `permission`：气泡 + TTS + 自动把宿主窗口拉回前台 | `plugins/agentrmc-bridge/hooks/agentrmc-notify.js`、`MainWindow.cpp` | 已实现 |
-| 等选方案提醒 | Qoder / WorkBuddy 走 `PreToolUse` + `matcher:"AskUserQuestion"`，payload 复用 `permission` | `hooks-qoder/`、`hooks-workbuddy/` | 已实现（HEAD `137e3ca` 起；两套 WorkBuddy 缓存均已 0.3.3） |
+| 等选方案提醒 | Qoder / WorkBuddy / ZCode 走 `PreToolUse` + `matcher:"AskUserQuestion"`，payload 复用 `permission` | `hooks-qoder/`、`hooks-workbuddy/`、`hooks/hooks.json` | 已实现（HEAD `137e3ca` 起；两套 WorkBuddy 缓存均已 0.3.3；ZCode 2026-11-08 实测补上） |
 | Work Item / 待我处理 | `/notify` 落成工单，`GET /work-items`、`POST /work-items/ack`，主窗按注意力排序 | `core/WorkItems.*`、`MainWindow::buildWorkPage` | 已实现（0.3.4） |
 | 任务完成提醒 | 读 transcript 最后一条 assistant 文本，压成一句话念出；拿不到退回「已完成任务，等你回来验收」 | `hooks/agentrmc-notify.js` | 已实现 |
 | 完成提醒不抢前台 | `stop` 只气泡 + 语音，不调 `SetForegroundWindow` | `MainWindow.cpp` | 已实现 |
@@ -754,7 +754,7 @@ Agent 宿主
 
 | 宿主 | 进程映像 | 配置家 / 插件缓存 | hooks 文件 | 等选方案事件 | raise 目标 |
 |---|---|---|---|---|---|
-| ZCode | `ZCode.exe` | `~/.zcode/cli/plugins/cache/` | `hooks/hooks.json` | `PermissionRequest`（tool_name 命中） | 空 → 原生缺省 `ZCode.exe` |
+| ZCode | `ZCode.exe` | `~/.zcode/cli/plugins/cache/` | `hooks/hooks.json` | `PreToolUse` + `AskUserQuestion`（2026-11-08；`PermissionRequest` 留作兜底） | 空 → 原生缺省 `ZCode.exe` |
 | Qoder | `Qoder.exe` | `~/.qoder/` | `hooks-qoder/hooks.json` | `PreToolUse` + `AskUserQuestion` | `Qoder.exe` |
 | Qoder CN | `Qoder CN.exe` | `~/.qoder-cn/` | `hooks-qoder/hooks.json` | `PreToolUse` + `AskUserQuestion` | `Qoder CN.exe` |
 | WorkBuddy | `WorkBuddy.exe` | `~/.workbuddy/` | 根 hooks + `hooks-workbuddy/` | `PreToolUse` + `AskUserQuestion` | `WorkBuddy.exe`（0.3.3 修正） |

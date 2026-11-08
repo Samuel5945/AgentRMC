@@ -75,7 +75,7 @@ Cordis bundle）、OpenSquilla（`plugins/opensquilla-bridge` 外部 WebSocket �
 |---|---|---|---|---|---|
 | Qoder / Qoder CN | Stop | PermissionRequest | PreToolUse matcher=AskUserQuestion → `question`（映射成 permission 发出） | **StopFailure → `error`** | UserPromptSubmit |
 | WorkBuddy / WorkBuddy AI | Stop | PermissionRequest | Notification(permission_prompt) → `prompt`（弹窗那一刻，准）+ PreToolUse 兜底 | 无（见下） | UserPromptSubmit |
-| ZCode（插件） | Stop | PermissionRequest | 无独立钩子，AskUserQuestion 落 permission 分支 | 无（运行时里查不到该事件） | UserPromptSubmit |
+| ZCode（插件） | Stop | PermissionRequest | PreToolUse matcher=AskUserQuestion → `question`（映射成 permission 发出；ZCode 对 AskUserQuestion 不发 PermissionRequest，2026-11-08 实测补的主路） | 无（运行时里查不到该事件） | UserPromptSubmit |
 | DeepSeek Harness | agent/turn-stopping | session/event `approval/asked` | session/event `tool/call` name=ask_user_question → `question` | 无 | agent/inbox/claimed（同 turn 去重） |
 | OpenSquilla | session.event.done / chat.done / task.succeeded | session.event.approval_required | session.event.plan_presentation（发 `question` 类） | 无 | session.event.turn_committed |
 

@@ -479,6 +479,31 @@ check('去重键兜底: 没 session_id 时按宿主+项目认，大小写与斜�
   assert.notStrictEqual(afterNoCwd, null, '给不出 cwd 的宿主只许多喊一声，不能静默漏掉');
 });
 
+// —— ZCode 双信号互斥：PermissionRequest（老配置）与 PreToolUse(question)（新主路）
+//    都可能为同一道题发信号，共用 tool:/solo: 账本，谁先到谁喊，后到的静默。
+check('ZCode 双信号互斥: permission 先喊 question 不补，反过来也一样', () => {
+  const s = installInto('.zcode');
+  const first = dryRun(s, 'permission', JSON.stringify({
+    session_id: 'z1', tool_name: 'AskUserQuestion', tool_use_id: 'tu_z1',
+  }));
+  assert.strictEqual(first.payload.event, 'permission');
+  assert.strictEqual(first.payload.message, '等你选方案');
+  assert.strictEqual(first.payload.title, 'ZCode');
+  // 同一弹窗的 PreToolUse 晚到：吞。
+  assert.strictEqual(dryRun(s, 'question', JSON.stringify({
+    session_id: 'z1', tool_name: 'AskUserQuestion', tool_use_id: 'tu_z1',
+  })), null, 'permission 喊过后 question 不该再喊');
+  // 下一道新题（新 tool_use_id）：question 主路照常喊。
+  const next = dryRun(s, 'question', JSON.stringify({
+    session_id: 'z1', tool_name: 'AskUserQuestion', tool_use_id: 'tu_z2',
+  }));
+  assert.strictEqual(next.payload.message, '等你选方案');
+  // 下一道新题的 PermissionRequest 晚到：也吞（方向反过来）。
+  assert.strictEqual(dryRun(s, 'permission', JSON.stringify({
+    session_id: 'z1', tool_name: 'AskUserQuestion', tool_use_id: 'tu_z2',
+  })), null, 'question 喊过后 permission 不该再喊');
+});
+
 // —— 2026-11-04 加固：去重认「弹窗」(tool_use_id) 不认「会话」 ——
 // 曾经按 session 记 30 分钟：同一会话连问多题，第二题起全被吞（实测某会话
 // 7 问只喊 2 声）。现在每道题有自己的 tool_use_id，各喊各的。
@@ -672,6 +697,17 @@ check('hooks 注册 UserPromptSubmit: 新一轮对话清旧验收', () => {
     fs.readFileSync(path.join(PLUGIN_ROOT, 'hooks-qoder', 'hooks.json'), 'utf8'),
   );
   assert.match(qoder.hooks.UserPromptSubmit[0].hooks[0].command, /agentrmc-launch\.cmd" turn-start$/);
+});
+
+check('hooks(ZCode) 注册了 PreToolUse + matcher=AskUserQuestion', () => {
+  // ZCode 对 AskUserQuestion 不发 PermissionRequest（2026-11-08 实测：
+  // 弹窗等人时桌宠全程静默），主路跟 Qoder 一样挂 PreToolUse——它在弹窗
+  // 那一刻派发，不像 WorkBuddy 要等用户答完。
+  const h = JSON.parse(fs.readFileSync(path.join(PLUGIN_ROOT, 'hooks', 'hooks.json'), 'utf8'));
+  const group = h.hooks.PreToolUse[0];
+  assert.strictEqual(group.matcher, 'AskUserQuestion');
+  assert.match(group.hooks[0].command, /agentrmc-launch\.cmd" question$/);
+  assert.strictEqual(group.hooks[0].timeout, 3);
 });
 
 check('turn-start DRY_RUN: 带 session 且不出声', () => {

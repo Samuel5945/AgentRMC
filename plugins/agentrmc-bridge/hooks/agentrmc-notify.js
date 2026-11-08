@@ -4,7 +4,8 @@
 //   node agentrmc-notify.js permission [Agent名] [窗口进程名]   ← 工具等授权
 //   node agentrmc-notify.js question   [Agent名] [窗口进程名]   ← AskUserQuestion 等选方案
 //        （Qoder 把 AskUserQuestion 走 PreToolUse 而非 PermissionRequest，所以单独
-//          一个事件名，payload 里仍按 permission 发——原生只对 stop/permission 出声）
+//          一个事件名，payload 里仍按 permission 发——原生只对 stop/permission 出声；
+//          ZCode 同理：PermissionRequest 压根不为它发，主路也是 PreToolUse 匹配）
 //   node agentrmc-notify.js prompt     [Agent名] [窗口进程名]   ← 弹窗刚出现（准点）
 //        （WorkBuddy 的 Notification + matcher:"permission_prompt"：这是唯一在
 //          「题目弹出那一刻」就派发的信号；同一件事它的 PreToolUse 要等用户答完
@@ -415,8 +416,16 @@ process.stdin.on('end', () => {
     const short = detail.length > 60 ? detail.slice(0, 57) + '…' : detail;
     if (tool === 'AskUserQuestion') {
       // 少数宿主会把方案选择当成授权请求；念中文比念工具名顺。
+      // ZCode 起主路是 PreToolUse(AskUserQuestion)→question（弹窗那一刻就发），
+      // PermissionRequest 若也跟一条，后到的按同一弹窗去重吞掉——与 question
+      // 分支共用 tool:/solo: 账本，两边谁先到谁喊，另一条静默。
+      const tid = toolUseId(hook);
+      const scope = askedScopeKey(hook);
+      if (tid && seenKey(`tool:${tid}`)) process.exit(0);
+      if (!tid && seenKey(`solo:${scope}`)) process.exit(0);
       message = '等你选方案';
       speech = `${agent} 在等你选方案`;
+      rememberKeys([tid ? `tool:${tid}` : `solo:${scope}`]);
     } else {
       message = `等你确认${tool ? ' ' + tool : ''}${short ? '：' + short : ''}`;
       speech = `${agent} 在等你点确认`;

@@ -115,7 +115,7 @@ hook 都是 `agentrmc-launch.cmd <已经不存在的文件>`——静默失败�
 | 提醒       | Qoder / Qoder CN                                  | WorkBuddy                                          | ZCode                                 |
 | ---------- | ------------------------------------------------- | -------------------------------------------------- | ------------------------------------- |
 | 等工具授权 | `PermissionRequest`                               | `PermissionRequest`                                | `PermissionRequest`                   |
-| 等选方案   | `PreToolUse` + `matcher:"AskUserQuestion"`        | `PreToolUse` + `matcher:"AskUserQuestion"`         | `PermissionRequest`（tool_name 命中） |
+| 等选方案   | `PreToolUse` + `matcher:"AskUserQuestion"`        | `PreToolUse` + `matcher:"AskUserQuestion"`         | `PreToolUse` + `matcher:"AskUserQuestion"` |
 | 一轮结束   | `Stop`                                            | `Stop`                                             | `Stop`                                |
 | 模型出错   | `StopFailure` → 脚本 `error`                       | 无（同名事件语义不同，见下）                       | 无（运行时里查不到该事件）            |
 
@@ -149,10 +149,19 @@ WorkBuddy **故意没挂**：它那家 harness 里 `StopFailure` 是在「Stop �
 回调（`sdkHooksManager`），不查 settings / 插件里的 hooks。所以 WorkBuddy 也改成挂
 `PreToolUse` + `matcher:"AskUserQuestion"`。
 
-为什么不直接写进共用的根 `hooks/hooks.json`：那份 ZCode 也在用，ZCode 对未知事件的处理没验过，
+为什么不直接写进共用的根 `hooks/hooks.json`：那份 ZCode 也在用，当时 ZCode 对未知事件的处理没验过，
 不拿它冒险。WorkBuddy 的 `hooks/hooks.json` **永远加载**、manifest 里的 `hooks` 再合并一次，
 所以把 `PreToolUse` 单独放 `hooks-workbuddy/hooks.json` 由 manifest 声明，两边都拿到、
 也不会重复触发（根那份里没有 `PreToolUse`）。
+
+**ZCode 同一个病，2026-11-08 修**：用户实测 tuwen-editor 会话里模型弹选项等人，桌宠既不出声
+也不落待办卡。读 ZCode 运行时（`resources/glm/zcode.cjs`）确认：七种 hook 事件里
+`Notification` 不存在；`AskUserQuestion` 带 `needsApproval` 走权限管线，但桌面端把「问题 UI 的
+答案并回入参」作为 modify 自答，`PermissionRequest` 链路上拿不到这条弹窗；而 `PreToolUse`
+在**每个工具执行前**派发（含 `AskUserQuestion`，即弹窗那一刻）。所以 ZCode 根
+`hooks/hooks.json` 也挂上 `PreToolUse` + `matcher:"AskUserQuestion"` → `question`，与
+`PermissionRequest` 走同一套 `tool_use_id` 账本互斥去重（谁先到谁喊），老配置里那条
+PermissionRequest 留作兜底不删。
 
 
 Qoder 同时导出 `${QODER_PLUGIN_ROOT}` 和 `${CLAUDE_PLUGIN_ROOT}`，也认 manifest 里的

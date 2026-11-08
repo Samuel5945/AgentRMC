@@ -195,38 +195,50 @@ Task/WorkItem 的**会话归属**与**可验证投递**，这两块得自己补�
   读回。`session/resume` 跨实例可重开别人实例建的会话——**dispatch 到用户既有
   会话就是同一条路**。会话按 workspace 归堆，db 为共享 SQLite
   （`~/.zcode/cli/db/db.sqlite` + `rollout/model-io-<sid>.jsonl`）。
-- **对话区可见的投递面是 `v4/command`（sendText 命令），不是裸 `session/send`**：
-  直接 `session/send` 只写裸消息，turn 能跑但桌面对话区**不渲染**（只在
-  remote v4 的 I/O 视图可见，remote 端直读 db）——对话区只渲染**准入队列**
-  promote 的 input。正确信封（stdio 同样服务 v4/*）：
-  `{commandId, clientId, sessionId, type:"sendText", payload:{text,
-  requestedDelivery:"startNow", modelSelection}, issuedAt, inputOrigin:"desktop"}`
-  → ack `inputAccepted` → `session_input` 表落 `sendText/startNow/promoted` 行
-  （与用户手发同一条准入路径）→ turn 跑 → 回复落库。
-- **模型必须带（用户裁决+实测）**：跨实例 resume 的新实例不绑模型（日志 warn
-  「model selection restored but not bound to the runtime」→ turn 死在
-  `model_creation`「Select a model before continuing」）。派发时从
-  `session_entry` 表 `runtime/model_selection` 行读该会话保存的选择
-  （providerId+modelId+options）放进 payload.modelSelection。带上后全链通
-  （助手回「带模收到」）。
-- **连接要活到 turn 结束**：在 turn 中途 kill app-server 会把已 promote 的
-  input 变成孤儿（对话区挂着无回复）；孤儿不丢——该会话下次被 resume 时
-  队列自动补 drain（补出回复）。真实派发器常驻连接，无此问题。
-  桌面对话区对外部投递的**实时性**：写入后不热刷新，重进应用后可见
-  （2026-11-07 用户实测）。
+- **两条投递路径（2026-11-08 定案）**：
+  ① **裸 `session/send`**：`{sessionId, content, modelSelection}`，消息直接落库、
+  turn 照跑、hook 照常上卡——个人供应商模型会话全链通；**重开应用后对话区正常
+  渲染**（与手发消息无差别）。
+  ② **`v4/command` sendText**（stdio 同样服务 v4/*）：`{commandId, clientId,
+  sessionId, type:"sendText", payload:{text, requestedDelivery:"startNow",
+  modelSelection}, issuedAt, inputOrigin:"desktop"}` → ack `inputAccepted` →
+  `session_input` 表落 `promoted` 行（与用户手发同一条准入路径）。**运行期对话区
+  两条路径都不热刷新**（见下），落库后可见性无差别；v4 路径的额外价值是队列
+  语义（孤儿补 drain）。
+- **模型选择规则（用户裁决，2026-11-08）**：payload/setModel 一律带**该会话
+  `session_entry` 表 `runtime/model_selection` 行的当前值**（= 用户在 UI 里选的），
+  from==to 零净切换。禁止断言旧值或别的模型——modelSelection 是**会话级切换**，
+  带错值会把用户定的模型顶掉（实测踩过，会话顶出「模型已切换」横幅）。
+  无模型字段则 turn 死在 `model_creation`（新实例不绑模型：「Select a model
+  before continuing」）。
+- **账号计划模型边界（用户裁决：不破解）**：`account:zai-start-plan/*` 等账号
+  供应商只活在桌面登录态里——外部实例注册表没有它（`provider/refreshRegistry`
+  也补不进），raw/v4 两路都死在 `Model creation failed`；本地
+  `credentials.json` 里的账号 API key 是加密存储（`enc:v1:`），**不从桌面进程外
+  解密使用**。→ 账号模型会话暂不可外部派发，等上游开放；个人供应商会话可派发。
+- **连接要活到落库+turn 结束**：消息落库是**异步**的——探针发完立刻 kill
+  app-server，消息根本不进库（实测踩过：10:00/10:04 两条「已接受」的消息消失，
+  假焦点/滚动实验全部作废）。真实派发器常驻连接 + 发后确认落库（查
+  `message` 表 MAX(time_created)）再收尾。孤儿 input（promoted 后 turn 被杀）
+  不丢——下次 resume 自动补 drain。
+- **对话区可见性（2026-11-08 用户实测量化）**：外部落库的消息**不热刷新**——
+  焦点切换、滚动、关标签重开、切项目、开新窗、最小化还原**全部无效**（每项都
+  做过对照实验）；约 **40-60 分钟**自行出现一次（机制未挖，疑似内部慢周期对账），
+  重启 ZCode 立即全量可见。→ 派发 UX 以**卡片为中心**：回执即时上卡，对话区
+  最终一致，够用。
 - **hook 隔离四件套（照搬 Qoder 重做轮教训）**：hook 事件走 agentrmc-bridge
   （UserPromptSubmit/PermissionRequest/Stop），桥的 `AGENTRMC_PORT` 与
   `AGENTRMC_SPOOL_DIR` 都是**环境变量**——给探针 app-server 喂
   `AGENTRMC_PORT=1`（不可路由）+ 临时 SPOOL_DIR，hook POST 失败落探针 spool。
   实证：探针 spool 收到 `turn-start`（带炮灰 sessionId），真实 store 与真实
   spool 全程无 MARKER。
-- **待接线**：`SessionDispatch` 的 ZCode 路由按上面配方接
-  （spawn 常驻 app-server → 反向偏好应答 → resume → v4/command sendText 带
-  modelSelection → 轮 `session/messages` 拿回执）；draft 探针会话
+- **待接线**：`SessionDispatch` 的 ZCode 路由按上面配方接（spawn 常驻
+  app-server → 反向偏好应答 → resume → 裸 send 带 fresh modelSelection →
+  确认落库 → 轮 `session/messages` 拿回执）；仅对**个人供应商模型**的会话开放
+  （账号模型会话按 `dispatch.supported` 关闭派发行）；draft 探针会话
   `sess_4beb6ff2…` 留着可删。
-- 与 Qoder 的本质差异：Qoder CLI 追加的轮次桌面**永不重扫**；ZCode 走
-  `v4/command` 准入队列与用户手发同路径，重进应用即见（实时热刷新未证实，
-  不影响闭环）。
+- 与 Qoder 的本质差异：Qoder CLI 追加的轮次桌面**永不重扫**；ZCode 落库即持久，
+  重开应用全量可见，对话区约 1 小时内最终一致——闭环成立。
 
 #### DSH 系实测（2026-11-07 深夜，插件临时探针 + `rc_probe/dsh_zstd_scan.py`）
 

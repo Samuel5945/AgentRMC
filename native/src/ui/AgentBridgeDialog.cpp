@@ -1,5 +1,7 @@
 #include "ui/AgentBridgeDialog.h"
 
+#include "core/ThemeManager.h"
+
 #include <QApplication>
 #include <QClipboard>
 #include <QHBoxLayout>
@@ -134,8 +136,11 @@ void AgentBridgeDialog::addRow(const QString &name, const QString &detail,
     lay->setContentsMargins(0, 0, 0, 0);
     lay->setSpacing(8);
     auto *dot = new QLabel(ok ? QStringLiteral("●") : QStringLiteral("○"));
-    dot->setStyleSheet(ok ? QStringLiteral("color:#3fb950;")
-                          : QStringLiteral("color:#8b949e;"));
+    dot->setStyleSheet(
+        ok ? QStringLiteral("color:%1;")
+                 .arg(ThemeManager::instance().css(QStringLiteral("ok")))
+           : QStringLiteral("color:%1;")
+                 .arg(ThemeManager::instance().css(QStringLiteral("muted"))));
     auto *nameLabel = new QLabel(name);
     nameLabel->setFixedWidth(kNameWidth);
     auto *detailLabel = new QLabel(detail);

@@ -5,18 +5,25 @@
 #include "core/Profiles.h"
 #include "core/ThemeManager.h"
 
+#include <QDir>
+#include <QDragEnterEvent>
+#include <QDropEvent>
+#include <QFileDialog>
 #include <QFrame>
 #include <QHBoxLayout>
 #include <QIcon>
 #include <QLabel>
 #include <QListWidget>
+#include <QMimeData>
 #include <QPainter>
 #include <QPainterPath>
 #include <QPixmap>
 #include <QPushButton>
 #include <QSignalBlocker>
 #include <QSlider>
+#include <QStandardPaths>
 #include <QTimer>
+#include <QUrl>
 #include <QVBoxLayout>
 
 namespace {
@@ -110,6 +117,7 @@ ThemeDialog::ThemeDialog(ProfileStore *store, QWidget *parent)
     setWindowFlags(Qt::Dialog | Qt::FramelessWindowHint);
     setAttribute(Qt::WA_TranslucentBackground, false);
     setFixedWidth(470);
+    setAcceptDrops(true);
 
     auto *root = new QVBoxLayout(this);
     root->setContentsMargins(18, 16, 18, 16);
@@ -130,7 +138,26 @@ ThemeDialog::ThemeDialog(ProfileStore *store, QWidget *parent)
 
     auto *themeLabel = new QLabel(QString::fromUtf8("主题"));
     themeLabel->setObjectName("mapHead");
-    root->addWidget(themeLabel);
+    auto *themeHead = new QHBoxLayout;
+    themeHead->addWidget(themeLabel);
+    themeHead->addStretch(1);
+    auto *themeImport = new QPushButton(QString::fromUtf8("导入主题包…"));
+    themeImport->setObjectName("ghostSmall");
+    themeImport->setCursor(Qt::PointingHandCursor);
+    themeImport->setToolTip(QString::fromUtf8(
+        "选一个主题包 .zip（theme.json + pet/ + backgrounds/），\n"
+        "装进 themes 并立即换上；同名主题会被更新覆盖。也可以直接把 zip 拖进来。"));
+    connect(themeImport, &QPushButton::clicked, this, [this] {
+        const QString file = QFileDialog::getOpenFileName(
+            this, QString::fromUtf8("选择主题包"),
+            QStandardPaths::writableLocation(QStandardPaths::DownloadLocation),
+            QString::fromUtf8("主题包 (*.zip)"));
+        if (!file.isEmpty()) {
+            importThemeFrom(file);
+        }
+    });
+    themeHead->addWidget(themeImport);
+    root->addLayout(themeHead);
 
     // 图标墙：预览图 + 名字，点一下立即换肤（选择写回 ui.theme）。
     themes_ = new QListWidget;
@@ -161,6 +188,11 @@ ThemeDialog::ThemeDialog(ProfileStore *store, QWidget *parent)
                 reloadSliders();  // 新主题的默认透明度要跟上
             });
     root->addWidget(themes_);
+    importNote_ = new QLabel;
+    importNote_->setObjectName("emptyHint");
+    importNote_->setWordWrap(true);
+    importNote_->hide();
+    root->addWidget(importNote_);
 
     // 形象与主题分离：主题管配色，形象管插画/桌宠帧/音色。
     auto *charLabel = new QLabel(QString::fromUtf8("形象"));
@@ -451,4 +483,75 @@ void ThemeDialog::syncLabels() {
 
 void ThemeDialog::scheduleApply() {
     debounce_->start();
+}
+
+void ThemeDialog::importThemeFrom(const QString &file) {
+    QString error;
+    QStringList warnings;
+    const QString id =
+        ThemeManager::instance().importThemePackage(file, &error, &warnings);
+    const auto report = [this](const char *token, const QString &text) {
+        if (importNote_ == nullptr) {
+            return;
+        }
+        importNote_->setStyleSheet(
+            QStringLiteral("color:%1;")
+                .arg(ThemeManager::instance().css(QString::fromLatin1(token))));
+        importNote_->setText(text);
+        importNote_->show();
+    };
+    if (id.isEmpty()) {
+        report("danger", QString::fromUtf8("导入失败：%1").arg(error));
+        return;
+    }
+    // 导入成功就换上（以前只装不启用，等于白装）。
+    ThemeManager::instance().setTheme(id);
+    reloadThemes();
+    QString text = QString::fromUtf8("主题包已导入并启用。");
+    if (!warnings.isEmpty()) {
+        text += QString::fromUtf8(" 提醒：%1")
+                    .arg(warnings.mid(0, 2).join(QStringLiteral("；")) +
+                         (warnings.size() > 2 ? QStringLiteral("…")
+                                             : QString()));
+    }
+    report("ok", text);
+}
+
+void ThemeDialog::dragEnterEvent(QDragEnterEvent *event) {
+    if (event->mimeData() != nullptr && event->mimeData()->hasUrls()) {
+        for (const QUrl &url : event->mimeData()->urls()) {
+            if (url.isLocalFile() &&
+                url.toLocalFile().endsWith(QStringLiteral(".zip"),
+                                           Qt::CaseInsensitive)) {
+                event->acceptProposedAction();
+                return;
+            }
+        }
+    }
+    event->ignore();
+}
+
+void ThemeDialog::dropEvent(QDropEvent *event) {
+    for (const QUrl &url : event->mimeData()->urls()) {
+        const QString file = url.toLocalFile();
+        if (!file.endsWith(QStringLiteral(".zip"), Qt::CaseInsensitive)) {
+            continue;
+        }
+        event->acceptProposedAction();
+        if (!ThemeManager::isThemePackage(file)) {
+            if (importNote_ != nullptr) {
+                importNote_->setStyleSheet(
+                    QStringLiteral("color:%1;")
+                        .arg(ThemeManager::instance().css(
+                            QStringLiteral("danger"))));
+                importNote_->setText(
+                    QString::fromUtf8("这不是主题包：压缩包里没有 theme.json"));
+                importNote_->show();
+            }
+            return;
+        }
+        importThemeFrom(file);
+        return;
+    }
+    event->ignore();
 }

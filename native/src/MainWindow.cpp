@@ -119,6 +119,12 @@ QString cssColor(const QColor &color) {
         .arg(color.alphaF(), 0, 'f', 3);
 }
 
+// 语义 token（ok/pending/info/danger/warn）→ 当前主题的颜色串。
+// 状态点、胶囊、事件流一律走这里，别再写死深色盘的值（浅色模式会发虚）。
+QString themeToken(const char *token) {
+    return ThemeManager::instance().css(QString::fromLatin1(token));
+}
+
 // 引导页数据：定义在 buildGuidePage 前面（Qt 页和外壳共用），这里先声明，
 // 让前面的 webShellState 也能序列化。
 struct GuideSection {
@@ -183,12 +189,16 @@ protected:
         }
         // 4K 源图每次 paint 都 Smooth 缩放太贵（全屏下 3840×2400 → 窗口尺寸
         // 一帧几十毫秒）：按 (路径, 窗口尺寸) 缓存缩放结果。换主题换路径、
-        // 拉窗口换尺寸才重算一次，平时 repaint 直接贴缓存。
-        if (scaledPath_ != theme.mainBackground || scaledSize_ != size()) {
+        // 拉窗口换尺寸才重算一次，平时 repaint 直接贴缓存。同名主题更新时
+        // 路径不变，所以还要看图片缓存代次（否则一直贴旧背景）。
+        const quint64 generation = ThemeManager::imageGeneration();
+        if (scaledPath_ != theme.mainBackground || scaledSize_ != size() ||
+            scaledGeneration_ != generation) {
             scaled_ = art.scaled(size(), Qt::KeepAspectRatioByExpanding,
                                  Qt::SmoothTransformation);
             scaledPath_ = theme.mainBackground;
             scaledSize_ = size();
+            scaledGeneration_ = generation;
         }
         QPainter painter(this);
         painter.drawImage(QPoint((width() - scaled_.width()) / 2,
@@ -206,6 +216,7 @@ private:
     QImage scaled_;
     QString scaledPath_;
     QSize scaledSize_;
+    quint64 scaledGeneration_ = 0;
 };
 
 // 待办行：状态色条 + 一行「Agent · 阶段 —— 时间」+ 一行消息。
@@ -230,9 +241,13 @@ public:
         const bool selected = option.state & QStyle::State_Selected;
         const bool hovered = option.state & QStyle::State_MouseOver;
         if (selected || hovered) {
-            painter->setPen(selected ? QPen(QColor(79, 140, 255, 150), 1.0)
+            // 选中色也走主题 token（a150 描边 / a36 底色），换强调色的主题能跟上。
+            painter->setPen(selected ? QPen(ThemeManager::instance().color(
+                                          QStringLiteral("a150")),
+                                      1.0)
                                      : QPen(Qt::NoPen));
-            painter->setBrush(selected ? QColor(79, 140, 255, 44)
+            painter->setBrush(selected ? ThemeManager::instance().color(
+                                             QStringLiteral("a36"))
                                        : ThemeManager::instance().color(
                                              QStringLiteral("w10")));
             painter->drawRoundedRect(row, 10, 10);
@@ -334,13 +349,12 @@ public:
     }
 };
 
-// 统计小胶囊：等你 / 待验收 / 进行中。样式自带（色板外的固定色），
-// 但字号随全局倍率走：主题广播时按当前倍率重刷，拖字体滑块立即跟上。
+// 统计小胶囊：等你 / 待验收 / 进行中。颜色走语义 token（浅色模式自动压深），
+// 字号随全局倍率走：主题广播时按当前倍率重刷，拖字体滑块立即跟上。
 class ChipLabel final : public QLabel {
 public:
-    ChipLabel(const QString &color, const QString &border,
-              const QString &fill, QWidget *parent = nullptr)
-        : QLabel(parent), color_(color), border_(border), fill_(fill) {
+    explicit ChipLabel(const char *token, QWidget *parent = nullptr)
+        : QLabel(parent), token_(token) {
         connect(&ThemeManager::instance(), &ThemeManager::themeChanged, this,
                 [this](const Theme &) { applyStyle(); });
         applyStyle();
@@ -349,23 +363,26 @@ public:
 
 private:
     void applyStyle() {
+        const QColor color =
+            ThemeManager::instance().color(QString::fromLatin1(token_));
+        QColor border = color;
+        border.setAlpha(95);
+        QColor fill = color;
+        fill.setAlpha(26);
         setStyleSheet(
             QStringLiteral("QLabel { color: %1; background: %2;"
                            " border: 1px solid %3; border-radius: 9px;"
                            " padding: 1px 8px; font-size: %4px;"
                            " font-weight: 600; }")
-                .arg(color_, fill_, border_,
+                .arg(themeToken(token_), cssColor(fill), cssColor(border),
                      QString::number(ThemeManager::scaledPx(10.5))));
     }
 
-    QString color_;
-    QString border_;
-    QString fill_;
+    const char *token_;
 };
 
-QLabel *makeChip(const QString &label, const QString &color,
-                 const QString &border, const QString &fill) {
-    auto *chip = new ChipLabel(color, border, fill);
+QLabel *makeChip(const QString &label, const char *token) {
+    auto *chip = new ChipLabel(token);
     chip->setText(label);
     return chip;
 }
@@ -603,7 +620,7 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
                 const bool running = engine_ != nullptr && engine_->isRunning();
                 const QString line =
                     ThemeManager::instance().css(QStringLiteral("line"));
-                const QString dot = running ? QStringLiteral("#3fb950") : line;
+                const QString dot = running ? themeToken("ok") : line;
                 if (statusDot_ != nullptr) {
                     statusDot_->setStyleSheet(
                         QStringLiteral("background: %1; border-radius: 3px;").arg(dot));
@@ -611,9 +628,10 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
                 if (statusText_ != nullptr) {
                     statusText_->setStyleSheet(
                         running
-                            ? QStringLiteral("color:#3fb950; font-size:%1px;"
+                            ? QStringLiteral("color:%1; font-size:%2px;"
                                             " font-weight:600;")
-                                  .arg(ThemeManager::scaledPx(11))
+                                  .arg(themeToken("ok"),
+                                       QString::number(ThemeManager::scaledPx(11)))
                             : QStringLiteral("color:%1; font-size:%2px;")
                                   .arg(ThemeManager::instance().css(
                                            QStringLiteral("muted")),
@@ -629,6 +647,8 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
                     voiceKey_->update();
                 }
                 if (workList_ != nullptr) {
+                    // 行内阶段色存在模型里，换主题要重新灌一遍，不然停在旧色。
+                    refreshWorkItems();
                     workList_->viewport()->update();
                 }
             });
@@ -1347,15 +1367,9 @@ QWidget *MainWindow::buildWorkPage() {
     workCount_->setObjectName("workCount");
     head->addWidget(workCount_);
 
-    chipNeeds_ = makeChip(QString(), QStringLiteral("#f0883e"),
-                          QStringLiteral("rgba(240,136,62,95)"),
-                          QStringLiteral("rgba(240,136,62,26)"));
-    chipReview_ = makeChip(QString(), QStringLiteral("#3fb950"),
-                           QStringLiteral("rgba(63,185,80,95)"),
-                           QStringLiteral("rgba(63,185,80,24)"));
-    chipWorking_ = makeChip(QString(), QStringLiteral("#58a6ff"),
-                            QStringLiteral("rgba(88,166,255,95)"),
-                            QStringLiteral("rgba(88,166,255,24)"));
+    chipNeeds_ = makeChip(QString(), "pending");
+    chipReview_ = makeChip(QString(), "ok");
+    chipWorking_ = makeChip(QString(), "info");
     head->addWidget(chipNeeds_);
     head->addWidget(chipReview_);
     head->addWidget(chipWorking_);
@@ -1597,11 +1611,11 @@ void MainWindow::refreshWorkItems() {
         QColor color = ThemeManager::instance().color(QStringLiteral("muted"));
         if (item.stage == QStringLiteral("needs-me")) {
             stage = QString::fromUtf8("等你处理");
-            color = QColor("#f0883e");
+            color = ThemeManager::instance().color(QStringLiteral("pending"));
             ++needs;
         } else if (item.stage == QStringLiteral("review")) {
             stage = QString::fromUtf8("待验收");
-            color = QColor("#3fb950");
+            color = ThemeManager::instance().color(QStringLiteral("ok"));
             ++review;
         } else if (item.stage == QStringLiteral("working")) {
             if (item.staleWorking(now)) {
@@ -1610,7 +1624,7 @@ void MainWindow::refreshWorkItems() {
                 color = ThemeManager::instance().color(QStringLiteral("muted"));
             } else {
                 stage = QString::fromUtf8("进行中");
-                color = QColor("#58a6ff");
+                color = ThemeManager::instance().color(QStringLiteral("info"));
             }
             ++working;
         }
@@ -2170,8 +2184,8 @@ void MainWindow::refreshHealth() {
             ? lastEventAt_.toLocalTime().toString(QStringLiteral("HH:mm"))
             : QStringLiteral("—");
     // 一行富文本：正常时只有一个绿点 + 灰字；有问题就直接列问题，不重复报「异常」。
-    const QString dot = problems.isEmpty() ? QStringLiteral("#3fb950")
-                                           : QStringLiteral("#f0883e");
+    const QString dot = problems.isEmpty() ? themeToken("ok")
+                                           : themeToken("pending");
     const QString body =
         problems.isEmpty()
             ? QString::fromUtf8("桥接正常 · %1 个 Worker · 最近 %2")
@@ -2407,7 +2421,7 @@ void MainWindow::refreshSystemPage() {
         state.value(QStringLiteral("problemsOk")).toBool()
             ? QStringLiteral("color:%1;")
                   .arg(ThemeManager::instance().css(QStringLiteral("muted")))
-            : QStringLiteral("color:#f0883e;"));
+            : QStringLiteral("color:%1;").arg(themeToken("pending")));
 
     const QJsonArray workers = state.value(QStringLiteral("workers")).toArray();
     sysWorkers_->setRowCount(workers.size());
@@ -2426,7 +2440,8 @@ void MainWindow::refreshSystemPage() {
         for (int column = 0; column < columns.size(); ++column) {
             auto *item = new QTableWidgetItem(columns.at(column));
             if (foreground && column == 0) {
-                item->setForeground(QColor("#58a6ff"));
+                item->setForeground(
+                    ThemeManager::instance().color(QStringLiteral("info")));
             }
             sysWorkers_->setItem(i, column, item);
         }
@@ -2900,20 +2915,25 @@ QJsonObject MainWindow::webThemeJson() {
         "bg",   "card.bg",   "card.bg2",  "text",      "text.soft",
         "text.dim", "muted", "muted.2",   "ghost",     "faint",
         "line", "raised",    "accent",    "accent.hover", "on.accent",
-        "danger", "warn",    "w6",        "w8",        "w10",
+        "danger", "warn",    "ok",        "pending",   "info",
+        "w6",   "w8",        "w10",
         "w14",  "w16",       "w18",       "w30",       "a26",
         "a36",  "a64"};
     QJsonObject theme;
     ThemeManager &tm = ThemeManager::instance();
+    // 用「已叠加卡片透明度」的调色板：网页卡片和 Qt 卡片必须同步变。
+    const QHash<QString, QString> palette = tm.effectivePalette();
     for (const char *token : kTokens) {
-        const QString value = cssColor(tm.color(QString::fromLatin1(token)));
+        const QString value = cssColor(ThemeManager::parsePaletteColor(
+            palette.value(QString::fromLatin1(token))));
         if (!value.isEmpty()) {
             theme.insert(QString::fromLatin1(token), value);
         }
     }
     theme.insert(QStringLiteral("fontScale"), tm.fontScale());
     // 首帧兜底色：背景图要等 Chromium 解码，先垫一层不透明纯色，别闪白。
-    QColor base = tm.color(QStringLiteral("bg"));
+    QColor base = ThemeManager::parsePaletteColor(
+        palette.value(QStringLiteral("bg")));
     base.setAlpha(255);
     theme.insert(QStringLiteral("base"), cssColor(base));
     // 美术主题的插画走虚拟域名（素材目录只读映射），不把 3MB PNG 编进状态里。
@@ -4056,7 +4076,7 @@ void MainWindow::updateListenUi() {
     if (statusDot_ != nullptr) {
         statusDot_->setStyleSheet(
             QStringLiteral("background: %1; border-radius: 3px;")
-                .arg(running ? QStringLiteral("#3fb950")
+                .arg(running ? themeToken("ok")
                              : ThemeManager::instance().css(QStringLiteral("line"))));
     }
     if (statusText_ != nullptr) {
@@ -4064,9 +4084,10 @@ void MainWindow::updateListenUi() {
                                      : QStringLiteral("未监听"));
         statusText_->setStyleSheet(
             running
-                ? QStringLiteral("color:#3fb950; font-size:%1px;"
+                ? QStringLiteral("color:%1; font-size:%2px;"
                                  " font-weight:600;")
-                      .arg(ThemeManager::scaledPx(11))
+                      .arg(themeToken("ok"),
+                           QString::number(ThemeManager::scaledPx(11)))
                 : QStringLiteral("color:%1; font-size:%2px;")
                       .arg(ThemeManager::instance().css(QStringLiteral("muted")),
                            QString::number(ThemeManager::scaledPx(11))));
@@ -4138,7 +4159,7 @@ void MainWindow::refreshVoiceUi() {
         const bool ready = voice_->modelReady();
         setVoiceStatus(voice_->statusText(),
                        ready ? ThemeManager::instance().css(QStringLiteral("text.dim"))
-                             : QStringLiteral("#d29922"),
+                             : themeToken("warn"),
                        true);
         if (voiceFoot_ != nullptr) {
             voiceFoot_->setText(
@@ -4162,10 +4183,12 @@ void MainWindow::refreshVoiceUi() {
             if (voiceState_ != nullptr) {
                 voiceState_->setTextFormat(Qt::PlainText);
                 voiceState_->setStyleSheet(QStringLiteral(
-                    "QLabel#voiceBox { border: 1px dashed rgba(120,170,255,150);"
-                    " border-radius: 10px; background: rgba(79,140,255,18);"
-                    " color: %1; padding: 8px; }")
-                    .arg(ThemeManager::instance().css(QStringLiteral("accent.text"))));
+                    "QLabel#voiceBox { border: 1px dashed %1;"
+                    " border-radius: 10px; background: %2;"
+                    " color: %3; padding: 8px; }")
+                    .arg(themeToken("a150"), themeToken("a16"),
+                         ThemeManager::instance().css(
+                             QStringLiteral("accent.text"))));
                 voiceState_->setText(
                     QString::fromUtf8("⇣  把模型包（.zip）拖到这里导入"));
                 voiceState_->setToolTip(
@@ -4377,6 +4400,9 @@ void MainWindow::applyRemoteMode(const QString &badge, const QSet<int> &keys,
 }
 
 void MainWindow::openThemeDialog() {
+    // 盘上主题目录可能被手动更新过：先把列表和当前主题从盘上重读一遍，
+    // 否则新文件夹不出现、同名覆盖还是旧图。
+    ThemeManager::instance().refreshFromDisk();
     ThemeDialog dialog(store_.get(), this);
     const QSize size = dialog.sizeHint();
     if (auto *screen = QGuiApplication::screenAt(QCursor::pos())) {
@@ -4438,7 +4464,7 @@ void MainWindow::onVoiceState(const QString &state, const QString &detail) {
                 ? voice_->statusText()
                 : detail;
         setVoiceStatus(shown,
-                       warn ? QStringLiteral("#d29922")
+                       warn ? themeToken("warn")
                             : ThemeManager::instance().css(QStringLiteral("text.dim")),
                        true);
     } else {
@@ -4575,7 +4601,8 @@ void MainWindow::onEngineRunning(bool running, const QString &message) {
     refreshRemoteCard();
     if (remoteDot_ != nullptr) {
         remoteDot_->setStyleSheet(
-            running ? QStringLiteral("background:#3fb950; border-radius:3px;")
+            running ? QStringLiteral("background:%1; border-radius:3px;")
+                          .arg(themeToken("ok"))
                     : QStringLiteral("background:%1; border-radius:3px;")
                           .arg(ThemeManager::instance().css(QStringLiteral("line"))));
     }
@@ -4613,10 +4640,10 @@ void MainWindow::appendEvent(const QString &kind, const QString &name,
     auto *item = new QListWidgetItem(text, logList_);
     QColor color = ThemeManager::instance().color(QStringLiteral("text.dim"));
     if (kind == "error") {
-        color = QColor("#f85149");
+        color = ThemeManager::instance().color(QStringLiteral("danger"));
     } else if (kind == "voice" || kind == "system") {
         // 系统命令的成功结果和听写同色：都是「按你说的做完了」。
-        color = QColor("#3fb950");
+        color = ThemeManager::instance().color(QStringLiteral("ok"));
     } else if (kind == "status") {
         color = ThemeManager::instance().color(QStringLiteral("muted"));
     }
@@ -4690,7 +4717,14 @@ bool MainWindow::eventFilter(QObject *obj, QEvent *event) {
     const QEvent::Type type = event->type();
     if (type == QEvent::DragEnter) {
         auto *drag = static_cast<QDragEnterEvent *>(event);
-        if (!modelPackageFromMime(drag->mimeData()).isEmpty()) {
+        const QString file = modelPackageFromMime(drag->mimeData());
+        if (!file.isEmpty()) {
+            if (dropHint_ != nullptr) {
+                // 主题包也是 zip：认出 theme.json 才说「换主题」，别把人吓成导入模型。
+                dropHint_->setText(ThemeManager::isThemePackage(file)
+                                       ? QString::fromUtf8("松手，换上这个主题")
+                                       : QString::fromUtf8("松手，导入这个模型包"));
+            }
             drag->acceptProposedAction();
             showDropHint(true);
             return true;
@@ -4703,7 +4737,11 @@ bool MainWindow::eventFilter(QObject *obj, QEvent *event) {
         showDropHint(false);
         if (!file.isEmpty()) {
             drop->acceptProposedAction();
-            importDroppedModel(file);
+            if (ThemeManager::isThemePackage(file)) {
+                importDroppedTheme(file);
+            } else {
+                importDroppedModel(file);
+            }
             return true;
         }
     }
@@ -4723,8 +4761,35 @@ void MainWindow::showDropHint(bool on) {
     dropHint_->show();
 }
 
-void MainWindow::importDroppedModel(const QString &file) {
-    const ModelImportResult result = importModelPackage(this, file);
+void MainWindow::importDroppedTheme(const QString &file) {
+    QString error;
+    QStringList warnings;
+    const QString id =
+        ThemeManager::instance().importThemePackage(file, &error, &warnings);
+    if (id.isEmpty()) {
+        appendEvent(QStringLiteral("error"),
+                    QString::fromUtf8("主题导入失败"), QString(), error, 0);
+        if (toast_ != nullptr) {
+            toast_->showText(
+                QString::fromUtf8("主题导入失败：%1").arg(error), 3200);
+        }
+        return;
+    }
+    ThemeManager::instance().setTheme(id);
+    QString text = QString::fromUtf8("主题已导入并启用");
+    if (!warnings.isEmpty()) {
+        text += QString::fromUtf8("（提醒：%1%2）")
+                    .arg(warnings.first(),
+                         warnings.size() > 1 ? QStringLiteral("…") : QString());
+    }
+    appendEvent(QStringLiteral("status"), QString::fromUtf8("主题已导入"),
+                QString(), text, 0);
+    if (toast_ != nullptr) {
+        toast_->showText(text, 3000);
+    }
+}
+
+void MainWindow::importDroppedModel(const QString &file) {    const ModelImportResult result = importModelPackage(this, file);
     if (!result.ok) {
         appendEvent(QStringLiteral("error"), QString::fromUtf8("模型导入失败"),
                     QString(), result.error, 0);

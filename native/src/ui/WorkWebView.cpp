@@ -550,6 +550,7 @@ QString WorkWebView::htmlFor(const QString &stateJson) const {
   --text:#171e2a;--text-soft:#1c2331;--text-dim:#2a323f;--muted:#48525f;--muted2:#5a6472;
   --ghost:#4a5361;--faint:#8f98a3;--line:#c9d0d9;--raised:#ffffff;--accent:#4f8cff;
   --accent-hover:#6299ff;--on-accent:#ffffff;--danger:#e5484d;--warn:#d29922;
+  --ok:#3fb950;--pending:#f0883e;--info:#58a6ff;
   --w6:rgba(15,23,42,.047);--w8:rgba(15,23,42,.063);--w10:rgba(15,23,42,.078);
   --w14:rgba(15,23,42,.110);--w16:rgba(15,23,42,.125);--w18:rgba(15,23,42,.141);
   --w30:rgba(15,23,42,.235);--a26:rgba(79,140,255,.102);--a36:rgba(79,140,255,.141);
@@ -703,9 +704,9 @@ QString WorkWebView::htmlFor(const QString &stateJson) const {
  .pill{display:flex;align-items:center;gap:6px;padding:3px 11px 3px 9px;
    border-radius:13px;border:1px solid var(--w14);background:var(--w6);
    color:var(--muted);font-size:var(--f11);cursor:default}
- .pill.on{color:#3fb950;font-weight:600}
+ .pill.on{color:var(--ok);font-weight:600}
  .dot{width:6px;height:6px;border-radius:3px;background:var(--line);flex:0 0 6px}
- .dot.on{background:#3fb950}
+ .dot.on{background:var(--ok)}
  .hbtn{border:0;background:transparent;color:var(--text-dim);
    font-size:var(--f11);padding:2px 6px;cursor:default}
  .hbtn:hover{color:var(--accent)}
@@ -746,7 +747,7 @@ QString WorkWebView::htmlFor(const QString &stateJson) const {
  .wave.rec{background:rgba(63,185,80,.14);border-color:rgba(63,185,80,.45)}
  .wave i{width:3px;border-radius:2px;background:var(--muted);height:6px}
  .wave.on i{background:var(--accent)}
- .wave.rec i{background:#3fb950}
+ .wave.rec i{background:var(--ok)}
  .picker{display:flex;gap:6px;flex:0 0 auto}
  .picker select{flex:1;min-width:0}
  .lfoot{font-size:var(--f10);color:var(--muted);flex:0 0 auto}
@@ -947,10 +948,10 @@ let STATE = )HTML")
                          + jsEscape(stateJson)
                          + QString::fromUtf8(R"HTML(;
 let WORK = {items:[]}, WORKERS = [], EVENTS = [], now = Date.now();
-const COLOR = {'needs-me':'#f0883e','review':'#3fb950','working':'#58a6ff'};
+const COLOR = {'needs-me':'var(--pending)','review':'var(--ok)','working':'var(--info)'};
 // 事件按 kind 上色，和 Qt 侧 appendEvent 同一套：错误红、听写/系统命令绿、
 // 状态灰（muted token）、其余（按键等）用 text.dim。阶段色一样两边硬编码同值。
-const EVCOLOR = {error:'#f85149',voice:'#3fb950',system:'#3fb950',status:'var(--muted)'};
+const EVCOLOR = {error:'var(--danger)',voice:'var(--ok)',system:'var(--ok)',status:'var(--muted)'};
 let evSeen = 0;
 let SYSTEM = {}, KEYMAP = {}, APPS = {}, GUIDE = {};
 let HEADER = {}, LEFT = {};
@@ -964,7 +965,7 @@ const TOKENS = {'--bg':'bg','--surface':'card.bg','--surface2':'card.bg2',
   '--muted':'muted','--muted2':'muted.2','--ghost':'ghost','--faint':'faint',
   '--line':'line','--raised':'raised','--accent':'accent',
   '--accent-hover':'accent.hover','--on-accent':'on.accent','--danger':'danger',
-  '--warn':'warn','--w6':'w6','--w8':'w8','--w10':'w10','--w14':'w14',
+  '--warn':'warn','--ok':'ok','--pending':'pending','--info':'info','--w6':'w6','--w8':'w8','--w10':'w10','--w14':'w14',
   '--w16':'w16','--w18':'w18','--w30':'w30','--a26':'a26','--a36':'a36',
   '--a64':'a64'};
 function applyTheme(t){
@@ -1059,8 +1060,8 @@ function renderTabs(){
 function renderChips(){
   const el=$('chips'); el.replaceChildren();
   const rows=visible();
-  const defs=[['needs-me','#f0883e','等你'],['review','#3fb950','待验收'],
-              ['working','#58a6ff','进行中']];
+  const defs=[['needs-me','var(--pending)','等你'],['review','var(--ok)','待验收'],
+              ['working','var(--info)','进行中']];
   defs.forEach(([stage,color,label])=>{
     const n=rows.filter(r=>r.stage===stage).length;
     if(!n) return;
@@ -1082,7 +1083,7 @@ function renderHealth(){
   const ok=!!h.bridge;
   const n=WORKERS.filter(w=>w.alive).length;
   const last=hhmm(h.last_event_at);
-  $('health').innerHTML='<span style="color:'+(ok?'#3fb950':'#f0883e')+'">●</span> '+
+  $('health').innerHTML='<span style="color:'+(ok?'var(--ok)':'var(--pending)')+'">●</span> '+
     (ok?'桥接正常':'桥接未启动')+' · '+n+' 个 Worker'+
     (last?' · 最近 '+last:'');
 }
@@ -1151,7 +1152,7 @@ function renderSystem(){
   const pl=document.createElement('div'); pl.textContent=s.plugin||'';
   pl.title=s.pluginTip||''; el.append(pl);
   const pr=document.createElement('div'); pr.textContent=s.problems||'';
-  if(!s.problemsOk) pr.style.color='#f0883e'; el.append(pr);
+  if(!s.problemsOk) pr.style.color='var(--pending)'; el.append(pr);
   const t=$('sysWorkers'); t.replaceChildren();
   const head=document.createElement('div'); head.className='wrow head';
   ['Worker','状态','待你','待验收','进行中','最近'].forEach(x=>{
@@ -1171,7 +1172,7 @@ function renderSystem(){
 function renderKeymap(){
   const k=KEYMAP||{};
   // 场景行：跟随前台绿点、固定场景黄点（和 Qt refreshScene 同色）。
-  $('kmDot').style.background = k.pinned ? '#d29922' : '#3fb950';
+  $('kmDot').style.background = k.pinned ? 'var(--warn)' : 'var(--ok)';
   $('kmName').textContent = k.sceneName||'—';
   $('kmRule').textContent = k.sceneRule||'';
   $('kmRule').title = k.sceneRuleTip||'';

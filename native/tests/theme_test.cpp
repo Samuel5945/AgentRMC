@@ -344,6 +344,14 @@ int main(int argc, char *argv[]) {
         }
         check(!tempLeft, "no temp dirs left behind");
 
+        // 2026-11-08：拖放/导入前先认包，别再拿主题 zip 当模型包。
+        check(ThemeManager::isThemePackage(dir.filePath(QStringLiteral("good.zip"))),
+              "isThemePackage accepts a theme zip");
+        check(!ThemeManager::isThemePackage(dir.filePath(QStringLiteral("junk.zip"))) &&
+                  !ThemeManager::isThemePackage(dir.filePath(QStringLiteral("junk.zip")) +
+                                                QStringLiteral(".notzip")),
+              "isThemePackage rejects non-zip / zips without theme.json");
+
         // 同名再导入 = 更新：改掉 displayName、重新打包后重导，读出来应是新值。
         writeFile(pkgRoot + QStringLiteral("/goodtheme/theme.json"),
                   QStringLiteral(R"({"displayName": "好主题2"})"));
@@ -366,6 +374,16 @@ int main(int argc, char *argv[]) {
                        updated.displayName)
                    .toUtf8()
                    .constData()));
+
+        // 同名更新走「先备份再装」：成功之后不能用残留的 .backup-* 目录。
+        bool backupLeft = false;
+        for (const QString &name :
+             QDir(themesDir).entryList(QDir::Dirs | QDir::Hidden)) {
+            if (name.startsWith(QStringLiteral(".backup-"))) {
+                backupLeft = true;
+            }
+        }
+        check(!backupLeft, "same-name update leaves no backup dir");
 
         // 没有 theme.json 的 zip 必须被拒绝。
         QDir().mkpath(pkgRoot + QStringLiteral("/junk/inner"));
@@ -391,6 +409,48 @@ int main(int argc, char *argv[]) {
     const QString badId = ThemeManager::importThemePackageTo(
         dir.filePath(QStringLiteral("bad.zip")), themesDir, &badError);
     check(badId.isEmpty() && !badError.isEmpty(), "corrupt zip rejected");
+
+    // 主题包校验：未知配色键 / 非颜色值 / 引用了却缺失的素材都要报出来，
+    // 不能「已导入」四个字把坏包糊过去（2026-11-08 审查）。
+    {
+        const QString badThemeDir = dir.filePath(QStringLiteral("badtheme"));
+        QDir().mkpath(badThemeDir);
+        writeFile(badThemeDir + QStringLiteral("/theme.json"),
+                  QStringLiteral(R"json({"displayName": "坏主题",
+                      "palette": {"nope.token": "#123456", "card.bg": "not-a-color"},
+                      "backgrounds": {"main": "backgrounds/missing.png"},
+                      "bubble": {"decor": "bubble/missing.png"}})json"));
+        const QStringList warnings = ThemeManager::validateThemeDir(badThemeDir);
+        const QString joined = warnings.join(QStringLiteral("\n"));
+        check(joined.contains(QStringLiteral("nope.token")) &&
+                  joined.contains(QStringLiteral("not-a-color")) &&
+                  joined.contains(QStringLiteral("backgrounds/missing.png")) &&
+                  joined.contains(QStringLiteral("bubble/missing.png")),
+              (QStringLiteral("validateThemeDir reports bad keys/colors/assets: ") +
+               joined)
+                  .toUtf8()
+                  .constData());
+        check(ThemeManager::validateThemeDir(themesDir +
+                                             QStringLiteral("/goodtheme"))
+                  .isEmpty(),
+              "validateThemeDir is quiet for a valid theme");
+    }
+
+    // 浅色盘必须覆盖状态色：深色值（#3fb950 等）在白底只有 2.3~3.9:1。
+    {
+        const QHash<QString, QString> dark = ThemeManager::classicPalette();
+        const QHash<QString, QString> light = ThemeManager::classicLightPalette();
+        check(light.value(QStringLiteral("ok")) != dark.value(QStringLiteral("ok")) &&
+                  light.value(QStringLiteral("pending")) !=
+                      dark.value(QStringLiteral("pending")) &&
+                  light.value(QStringLiteral("info")) !=
+                      dark.value(QStringLiteral("info")) &&
+                  light.value(QStringLiteral("danger")) !=
+                      dark.value(QStringLiteral("danger")) &&
+                  light.value(QStringLiteral("warn")) !=
+                      dark.value(QStringLiteral("warn")),
+              "light palette overrides all status colors");
+    }
 
     // 回归：带浅色变体的主题切配色模式必须留在自己 id 上。曾把 setScheme
     // 的重建写死 buildClassicTheme()，鲸鱼娘一切浅/深就被偷换成 classic。

@@ -1,5 +1,6 @@
 #include "ui/LlmSettingsDialog.h"
 
+#include "core/ThemeManager.h"
 #include "core/LlmClient.h"
 #include "core/Profiles.h"
 #include "core/VoiceSettings.h"
@@ -150,12 +151,12 @@ LlmSettingsDialog::LlmSettingsDialog(ProfileStore *store, QWidget *parent)
         if (preview.size() > 80) {
             preview = preview.left(80) + QString::fromUtf8("…");
         }
-        note_->setStyleSheet(QStringLiteral("color:#3fb950;"));
+        note_->setStyleSheet(QStringLiteral("color:%1;").arg(ThemeManager::instance().css(QStringLiteral("ok"))));
         note_->setText(QString::fromUtf8("✓ 模型回复：%1").arg(preview));
     });
     connect(llm_, &LlmClient::failed, this, [this](const QString &error, qint64) {
         test_->setEnabled(true);
-        note_->setStyleSheet(QStringLiteral("color:#f85149;"));
+        note_->setStyleSheet(QStringLiteral("color:%1;").arg(ThemeManager::instance().css(QStringLiteral("danger"))));
         note_->setText(QString::fromUtf8("测试失败：%1").arg(error));
     });
 }
@@ -179,7 +180,7 @@ void LlmSettingsDialog::test() {
     llm_->setOptions(baseUrl, apiKey, model_->currentText(),
                      system_->text());
     if (!llm_->ready()) {
-        note_->setStyleSheet(QStringLiteral("color:#d29922;"));
+        note_->setStyleSheet(QStringLiteral("color:%1;").arg(ThemeManager::instance().css(QStringLiteral("warn"))));
         note_->setText(QString::fromUtf8(
             "还差配置：模型必填，Key 可以留空沿用语音反馈的。"));
         return;
@@ -209,7 +210,7 @@ void LlmSettingsDialog::save() {
     }
     if (!store_->updateVoice(QJsonObject{{"llm_api", patch}})) {
         note_->setText(QString::fromUtf8("保存失败：无法写入 config.json"));
-        note_->setStyleSheet(QStringLiteral("color:#f85149;"));
+        note_->setStyleSheet(QStringLiteral("color:%1;").arg(ThemeManager::instance().css(QStringLiteral("danger"))));
         return;
     }
     // 回复音色存在 voice.tts 里（TTS 合成配置一处管），空 = 删掉跟随全局。
@@ -222,7 +223,7 @@ void LlmSettingsDialog::save() {
     }
     if (!store_->updateVoice(QJsonObject{{"tts", tts}})) {
         note_->setText(QString::fromUtf8("保存失败：无法写入 config.json"));
-        note_->setStyleSheet(QStringLiteral("color:#f85149;"));
+        note_->setStyleSheet(QStringLiteral("color:%1;").arg(ThemeManager::instance().css(QStringLiteral("danger"))));
         return;
     }
     emit saved();

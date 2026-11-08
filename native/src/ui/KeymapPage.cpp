@@ -257,8 +257,9 @@ void KeymapPage::buildUi() {
     footHint_ = new QLabel(QStringLiteral("点击手势格改键 · 自动保存"));
     footHint_->setObjectName("mapFoot");
     footHint_->setStyleSheet(
-        QStringLiteral("QLabel#mapFoot { color: #5b6472; font-size: %1px; }")
-            .arg(ThemeManager::scaledPx(10)));
+        QStringLiteral("QLabel#mapFoot { color: %1; font-size: %2px; }")
+            .arg(ThemeManager::instance().css(QStringLiteral("muted.2")),
+                 QString::number(ThemeManager::scaledPx(10))));
     const QString takeoverTip = QStringLiteral(
         "打开后当前前台场景生效：吞掉映射键原生事件，再按映射注入\n"
         "实体键盘同名键也会按映射处理\n"
@@ -315,7 +316,10 @@ void KeymapPage::refreshScene() {
     const Profile &profile = store_->current(false);
     const bool pinned = store_->isPinned();
     sceneDot_->setStyleSheet(QStringLiteral("background: %1; border-radius: 3px;")
-                                 .arg(pinned ? "#d29922" : "#3fb950"));
+                                 .arg(pinned ? ThemeManager::instance().css(
+                                                   QStringLiteral("warn"))
+                                             : ThemeManager::instance().css(
+                                                   QStringLiteral("ok"))));
     sceneName_->setText(profile.name);
     sceneName_->setMinimumWidth(
         sceneName_->fontMetrics().horizontalAdvance(profile.name));
@@ -676,7 +680,7 @@ void KeymapPage::applyPreset(int vk, const QString &gesture,
                              const QString &kind) {
     const QString profileName = currentProfile().name;
     if (!store_->apply(profileName, vk, gesture, kind)) {
-        flashHint(QStringLiteral("保存失败"), QStringLiteral("#f85149"));
+        flashHint(QStringLiteral("保存失败"), ThemeManager::instance().css(QStringLiteral("danger")));
         return;
     }
     refreshAll();
@@ -694,7 +698,7 @@ void KeymapPage::applyPreset(int vk, const QString &gesture,
     }
     flashHint(QStringLiteral("已保存 · %1 · %2 %3 → %4")
                   .arg(profileName, keyName(vk), gestureLabel(gesture), label),
-              QStringLiteral("#7ee2a8"));
+              ThemeManager::instance().css(QStringLiteral("ok")));
 }
 
 void KeymapPage::captureCombo(int vk, const QString &gesture) {
@@ -710,7 +714,7 @@ void KeymapPage::captureCombo(int vk, const QString &gesture) {
     };
     const QString profileName = currentProfile().name;
     if (!store_->apply(profileName, vk, gesture, "custom", action)) {
-        flashHint(QStringLiteral("保存失败"), QStringLiteral("#f85149"));
+        flashHint(QStringLiteral("保存失败"), ThemeManager::instance().css(QStringLiteral("danger")));
         return;
     }
     refreshAll();
@@ -718,7 +722,7 @@ void KeymapPage::captureCombo(int vk, const QString &gesture) {
     flashHint(QStringLiteral("已保存 · %1 · %2 %3 → %4")
                   .arg(profileName, keyName(vk), gestureLabel(gesture),
                        dialog.combo()),
-              QStringLiteral("#7ee2a8"));
+              ThemeManager::instance().css(QStringLiteral("ok")));
 }
 
 void KeymapPage::syncTakeoverUi() {
@@ -729,8 +733,8 @@ void KeymapPage::syncTakeoverUi() {
     takeoverSwitch_->setChecked(on);
     takeoverLabel_->setStyleSheet(
         QStringLiteral("QLabel#mapTakeover { color: %1; font-size: %2px; }")
-            .arg(on ? QStringLiteral("#9ec1ff")
-                    : QStringLiteral("#6b7684"),
+            .arg(on ? ThemeManager::instance().css(QStringLiteral("accent.text"))
+                    : ThemeManager::instance().css(QStringLiteral("muted")),
                  QString::number(ThemeManager::scaledPx(10))));
 }
 
@@ -747,9 +751,10 @@ void KeymapPage::flashHint(const QString &text, const QString &color) {
 void KeymapPage::resetHint() {
     footHint_->setText(QStringLiteral("点击手势格改键 · 自动保存"));
     footHint_->setStyleSheet(
-        QStringLiteral("QLabel#mapFoot { color: #5b6472; font-size: %1px; }")
-            .arg(ThemeManager::scaledPx(10)));
-    hintColor_ = QStringLiteral("#5b6472");
+        QStringLiteral("QLabel#mapFoot { color: %1; font-size: %2px; }")
+            .arg(ThemeManager::instance().css(QStringLiteral("muted.2")),
+                 QString::number(ThemeManager::scaledPx(10))));
+    hintColor_ = ThemeManager::instance().css(QStringLiteral("muted.2"));
     emit hintChanged();
 }
 
@@ -783,13 +788,13 @@ void KeymapPage::reloadProfiles() {
     QString error;
     if (!store_->load(&error)) {
         flashHint(QStringLiteral("重载失败：") + error,
-                  QStringLiteral("#f85149"));
+                  ThemeManager::instance().css(QStringLiteral("danger")));
         return;
     }
     rebuildCombo();
     refreshAll();
     flashHint(QStringLiteral("按键映射已重新加载"),
-              QStringLiteral("#7ee2a8"));
+              ThemeManager::instance().css(QStringLiteral("ok")));
 }
 
 QJsonObject KeymapPage::webState() {

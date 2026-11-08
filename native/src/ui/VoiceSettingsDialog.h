@@ -33,6 +33,8 @@ private:
     // 让小白只挑一个模型包：解压、找模型目录、装到程序自己的 models\ 下。
     void importModel(bool senseVoice);
     void importFromPath(const QString &file, const QString &expectedBackend);
+    // 主题包（.zip）导入：装好即启用，并把校验提醒显示在 note_ 上。
+    void importThemeFrom(const QString &file);
 
     ProfileStore *store_ = nullptr;
     QString senseDefault_;

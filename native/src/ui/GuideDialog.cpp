@@ -545,8 +545,10 @@ QWidget *GuideDialog::buildKeyTestPage() {
             [this](const Theme &) {
                 keyStatus_->setStyleSheet(
                     keyCount_ > 0
-                        ? QStringLiteral("color:#3fb950; font-size:%1px;")
-                              .arg(ThemeManager::scaledPx(16))
+                        ? QStringLiteral("color:%1; font-size:%2px;")
+                              .arg(ThemeManager::instance().css(
+                                       QStringLiteral("ok")),
+                                   QString::number(ThemeManager::scaledPx(16)))
                         : QStringLiteral("color:%1; font-size:%2px;")
                               .arg(ThemeManager::instance().css(
                                        QStringLiteral("muted")),
@@ -654,8 +656,9 @@ void GuideDialog::noteKey(const QString &keyLabel) {
     keyStatus_->setText(
         QString::fromUtf8("✓ 已收到 %1 次 · 最近：%2").arg(keyCount_).arg(keyLabel));
     keyStatus_->setStyleSheet(
-        QStringLiteral("color:#3fb950; font-size:%1px;")
-            .arg(ThemeManager::scaledPx(16)));
+        QStringLiteral("color:%1; font-size:%2px;")
+            .arg(ThemeManager::instance().css(QStringLiteral("ok")),
+                 QString::number(ThemeManager::scaledPx(16))));
 }
 
 void GuideDialog::setBackend(const QString &backend) {

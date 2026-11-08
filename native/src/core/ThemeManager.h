@@ -113,6 +113,21 @@ public:
     // 这样它们跟全局 QSS 一起随浅色/深色切换，不会各画各的。
     QColor color(const QString &token) const;
     QString css(const QString &token) const;
+    // 「卡片不透明度」覆盖后的调色板：QSS 与网页主题必须用同一份，
+    // 否则拖滑块时 Qt 卡片变了、右半区网页卡片还是原透明度。
+    QHash<QString, QString> effectivePalette() const;
+
+    // 盘上主题目录变了（手动放文件夹 / 同名覆盖）之后重扫：图片缓存作废，
+    // 当前主题按盘上内容重建并广播。主题页/设置页打开时调用。
+    void refreshFromDisk();
+    // 主题图片按路径缓存；同名覆盖后路径不变，必须靠代次作废。
+    // 自绘控件把缩放结果也缓存时，要把这个代次算进缓存键。
+    static quint64 imageGeneration();
+    static void clearImageCache();
+    // 主题包校验：未知配色键 / 非颜色值 / 引用了却缺失的素材，返回可读提醒。
+    static QStringList validateThemeDir(const QString &dir);
+    // 一个 zip 是不是主题包（任意层级含 theme.json）。只列条目，不解压。
+    static bool isThemePackage(const QString &zipPath);
 
     // 跟随系统：Windows 切换深浅色会广播 WM_SETTINGCHANGE，这里收到后
     // 若当前是 auto 且主题吃配色模式就重算并刷新。广播是串行等所有顶层窗
@@ -136,12 +151,15 @@ signals:
 
 public:
     // 导入主题包（.zip）：解压、找 theme.json、校验、装进 themes/（同名覆盖=更新）。
-    // 返回主题目录名（即主题 id）；失败返回空串并给出 error。
-    QString importThemePackage(const QString &zipPath, QString *error);
+    // 返回主题目录名（即主题 id）；失败返回空串并给出 error；warnings 收集
+    // 「能装但看着会不对」的提醒（未知配色键、坏颜色值、缺素材）。
+    QString importThemePackage(const QString &zipPath, QString *error,
+                               QStringList *warnings = nullptr);
     // 纯函数版本：显式指定目标 themes 目录，便于测试；不触发 rescan。
     static QString importThemePackageTo(const QString &zipPath,
                                         const QString &themesDir,
-                                        QString *error);
+                                        QString *error,
+                                        QStringList *warnings = nullptr);
 
 public:
     // —— 纯函数，测试直接调用 ——

@@ -1,5 +1,6 @@
 #include "ui/AsrSettingsDialog.h"
 
+#include "core/ThemeManager.h"
 #include "core/Profiles.h"
 #include "core/VoiceSettings.h"
 
@@ -137,7 +138,7 @@ void AsrSettingsDialog::save() {
     patch["model"] = model_->currentText().trimmed();
     if (!store_->updateVoice(QJsonObject{{"asr_api", patch}})) {
         note_->setText(QString::fromUtf8("保存失败：无法写入 config.json"));
-        note_->setStyleSheet(QStringLiteral("color:#f85149;"));
+        note_->setStyleSheet(QStringLiteral("color:%1;").arg(ThemeManager::instance().css(QStringLiteral("danger"))));
         return;
     }
     emit saved();

@@ -417,7 +417,7 @@ VoiceWindow::VoiceWindow(VoiceController *voice, ProfileStore *store,
                     stateLabel_->setVisible(
                         !(hintSeen_ && detail == QStringLiteral("就绪")));
                     stateLabel_->setStyleSheet(warn
-                                                   ? QStringLiteral("color:#d29922;")
+                                                   ? QStringLiteral("color:%1;").arg(ThemeManager::instance().css(QStringLiteral("warn")))
                                                    : QString());
                 } else {
                     stateLabel_->setVisible(true);
@@ -496,7 +496,7 @@ void VoiceWindow::refreshStatusDot() {
     statusDot_->setStyleSheet(
         QStringLiteral("background:%1;")
             .arg(recording_
-                     ? QStringLiteral("#3fb950")
+                     ? ThemeManager::instance().css(QStringLiteral("ok"))
                      : ThemeManager::instance().css(QStringLiteral("accent"))));
 }
 

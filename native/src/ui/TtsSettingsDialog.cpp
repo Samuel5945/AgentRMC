@@ -262,12 +262,12 @@ TtsSettingsDialog::TtsSettingsDialog(ProfileStore *store, QWidget *parent)
     tts_ = new TtsClient(this);
     connect(tts_, &TtsClient::audioReady, this, [this] {
         preview_->setEnabled(true);
-        note_->setStyleSheet(QStringLiteral("color:#3fb950;"));
+        note_->setStyleSheet(QStringLiteral("color:%1;").arg(ThemeManager::instance().css(QStringLiteral("ok"))));
         note_->setText(QString::fromUtf8("✓ 已合成并播放"));
     });
     connect(tts_, &TtsClient::failed, this, [this](const QString &error) {
         preview_->setEnabled(true);
-        note_->setStyleSheet(QStringLiteral("color:#f85149;"));
+        note_->setStyleSheet(QStringLiteral("color:%1;").arg(ThemeManager::instance().css(QStringLiteral("danger"))));
         note_->setText(QString::fromUtf8("试听失败：%1").arg(error));
     });
 }
@@ -296,7 +296,7 @@ void TtsSettingsDialog::preview() {
                      model_->currentText(), voiceName, style,
                      output_->currentData().toString());
     if (apiKey_->text().trimmed().isEmpty()) {
-        note_->setStyleSheet(QStringLiteral("color:#d29922;"));
+        note_->setStyleSheet(QStringLiteral("color:%1;").arg(ThemeManager::instance().css(QStringLiteral("warn"))));
         note_->setText(QString::fromUtf8("先填 API Key 再试听。"));
         return;
     }
@@ -336,7 +336,7 @@ void TtsSettingsDialog::save() {
                                          {QStringLiteral("input_device"),
                                           input_->currentData().toString()}})) {
         note_->setText(QString::fromUtf8("保存失败：无法写入 config.json"));
-        note_->setStyleSheet(QStringLiteral("color:#f85149;"));
+        note_->setStyleSheet(QStringLiteral("color:%1;").arg(ThemeManager::instance().css(QStringLiteral("danger"))));
         return;
     }
     tts_->stop();

@@ -30,6 +30,20 @@
 #include <QUrl>
 #include <QVBoxLayout>
 
+namespace {
+
+// 状态字色走主题 token：浅色模式要压深，硬编码的深色盘值在白底只有 2~3:1。
+void tintStatus(QLabel *label, const char *token) {
+    if (label == nullptr) {
+        return;
+    }
+    label->setStyleSheet(
+        QStringLiteral("color:%1;")
+            .arg(ThemeManager::instance().css(QString::fromLatin1(token))));
+}
+
+}  // namespace
+
 VoiceSettingsDialog::VoiceSettingsDialog(ProfileStore *store, QWidget *parent)
     : QDialog(parent), store_(store) {
     setObjectName("voiceDialog");
@@ -37,6 +51,9 @@ VoiceSettingsDialog::VoiceSettingsDialog(ProfileStore *store, QWidget *parent)
     setAttribute(Qt::WA_TranslucentBackground, false);
     setFixedWidth(460);
     setAcceptDrops(true);
+    // 盘上主题目录可能被手动更新过（同名覆盖/新文件夹）：打开设置时重扫 +
+    // 作废旧图，再按盘上内容重建当前主题，别等重启。
+    ThemeManager::instance().refreshFromDisk();
 
     auto *root = new QVBoxLayout(this);
     root->setContentsMargins(18, 16, 18, 16);
@@ -90,17 +107,7 @@ VoiceSettingsDialog::VoiceSettingsDialog(ProfileStore *store, QWidget *parent)
         if (file.isEmpty()) {
             return;
         }
-        QString error;
-        const QString id =
-            ThemeManager::instance().importThemePackage(file, &error);
-        if (id.isEmpty()) {
-            note_->setStyleSheet(QStringLiteral("color:#f85149;"));
-            note_->setText(QString::fromUtf8("导入失败：%1").arg(error));
-            return;
-        }
-        reloadThemes();
-        note_->setStyleSheet(QStringLiteral("color:#3fb950;"));
-        note_->setText(QString::fromUtf8("主题包已导入并启用。"));
+        importThemeFrom(file);
     });
     auto *themeDir = new QPushButton(QString::fromUtf8("打开主题目录"));
     themeDir->setObjectName("ghostSmall");
@@ -427,8 +434,7 @@ void VoiceSettingsDialog::refreshStatus() {
                                  : qwen3Ready(dir, nullptr, nullptr, nullptr, nullptr);
         label->setText(ready ? QString::fromUtf8("✓ 已安装")
                              : QString::fromUtf8("未安装"));
-        label->setStyleSheet(ready ? QStringLiteral("color:#3fb950;")
-                                   : QStringLiteral("color:#d29922;"));
+        tintStatus(label, ready ? "ok" : "warn");
     };
     state(senseState_, senseDefault_, true);
     state(qwenState_, qwenDefault_, false);
@@ -440,14 +446,12 @@ void VoiceSettingsDialog::refreshStatus() {
         !current.asrApiKey.isEmpty() && !current.asrApiModel.isEmpty();
     asrState_->setText(cloudReady ? QStringLiteral("✓ %1").arg(current.asrApiModel)
                                   : QString::fromUtf8("未配置"));
-    asrState_->setStyleSheet(cloudReady ? QStringLiteral("color:#3fb950;")
-                                        : QStringLiteral("color:#d29922;"));
+    tintStatus(asrState_, cloudReady ? "ok" : "warn");
     const bool llmReady =
         !current.llmApiKey.isEmpty() && !current.llmApiModel.isEmpty();
     llmState_->setText(llmReady ? QStringLiteral("✓ %1").arg(current.llmApiModel)
                                 : QString::fromUtf8("未配置"));
-    llmState_->setStyleSheet(llmReady ? QStringLiteral("color:#3fb950;")
-                                      : QStringLiteral("color:#d29922;"));
+    tintStatus(llmState_, llmReady ? "ok" : "warn");
 
     const QString backend = backend_->currentData().toString();
     if (backend == "sensevoice") {
@@ -486,7 +490,7 @@ void VoiceSettingsDialog::importFromPath(const QString &file,
     refreshStatus();
     note_->setStyleSheet(QString());
     if (!result.ok) {
-        note_->setStyleSheet(QStringLiteral("color:#f85149;"));
+        tintStatus(note_, "danger");
         note_->setText(result.error);
         return;
     }
@@ -494,13 +498,13 @@ void VoiceSettingsDialog::importFromPath(const QString &file,
                              ? QStringLiteral("Qwen3-ASR")
                              : QStringLiteral("SenseVoice");
     if (!expectedBackend.isEmpty() && expectedBackend != result.backend) {
-        note_->setStyleSheet(QStringLiteral("color:#d29922;"));
+        tintStatus(note_, "warn");
         note_->setText(QString::fromUtf8(
                            "装的是 %1 模型，可在上面「识别方式」里切过去。")
                            .arg(name));
         return;
     }
-    note_->setStyleSheet(QStringLiteral("color:#3fb950;"));
+    tintStatus(note_, "ok");
     note_->setText(
         QString::fromUtf8("%1 模型已装好，保存后生效。").arg(name));
 }
@@ -520,7 +524,36 @@ void VoiceSettingsDialog::dropEvent(QDropEvent *event) {
         return;
     }
     event->acceptProposedAction();
+    // 主题包也是 zip，先认主题再走模型导入；认不出来才当模型包。
+    if (ThemeManager::isThemePackage(file)) {
+        importThemeFrom(file);
+        return;
+    }
     importFromPath(file, QString());
+}
+
+void VoiceSettingsDialog::importThemeFrom(const QString &file) {
+    QString error;
+    QStringList warnings;
+    const QString id =
+        ThemeManager::instance().importThemePackage(file, &error, &warnings);
+    if (id.isEmpty()) {
+        tintStatus(note_, "danger");
+        note_->setText(QString::fromUtf8("导入失败：%1").arg(error));
+        return;
+    }
+    // 导入成功就换上（提示写过「已启用」，但旧实现根本没 setTheme）。
+    ThemeManager::instance().setTheme(id);
+    reloadThemes();
+    tintStatus(note_, "ok");
+    QString text = QString::fromUtf8("主题包已导入并启用。");
+    if (!warnings.isEmpty()) {
+        text += QString::fromUtf8(" 提醒：%1")
+                    .arg(warnings.mid(0, 2).join(QStringLiteral("；")) +
+                         (warnings.size() > 2 ? QStringLiteral("…")
+                                             : QString()));
+    }
+    note_->setText(text);
 }
 
 void VoiceSettingsDialog::save() {
@@ -531,7 +564,7 @@ void VoiceSettingsDialog::save() {
                 ? qwen3Ready(qwenDefault_, nullptr, nullptr, nullptr, nullptr)
                 : senseVoiceReady(senseDefault_, nullptr, nullptr);
         if (!ready) {
-            note_->setStyleSheet(QStringLiteral("color:#f85149;"));
+            tintStatus(note_, "danger");
             note_->setText(QString::fromUtf8(
                 "这个模型还没导入，语音会不可用：先点上面的「导入模型包…」，"
                 "或把识别方式改回转发。"));
@@ -559,14 +592,14 @@ void VoiceSettingsDialog::save() {
     patch["auto_enter"] = autoEnter_->isChecked();
     if (!store_->updateVoice(patch)) {
         note_->setText(QString::fromUtf8("保存失败：无法写入 config.json"));
-        note_->setStyleSheet(QStringLiteral("color:#f85149;"));
+        tintStatus(note_, "danger");
         return;
     }
     QJsonObject mediaPatch;
     mediaPatch["enabled"] = headset_->isChecked();
     if (!store_->updateMediaVoice(mediaPatch)) {
         note_->setText(QString::fromUtf8("保存失败：无法写入 config.json"));
-        note_->setStyleSheet(QStringLiteral("color:#f85149;"));
+        tintStatus(note_, "danger");
         return;
     }
     // tts 对象整体读改写：本对话框只管开关，详细字段归 TtsSettingsDialog。
@@ -574,7 +607,7 @@ void VoiceSettingsDialog::save() {
     tts["enabled"] = ttsEnabled_->isChecked();
     if (!store_->updateVoice(QJsonObject{{"tts", tts}})) {
         note_->setText(QString::fromUtf8("保存失败：无法写入 config.json"));
-        note_->setStyleSheet(QStringLiteral("color:#f85149;"));
+        tintStatus(note_, "danger");
         return;
     }
     emit saved();

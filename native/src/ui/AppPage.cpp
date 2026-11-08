@@ -1,5 +1,6 @@
 #include "AppPage.h"
 
+#include "core/ThemeManager.h"
 #include "core/AppLauncher.h"
 #include "core/Profiles.h"
 #include "core/SystemControl.h"
@@ -279,7 +280,7 @@ void AppPage::addCustomApp() {
         const QString name = nameEdit->text().trimmed();
         const QString path = pathEdit->text().trimmed();
         if (name.isEmpty() || path.isEmpty()) {
-            note->setStyleSheet(QStringLiteral("color:#f85149;"));
+            note->setStyleSheet(QStringLiteral("color:%1;").arg(ThemeManager::instance().css(QStringLiteral("danger"))));
             note->setText(QString::fromUtf8("名称和路径都要填。"));
             return;
         }
@@ -287,7 +288,7 @@ void AppPage::addCustomApp() {
         for (const QJsonValue &value : apps) {
             if (value.toObject().value("name").toString().compare(
                     name, Qt::CaseInsensitive) == 0) {
-                note->setStyleSheet(QStringLiteral("color:#f85149;"));
+                note->setStyleSheet(QStringLiteral("color:%1;").arg(ThemeManager::instance().css(QStringLiteral("danger"))));
                 note->setText(QString::fromUtf8("已经有叫这个名字的自定义应用了。"));
                 return;
             }

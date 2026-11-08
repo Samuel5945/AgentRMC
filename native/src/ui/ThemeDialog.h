@@ -3,13 +3,15 @@
 #include <QDialog>
 
 class ProfileStore;
+class QDragEnterEvent;
+class QDropEvent;
 class QLabel;
 class QListWidget;
 class QPushButton;
 class QSlider;
 class QTimer;
 
-// 主题与外观：换主题、调卡片不透明度 / 背景压暗。
+// 主题与外观：换主题、导入主题包、调卡片不透明度 / 背景压暗。
 // 语音设置里也有一个主题下拉，但那里是「顺手改」，这里才是专门入口——
 // 换肤和「字看不清」是两件用户会专门去找的事。
 class ThemeDialog final : public QDialog {
@@ -17,6 +19,10 @@ class ThemeDialog final : public QDialog {
 
 public:
     explicit ThemeDialog(ProfileStore *store, QWidget *parent = nullptr);
+
+protected:
+    void dragEnterEvent(QDragEnterEvent *event) override;
+    void dropEvent(QDropEvent *event) override;
 
 private:
     void reloadThemes();
@@ -27,6 +33,8 @@ private:
     void syncLabels();
     // 滑块拖动时别每一格都重刷整窗样式：攒 60ms 再落一次。
     void scheduleApply();
+    // 主题包（.zip）导入：装好即启用，校验提醒显示在状态行上。
+    void importThemeFrom(const QString &file);
 
     ProfileStore *store_ = nullptr;
     QListWidget *themes_ = nullptr;
@@ -40,5 +48,6 @@ private:
     QLabel *alphaValue_ = nullptr;
     QLabel *dimValue_ = nullptr;
     QLabel *fontScaleValue_ = nullptr;
+    QLabel *importNote_ = nullptr;
     QTimer *debounce_ = nullptr;
 };

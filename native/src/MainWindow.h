@@ -144,6 +144,8 @@ private:
     void onUpdateChecked(const UpdateInfo &info, bool manual);
     void showUpdateDialog(const UpdateInfo &info);
     void importDroppedModel(const QString &file);
+    // 拖进来的既是模型包后缀也可能是主题包：先按 theme.json 认，认出来就换主题。
+    void importDroppedTheme(const QString &file);
     void showDropHint(bool on);
     void updateTrayState();
     bool autoStartEnabled() const;

@@ -7,6 +7,7 @@
 #include <QDateTime>
 #include <QDir>
 #include <QDirIterator>
+#include <QElapsedTimer>
 #include <QFile>
 #include <QFileInfo>
 #include <QJsonArray>
@@ -85,6 +86,18 @@ QString rgbaString(const QColor &color, int alpha) {
         .arg(qBound(0, alpha, 255));
 }
 
+// 主题图片按路径缓存；同名覆盖后路径不变，只靠 clearImageCache 作废，
+// 同时递增代次让自绘控件（缩略图/背景缩放）的二级缓存也能发现。
+QHash<QString, QImage> &imageCache() {
+    static QHash<QString, QImage> cache;
+    return cache;
+}
+
+quint64 &imageCacheGeneration() {
+    static quint64 generation = 0;
+    return generation;
+}
+
 }  // namespace
 
 ThemeManager &ThemeManager::instance() {
@@ -133,11 +146,16 @@ QHash<QString, QString> ThemeManager::classicPalette() {
     m_.insert(QStringLiteral("faint.2"), QStringLiteral("#3d4653"));
     m_.insert(QStringLiteral("ghost"), QStringLiteral("#6b7684"));
     m_.insert(QStringLiteral("guide.image.bg"), QStringLiteral("#05070c"));
+    // 状态色：阶段/事件/健康点共用一套语义 token（深色值）。浅色版的
+    // 同亮度值在白底上只有 2.3~3.4:1，必须在 classicLightPalette 里压深。
+    m_.insert(QStringLiteral("info"), QStringLiteral("#58a6ff"));
     m_.insert(QStringLiteral("line"), QStringLiteral("#4a5568"));
     m_.insert(QStringLiteral("muted"), QStringLiteral("#8b949e"));
     m_.insert(QStringLiteral("muted.2"), QStringLiteral("#5b6472"));
     m_.insert(QStringLiteral("msgbox.bg"), QStringLiteral("#121722"));
+    m_.insert(QStringLiteral("ok"), QStringLiteral("#3fb950"));
     m_.insert(QStringLiteral("on.accent"), QStringLiteral("white"));
+    m_.insert(QStringLiteral("pending"), QStringLiteral("#f0883e"));
     m_.insert(QStringLiteral("raised"), QStringLiteral("#161d2a"));
     m_.insert(QStringLiteral("text"), QStringLiteral("#e6edf3"));
     m_.insert(QStringLiteral("text.body"), QStringLiteral("#b6c2cf"));
@@ -200,6 +218,14 @@ QHash<QString, QString> ThemeManager::classicLightPalette() {
     // 浅底上的蓝色文字要压深才读得出；主按钮仍是蓝底白字，accent 本身不动。
     m_.insert(QStringLiteral("accent.text"), QStringLiteral("#2f6bdb"));
     m_.insert(QStringLiteral("accent.link"), QStringLiteral("#2f6bdb"));
+    // 状态色浅色版：深色值（#3fb950/#f0883e/#58a6ff/#e5484d/#d29922）在白底
+    // 只有 2.3~3.9:1，正文级文字必须压深。这五个值在 #ffffff 与卡片渐变
+    // 第二停 #eef1f5 上都 ≥4.5:1（2026-11-08 实测）。
+    m_.insert(QStringLiteral("ok"), QStringLiteral("#15702c"));
+    m_.insert(QStringLiteral("pending"), QStringLiteral("#b04600"));
+    m_.insert(QStringLiteral("info"), QStringLiteral("#0969da"));
+    m_.insert(QStringLiteral("danger"), QStringLiteral("#cf222e"));
+    m_.insert(QStringLiteral("warn"), QStringLiteral("#8a5c00"));
     // 白色透明阶梯在浅底上改成深色透明阶梯（表面/描边/滚动条）；透明度翻倍，
     // 不然白底上描边几乎看不见。蓝色 a 阶梯不动——选中高亮两种底都成立。
     const QList<int> alphas = {4,  6,  7,  8,  10, 11, 12, 14,
@@ -284,8 +310,141 @@ ThemeInfo ThemeManager::parseThemeDir(const QString &dir, QString *error) {
     return info;
 }
 
-QImage ThemeManager::cachedImage(const QString &path) {
-    static QHash<QString, QImage> cache;
+QStringList ThemeManager::validateThemeDir(const QString &dir) {
+    // 「能装但看着会不对」的提醒：未知配色键、非颜色值、引用了却缺失的素材。
+    // 只提醒不拦——主题仍然可装（缺件会退回内置配色/无图），但导入方要把
+    // 这些话说给用户听，不能报一句「已导入」就完事。
+    QStringList warnings;
+    QFile file(dir + QStringLiteral("/theme.json"));
+    if (!file.open(QIODevice::ReadOnly)) {
+        return warnings;
+    }
+    const QJsonObject root = QJsonDocument::fromJson(file.readAll()).object();
+    const QHash<QString, QString> known = classicPalette();
+    const auto checkPalette = [&warnings, &known](const QJsonObject &palette,
+                                                  const QString &prefix) {
+        for (auto it = palette.begin(); it != palette.end(); ++it) {
+            if (it.key() == QStringLiteral("light")) {
+                continue;  // 浅色变体单独校验
+            }
+            if (!known.contains(it.key())) {
+                warnings << QStringLiteral("%1未知配色键 %2（已忽略）")
+                                .arg(prefix, it.key());
+                continue;
+            }
+            const QString value = it.value().toString().trimmed();
+            if (!value.isEmpty() &&
+                !ThemeManager::parsePaletteColor(value).isValid()) {
+                warnings << QStringLiteral("%1配色 %2 的值不是有效颜色：%3")
+                                .arg(prefix, it.key(), value.left(40));
+            }
+        }
+    };
+    const QJsonObject palette = root.value(QStringLiteral("palette")).toObject();
+    checkPalette(palette, QString());
+    checkPalette(palette.value(QStringLiteral("light")).toObject(),
+                 QStringLiteral("浅色版 "));
+
+    const auto checkImage = [&warnings, &dir](const QString &rel,
+                                              const QString &label) {
+        const QString trimmed = rel.trimmed();
+        if (trimmed.isEmpty()) {
+            return;
+        }
+        const QString abs = absolutePath(dir, trimmed);
+        if (!QFile::exists(abs)) {
+            warnings << QStringLiteral("%1 指向的素材不存在：%2")
+                            .arg(label, trimmed);
+        }
+    };
+    const QJsonObject backgrounds =
+        root.value(QStringLiteral("backgrounds")).toObject();
+    checkImage(backgrounds.value(QStringLiteral("main")).toString(),
+               QStringLiteral("backgrounds.main"));
+    checkImage(backgrounds.value(QStringLiteral("panel")).toString(),
+               QStringLiteral("backgrounds.panel"));
+    const QJsonObject lightBg =
+        backgrounds.value(QStringLiteral("light")).toObject();
+    checkImage(lightBg.value(QStringLiteral("main")).toString(),
+               QStringLiteral("backgrounds.light.main"));
+    checkImage(lightBg.value(QStringLiteral("panel")).toString(),
+               QStringLiteral("backgrounds.light.panel"));
+    checkImage(root.value(QStringLiteral("bubble"))
+                   .toObject()
+                   .value(QStringLiteral("decor"))
+                   .toString(),
+               QStringLiteral("bubble.decor"));
+    const QJsonObject states = root.value(QStringLiteral("pet"))
+                                   .toObject()
+                                   .value(QStringLiteral("states"))
+                                   .toObject();
+    for (auto it = states.begin(); it != states.end(); ++it) {
+        for (const QJsonValue &frame :
+             it.value().toObject().value(QStringLiteral("frames")).toArray()) {
+            const QString rel = frame.toString().trimmed();
+            if (!rel.isEmpty() && !QFile::exists(absolutePath(dir, rel))) {
+                warnings << QStringLiteral("桌宠帧 %1/%2 不存在：%3")
+                                .arg(it.key(), rel, rel);
+            }
+        }
+    }
+    return warnings;
+}
+
+bool ThemeManager::isThemePackage(const QString &zipPath) {
+    if (!zipPath.endsWith(QStringLiteral(".zip"), Qt::CaseInsensitive) ||
+        !QFile::exists(zipPath)) {
+        return false;
+    }
+    // 只列条目不解压：主题包里任意层级有 theme.json 就算主题包。
+    // 模型包可能是几百 MB 的 tar.gz，超时/超长就按非主题处理。
+    QProcess proc;
+    proc.setProgram(QStringLiteral("tar"));
+    proc.setArguments({QStringLiteral("-tf"),
+                       QDir::toNativeSeparators(zipPath)});
+#ifdef Q_OS_WIN
+    proc.setCreateProcessArgumentsModifier(
+        [](QProcess::CreateProcessArguments *args) {
+            args->flags |= CREATE_NO_WINDOW;
+        });
+#endif
+    proc.start();
+    if (!proc.waitForStarted(2000)) {
+        return false;
+    }
+    QByteArray out;
+    QElapsedTimer timer;
+    timer.start();
+    const auto found = [](const QByteArray &buffer) {
+        for (const QByteArray &raw : buffer.split('\n')) {
+            const QByteArray line = raw.trimmed();
+            if (line.startsWith("__MACOSX/")) {
+                continue;
+            }
+            const int slash = line.lastIndexOf('/');
+            const QByteArray name = slash >= 0 ? line.mid(slash + 1) : line;
+            if (name == "theme.json") {
+                return true;
+            }
+        }
+        return false;
+    };
+    while (proc.state() != QProcess::NotRunning && timer.elapsed() < 4000) {
+        if (proc.waitForReadyRead(100)) {
+            out += proc.readAllStandardOutput();
+        }
+        if (found(out)) {
+            proc.kill();
+            proc.waitForFinished(500);
+            return true;
+        }
+    }
+    proc.kill();
+    proc.waitForFinished(500);
+    return found(out);
+}
+
+QImage ThemeManager::cachedImage(const QString &path) {    auto &cache = imageCache();
     auto it = cache.constFind(path);
     if (it != cache.constEnd()) {
         return it.value();
@@ -293,6 +452,15 @@ QImage ThemeManager::cachedImage(const QString &path) {
     const QImage image(path);
     cache.insert(path, image);
     return image;
+}
+
+quint64 ThemeManager::imageGeneration() {
+    return imageCacheGeneration();
+}
+
+void ThemeManager::clearImageCache() {
+    imageCache().clear();
+    ++imageCacheGeneration();
 }
 
 QString ThemeManager::renderQss(const QString &qssTemplate,
@@ -347,6 +515,11 @@ void ThemeManager::rescan() {
     const QStringList dirs =
         root.entryList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name);
     for (const QString &name : dirs) {
+        // .import-* / .backup-* 是导入过程的临时目录（崩溃会留下）；点开头
+        // 的目录一律不算主题，别让半成品出现在选择列表里。
+        if (name.startsWith(QLatin1Char('.'))) {
+            continue;
+        }
         QString error;
         ThemeInfo info = parseThemeDir(root.filePath(name), &error);
         if (name == QStringLiteral("classic")) {
@@ -615,7 +788,11 @@ void ThemeManager::applyQss() {
     const QString qss = tpl.open(QIODevice::ReadOnly | QIODevice::Text)
                             ? QString::fromUtf8(tpl.readAll())
                             : QString();
-    // 用户拖过「卡片不透明度」就覆盖主题给的两个卡片色，其余 token 原样保留。
+    qApp->setStyleSheet(
+        renderQss(qss, effectivePalette(), current_.mainBackground, fontScale()));
+}
+
+QHash<QString, QString> ThemeManager::effectivePalette() const {
     QHash<QString, QString> palette = current_.palette;
     if (cardAlpha_ >= 0) {
         for (const char *key : {"card.bg", "card.bg2"}) {
@@ -626,8 +803,20 @@ void ThemeManager::applyQss() {
             }
         }
     }
-    qApp->setStyleSheet(
-        renderQss(qss, palette, current_.mainBackground, fontScale()));
+    return palette;
+}
+
+void ThemeManager::refreshFromDisk() {
+    // 手动放文件夹 / 同名覆盖之后：重扫目录、作废旧图、按盘上内容重建当前主题。
+    // 不做的话新目录不会出现在列表里，同名更新的背景/桌宠帧要等重启。
+    rescan();
+    clearImageCache();
+    if (store_ == nullptr) {
+        return;
+    }
+    current_ = composeCharacter(loadTheme(current_.id));
+    applyQss();
+    emit themeChanged(current_);
 }
 
 QColor ThemeManager::parsePaletteColor(const QString &value) {
@@ -805,8 +994,10 @@ void ThemeManager::setCharacter(const QString &id) {
 
 QString ThemeManager::importThemePackageTo(const QString &zipPath,
                                            const QString &themesDir,
-                                           QString *error) {
+                                           QString *error,
+                                           QStringList *warnings) {
     if (error) error->clear();
+    if (warnings) warnings->clear();
     if (!QFile::exists(zipPath)) {
         if (error) *error = QStringLiteral("找不到文件：%1").arg(zipPath);
         return {};
@@ -886,6 +1077,9 @@ QString ThemeManager::importThemePackageTo(const QString &zipPath,
         }
         return {};
     }
+    if (warnings) {
+        *warnings = validateThemeDir(manifestDir);
+    }
 
     // 目标目录名：zip 里那个文件夹的名字；直接铺在根就用 zip 文件名。
     QString name = manifestDir == tmp
@@ -896,23 +1090,49 @@ QString ThemeManager::importThemePackageTo(const QString &zipPath,
         name = QFileInfo(zipPath).completeBaseName();
     }
     const QString target = themesDir + QLatin1Char('/') + name;
-    QDir(target).removeRecursively();  // 同名 = 更新
-    if (!QDir().rename(manifestDir, target)) {
-        if (!copyDir(manifestDir, target)) {
+    // 同名 = 更新。先把旧目录挪到备份再装：装失败能还原，不会把用户
+    // 正在用的主题删掉（旧实现是先 removeRecursively，失败就没了）。
+    QString backup;
+    if (QDir(target).exists()) {
+        backup = themesDir + QStringLiteral("/.backup-") +
+                 QString::number(QDateTime::currentMSecsSinceEpoch());
+        if (!QDir().rename(target, backup)) {
             QDir(tmp).removeRecursively();
-            if (error) *error = QStringLiteral("装进 themes 失败");
+            if (error) {
+                *error = QStringLiteral(
+                    "旧主题目录正被占用，无法原地更新；关掉占用它的程序后重试");
+            }
             return {};
         }
+    }
+    bool installed = QDir().rename(manifestDir, target);
+    if (!installed) {
+        installed = copyDir(manifestDir, target);
+    }
+    if (!installed) {
+        if (!backup.isEmpty()) {
+            QDir(target).removeRecursively();
+            QDir().rename(backup, target);
+        }
+        QDir(tmp).removeRecursively();
+        if (error) *error = QStringLiteral("装进 themes 失败");
+        return {};
+    }
+    if (!backup.isEmpty()) {
+        QDir(backup).removeRecursively();
     }
     QDir(tmp).removeRecursively();
     return name;
 }
 
 QString ThemeManager::importThemePackage(const QString &zipPath,
-                                         QString *error) {
-    const QString id = importThemePackageTo(zipPath, themesRoot(), error);
+                                         QString *error,
+                                         QStringList *warnings) {
+    const QString id = importThemePackageTo(zipPath, themesRoot(), error, warnings);
     if (!id.isEmpty()) {
         rescan();
+        // 同名覆盖路径不变：图缓存必须作废，否则装的更新还是旧画面。
+        clearImageCache();
     }
     return id;
 }

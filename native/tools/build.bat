@@ -31,19 +31,21 @@ if errorlevel 1 exit /b 1
     "%ROOT%\native\build\Release\AgentRMCNative.exe" >nul
 if errorlevel 1 exit /b 1
 
-rem Widgets 版用不到 QRhi 的 D3D 着色器编译器和 VC 安装包，删掉省 ~34MB。
+rem QRhi D3D shader compiler and VC redistributable are unused in the Widgets
+rem build; delete them to save ~34MB.
 for %%f in (vc_redist.x64.exe dxcompiler.dll dxil.dll d3dcompiler_47.dll) do (
     if exist "%ROOT%\native\build\Release\%%f" del /q "%ROOT%\native\build\Release\%%f"
 )
 
-rem 每次强制用仓库干净模板覆盖 build 内的 config/profiles：installer 会把它们当
-rem 全新安装的默认种子。若只在不存在时拷贝，开发期写进 build 的个人密钥/模型
-rem 配置会残留并被分发出去（2026-11-04 实测泄露过一枚 API key）。
+rem Always overwrite config/profiles with the clean repo templates so the
+rem installer never seeds personal API keys or model paths into a fresh install.
+rem (A key leaked once when we skipped this copy: 2026-11-04.)
 copy /y "%ROOT%\config.json" "%ROOT%\native\build\Release\" >nul
 copy /y "%ROOT%\profiles.json" "%ROOT%\native\build\Release\" >nul
 
-rem WebView2 loader 必须躺在 exe 旁边：开发态还能从源码树 .webview2-sdk 往上找，
-rem 装好的程序旁边没有源码树，缺它就静默回退 Qt 页签（2026-11-07 实测）。
+rem WebView2Loader.dll must sit next to the exe; in dev the shell can search
+rem the source tree .webview2-sdk, but the installed copy has no source tree
+rem and silently falls back to Qt tabs without it (observed 2026-11-07).
 if exist "%ROOT%\native\.webview2-sdk\runtimes\win-x64\native\WebView2Loader.dll" (
     copy /y "%ROOT%\native\.webview2-sdk\runtimes\win-x64\native\WebView2Loader.dll" "%ROOT%\native\build\Release\" >nul
 ) else (
@@ -52,7 +54,8 @@ if exist "%ROOT%\native\.webview2-sdk\runtimes\win-x64\native\WebView2Loader.dll
 
 rem Themes are loose folders next to the exe so users can drop in new ones.
 if exist "%ROOT%\themes" robocopy "%ROOT%\themes" "%ROOT%\native\build\Release\themes" /E /NFL /NDL /NJH /NJS >nul
-rem ZCode 联动插件（agentrmc-bridge）随包分发，装完 AgentRMC 就地可用。
+rem ZCode companion plugin (agentrmc-bridge) ships alongside the app; users
+rem can use it immediately after installing AgentRMC.
 rem Version single source is plugins\agentrmc-bridge\VERSION; sync the five
 rem manifests into it before the copy so the zip can't carry a stale version.
 powershell -NoProfile -ExecutionPolicy Bypass -File "%HERE%sync-plugin-version.ps1" >nul

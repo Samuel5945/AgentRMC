@@ -59,8 +59,9 @@ Harness, OpenSquilla, BLE remote, Qt 6, C++, Windows
 当前实现是 **C++/Qt 6 原生版**（`native/`，v0.4.1；按键映射不接 LLM，动作直接交给 Qoder / WorkBuddy 等前台 Agent；只有桌宠对话模式会调用你在「对话设置」里自配的 LLM）。
 Python 版留在 `legacy-python` 分支，两版读写同一套 `config.json` / `profiles.json`。
 
-当前 0.4.1：**四路定向派发全链接线**——说一句话直接派给 Qoder / ZCode / WorkBuddy / DeepSeek Harness /
-OpenSquilla 里的指定宿主（ZCode 走自带 app-server 通道、DSH 走插件通道、OpenSquilla 走网关 RPC，都不靠模拟点击）；
+当前 0.4.1：**四路定向派发全链接线**——说一句话直接派给 WorkBuddy / ZCode / DeepSeek Harness /
+OpenSquilla 里的指定会话（ZCode 走自带 app-server 通道、DSH 走插件通道、OpenSquilla 走网关 RPC，都不靠模拟点击；
+Qoder 桌面通道等上游，暂用「续当前会话」）；
 主窗右半区换成 **WebView2 单管线外壳**，Qt 混渲染发虚消除；语音新增**系统控制**（音量 / 亮度 / 媒体，
 关机重启要二次确认）；**模型出错（StopFailure）也会喊人**；提醒从四类变五类。
 **装 Agent 的那台机器不需要 Node**——联动插件自己找运行时（PATH 上的 node，找不到就借宿主自带的

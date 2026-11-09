@@ -289,11 +289,16 @@ VoiceWindow::VoiceWindow(VoiceController *voice, ProfileStore *store,
     foot->setSpacing(6);
     footLay->addLayout(foot);
     backend_ = new QComboBox;
-    // 与主窗语音卡同一套命名，两处别各叫各的。
-    backend_->addItem(QString::fromUtf8("转发热键 · 0 模型"), "hotkey");
-    backend_->addItem(QString::fromUtf8("本地 SenseVoice"), "sensevoice");
-    backend_->addItem(QString::fromUtf8("本地 Qwen3-ASR"), "qwen3");
-    backend_->addItem(QString::fromUtf8("云端 ASR（需联网）"), "api");
+    // 与主窗语音卡同一套命名，两处别各叫各的。用短名：独立面板这一行还要挤
+    // 「对话 / 语音反馈 / 模型设置」三个按钮，长标签（本地 Qwen3-ASR）会被
+    // 挤成「本地 Q」。
+    backend_->addItem(QString::fromUtf8("转发"), "hotkey");
+    backend_->addItem(QString::fromUtf8("Sense"), "sensevoice");
+    backend_->addItem(QString::fromUtf8("Qwen"), "qwen3");
+    backend_->addItem(QString::fromUtf8("云端"), "api");
+    backend_->setSizeAdjustPolicy(
+        QComboBox::AdjustToMinimumContentsLengthWithIcon);
+    backend_->setMinimumContentsLength(4);
     const QString backendKey = [&] {
         const QString value = store_->voiceConfig().value("backend").toString();
         return value.isEmpty() ? QStringLiteral("hotkey") : value;

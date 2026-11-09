@@ -106,10 +106,10 @@ public:
         backendCombo_->setObjectName("petBackend");
         backendCombo_->setFocusPolicy(Qt::NoFocus);
         backendCombo_->setCursor(Qt::PointingHandCursor);
-        backendCombo_->addItem(QString::fromUtf8("转发热键"));
-        backendCombo_->addItem(QString::fromUtf8("本地 SenseVoice"));
-        backendCombo_->addItem(QString::fromUtf8("本地 Qwen3-ASR"));
-        backendCombo_->addItem(QString::fromUtf8("云端 ASR"));
+        backendCombo_->addItem(QString::fromUtf8("转发"));
+        backendCombo_->addItem(QString::fromUtf8("Sense"));
+        backendCombo_->addItem(QString::fromUtf8("Qwen"));
+        backendCombo_->addItem(QString::fromUtf8("云端"));
         connect(backendCombo_, &QComboBox::currentIndexChanged, this,
                 [this](int index) { pet_->setBackend(index); });
         top->addWidget(backendCombo_);

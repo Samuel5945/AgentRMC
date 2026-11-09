@@ -1378,9 +1378,10 @@ function setSel(el,opts,value,enabled){
   if(enabled!==undefined) el.disabled=!enabled;
   if(document.activeElement!==el && el.value!==value) el.value=value;
 }
-const BACKENDS=[{id:'hotkey',name:'转发热键 · 0 模型'},
-  {id:'sensevoice',name:'本地 SenseVoice'},{id:'qwen3',name:'本地 Qwen3-ASR'},
-  {id:'api',name:'云端 ASR（需联网）'}];
+// 短名：独立面板一行要挤三个按钮，长标签会被截成「本地 Q」。
+const BACKENDS=[{id:'hotkey',name:'转发'},
+  {id:'sensevoice',name:'Sense'},{id:'qwen3',name:'Qwen'},
+  {id:'api',name:'云端'}];
 // 遥控器实体：键位坐标照 RemotePanel 的排布，灯态走 mode/lit/linked 三层。
 const RPOS={0:[35,10,'○'],122:[35,40,'◎'],116:[35,70,'●'],38:[35,100,'↑'],
   37:[12,130,'←'],13:[35,130,'OK'],39:[58,130,'→'],40:[35,160,'↓'],

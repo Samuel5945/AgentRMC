@@ -38,6 +38,11 @@ public:
     // 桌面端 exe：AGENTRMC_ZCODE_EXE 覆盖优先，否则解析 HKCR\zcode 协议命令。
     static QString zcodeExeFromRegistry();
     static QString cjsPathFor(const QString &zcodeExe);
+    // CLI 形态（ELECTRON_RUN_AS_NODE 跑 zcode.cjs）找内置供应商配置只认
+    // glm/provider/ 与盘符根 config/provider/ 两个死路径，桌面端实际放在
+    // resources/config/provider/——spawn 时经 ZCODE_BUILTIN_PROVIDER_CONFIG_FILE
+    // 显式指过去，否则 app-server 启动即 exit=1。文件不存在返回空串。
+    static QString builtinProviderConfigFor(const QString &zcodeExe);
     // 会话索引（共享 SQLite，只读）：session 行存在且未删除＝归属证明；
     // session_entry 的 runtime/model_selection＝该会话当前模型；time_updated
     // 给活动门。rollout jsonl 只有开了完整保留的会话才有，不能当索引。

@@ -99,6 +99,12 @@ QString ZcodeDispatch::cjsPathFor(const QString &zcodeExe) {
            QStringLiteral("/resources/glm/zcode.cjs");
 }
 
+QString ZcodeDispatch::builtinProviderConfigFor(const QString &zcodeExe) {
+    const QString path = QFileInfo(zcodeExe).absolutePath() +
+                         QStringLiteral("/resources/config/provider/zcode-builtin.json");
+    return QFileInfo::exists(path) ? path : QString();
+}
+
 bool ZcodeDispatch::sessionRecord(const QString &sessionId, QString *directory,
                                   QJsonObject *modelSelection,
                                   qint64 *timeUpdatedMs) {
@@ -176,6 +182,16 @@ void ZcodeDispatch::start(const Job &job) {
     process_ = new QProcess(this);
     QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
     env.insert(QStringLiteral("ELECTRON_RUN_AS_NODE"), QStringLiteral("1"));
+    // 宿主桌面端会给自己子进程注入该变量；AgentRMC 从开始菜单/自启起来时没有，
+    // 不补的话 CLI 在两个死路径找不到配置直接 exit=1。已有值不覆盖。
+    const QString kProviderEnv =
+        QStringLiteral("ZCODE_BUILTIN_PROVIDER_CONFIG_FILE");
+    if (env.value(kProviderEnv).isEmpty()) {
+        const QString bundled = builtinProviderConfigFor(job_.zcodeExe);
+        if (!bundled.isEmpty()) {
+            env.insert(kProviderEnv, bundled);
+        }
+    }
     process_->setProcessEnvironment(env);
     process_->setWorkingDirectory(QDir::homePath());
     process_->setProgram(job_.zcodeExe);

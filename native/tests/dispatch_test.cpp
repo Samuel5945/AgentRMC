@@ -449,6 +449,12 @@ int main(int argc, char *argv[]) {
         if (node.isEmpty()) {
             std::printf("SKIP zcode mock: node not found on PATH\n");
         } else {
+            // 从 ZCode 会话里跑测试时宿主会注入 ZCODE_BUILTIN_PROVIDER_CONFIG_FILE，
+            // 不清掉的话「注入」断言测的是继承值而不是 spawn 逻辑。
+            const QByteArray providerEnvKey =
+                QByteArrayLiteral("ZCODE_BUILTIN_PROVIDER_CONFIG_FILE");
+            const QByteArray savedProviderEnv = qgetenv(providerEnvKey.constData());
+            qunsetenv(providerEnvKey.constData());
             const auto waitUntil = [](const std::function<bool()> &pred, int ms) {
                 QElapsedTimer t;
                 t.start();
@@ -463,7 +469,8 @@ int main(int argc, char *argv[]) {
                                      bool *skippedOnce, bool *persistTimedOut,
                                      bool *notTruncated, int *msgPolls,
                                      bool *authAnswered = nullptr,
-                                     QString *failWhyOut = nullptr) {
+                                     QString *failWhyOut = nullptr,
+                                     bool *providerEnvOk = nullptr) {
                 QTemporaryDir ztmp;
                 const QString root = ztmp.path();
                 const QString exe = root + QStringLiteral("/ZCode.exe");
@@ -483,6 +490,16 @@ int main(int argc, char *argv[]) {
                 scenario.open(QIODevice::WriteOnly);
                 scenario.write(QStringLiteral(R"({"mode":"%1"})").arg(mode).toUtf8());
                 scenario.close();
+                // 桌面端自带内置供应商配置（resources/config/provider/）：
+                // spawn 必须经 ZCODE_BUILTIN_PROVIDER_CONFIG_FILE 指给 CLI。
+                const QString providerDir =
+                    root + QStringLiteral("/resources/config/provider");
+                QDir().mkpath(providerDir);
+                QFile providerCfg(providerDir +
+                                  QStringLiteral("/zcode-builtin.json"));
+                providerCfg.open(QIODevice::WriteOnly);
+                providerCfg.write("{\"schemaVersion\":1,\"revision\":1,\"config\":{}}");
+                providerCfg.close();
                 QFile mock(cjsDir + QStringLiteral("/zcode.cjs"));
                 mock.open(QIODevice::WriteOnly);
                 mock.write(QStringLiteral(R"JS(
@@ -490,6 +507,8 @@ const fs = require('fs');
 const path = require('path');
 const dir = __dirname;
 const scenario = JSON.parse(fs.readFileSync(path.join(dir, 'scenario.json'), 'utf8'));
+fs.writeFileSync(path.join(dir, 'provider-env.txt'),
+                 process.env.ZCODE_BUILTIN_PROVIDER_CONFIG_FILE || '');
 let msgPolls = 0, evPolls = 0, interactionsSent = false;
 function out(o) { process.stdout.write(JSON.stringify(o) + '\n'); }
 function result(id, r) { out({ id: id, result: r }); }
@@ -615,6 +634,13 @@ process.stdin.on('end', () => process.exit(0));
                 if (polls.open(QIODevice::ReadOnly)) {
                     *msgPolls = polls.readAll().toInt();
                 }
+                if (providerEnvOk != nullptr) {
+                    QFile envSeen(cjsDir + QStringLiteral("/provider-env.txt"));
+                    *providerEnvOk =
+                        envSeen.open(QIODevice::ReadOnly) &&
+                        QString::fromUtf8(envSeen.readAll()) ==
+                            providerDir + QStringLiteral("/zcode-builtin.json");
+                }
                 QFile interactions(cjsDir + QStringLiteral("/interactions.jsonl"));
                 if (interactions.open(QIODevice::ReadOnly)) {
                     for (const QByteArray &line : interactions.readAll().split('\n')) {
@@ -650,12 +676,18 @@ process.stdin.on('end', () => process.exit(0));
             bool turnOk = false, denied = false, declined = false, skipped = false;
             bool timedOut = false, notTruncated = false;
             int msgPolls = 0;
+            bool providerEnvOk = false;
             runMock(QStringLiteral("turn"), &turnOk, &denied, &declined, &skipped,
-                    &timedOut, &notTruncated, &msgPolls);
+                    &timedOut, &notTruncated, &msgPolls, nullptr, nullptr,
+                    &providerEnvOk);
             check("zcode mock: turn.completed carries the final reply",
                   turnOk && notTruncated);
             check("zcode mock: intermediate assistant text does not finish the turn",
                   turnOk && notTruncated && msgPolls >= 1);
+            // CLI 形态两个死路径找不到内置配置就 exit=1：spawn 必须注入
+            // ZCODE_BUILTIN_PROVIDER_CONFIG_FILE 指向桌面端自带的那份。
+            check("zcode mock: spawn injects builtin provider config env",
+                  providerEnvOk);
 
             runMock(QStringLiteral("interaction"), &turnOk, &denied, &declined,
                     &skipped, &timedOut, &notTruncated, &msgPolls);
@@ -687,6 +719,9 @@ process.stdin.on('end', () => process.exit(0));
                     &skipped, &timedOut, &notTruncated, &msgPolls, &authAnswered);
             check("zcode mock: official MCP auth answered with typed refusal",
                   turnOk && authAnswered);
+            if (!savedProviderEnv.isEmpty()) {
+                qputenv(providerEnvKey.constData(), savedProviderEnv);
+            }
         }
     }
 

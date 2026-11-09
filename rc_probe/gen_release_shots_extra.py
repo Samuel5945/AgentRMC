@@ -1,4 +1,8 @@
-"""补两张：使用引导页（WebView2 真实窗口）与桌宠 + 语音小窗实拍。"""
+"""补两张：使用引导页（WebView2 真实窗口）与桌宠 + 语音小窗实拍。
+
+用法: python rc_probe/gen_release_shots_extra.py [版本号]
+版本号缺省读 plugins/agentrmc-bridge/VERSION，输出到 rc_probe/shots<数字>。
+"""
 import ctypes
 ctypes.windll.shcore.SetProcessDpiAwareness(2)
 import ctypes.wintypes as wt
@@ -6,6 +10,7 @@ import json
 import pathlib
 import shutil
 import subprocess
+import sys
 import time
 from ctypes import byref
 
@@ -15,9 +20,14 @@ from PIL import Image, ImageGrab
 comtypes.client.GetModule("UIAutomationCore.dll")
 from comtypes.gen.UIAutomationClient import CUIAutomation, IUIAutomation  # noqa: E402
 
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+VERSION = (sys.argv[1].strip() if len(sys.argv) > 1 else
+           (ROOT / "plugins" / "agentrmc-bridge" / "VERSION")
+           .read_text(encoding="utf-8").strip())
 CFG = pathlib.Path(r"D:\apps\AgentRMC\config.json")
 EXE = r"D:\apps\AgentRMC\AgentRMCNative.exe"
-OUT = pathlib.Path(r"D:\githubrepos\Agentrmc\rc_probe\shots041")
+OUT = pathlib.Path(__file__).resolve().parent / ("shots" + VERSION.replace(".", ""))
+OUT.mkdir(exist_ok=True)
 CFG_BAK = CFG.with_suffix(".json.shot_bak")
 
 user32 = ctypes.windll.user32

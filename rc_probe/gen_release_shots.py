@@ -1,4 +1,7 @@
-"""0.4.1 发布截图：真实窗口 + WebView2 PrintWindow，逐主题截主窗页签。
+"""发布截图：真实窗口 + WebView2 PrintWindow，逐主题截主窗页签。
+
+用法: python rc_probe/gen_release_shots.py [版本号]
+版本号缺省读 plugins/agentrmc-bridge/VERSION，输出到 rc_probe/shots<数字>。
 
 演示数据只在这一轮有效：先备份 config.json 与 work-items.json，写入 6 条
 多 Agent 演示待办（其余活动卡标 done），全部截完还原并重启应用。
@@ -21,17 +24,23 @@ from PIL import Image
 comtypes.client.GetModule("UIAutomationCore.dll")
 from comtypes.gen.UIAutomationClient import CUIAutomation, IUIAutomation  # noqa: E402
 
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+VERSION = (sys.argv[1].strip() if len(sys.argv) > 1 else
+           (ROOT / "plugins" / "agentrmc-bridge" / "VERSION")
+           .read_text(encoding="utf-8").strip())
 CFG = pathlib.Path(r"D:\apps\AgentRMC\config.json")
 EXE = r"D:\apps\AgentRMC\AgentRMCNative.exe"
 STORE = pathlib.Path(r"C:\Users\PC\AppData\Roaming\LIG\AgentRMCNative\work-items.json")
-OUT = pathlib.Path(r"D:\githubrepos\Agentrmc\rc_probe\shots041")
+OUT = pathlib.Path(__file__).resolve().parent / ("shots" + VERSION.replace(".", ""))
 OUT.mkdir(exist_ok=True)
 
 CFG_BAK = CFG.with_suffix(".json.shot_bak")
 STORE_BAK = STORE.with_suffix(".json.shot_bak")
-if not CFG_BAK.exists():
+
+
+def backup_state():
+    # 每次开跑都重新备份，别复用上一轮可能已拍脏的备份
     shutil.copy2(CFG, CFG_BAK)
-if not STORE_BAK.exists():
     shutil.copy2(STORE, STORE_BAK)
 
 user32 = ctypes.windll.user32
@@ -188,9 +197,9 @@ SCENES = [
     ("classic", "dark", "事件流", "events_cl_dark"),
 ]
 
-MINUTES = None
-
 def main():
+    print("version:", VERSION, "->", OUT)
+    backup_state()
     write_demo_store()
     try:
         current = None

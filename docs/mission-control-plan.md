@@ -227,6 +227,20 @@ Task/WorkItem 的**会话归属**与**可验证投递**，这两块得自己补�
   「40-60 分钟自现」，实为重启后**首次打开会话时 runtime 首载读库**，会话运行时
   随进程驻留、关闭标签也不驱逐，之后同进程内永远陈旧）。→ 可见性 = **重启
   ZCode**；派发 UX 以**卡片为中心**：回执即时上卡，人回会话时值得重开一次宿主。
+- **刷新机制代码级排查（2026-11-09，3.17.2 / app 0.21.1，asar 解包核对）**：
+  上面的实验结论在代码里全部对得上，且**没有留任何外部热刷新口子**——
+  ① 桌面实时总线 `TaskRealtimeBus`（out/main/index.js）只认本进程 utilityProcess
+  fork 的 host（`registerHost` 收 MessageChannelMain port），`broadcastHub` 只向
+  本进程 utility 子进程扇出，`sessionRoutes` 按 hostId 路由、host 退出即清；
+  外部 app-server 进程不在册，事件进不去。② `session/lifecycle/changed`、
+  `v4/sessionsIndex/reconcile`、`v4/conversation/resync` 都是**实例内**协议
+  （各自 app-server 连接上的通知/请求），不跨进程广播。③ `ZCODE_OFFICIAL_ENDPOINT`
+  命名管道是**云端 API 鉴权代理**（createOfficialCommandEndpoint：Bearer token →
+  resolveHeaders → fetch zcode-server），不是桌面控制通道。④ `zcode://` deep-link
+  只支持 workspace/open（外部路径还要弹确认框）、支付回调、share import、OAuth
+  四种，**没有打开会话的路由**，second-instance 只做聚焦。⑤ 主进程无 db/rollout
+  文件 watcher（仅 file-watcher 服务给编辑器用）。→ 「重启宿主」是当前版本唯一
+  可见性路径，属上游架构使然；等上游提供跨实例通知或会话 deep-link 再改。
 - **hook 隔离四件套（照搬 Qoder 重做轮教训）**：hook 事件走 agentrmc-bridge
   （UserPromptSubmit/PermissionRequest/Stop），桥的 `AGENTRMC_PORT` 与
   `AGENTRMC_SPOOL_DIR` 都是**环境变量**——给探针 app-server 喂

@@ -131,6 +131,7 @@ public:
         dispatch_ = new DispatchPicker(pet_->store_, this);
         root->addWidget(dispatch_);
 
+        // 桌宠卡没有历史列表，这块转写就是唯一的正文显示，保留点击复制。
         transcript_ = new QLabel(QString::fromUtf8("说了话会显示在这里，点击复制"), this);
         transcript_->setObjectName("petTranscript");
         transcript_->setWordWrap(true);

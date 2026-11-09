@@ -53,7 +53,6 @@ protected:
     void resizeEvent(QResizeEvent *event) override;
     void paintEvent(QPaintEvent *event) override;
     void mousePressEvent(QMouseEvent *event) override;
-    bool eventFilter(QObject *watched, QEvent *event) override;
 
 public:
     // 桌宠收起时对话回复的落点：转写框显示 + 进「最近」历史。
@@ -68,12 +67,10 @@ public:
     void webRefreshPicker();
 
 private:
-    void copyText(const QString &text);
     void pushHistory(const QString &text, int costMs);
-    // 转写框：全文另存，显示的那段按框宽折行、超出行数上限折成省略号，
-    // 高度按当前字体现量（layoutTranscript），所以点击复制拿到的是全文。
-    void setTranscript(const QString &text);
-    void layoutTranscript();
+    // 历史行点击即复制（整面板唯一复制入口）：最新一条就是历史第 0 条，
+    // 不再单独留一个「当前转写」框重复显示同一句话。
+    void copyText(const QString &text);
     void refreshHint();
     void refreshHistoryEmpty();
     void refreshStatusDot();
@@ -89,17 +86,14 @@ private:
     QPushButton *testBtn_ = nullptr;
     QLabel *stateLabel_ = nullptr;
     QLabel *hintLabel_ = nullptr;
-    QLabel *transcript_ = nullptr;
-    QListWidget *history_ = nullptr;
     QLabel *historyEmpty_ = nullptr;
+    QListWidget *history_ = nullptr;
     QComboBox *backend_ = nullptr;
     DispatchPicker *picker_ = nullptr;
     QLineEdit *typed_ = nullptr;
     QPushButton *readLast_ = nullptr;
     QTimer *levelTimer_ = nullptr;
     QString lastText_;
-    // 转写框的全文（显示的那段可能被折成省略号，复制/悬浮提示用这份）。
-    QString transcriptFull_;
 
     bool listening_ = false;
     bool recording_ = false;

@@ -774,14 +774,11 @@ QString WorkWebView::htmlFor(const QString &stateJson) const {
    color:var(--muted);flex:0 0 auto}
  .rfoot .spacer{margin-left:auto}
  .vline{font-size:var(--f10);color:var(--muted);flex:0 0 auto}
- .vtrans{border:1px solid var(--w14);background:var(--w6);border-radius:10px;
-   padding:8px;font-size:var(--f11);color:var(--text);word-break:break-word;
-   cursor:pointer;max-height:96px;overflow:hidden;flex:0 0 auto}
  .vhist{flex:1 1 auto;min-height:0;overflow-y:auto;scrollbar-width:none;
    display:flex;flex-direction:column;gap:2px}
  .vhist::-webkit-scrollbar{width:0;height:0}
  .vh{font-size:var(--f11);color:var(--text-dim);padding:4px 6px;border-radius:6px;
-   word-break:break-word;cursor:default;flex:0 0 auto}
+   word-break:break-word;cursor:pointer;flex:0 0 auto}
  .vh:hover{background:var(--w6)}
  .vempty{flex:1 1 auto;display:flex;align-items:center;justify-content:center;
    color:var(--muted);font-size:var(--f11);text-align:center}
@@ -830,7 +827,6 @@ QString WorkWebView::htmlFor(const QString &stateJson) const {
     <button class="wave" id="vWave2" title="语音键：点击说话，再点结束"></button>
     <div class="picker"><select id="pkAgent2"></select><select id="pkMode2"></select></div>
     <div class="vline" id="vLine">点击开始 · 再点结束</div>
-    <div class="vtrans" id="vTrans" title="点击复制"></div>
     <div class="vhist" id="vHist"></div>
     <div class="vempty" id="vEmpty">说完的话会攒在这里</div>
     <div class="vdock">
@@ -1470,9 +1466,6 @@ function renderLeft(){
   $('vDot2').className='dot'+(HEADER.listening?' on':'');
   $('readLast').disabled=!W.readLastEnabled;
   $('vLine').hidden=!W.stateLineVisible;
-  const vt=$('vTrans');
-  vt.textContent=W.transcript||'';
-  vt.dataset.full=W.transcript||'';
   const hist=W.history||[];
   $('vHist').hidden=!hist.length;
   $('vEmpty').hidden=!!hist.length;
@@ -1530,7 +1523,6 @@ $('toVoice').onclick=()=>postObj({cmd:'leftForm',voice:true});
 $('toRemote').onclick=()=>postObj({cmd:'leftForm',voice:false});
 $('btSet').onclick=()=>postObj({cmd:'bt'});
 $('readLast').onclick=()=>postObj({cmd:'readLast'});
-$('vTrans').onclick=()=>postObj({cmd:'copy',text:$('vTrans').dataset.full||''});
 $('vSend').onclick=()=>{const t=$('vTyped').value;
   if(t.trim()){postObj({cmd:'vTyped',text:t});$('vTyped').value='';}};
 $('vTyped').addEventListener('keydown',e=>{

@@ -1,7 +1,6 @@
 // 主题系统单测：classic 调色板、palette 合并、清单解析、QSS 渲染。
 // 只测纯函数，不碰 QApplication / setStyleSheet。
 #include "core/ThemeManager.h"
-#include "ui/TranscriptLayout.h"
 
 #include <QApplication>
 #include <QDir>
@@ -508,46 +507,6 @@ int main(int argc, char *argv[]) {
     QDir(ThemeManager::themesRoot() + QStringLiteral("/__scheme_novariant"))
         .removeRecursively();
     tm.rescan();
-
-    // 转写框折行/量高：QSS 的 padding/border 不跟字号缩放，写死高度就会在
-    // 大字号档把换行的最后一行裁掉半截（用户 2026-11-05 真机，120% 字号）。
-    {
-        QFont boxFont = app.font();
-        boxFont.setPixelSize(17);  // 14px × 120% 字号档
-        const QFontMetrics fm(boxFont);
-        const int width = 244;  // 286 栏宽 − 左右页边距 20 − 箱体厚度 22
-        const QString placeholder =
-            QString::fromUtf8("说了话会显示在这里，点击可复制");
-        const QString kept = transcript::elideToLines(placeholder, fm, width);
-        check(transcript::textHeight(kept, fm, width) > fm.lineSpacing(),
-              "placeholder wraps to two lines at this width");
-        check(kept == placeholder, "two-line placeholder is not elided");
-        check(transcript::boxHeight(kept, fm, width) >=
-                  transcript::textHeight(kept, fm, width) +
-                      transcript::kChromePx,
-              "box tall enough for every line it shows");
-        check(transcript::boxHeight(kept, fm, width) > 48,
-              "box outgrew the old hardcoded 48px cap");
-
-        QString longText;
-        for (int i = 0; i < 8; ++i) {
-            longText += QString::fromUtf8("今天要把语音页的转写框修好，");
-        }
-        const QString shown = transcript::elideToLines(longText, fm, width);
-        check(shown != longText, "over-long sentence gets elided");
-        check(shown.endsWith(QChar(0x2026)), "elided tail marked with ellipsis");
-        check(longText.startsWith(shown.left(shown.length() - 1)),
-              "elided text stays a prefix of the original");
-        check(transcript::textHeight(shown, fm, width) <=
-                  fm.lineSpacing() * transcript::kMaxLines,
-              "elided text stays inside the three-line cap");
-        check(transcript::boxHeight(shown, fm, width) >=
-                  transcript::textHeight(shown, fm, width) +
-                      transcript::kChromePx,
-              "elided box still tall enough for what it shows");
-        check(transcript::elideToLines(longText, fm, 0) == longText,
-              "unlaid-out width leaves the text alone");
-    }
 
     if (failures == 0) {
         std::printf("PASS native theme: palette / manifest / qss render\n");

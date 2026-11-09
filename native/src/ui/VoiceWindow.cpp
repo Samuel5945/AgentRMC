@@ -1,7 +1,6 @@
 #include "VoiceWindow.h"
 
 #include "DispatchPicker.h"
-#include "TranscriptLayout.h"
 #include "WaveformButton.h"
 
 #include "Toast.h"
@@ -212,15 +211,8 @@ VoiceWindow::VoiceWindow(VoiceController *voice, ProfileStore *store,
     micText->addWidget(hintLabel_);
     body->addLayout(micText);
 
-    // 对话块：最新转写 + 历史。整面板不滚动，只有这一块内部滚（滚轮）。
-    transcript_ = new QLabel;
-    transcript_->setObjectName("voiceTranscript");
-    transcript_->setWordWrap(true);
-    transcript_->setCursor(Qt::PointingHandCursor);
-    transcript_->installEventFilter(this);
-    body->addWidget(transcript_);
-    setTranscript(QString::fromUtf8("说了话会显示在这里，点击可复制"));
-
+    // 对话块：只留历史（最新一条在最上面，点击历史行即复制）。不再单独留
+    // 一个「当前转写」框：它显示的就是历史第 0 条，等于同一句话显示两遍。
     history_ = new QListWidget;
     history_->setObjectName("voiceHistory");
     history_->setFrameShape(QFrame::NoFrame);
@@ -233,11 +225,14 @@ VoiceWindow::VoiceWindow(VoiceController *voice, ProfileStore *store,
     history_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     history_->setHorizontalScrollMode(QAbstractItemView::ScrollPerPixel);
     history_->setTextElideMode(Qt::ElideNone);
+    // 历史行点击即复制：全价面板唯一的复制入口（复制最近一条就是点第一行）。
     connect(history_, &QListWidget::itemClicked, this,
-            [this](QListWidgetItem *item) { copyText(item->data(Qt::UserRole).toString()); });
+            [this](QListWidgetItem *item) {
+                copyText(item->data(Qt::UserRole).toString());
+            });
     body->addWidget(history_, 1);
     // 空态：嵌入态/无插画时中部别留死白；独立态有插画时中部是形象舞台，不放字。
-    // 只说来这会攒，不提「点击复制」——上面记录框才是可点的那块。
+    // 只说来这会攒；复制入口在历史行上，不在这里重复喊。
     historyEmpty_ = new QLabel(QString::fromUtf8("说完的话会攒在这里"),
                                history_->viewport());
     historyEmpty_->setObjectName("emptyHint");
@@ -436,7 +431,6 @@ VoiceWindow::VoiceWindow(VoiceController *voice, ProfileStore *store,
             });
     connect(voice_, &VoiceController::transcribed, this,
             [this](const QString &text, int costMs) {
-                setTranscript(text);
                 pushHistory(text, costMs);
             });
     connect(voice_, &VoiceController::optionsChanged, this, [this] {
@@ -518,38 +512,6 @@ void VoiceWindow::copyText(const QString &text) {
     toast_->showText(QString::fromUtf8("已复制到剪贴板"));
 }
 
-void VoiceWindow::setTranscript(const QString &text) {
-    transcriptFull_ = text;
-    layoutTranscript();
-}
-
-void VoiceWindow::layoutTranscript() {
-    if (transcript_ == nullptr) {
-        return;
-    }
-    transcript_->ensurePolished();  // font() 要拿到 QSS（含字号倍率）再量
-    const QFontMetrics fm(transcript_->font());
-    // 箱体厚度优先按当前几何量（QSS 的 padding 会落到 contentsRect 上），
-    // 量不到就退回 style.qss 里写死的 padding+border。
-    const int chrome = qMax(transcript::kChromePx,
-                            transcript_->width() -
-                                transcript_->contentsRect().width());
-    const int textWidth = transcript_->width() - chrome;
-    if (textWidth <= 0) {
-        transcript_->setText(transcriptFull_);  // 还没排版，show/resize 会重量
-        return;
-    }
-    const QString shown = transcript::elideToLines(transcriptFull_, fm,
-                                                   textWidth);
-    transcript_->setText(shown);
-    transcript_->setToolTip(shown == transcriptFull_ ? QString()
-                                                     : transcriptFull_);
-    const int height = transcript::boxHeight(shown, fm, textWidth, chrome);
-    if (transcript_->minimumHeight() != height) {
-        transcript_->setFixedHeight(height);
-    }
-}
-
 void VoiceWindow::pushHistory(const QString &text, int costMs) {
     auto *item = new QListWidgetItem(history_);
     item->setText(QStringLiteral("%1  ·  %2s")
@@ -576,12 +538,6 @@ void VoiceWindow::refreshHistoryEmpty() {
     historyEmpty_->setVisible(history_->count() == 0 && !stage);
 }
 
-bool VoiceWindow::eventFilter(QObject *watched, QEvent *event) {
-    if (watched == transcript_ && event->type() == QEvent::MouseButtonPress) {
-        copyText(transcriptFull_);
-    }
-    return QWidget::eventFilter(watched, event);
-}
 
 void VoiceWindow::mousePressEvent(QMouseEvent *event) {
     // 面板空白处也能拖走：子控件（按钮/列表）各自吃掉自己的按下事件，
@@ -597,10 +553,6 @@ void VoiceWindow::mousePressEvent(QMouseEvent *event) {
 }
 
 void VoiceWindow::showChatReply(const QString &text) {
-    const QString name = ThemeManager::instance().current().characterName;
-    setTranscript(name.isEmpty()
-                      ? text
-                      : QStringLiteral("%1：%2").arg(name, text));
     pushHistory(text, 0);
 }
 
@@ -670,7 +622,6 @@ void VoiceWindow::paintEvent(QPaintEvent *event) {
 void VoiceWindow::showEvent(QShowEvent *event) {
     picker_->refresh();
     QWidget::showEvent(event);
-    layoutTranscript();
     if (themePaintDirty_) {
         themePaintDirty_ = false;
         refreshThemePaint();
@@ -681,8 +632,6 @@ void VoiceWindow::refreshThemePaint() {
     // 面板底/麦克风/Toast 是自绘的，不吃 QSS：换配色模式要自己重画。
     refreshStatusDot();
     refreshHistoryEmpty();
-    // 字号倍率也走这条：转写框的行高跟着字体走，换主题要重量。
-    layoutTranscript();
     mic_->update();
     toast_->update();
     update();
@@ -690,8 +639,6 @@ void VoiceWindow::refreshThemePaint() {
 
 void VoiceWindow::resizeEvent(QResizeEvent *event) {
     QWidget::resizeEvent(event);
-    // 框宽变了换行就变了，高度要跟着重量（独立态可拉伸，嵌入态随栏宽）。
-    layoutTranscript();
 }
 
 void VoiceWindow::closeEvent(QCloseEvent *event) {
@@ -716,7 +663,6 @@ void VoiceWindow::submitTyped() {
         return;
     }
     typed_->clear();
-    setTranscript(text);
     pushHistory(text, 0);
     emit typedSubmitted(text);
 }
@@ -730,7 +676,6 @@ QJsonObject VoiceWindow::webState() const {
             {QStringLiteral("full"), item->data(Qt::UserRole).toString()}});
     }
     return QJsonObject{
-        {QStringLiteral("transcript"), transcriptFull_},
         {QStringLiteral("history"), hist},
         {QStringLiteral("readLastEnabled"), !lastText_.isEmpty()},
         {QStringLiteral("stateLineVisible"), !hintSeen_},

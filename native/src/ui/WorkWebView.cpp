@@ -776,7 +776,7 @@ QString WorkWebView::htmlFor(const QString &stateJson) const {
  .vline{font-size:var(--f10);color:var(--muted);flex:0 0 auto}
  .vtrans{border:1px solid var(--w14);background:var(--w6);border-radius:10px;
    padding:8px;font-size:var(--f11);color:var(--text);word-break:break-word;
-   cursor:default;max-height:96px;overflow:hidden;flex:0 0 auto}
+   cursor:pointer;max-height:96px;overflow:hidden;flex:0 0 auto}
  .vhist{flex:1 1 auto;min-height:0;overflow-y:auto;scrollbar-width:none;
    display:flex;flex-direction:column;gap:2px}
  .vhist::-webkit-scrollbar{width:0;height:0}
@@ -832,7 +832,7 @@ QString WorkWebView::htmlFor(const QString &stateJson) const {
     <div class="vline" id="vLine">点击开始 · 再点结束</div>
     <div class="vtrans" id="vTrans" title="点击复制"></div>
     <div class="vhist" id="vHist"></div>
-    <div class="vempty" id="vEmpty">说完的话会攒在这里 · 点击复制</div>
+    <div class="vempty" id="vEmpty">说完的话会攒在这里</div>
     <div class="vdock">
       <div class="vrow"><input type="text" id="vTyped" placeholder="打字说一句话，Enter 发送"><button class="btn" id="vSend">发送</button></div>
       <div class="vrow"><select id="vBackend2" style="flex:1 1 auto;min-width:0"></select><button class="btn" id="chatBtn" style="flex:0 0 auto" title="桌宠对话模式：说话发给模型聊，回复用 TTS 念出来">对话</button><button class="btn" id="ttsBtn" style="flex:0 0 auto" title="语音反馈：Base URL / API Key / TTS 模型自填">语音</button><button class="btn" id="vSettings2" style="flex:0 0 auto" title="模型设置：识别模型 / 云端 ASR / 桌宠对话">模型</button></div>

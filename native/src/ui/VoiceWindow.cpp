@@ -237,7 +237,8 @@ VoiceWindow::VoiceWindow(VoiceController *voice, ProfileStore *store,
             [this](QListWidgetItem *item) { copyText(item->data(Qt::UserRole).toString()); });
     body->addWidget(history_, 1);
     // 空态：嵌入态/无插画时中部别留死白；独立态有插画时中部是形象舞台，不放字。
-    historyEmpty_ = new QLabel(QString::fromUtf8("说完的话会攒在这里 · 点击复制"),
+    // 只说来这会攒，不提「点击复制」——上面记录框才是可点的那块。
+    historyEmpty_ = new QLabel(QString::fromUtf8("说完的话会攒在这里"),
                                history_->viewport());
     historyEmpty_->setObjectName("emptyHint");
     historyEmpty_->setAlignment(Qt::AlignCenter);

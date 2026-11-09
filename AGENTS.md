@@ -72,10 +72,17 @@
 
 ## Native 测试
 
-- **跑 build.bat / package.bat 前先 `unset https_proxy http_proxy`**：Git Bash 里
-  大小写两份代理变量同时存在时，MSBuild 会炸在环境字典上，报
+- **跑 build.bat / package.bat 前先清掉代理变量**：大小写两份代理变量同时存在时，
+  MSBuild 会炸在环境字典上，报
   `MSB6001: “CL.exe”的命令行开关无效 ... 关键字:“HTTPS_PROXY”所添加的关键字:“https_proxy”`
-  ——这不是代码错，别去改 CMake。
+  ——这不是代码错，别去改 CMake。Git Bash 里 `unset https_proxy http_proxy` 起步，
+  但**本机实测（2026-11-09）原始环境块里 `http_proxy`/`https_proxy`/`no_proxy`
+  每个都有大小写两份**（`cmd /c set` 才看得到全量，PowerShell 的 Env: 视图只显示
+  一份），PowerShell `Remove-Item` 和 cmd 单次 `set "var="` 都只删得掉一份，
+  MSBuild 换个变量照样炸（这次炸 `NO_PROXY`/`no_proxy`）。可靠做法：在**同一个
+  cmd 调用**里对每个变量连删两遍再跑构建/出包：
+  `cmd /c 'set "no_proxy=" & set "no_proxy=" & set "http_proxy=" & set "http_proxy=" & set "https_proxy=" & set "https_proxy=" & set "all_proxy=" & set "all_proxy=" & native\tools\build.bat'`
+  （`NODE_USE_ENV_PROXY` 无大小写冲突，留着无害）。
 - 构建后在 `native\build\Release` 下跑相关测试（AgentRMCAppTest /
   AgentRMCStoreTest / AgentRMCThemeTest 等），改动涉及按键映射或应用启动时
   必须跑 AgentRMCAppTest。

@@ -55,7 +55,7 @@ Task/WorkItem 的**会话归属**与**可验证投递**，这两块得自己补�
 - 双击 = **先送到 Agent（没开就启动）再销账**；手动「标为已处理」只结账、不启动
   （`MainWindow.cpp:2686` `bringToAgent`；`3106` 附近的 `openWorkItem`）。
 
-### 第 3 批：定向派发（**未开工**）
+### 第 3 批：定向派发（已落地，Qoder 线等上游）
 
 目标：从某条待办把指令派回**它那条会话**，并拿到「确实到了」的回执。
 
@@ -64,8 +64,8 @@ Task/WorkItem 的**会话归属**与**可验证投递**，这两块得自己补�
 | 能力 | WorkBuddy 系 | Qoder 系 | ZCode 系 | DSH |
 |---|---|---|---|---|
 | 拿到真实会话 id | 有（插件从宿主取） | 有（hook payload） | 有（hook payload / sqlite） | 有（agent.id，即盘上 `session-<uuid>` 目录名） |
-| 打开指定会话 | **已接线**（UIA 通道，见下） | 桌面通道证伪（CLI 已否决） | **已探明**（app-server 协议，见下） | 不需要（API 注入，见下） |
-| 按 id 发送并回回执 | **已接线**（UIA 通道，见下） | 桌面通道证伪（CLI 已否决） | **已探明**（app-server 协议，见下） | **已接线**（插件进程内 followup，见下） |
+| 打开指定会话 | **已接线**（UIA 通道，见下） | 桌面通道证伪（CLI 已否决） | 不可热打开（重启宿主后人工打开，见下） | 不需要（API 注入，见下） |
+| 按 id 发送并回回执 | **已接线**（UIA 通道，见下） | 桌面通道证伪（CLI 已否决） | **已接线**（app-server 协议，见下） | **已接线**（插件进程内 followup，见下） |
 
 #### WorkBuddy 系实测（2026-11-07，探针 `rc_probe/wb_open_session.py` / `wb_send_receipt.py`）
 
@@ -247,11 +247,15 @@ Task/WorkItem 的**会话归属**与**可验证投递**，这两块得自己补�
   `AGENTRMC_PORT=1`（不可路由）+ 临时 SPOOL_DIR，hook POST 失败落探针 spool。
   实证：探针 spool 收到 `turn-start`（带炮灰 sessionId），真实 store 与真实
   spool 全程无 MARKER。
-- **待接线**：`SessionDispatch` 的 ZCode 路由按上面配方接（spawn 常驻
-  app-server → 反向偏好应答 → resume → 裸 send 带 fresh modelSelection →
-  确认落库 → 轮 `session/messages` 拿回执）；仅对**个人供应商模型**的会话开放
-  （账号模型会话按 `dispatch.supported` 关闭派发行）；draft 探针会话
-  `sess_4beb6ff2…` 留着可删。
+- **已接线（2026-11-09）**：`SessionDispatch` 的 ZCode 路由按上面配方接完
+  （spawn 常驻 app-server → 反向偏好应答 → resume → 裸 send 带 fresh
+  modelSelection → 确认落库 → 轮 `session/events` 等 `turn.completed`）；仅对
+  **个人供应商模型**的会话开放（账号模型会话按 `dispatch.supported` 关闭派发行）。
+  接线后补的两处硬需求：① CLI 形态（ELECTRON_RUN_AS_NODE 跑 zcode.cjs）找内置
+  供应商配置只认两个死路径，桌面端实际在 `resources/config/provider/`——spawn
+  必须注入 `ZCODE_BUILTIN_PROVIDER_CONFIG_FILE`，否则启动即 exit=1；
+  ② 对话区不热刷新，回执卡上带「重启 ZCode」按钮（`restartDesktop`），该卡
+  通知态藏「回到 Agent」、Enter/双击只聚焦不销账（避免送进陈旧视图还顺手结账）。
 - 与 Qoder 的本质差异：Qoder CLI 追加的轮次桌面**永不重扫**；ZCode 落库即持久，
   重启应用全量可见（会话运行时进程内驻留不重读）——闭环成立，UX 以卡片为中心。
 - **终态与交互（2026-11-08 审查加固，mock 状态机回归锁定）**：整轮完成只认
@@ -481,22 +485,19 @@ Task/WorkItem 的**会话归属**与**可验证投递**，这两块得自己补�
 
 ## 8. 现状与剩余
 
-- 数据面：第 1、2 批已落地并装机验证；第 3 批定向派发 **WorkBuddy 系、DSH、
-  OpenSquilla 已接线并活体验收**（OpenSquilla 2026-11-08，网关 RPC 通道，
-  e2e PASS），ZCode 系已探明待接线；Qoder 桌面 UI 定向打开 / 国际版待补。
+- 数据面：**三批全部落地**。第 1、2 批已装机验证；第 3 批定向派发四路接线并
+  活体验收——WorkBuddy 系 UIA、ZCode app-server 协议、DSH 插件进程内 followup、
+  OpenSquilla 网关 RPC（各路线细节见第 3 批各节）。Qoder 线等上游。
 - 表现面：外壳＋六个页签已落，默认启用；桌宠／气泡保持 Qt。
 - 版本号仍是 `0.4.1`（Native 与插件同号）：按约定等用户明确说「升版」才动。
-- 剩余事项：
-  1. 第 3 批：**WorkBuddy 系 UIA 通道已接线并活体验收**；**ZCode 系 app-server
-     协议通道已探明并活体验收**（create/send×3/回执全链通，hook 毒化隔离实证，
-     桌面可见性待人工眼见后接线）；**DSH 插件进程内 followup 通道已接线并
-     端到端活体验收**（native 队列 + 插件轮询注入 + ack 回执落账 + zstd 零泄漏，
-     `rc_probe/dsh_dispatch_e2e.py`）；**OpenSquilla 网关 RPC 通道已接线并端到端
-     活体验收**（桥取件 + resolve 守卫 + sessions.send + ack 回执 + SQLite 零泄漏，
-     `rc_probe/osquilla_dispatch_e2e.py`）；
-     Qoder CN 的 CLI 通道实测后被用户否决（桌面不可见），路由休眠；桌面可见
-     通道两候选（deep link、a11y 设置）2026-11-07 深夜均证伪——**Qoder 线等
-     上游**（官方 deeplink 支持按 id 打开会话、renderer a11y 开关或本地会话
-     API 任一出现再接线）；「续当前会话」模式保持可用。
-  2. 事件流／系统页的真实数据字段如有新增，记得同步给 `webShellState()`。
-  3. 美术主题下的外壳观感复检（有探针图，但需人工确认一遍）。
+- 剩余事项（均非主任务阻塞项）：
+  1. **Qoder 线等上游**：Qoder CN 的 CLI 通道实测后被用户否决（桌面不可见），
+     路由休眠；桌面可见通道两候选（deep link、a11y 设置）2026-11-07 深夜均证伪
+     ——官方 deeplink 支持按 id 打开会话、renderer a11y 开关或本地会话 API
+     任一出现再接线；「续当前会话」模式保持可用。
+  2. **ZCode 对话区可见性受上游限制**：外部落库的消息要重启宿主才可见（代码级
+     排查见第 3 批 ZCode 节，四条候选通道全排除）。已用卡片为中心 UX + 回执卡
+     「重启 ZCode」按钮兜底；等上游出现跨实例通知或会话 deep-link 才能改成
+     「聚焦即刷新」。
+  3. 事件流／系统页的真实数据字段如有新增，记得同步给 `webShellState()`。
+  4. 美术主题下的外壳观感复检（有探针图，但需人工确认一遍）。

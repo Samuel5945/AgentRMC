@@ -24,6 +24,7 @@
 #include "core/ModelImport.h"
 #include "core/Presets.h"
 #include "core/SessionDispatch.h"
+#include "core/ZcodeDispatch.h"
 #include "core/ThemeManager.h"
 #include "core/Updater.h"
 #include "core/VoiceController.h"
@@ -418,7 +419,14 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
                 }
                 dispatchNotice_ =
                     QStringLiteral("会话 %1 回执已落账").arg(sid.left(8));
+                if (ZcodeDispatch::supports(exe)) {
+                    // 对话区不热刷新（上游架构使然）：告诉人全文在卡上，
+                    // 回会话前重启一次宿主即可见。
+                    dispatchNotice_ += QStringLiteral(
+                        "；ZCode 对话区要重启后才显示新消息，回复先看卡片");
+                }
                 dispatchNoticeId_ = itemIdForSession(sid);
+                dispatchNoticeExe_ = exe;
                 appendEvent(QStringLiteral("status"), QString(), QString(),
                             QStringLiteral("派发回执：%1… 会话 %2")
                                 .arg(dispatchId.left(8), sid.left(8)), 0);
@@ -429,6 +437,16 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
                 dispatchNotice_ = reason;
                 dispatchNoticeId_ =
                     itemIdForSession(dispatchSessionById_.value(dispatchId));
+                // 失败通知也带宿主：ZCode 启动类失败可在卡片上直接重启重试。
+                if (workItems_ != nullptr) {
+                    for (const WorkItem &it : workItems_->items()) {
+                        if (it.sessionId ==
+                            dispatchSessionById_.value(dispatchId)) {
+                            dispatchNoticeExe_ = it.agentExe;
+                            break;
+                        }
+                    }
+                }
                 appendEvent(QStringLiteral("error"), QString(), QString(),
                             QStringLiteral("派发失败：%1… %2")
                                 .arg(dispatchId.left(8), reason), 0);
@@ -474,13 +492,13 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
                 // 外部通道没有代答 UI：授权/提问已按协议拒绝。授权提醒本身
                 // 由宿主的 hook 负责（spawn 的 app-server 也跑 hooks），这里
                 // 只把「这一轮为什么可能没做成」写进事件流和派发提示。
-                Q_UNUSED(exe);
                 Q_UNUSED(proj);
                 dispatchNotice_ =
                     QStringLiteral("派发轮遇到%1，外部通道已代为拒绝；要它继续请回 "
                                    "ZCode 桌面处理")
                         .arg(what);
                 dispatchNoticeId_ = itemIdForSession(sid);
+                dispatchNoticeExe_ = exe;
                 appendEvent(QStringLiteral("status"), QString(), QString(),
                             QStringLiteral("派发交互：%1（%2…）")
                                 .arg(dispatchNotice_, dispatchId.left(8)),
@@ -3025,6 +3043,7 @@ QString MainWindow::webShellState() {
         {QStringLiteral("dispatch"),
          QJsonObject{{QStringLiteral("notice"), dispatchNotice_},
                      {QStringLiteral("noticeId"), dispatchNoticeId_},
+                     {QStringLiteral("noticeExe"), dispatchNoticeExe_},
                      {QStringLiteral("draftId"), dispatchDraftId_},
                      {QStringLiteral("draftText"), dispatchDraftText_},
                      {QStringLiteral("supported"), supportedDispatchExes()}}},
@@ -3279,6 +3298,20 @@ void MainWindow::handleWebAction(const QJsonObject &action) {
         if (embeddedVoice_ != nullptr) {
             embeddedVoice_->webReadLast();
         }
+    } else if (cmd == QStringLiteral("restartZcode")) {
+        // 页面按钮已带确认（会中断该宿主正在跑的其它轮次）。
+        QString error;
+        if (ZcodeDispatch::restartDesktop(&error)) {
+            dispatchNotice_ = QStringLiteral(
+                "ZCode 已重启；打开会话即可看到派发消息全文");
+            appendEvent(QStringLiteral("status"), QString(), QString(),
+                        QString::fromUtf8("已重启 ZCode（派发可见性）"), 0);
+        } else {
+            dispatchNotice_ = error;
+            appendEvent(QStringLiteral("error"), QString(), QString(),
+                        QStringLiteral("重启 ZCode 失败：%1").arg(error), 0);
+        }
+        refreshWorkItems();
     } else if (cmd == QStringLiteral("vTyped")) {
         const QString text = action.value(QStringLiteral("text")).toString();
         if (!text.trimmed().isEmpty()) {
@@ -3336,6 +3369,7 @@ void MainWindow::handleWebAction(const QJsonObject &action) {
                 dispatchNotice_ = QStringLiteral("已派往会话 %1，等回执…")
                                       .arg(item->sessionId.left(8));
                 dispatchNoticeId_ = id;
+                dispatchNoticeExe_ = item->agentExe;
                 dispatchDraftId_.clear();
                 dispatchDraftText_.clear();
                 appendEvent(QStringLiteral("status"), QString(), QString(),
@@ -3346,6 +3380,7 @@ void MainWindow::handleWebAction(const QJsonObject &action) {
                 // 裁决 6：证明不了就不发；草稿留在页面输入框里别丢。
                 dispatchNotice_ = reason;
                 dispatchNoticeId_ = id;
+                dispatchNoticeExe_ = item != nullptr ? item->agentExe : QString();
                 dispatchDraftId_ = id;
                 dispatchDraftText_ = text;
                 appendEvent(QStringLiteral("error"), QString(), QString(),

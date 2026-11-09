@@ -436,6 +436,15 @@ int main(int argc, char *argv[]) {
               !zd.dispatch(QStringLiteral("ZCode.exe"), zs, QString(),
                            QStringLiteral("task"), &reason) &&
                   reason.contains(QStringLiteral("app-server 入口")));
+        // 重启桌面与派发共用 exe 解析：override 优先；路径不存在时干净拒绝，
+        // 绝不真的 taskkill（测试机上跑着真 ZCode）。
+        check("zcode restart: exe override honored",
+              ZcodeDispatch::zcodeExeFromRegistry() ==
+                  dir.path() + QStringLiteral("/no/ZCode.exe"));
+        QString restartError;
+        check("zcode restart: missing exe refused without killing",
+              !ZcodeDispatch::restartDesktop(&restartError) &&
+                  restartError.contains(QStringLiteral("找不到")));
         qunsetenv("AGENTRMC_ZCODE_EXE");
         qunsetenv("AGENTRMC_ZCODE_HOME");
     }

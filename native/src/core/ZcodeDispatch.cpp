@@ -7,6 +7,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QProcess>
 #include <QProcessEnvironment>
 #include <QRegularExpression>
 #include <QSettings>
@@ -103,6 +104,40 @@ QString ZcodeDispatch::builtinProviderConfigFor(const QString &zcodeExe) {
     const QString path = QFileInfo(zcodeExe).absolutePath() +
                          QStringLiteral("/resources/config/provider/zcode-builtin.json");
     return QFileInfo::exists(path) ? path : QString();
+}
+
+bool ZcodeDispatch::restartDesktop(QString *error) {
+    const QString exe = zcodeExeFromRegistry();
+    if (exe.isEmpty() || !QFileInfo::exists(exe)) {
+        if (error != nullptr) {
+            *error = QStringLiteral("找不到 ZCode 桌面端（zcode:// 协议未注册）");
+        }
+        return false;
+    }
+    // 优雅关：Electron 收 WM_CLOSE 能保存状态退出；3s 不退再强杀。
+    // /T 连子进程树一起：app-server / utility host 都是它的孩子，留着占端口。
+    const QString image = QFileInfo(exe).fileName();
+    QProcess::execute(QStringLiteral("taskkill"),
+                      {QStringLiteral("/IM"), image, QStringLiteral("/T")});
+    QProcess probe;
+    probe.start(QStringLiteral("tasklist"),
+                {QStringLiteral("/FI"),
+                 QStringLiteral("IMAGENAME eq ") + image,
+                 QStringLiteral("/NH")});
+    probe.waitForFinished(3000);
+    if (QString::fromLocal8Bit(probe.readAllStandardOutput())
+            .contains(image, Qt::CaseInsensitive)) {
+        QProcess::execute(QStringLiteral("taskkill"),
+                          {QStringLiteral("/F"), QStringLiteral("/IM"), image,
+                           QStringLiteral("/T")});
+    }
+    if (!QProcess::startDetached(exe, {})) {
+        if (error != nullptr) {
+            *error = QStringLiteral("ZCode 已关闭，但重新启动失败：%1").arg(exe);
+        }
+        return false;
+    }
+    return true;
 }
 
 bool ZcodeDispatch::sessionRecord(const QString &sessionId, QString *directory,

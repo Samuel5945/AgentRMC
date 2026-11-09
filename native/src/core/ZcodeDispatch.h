@@ -43,6 +43,11 @@ public:
     // resources/config/provider/——spawn 时经 ZCODE_BUILTIN_PROVIDER_CONFIG_FILE
     // 显式指过去，否则 app-server 启动即 exit=1。文件不存在返回空串。
     static QString builtinProviderConfigFor(const QString &zcodeExe);
+    // 重启 ZCode 桌面：外部落库的消息要重启宿主才在对话区可见（runtime 首载
+    // 读库后进程内驻留，见 docs/mission-control-plan.md 刷新机制排查）。
+    // 先 taskkill 优雅关（Electron 可保存退出），3s 不退再 /F，然后按注册表
+    // 解析出的 exe 路径拉起。会中断该宿主里正在跑的其它轮次——调用方先确认。
+    static bool restartDesktop(QString *error = nullptr);
     // 会话索引（共享 SQLite，只读）：session 行存在且未删除＝归属证明；
     // session_entry 的 runtime/model_selection＝该会话当前模型；time_updated
     // 给活动门。rollout jsonl 只有开了完整保留的会话才有，不能当索引。

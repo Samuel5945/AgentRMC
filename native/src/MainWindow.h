@@ -187,6 +187,8 @@ private:
     SessionDispatch *dispatch_ = nullptr;
     QString dispatchNotice_;
     QString dispatchNoticeId_;
+    // 通知归属的宿主 exe：外壳据此决定要不要亮「重启 ZCode」按钮。
+    QString dispatchNoticeExe_;
     QString dispatchDraftId_;
     QString dispatchDraftText_;
     QHash<QString, QString> dispatchSessionById_;

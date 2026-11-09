@@ -935,8 +935,8 @@ QString WorkWebView::htmlFor(const QString &stateJson) const {
       background:var(--raised);border:1px solid var(--line);border-radius:8px;
       padding:6px 10px">
     <button class="btn" id="dpSend" style="flex:0 0 auto;white-space:nowrap">派回会话</button>
-    <span class="hint" id="dpNotice"
-      style="flex:1 1 100%;white-space:normal;line-height:1.4"></span>
+    <button class="btn" id="dpRestart" style="flex:0 0 auto;white-space:nowrap;display:none"
+      title="ZCode 对话区不热刷新：重启宿主后打开会话即可看到派发消息全文。会中断 ZCode 里正在跑的其它轮次">重启 ZCode</button>
   </span>
 </div>
 </div>
@@ -1108,9 +1108,14 @@ function row(it){
 }
 function renderFoot(){
   const selItem=(WORK.items||[]).find(i=>i.id===selected && !i.done);
-  $('hint').textContent=selItem
+  const d=STATE.dispatch||{};
+  // 通知只跟当次派发的那张卡走，别把上一条的拒绝原因挂在新选中的卡下面。
+  const notice=(d.noticeId && d.noticeId!==selected)?'':(d.notice||'');
+  // 通知顶掉键位提示占头行：状态比键位值钱，别两行都挤在脚部。
+  $('hint').textContent=notice||(selItem
     ? 'Enter 回到 Agent · Delete 标为已处理'
-    : '选中一条待办后可操作 · 双击打开 Agent（没开着会先启动）并销账';
+    : '选中一条待办后可操作 · 双击打开 Agent（没开着会先启动）并销账');
+  $('hint').style.color=notice?'var(--text-dim)':'';
   $('raise').disabled=!selItem;
   $('ack').disabled=!selItem;
   // 定向派发只对有会话身份且宿主已接通道（Qoder 系）的待办开放。
@@ -1118,9 +1123,9 @@ function renderFoot(){
     ((STATE.dispatch||{}).supported||[]).includes(selItem.agent_exe));
   $('dpWrap').style.display=dpOk?'flex':'none';
   $('dpSend').disabled=!dpOk;
-  const d=STATE.dispatch||{};
-  // 通知只跟当次派发的那张卡走，别把上一条的拒绝原因挂在新选中的卡下面。
-  $('dpNotice').textContent=(d.noticeId && d.noticeId!==selected)?'':(d.notice||'');
+  // 重启按钮只跟最近一次 ZCode 派发的通知走（失败通知也亮，方便重试）。
+  $('dpRestart').style.display=
+    (dpOk && d.noticeId===selected && d.noticeExe==='ZCode.exe')?'':'none';
   if(dpOk && d.draftId===selected && d.draftText && !$('dpText').value)
     $('dpText').value=d.draftText;
 }
@@ -1536,6 +1541,10 @@ function sendDispatch(){
   $('dpText').value='';
 }
 $('dpSend').onclick=sendDispatch;
+$('dpRestart').onclick=()=>{
+  if(confirm('重启 ZCode 桌面？\n会中断它里面正在跑的其它轮次；重启后打开会话即可看到派发消息全文。'))
+    postObj({cmd:'restartZcode'});
+};
 $('dpText').addEventListener('keydown',e=>{
   if(e.key==='Enter'){e.preventDefault();sendDispatch();}});
 $('workGuide').onclick=()=>{activeTab=5;render();};

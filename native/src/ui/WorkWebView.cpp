@@ -1103,7 +1103,10 @@ function row(it){
   const l2=document.createElement('div');l2.className='l2';l2.textContent=it.message||'';
   el.append(bar,l1,l2);
   el.addEventListener('click',()=>{selected=it.id;render();});
-  el.addEventListener('dblclick',()=>post('open',it.id));
+  el.addEventListener('dblclick',()=>{
+    const dd=STATE.dispatch||{};
+    post((dd.noticeId===it.id && dd.noticeExe==='ZCode.exe')?'raiseZcode':'open',it.id);
+  });
   return el;
 }
 function renderFoot(){
@@ -1111,12 +1114,17 @@ function renderFoot(){
   const d=STATE.dispatch||{};
   // 通知只跟当次派发的那张卡走，别把上一条的拒绝原因挂在新选中的卡下面。
   const notice=(d.noticeId && d.noticeId!==selected)?'':(d.notice||'');
+  // ZCode 派发通知态：对话区要重启才可见，「回到 Agent」只会把人送进陈旧
+  // 视图还顺手销账——藏掉按钮，Enter/双击改走聚焦不销账（raiseZcode）。
+  const zcodeNotice=!!(selItem && notice && d.noticeExe==='ZCode.exe');
+  window.ZC_NOTICE=zcodeNotice;
   // 通知顶掉键位提示占头行：状态比键位值钱，别两行都挤在脚部。
   $('hint').textContent=notice||(selItem
     ? 'Enter 回到 Agent · Delete 标为已处理'
     : '选中一条待办后可操作 · 双击打开 Agent（没开着会先启动）并销账');
   $('hint').style.color=notice?'var(--text-dim)':'';
   $('raise').disabled=!selItem;
+  $('raise').style.display=zcodeNotice?'none':'';
   $('ack').disabled=!selItem;
   // 定向派发只对有会话身份且宿主已接通道（Qoder 系）的待办开放。
   const dpOk=!!(selItem && selItem.session_id &&
@@ -1561,7 +1569,7 @@ document.addEventListener('keydown',e=>{
   // 快捷键只属于待办页：Qt 侧事件流是 NoSelection/NoFocus，别的页也不接。
   if(activeTab!==0 || !selected) return;
   if(e.target && e.target.tagName==='INPUT') return;
-  if(e.key==='Enter'){post('open',selected);}
+  if(e.key==='Enter'){post(window.ZC_NOTICE?'raiseZcode':'open',selected);}
   else if(e.key==='Delete'){post('ack',selected);}
 });
 function adopt(s){

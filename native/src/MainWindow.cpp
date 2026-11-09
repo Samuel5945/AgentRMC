@@ -3144,6 +3144,12 @@ void MainWindow::handleWebAction(const QJsonObject &action) {
         openWorkItem(id);
         return;
     }
+    if (cmd == QStringLiteral("raiseZcode")) {
+        // ZCode 派发通知态的 Enter/双击：只聚焦不销账——对话区还没重启，
+        // 人看到的是陈旧视图，不能算「等我看」的账已结。
+        raiseWorkItem(id);
+        return;
+    }
     if (cmd == QStringLiteral("clearLog")) {
         clearLog();
     } else if (cmd == QStringLiteral("sysRefresh")) {

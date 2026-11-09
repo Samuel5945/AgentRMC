@@ -10,8 +10,9 @@
   **不要在 Git Bash 里直接写 `./dist/AgentRMC-Setup.exe /S`**——MSYS 可能把
   `/S` 当路径参数转换，安装器会弹出向导让人手点「下一步」。命令行临时用时走
   `cmd //c "dist\AgentRMC-Setup.exe /S"`。安装器按注册表
-  `HKCU\Software\AgentRMC\InstallDir` 原地升级（本机装在
-  `D:\apps\AgentRMC`，不是默认的 %LOCALAPPDATA%）。注意 Git Bash 里
+  `HKCU\Software\AgentRMC\InstallDir` 原地升级（本机现装在
+  `%LOCALAPPDATA%\AgentRMC` = `C:\Users\航\AppData\Local\AgentRMC`；早期曾装
+  `D:\apps\AgentRMC`，以注册表读数为准）。注意 Git Bash 里
   `reg query ... /v X` 的 `/v` 也会被 MSYS 吞掉，要查就查整个键。装完手动启动
   安装目录里的 AgentRMCNative.exe——静默模式会跳过完成页的「立即启动」，
   应用不会自己起来。安装器自己会 taskkill 旧实例，不用先关应用；装完用
@@ -19,7 +20,7 @@
 - **启动应用绝对不要用 `cmd //c start ...`**：MSYS 会把 `start "" "D:\..."` 里的
   空标题和路径揉成 `\\`，Windows 当成 UNC 路径，直接弹「找不到网络路径」对话框
   （已经反复踩过）。要么让用户自己点开始菜单 / 安装目录里的 exe，要么在
-  PowerShell 里 `Start-Process 'D:\apps\AgentRMC\AgentRMCNative.exe'`。
+  PowerShell 里 `Start-Process "$env:LOCALAPPDATA\AgentRMC\AgentRMCNative.exe"`。
 - curl 验证要带 `--noproxy '*'`：本机开着代理，不带的话 127.0.0.1 也会被拦成
   `upstream connect failed`，看起来像应用没起来。
 - 可带参数 `lean`，但**它的真实语义是关闭 sherpa-onnx 编译**（build.bat 把
@@ -98,9 +99,9 @@
   才跟着升，纯 native 改动不必为了对齐而空升插件。
 - 出包前跑 `native\tools\check-version.ps1`（CMake / NSIS / exe 一致）和
   `native\tools\sync-plugin-version.ps1 -Check`（六处清单 == VERSION）。
-- 当前批次：Native `0.4.1` / 插件 `0.4.1`（0.4.0 已出包装机、本地验收；0.4.1 是
-  「模型出错要喊人」这条插件能力 + 一次本地装机，上线待办仍见
-  `docs/release-checklist-v0.4.0.md`）。
+- 当前批次：Native `0.4.1` / 插件 `0.4.1` **已发布完成**（2026-11-09：tag + GitHub
+  release 三资产、官网 agentrmc-update.json 0.4.1、本机静默装机验活）。下一批改完
+  照常编译测试出包装机，版本号等用户说「升版」再动。
 - **插件版本只有一个来源**：`plugins/agentrmc-bridge/VERSION`。构建时
   `native/tools/sync-plugin-version.ps1` 把它同步进 3 个 `plugin.json`、
   `plugins/deepseek-harness/package.json`（DSH 版）和 2 个 `marketplace.json`；

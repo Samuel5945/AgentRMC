@@ -49,12 +49,13 @@ cmd //c "native\\tools\\package.bat"
 
 ```bash
 cmd //c "native\\tools\\install-silent.bat"
-powershell -NoProfile -Command "Start-Process 'D:\apps\AgentRMC\AgentRMCNative.exe'"
+powershell -NoProfile -Command "Start-Process \"$env:LOCALAPPDATA\AgentRMC\AgentRMCNative.exe\""
 curl --noproxy '*' -s -m 3 http://127.0.0.1:45915/state
-sha256sum native/build/Release/AgentRMCNative.exe D:/apps/AgentRMC/AgentRMCNative.exe
+sha256sum native/build/Release/AgentRMCNative.exe "$LOCALAPPDATA/AgentRMC/AgentRMCNative.exe"
 ```
 
-通过判据：`/state` 有响应；两个 SHA256 完全一致；进程路径是 `D:\apps\AgentRMC`。
+通过判据：`/state` 有响应；两个 SHA256 完全一致；进程路径与注册表
+`HKCU\Software\AgentRMC\InstallDir` 一致（本机现为 `%LOCALAPPDATA%\AgentRMC`）。
 
 ## 5. dist 整理与发布说明
 
@@ -150,7 +151,7 @@ curl --noproxy '*' -s http://127.0.0.1:45915/work-items   # 活动卡数量回�
 |---|---|
 | 版本 | cmake = nsi = exe = VERSION，`check-version.ps1` / `sync-plugin-version.ps1 -Check` 全绿 |
 | 安装包 | 时间戳晚于最后一次源码改动；日志 `Done` |
-| 装机 | 安装目录 exe SHA256 == build 产物；`/state` 有响应且路径为 `D:\apps\AgentRMC` |
+| 装机 | 安装目录 exe SHA256 == build 产物；`/state` 有响应且路径与注册表 InstallDir 一致 |
 | 插件包 | zip 解压后与 `plugins/agentrmc-bridge` 逐文件一致 |
 | GitHub | release 含 Setup + 两个 zip；tag 指向发布提交 |
 | 官网 | 部署 commit 的 stage=success；版本号/缓存号/新文案/新图 SHA 都对 |

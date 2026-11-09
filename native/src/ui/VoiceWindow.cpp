@@ -289,9 +289,9 @@ VoiceWindow::VoiceWindow(VoiceController *voice, ProfileStore *store,
     foot->setSpacing(6);
     footLay->addLayout(foot);
     backend_ = new QComboBox;
-    // 与主窗语音卡同一套命名，两处别各叫各的。用短名：独立面板这一行还要挤
-    // 「对话 / 语音反馈 / 模型设置」三个按钮，长标签（本地 Qwen3-ASR）会被
-    // 挤成「本地 Q」。
+    // 与主窗语音卡同一套命名，两处别各叫各的。用短名：这一行还要挤
+    // 「对话 / 语音 / 模型」三个按钮（完整界面左栏只有 286 宽），长标签
+    // （本地 Qwen3-ASR）会被挤成「本地 Q」。
     backend_->addItem(QString::fromUtf8("转发"), "hotkey");
     backend_->addItem(QString::fromUtf8("Sense"), "sensevoice");
     backend_->addItem(QString::fromUtf8("Qwen"), "qwen3");
@@ -372,21 +372,21 @@ VoiceWindow::VoiceWindow(VoiceController *voice, ProfileStore *store,
         const QSignalBlocker block(chatMode);
         chatMode->setChecked(on);
     });
-    foot->addWidget(backend_, 1);
     if (embedded_) {
-        // 主窗左栏只剩波形键后，引擎/设置收进这里；286 宽一行放不下四控件，
-        // 引擎独占一行，功能按钮第二行。
-        auto *row2 = new QHBoxLayout;
-        row2->setSpacing(6);
-        row2->addWidget(chatMode);
-        row2->addWidget(tts);
-        row2->addWidget(settings);
-        footLay->addLayout(row2);
-    } else {
-        foot->addWidget(chatMode);
-        foot->addWidget(tts);
-        foot->addWidget(settings);
+        // 完整界面左栏只有 286 宽：按钮名压成两个字，全称进 tooltip。
+        tts->setText(QString::fromUtf8("语音"));
+        tts->setToolTip(
+            QString::fromUtf8("语音反馈：Base URL / API Key / TTS 模型自填"));
+        settings->setText(QString::fromUtf8("模型"));
+        settings->setToolTip(
+            QString::fromUtf8("模型设置：识别模型 / 云端 ASR / 桌宠对话"));
     }
+    // 引擎与三个功能按钮同一行：短名（Qwen / 语音 / 模型）后 286 宽也放得下，
+    // 不再让引擎独占一行。
+    foot->addWidget(backend_, 1);
+    foot->addWidget(chatMode);
+    foot->addWidget(tts);
+    foot->addWidget(settings);
     dock->addWidget(footW);
     body->addWidget(dockW);
 

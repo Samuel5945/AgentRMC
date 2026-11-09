@@ -114,5 +114,14 @@ relaunch_voice_mode()
 panels = [h for h, t in windows() if t == "AgentRMC 语音"]
 print("standalone=%s" % bool(panels))
 if panels:
+    # 面板可能被别的窗口盖着（ImageGrab 抓的是屏幕区域，不是窗口内容）：
+    # 先 ALT 抖一下拿到前台权限，再还原最小化并置顶，否则截到的是隔壁宿主。
+    user32.keybd_event(0x12, 0, 0, 0)
+    user32.keybd_event(0x12, 0, 2, 0)
+    if user32.IsIconic(panels[0]):
+        user32.ShowWindow(panels[0], 9)
+    user32.SetForegroundWindow(panels[0])
+    user32.BringWindowToTop(panels[0])
+    time.sleep(0.6)
     shot(panels[0], "standalone")
 print("DONE")

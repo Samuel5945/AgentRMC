@@ -59,6 +59,7 @@ signals:
 private:
     enum class Stage { Spawn, Ready, Resume, Baseline, Send, Persist, Turn };
     qint64 scaled(qint64 baseMs) const;
+    QString stageName() const;
     void onReadyRead();
     void handleLine(const QByteArray &line);
     void request(const QString &method, const QJsonObject &params);
@@ -86,6 +87,10 @@ private:
     bool interactionNotified_ = false;
     bool sent_ = false;
     bool done_ = false;
+    // 子进程 stderr 尾巴（封顶 4KiB）：app-server 的致命诊断写在这里
+    // （[zcode-process-exception] / Protocol input closed 等），提前退出时
+    // 拼进失败原因，别只留一句没法定位的「提前退出」。
+    QByteArray stderrTail_;
 };
 
 namespace ZcodeGuard {

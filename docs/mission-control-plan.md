@@ -253,6 +253,25 @@ Task/WorkItem 的**会话归属**与**可验证投递**，这两块得自己补�
 - **卡片口径**：派发轮晚到的回复只补正文、不把 hook 已推进的「待验收/等你处理」
   降回进行中；回复缓存按会话在 turn-start / 新派发时清空，不拿上一轮正文冒充；
   未知 `dispatch_id` 的 ack 回 404（不能把无效回执当成功）。
+- **「提前退出」取证与诊断加固（2026-11-09）**：用户实测定向派送报「ZCode
+  app-server 提前退出」。从 `~/.zcode/cli/log/zcode-<date>.jsonl` 还原当天所有
+  `zcode_protocol_agent` 实例生命周期，定位到两种死法：① 实例启动 +122ms 即
+  `startup.failed: Protocol input closed`（stdin 管道在 resume 前就 EOF）；
+  ② 实例 storage ready 正常、却永远收不到 resume，sessions=0 空转。对照实验：
+  Python 控制台父进程跑完整 create→resume→send→落库**全通**；专编的 GUI 子系统
+  （winexe、无控制台）C# 探针模拟 AgentRMC spawn 方式，stdin 保持打开 + session/list
+  正常应答，**也通**——协议本身没坏，问题在 AgentRMC 进程 spawn 子进程时 stdin
+  管道的具体环境（疑与它被谁拉起、继承的环境有关）。旧代码把真实死因吞成一句
+  「提前退出」，无法定位。**修复**：`ZcodeDispatch` 捕获子进程 stderr 尾巴（封顶
+  4KiB）+ exit code + 当前阶段，提前退出时拼进失败文案（如「…提前退出（resume
+  阶段，exit=3）：Error: Protocol input closed」）；`start()` 补齐 `sent_/done_/
+  buffer_/nextId_/awaitingId_` 重置防复用脏状态。另补协议缺口：
+  `interaction/requestOfficialMcpAuthHeaders` 旧代码回 -32000，服务端降级
+  `official_auth_unavailable` 且日志全是 auth_request_failed 噪音——现按 schema 回
+  `{ok:false, reason:"official_auth_unavailable"}`（外部实例拿不到桌面登录态鉴权头，
+  用户裁决不破解）。回归：dispatch_test 新增 early-exit / official-auth 两个 mock
+  场景（已用 Electron-as-node 实跑验证）。**注意**：诊断加固让下次失败能直接看到
+  死因，但 stdin 管道为何 EOF 的根因仍待在有工具链的机器上 build 后复测确认。
 
 #### DSH 系实测（2026-11-07 深夜，插件临时探针 + `rc_probe/dsh_zstd_scan.py`）
 

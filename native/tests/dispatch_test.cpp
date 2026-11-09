@@ -461,7 +461,9 @@ int main(int argc, char *argv[]) {
             const auto runMock = [&](const QString &mode, bool *turnOk,
                                      bool *interactionDenied, bool *interactionDeclined,
                                      bool *skippedOnce, bool *persistTimedOut,
-                                     bool *notTruncated, int *msgPolls) {
+                                     bool *notTruncated, int *msgPolls,
+                                     bool *authAnswered = nullptr,
+                                     QString *failWhyOut = nullptr) {
                 QTemporaryDir ztmp;
                 const QString root = ztmp.path();
                 const QString exe = root + QStringLiteral("/ZCode.exe");
@@ -470,6 +472,9 @@ int main(int argc, char *argv[]) {
                 *turnOk = *interactionDenied = *interactionDeclined = false;
                 *skippedOnce = *persistTimedOut = *notTruncated = false;
                 *msgPolls = 0;
+                if (authAnswered != nullptr) {
+                    *authAnswered = false;
+                }
                 if (!QFile::copy(node, exe)) {
                     std::printf("SKIP zcode mock: cannot copy node.exe\n");
                     return;
@@ -488,7 +493,15 @@ const scenario = JSON.parse(fs.readFileSync(path.join(dir, 'scenario.json'), 'ut
 let msgPolls = 0, evPolls = 0, interactionsSent = false;
 function out(o) { process.stdout.write(JSON.stringify(o) + '\n'); }
 function result(id, r) { out({ id: id, result: r }); }
+if (scenario.mode === 'early-exit') {
+  // 模拟 2026-11-09 实测死法：storage ready 已发出，resume 之前进程退出，
+  // stderr 留死因（真实案例是 'Protocol input closed'，exit code 非零）。
+  out({ method: 'startup/storageState', params: { phase: 'ready' } });
+  process.stderr.write('Error: Protocol input closed\n');
+  setTimeout(() => process.exit(3), 150);
+} else {
 out({ method: 'startup/storageState', params: { phase: 'ready' } });
+}
 process.stdin.setEncoding('utf8');
 let buf = '';
 process.stdin.on('data', (chunk) => {
@@ -500,12 +513,15 @@ process.stdin.on('data', (chunk) => {
     if (!line.trim()) continue;
     const f = JSON.parse(line);
     if (f.method === undefined) {
-      if (f.id === 501 || f.id === 502) {
+      if (f.id === 501 || f.id === 502 || f.id === 503) {
         fs.appendFileSync(path.join(dir, 'interactions.jsonl'), JSON.stringify(f) + '\n');
       }
       continue;
     }
-    if (f.method === 'session/resume') { result(f.id, { sessionId: 'mock' }); continue; }
+    if (f.method === 'session/resume') {
+      if (scenario.mode === 'early-exit') { continue; }  // 不应答，等退出
+      result(f.id, { sessionId: 'mock' }); continue;
+    }
     if (f.method === 'session/send') { result(f.id, {}); continue; }
     if (f.method === 'session/messages') {
       msgPolls += 1;
@@ -530,6 +546,13 @@ process.stdin.on('data', (chunk) => {
                         response: { decision: 'allow' } }] } });
           out({ id: 502, method: 'interaction/requestUserInput', params: {
             sessionId: 'mock', requestId: 'r2', prompt: 'which?', questions: [] } });
+        }
+        if (scenario.mode === 'official-auth' && !interactionsSent) {
+          interactionsSent = true;
+          out({ id: 503, method: 'interaction/requestOfficialMcpAuthHeaders', params: {
+            mcpKey: 'image_search', pluginId: 'image-search',
+            requestId: 'official-mcp-auth:1', targetOrigin: 'https://example.invalid',
+            workspace: { workspaceKey: 'mock', workspacePath: 'mock' } } });
         }
         if (evPolls === 1) {
           result(f.id, { events: [
@@ -607,9 +630,20 @@ process.stdin.on('end', () => process.exit(0));
                                 QStringLiteral("decline")) {
                             *interactionDeclined = true;
                         }
+                        if (authAnswered != nullptr &&
+                            f.value(QStringLiteral("id")).toInt() == 503 &&
+                            res.contains(QStringLiteral("ok")) &&
+                            !res.value(QStringLiteral("ok")).toBool() &&
+                            res.value(QStringLiteral("reason")).toString() ==
+                                QStringLiteral("official_auth_unavailable")) {
+                            *authAnswered = true;
+                        }
                     }
                 }
                 *skippedOnce = skipped == 1;
+                if (failWhyOut != nullptr) {
+                    *failWhyOut = failWhy;
+                }
                 qunsetenv("AGENTRMC_ZCODE_TIME_SCALE");
             };
 
@@ -635,6 +669,24 @@ process.stdin.on('end', () => process.exit(0));
                     &skipped, &timedOut, &notTruncated, &msgPolls);
             check("zcode mock: persist timeout still fires while polling",
                   timedOut && msgPolls >= 3);
+
+            // 提前退出必须带死因：阶段 + exit code + stderr 最后一行。
+            // 2026-11-09 实测「ZCode app-server 提前退出」一句话没法定位。
+            QString earlyWhy;
+            runMock(QStringLiteral("early-exit"), &turnOk, &denied, &declined,
+                    &skipped, &timedOut, &notTruncated, &msgPolls, nullptr,
+                    &earlyWhy);
+            check("zcode mock: early exit reports stage, code and stderr cause",
+                  !turnOk && earlyWhy.contains(QStringLiteral("提前退出")) &&
+                      earlyWhy.contains(QStringLiteral("exit=3")) &&
+                      earlyWhy.contains(QStringLiteral("Protocol input closed")));
+
+            // 官方 MCP 鉴权头请求：按协议回 ok:false + 枚举原因，不回 -32000。
+            bool authAnswered = false;
+            runMock(QStringLiteral("official-auth"), &turnOk, &denied, &declined,
+                    &skipped, &timedOut, &notTruncated, &msgPolls, &authAnswered);
+            check("zcode mock: official MCP auth answered with typed refusal",
+                  turnOk && authAnswered);
         }
     }
 

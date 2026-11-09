@@ -13,6 +13,7 @@
 #include <QSqlDatabase>
 #include <QSqlError>
 #include <QSqlQuery>
+#include <QStringList>
 #include <QVariant>
 
 #include <algorithm>
@@ -163,6 +164,12 @@ void ZcodeDispatch::start(const Job &job) {
     baselineSeq_ = 0;
     pendingTurnId_.clear();
     interactionNotified_ = false;
+    sent_ = false;
+    done_ = false;
+    buffer_.clear();
+    stderrTail_.clear();
+    nextId_ = 1;
+    awaitingId_ = -1;
     stage_ = Stage::Spawn;
     stageClock_.start();
     pollClock_.start();
@@ -176,16 +183,46 @@ void ZcodeDispatch::start(const Job &job) {
                             QStringLiteral("app-server"), QStringLiteral("--stdio")});
     connect(process_, &QProcess::readyReadStandardOutput, this,
             &ZcodeDispatch::onReadyRead);
+    connect(process_, &QProcess::readyReadStandardError, this, [this] {
+        stderrTail_ += process_->readAllStandardError();
+        // 只留尾巴：诊断要看的是最后几行，别让长日志吃内存。
+        if (stderrTail_.size() > 4096) {
+            stderrTail_ = stderrTail_.right(4096);
+        }
+    });
     connect(process_, &QProcess::errorOccurred, this, [this](QProcess::ProcessError) {
         if (stage_ == Stage::Spawn) {
             fail(QStringLiteral("ZCode app-server 启动失败：%1")
                      .arg(process_->errorString()));
         }
     });
-    connect(process_, &QProcess::finished, this, [this]() {
-        if (!done_ && !sent_) {
-            fail(QStringLiteral("ZCode app-server 提前退出"));
-        } else if (!done_) {
+    connect(process_, &QProcess::finished, this,
+            [this](int exitCode, QProcess::ExitStatus status) {
+        // finished 触发时管道里可能还有没读完的尾巴：先抽干再报死因。
+        stderrTail_ += process_->readAllStandardError();
+        if (stderrTail_.size() > 4096) {
+            stderrTail_ = stderrTail_.right(4096);
+        }
+        if (done_) {
+            return;
+        }
+        if (!sent_) {
+            // 提前退出：把阶段、退出码和 stderr 尾巴一起报出去。
+            // 2026-11-09 实测：只报「提前退出」时完全没法定位——真实死因
+            // （如 Protocol input closed）全在 stderr 里被丢掉了。
+            QString why = QStringLiteral("ZCode app-server 提前退出（%1阶段，exit=%2%3）")
+                              .arg(stageName())
+                              .arg(exitCode)
+                              .arg(status == QProcess::CrashExit
+                                       ? QStringLiteral("，崩溃")
+                                       : QString());
+            const QString tail = QString::fromUtf8(stderrTail_).trimmed();
+            if (!tail.isEmpty()) {
+                const QStringList lines = tail.split('\n');
+                why += QStringLiteral("：%1").arg(lines.last().trimmed().left(200));
+            }
+            fail(why);
+        } else {
             finishTurn(QString());
         }
     });
@@ -253,6 +290,19 @@ void ZcodeDispatch::handleLine(const QByteArray &line) {
                     emit interactionSkipped(job_.dispatchId,
                                             QStringLiteral("提问"));
                 }
+            } else if (
+                method ==
+                QStringLiteral("interaction/requestOfficialMcpAuthHeaders")) {
+                // 官方 MCP（image-search / zcode-site 等）要桌面登录态的鉴权头，
+                // 外部派发实例拿不到（凭据在桌面进程里，用户裁决不破解）。
+                // 按协议回明确的 ok:false + 枚举原因，服务端降级为
+                // official_auth_unavailable、跳过该 MCP；回 -32000 会被当成
+                // 客户端协议错误，日志里全是 auth_request_failed 噪音。
+                reply = QJsonObject{
+                    {QStringLiteral("result"),
+                     QJsonObject{{QStringLiteral("ok"), false},
+                                 {QStringLiteral("reason"),
+                                  QStringLiteral("official_auth_unavailable")}}}};
             } else {
                 reply = QJsonObject{
                     {QStringLiteral("error"),
@@ -479,6 +529,27 @@ qint64 ZcodeDispatch::scaled(qint64 baseMs) const {
     // 测试用时间倍率（AGENTRMC_ZCODE_TIME_SCALE，默认 1）。测试取 0.02：
     // spawn 400ms 够 node 起来，persist 900ms 能跑出多次轮询再撞超时。
     return qMax<qint64>(1, qint64(double(baseMs) * timeScale_));
+}
+
+// 阶段名进失败文案：同一句「提前退出」可能死在任何一步，带上阶段才能定位。
+QString ZcodeDispatch::stageName() const {
+    switch (stage_) {
+    case Stage::Spawn:
+        return QStringLiteral("启动");
+    case Stage::Ready:
+        return QStringLiteral("握手");
+    case Stage::Resume:
+        return QStringLiteral("resume");
+    case Stage::Baseline:
+        return QStringLiteral("事件基线");
+    case Stage::Send:
+        return QStringLiteral("send");
+    case Stage::Persist:
+        return QStringLiteral("落库确认");
+    case Stage::Turn:
+        return QStringLiteral("等回复");
+    }
+    return QStringLiteral("?");
 }
 
 void ZcodeDispatch::fail(const QString &reason) {

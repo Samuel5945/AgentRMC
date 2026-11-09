@@ -777,8 +777,10 @@ QString WorkWebView::htmlFor(const QString &stateJson) const {
  .vhist{flex:1 1 auto;min-height:0;overflow-y:auto;scrollbar-width:none;
    display:flex;flex-direction:column;gap:2px}
  .vhist::-webkit-scrollbar{width:0;height:0}
- .vh{font-size:var(--f11);color:var(--text-dim);padding:4px 6px;border-radius:6px;
-   word-break:break-word;cursor:pointer;flex:0 0 auto}
+ .vh{font-size:var(--f11);padding:4px 6px;border-radius:6px;
+   word-break:break-word;cursor:pointer;flex:0 0 auto;max-width:88%}
+ .vh.out{color:var(--text);text-align:right;margin-left:auto;background:var(--w8)}
+ .vh.in{color:var(--accent);text-align:left;margin-right:auto;background:var(--w6)}
  .vh:hover{background:var(--w6)}
  .vempty{flex:1 1 auto;display:flex;align-items:center;justify-content:center;
    color:var(--muted);font-size:var(--f11);text-align:center}
@@ -1474,7 +1476,9 @@ function renderLeft(){
     $('vHist').dataset.sig=hs;
     const keep=$('vHist').scrollTop;
     $('vHist').replaceChildren();
-    hist.forEach(h=>{const d=document.createElement('div');d.className='vh';
+    hist.forEach(h=>{const d=document.createElement('div');
+      // 收发分边：我说的靠右（正文色），Agent 回复靠左（强调色）。
+      d.className='vh '+(h.in?'in':'out');
       d.textContent=h.t;d.title='点击复制';
       d.onclick=()=>postObj({cmd:'copy',text:h.full});
       $('vHist').append(d);});

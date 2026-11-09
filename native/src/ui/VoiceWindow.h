@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QComboBox>
+#include <QBrush>
 #include <QJsonObject>
 #include <QImage>
 #include <QLabel>
@@ -67,7 +68,9 @@ public:
     void webRefreshPicker();
 
 private:
-    void pushHistory(const QString &text, int costMs);
+    // fromAgent=false 是我这一侧（说话/打字），true 是 Agent 的回复。
+    void pushHistory(const QString &text, int costMs, bool fromAgent = false);
+    QBrush historyBrush(bool fromAgent);
     // 历史行点击即复制（整面板唯一复制入口）：最新一条就是历史第 0 条，
     // 不再单独留一个「当前转写」框重复显示同一句话。
     void copyText(const QString &text);

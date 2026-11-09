@@ -512,12 +512,18 @@ void VoiceWindow::copyText(const QString &text) {
     toast_->showText(QString::fromUtf8("已复制到剪贴板"));
 }
 
-void VoiceWindow::pushHistory(const QString &text, int costMs) {
+void VoiceWindow::pushHistory(const QString &text, int costMs, bool fromAgent) {
     auto *item = new QListWidgetItem(history_);
-    item->setText(QStringLiteral("%1  ·  %2s")
-                      .arg(text,
-                           QString::number(costMs / 1000.0, 'f', 1)));
+    // 收发分边：我说的（说话/打字）靠右、用正文色；Agent 回复靠左、用强调色。
+    // 耗时只对「我这一句」有意义（识别用了多久），回复那行不带。
+    item->setText(fromAgent || costMs <= 0
+                      ? text
+                      : QStringLiteral("%1  ·  %2s")
+                            .arg(text, QString::number(costMs / 1000.0, 'f', 1)));
     item->setData(Qt::UserRole, text);
+    item->setData(Qt::UserRole + 1, fromAgent);
+    item->setTextAlignment(fromAgent ? Qt::AlignLeft : Qt::AlignRight);
+    item->setForeground(historyBrush(fromAgent));
     item->setToolTip(text);
     lastText_ = text;
     if (readLast_ != nullptr) {
@@ -528,6 +534,13 @@ void VoiceWindow::pushHistory(const QString &text, int costMs) {
         delete history_->takeItem(history_->count() - 1);
     }
     refreshHistoryEmpty();
+}
+
+// 清一色灰字分不清谁说的：发送侧用正文色，接收侧用强调色。换主题要重刷
+// （历史项颜色在插入时烘进 item，不跟着 QSS 的 token 走）。
+QBrush VoiceWindow::historyBrush(bool fromAgent) {
+    return QBrush(QColor(ThemeManager::instance().css(
+        fromAgent ? QStringLiteral("accent") : QStringLiteral("text"))));
 }
 
 void VoiceWindow::refreshHistoryEmpty() {
@@ -553,7 +566,7 @@ void VoiceWindow::mousePressEvent(QMouseEvent *event) {
 }
 
 void VoiceWindow::showChatReply(const QString &text) {
-    pushHistory(text, 0);
+    pushHistory(text, 0, true);
 }
 
 void VoiceWindow::paintEvent(QPaintEvent *event) {
@@ -632,6 +645,12 @@ void VoiceWindow::refreshThemePaint() {
     // 面板底/麦克风/Toast 是自绘的，不吃 QSS：换配色模式要自己重画。
     refreshStatusDot();
     refreshHistoryEmpty();
+    // 收发气泡的颜色是插入时烘进 item 的，换主题要按方向重刷一遍。
+    for (int i = 0; i < history_->count(); ++i) {
+        QListWidgetItem *item = history_->item(i);
+        item->setForeground(
+            historyBrush(item->data(Qt::UserRole + 1).toBool()));
+    }
     mic_->update();
     toast_->update();
     update();
@@ -673,7 +692,8 @@ QJsonObject VoiceWindow::webState() const {
         const QListWidgetItem *item = history_->item(i);
         hist.append(QJsonObject{
             {QStringLiteral("t"), item->text()},
-            {QStringLiteral("full"), item->data(Qt::UserRole).toString()}});
+            {QStringLiteral("full"), item->data(Qt::UserRole).toString()},
+            {QStringLiteral("in"), item->data(Qt::UserRole + 1).toBool()}});
     }
     return QJsonObject{
         {QStringLiteral("history"), hist},

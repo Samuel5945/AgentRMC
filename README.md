@@ -56,33 +56,36 @@ Harness, OpenSquilla, BLE remote, Qt 6, C++, Windows
 实测机型为极米「快乐星球 O3」13 键 BLE 遥控器（VID `0x000D` / PID `0x3838`）；
 同款 HID 遥控器改 `config.json` 的 `device_mark` 即可复用。
 
-当前实现是 **C++/Qt 6 原生版**（`native/`，v0.4.0；按键映射不接 LLM，动作直接交给 Qoder / WorkBuddy 等前台 Agent；只有桌宠对话模式会调用你在「对话设置」里自配的 LLM）。
+当前实现是 **C++/Qt 6 原生版**（`native/`，v0.4.1；按键映射不接 LLM，动作直接交给 Qoder / WorkBuddy 等前台 Agent；只有桌宠对话模式会调用你在「对话设置」里自配的 LLM）。
 Python 版留在 `legacy-python` 分支，两版读写同一套 `config.json` / `profiles.json`。
 
-当前 0.4.0：语音主界面重排到一屏放得下、桌宠形象与配色主题拆开各调各的、每台宿主的派活方式可单独设；
+当前 0.4.1：**四路定向派发全链接线**——说一句话直接派给 Qoder / ZCode / WorkBuddy / DeepSeek Harness /
+OpenSquilla 里的指定宿主（ZCode 走自带 app-server 通道、DSH 走插件通道、OpenSquilla 走网关 RPC，都不靠模拟点击）；
+主窗右半区换成 **WebView2 单管线外壳**，Qt 混渲染发虚消除；语音新增**系统控制**（音量 / 亮度 / 媒体，
+关机重启要二次确认）；**模型出错（StopFailure）也会喊人**；提醒从四类变五类。
 **装 Agent 的那台机器不需要 Node**——联动插件自己找运行时（PATH 上的 node，找不到就借宿主自带的
-Electron），没 node 也不再静默失联。联动插件与 Native 同号。
+Electron），没 node 也不再静默失联。联动插件与 Native 同号 0.4.1。
 
 <p align="center">
-  <img src="assets/screenshots/agentrmc-inbox.jpg" alt="AgentRMC「待我处理」：Qoder、Qoder CN、ZCode、WorkBuddy、DeepSeek Harness、OpenSquilla 等七个 Agent 的待办收进一张列表" width="100%">
+  <img src="assets/screenshots/agentrmc-inbox.jpg" alt="AgentRMC「待我处理」：Qoder、Qoder CN、ZCode、WorkBuddy、DeepSeek Harness、OpenSquilla 等 Agent 的待办按等你处理 / 待验收 / 进行中收进一张列表" width="100%">
 </p>
 <p align="center">
-  <img src="assets/screenshots/agentrmc-theme-whale-light.jpg" alt="AgentRMC 鲸鱼娘主题浅色：语音主界面与「待我处理」并排，美术背景透过卡片表面" width="49%">
+  <img src="assets/screenshots/agentrmc-theme-whale-light.jpg" alt="AgentRMC 鲸鱼娘主题浅色：「待我处理」与语音卡片并排，美术背景透过 WebView2 卡片表面" width="49%">
   <img src="assets/screenshots/agentrmc-theme-whale-dark.jpg" alt="AgentRMC 鲸鱼娘主题深色：同一套布局的暗色配色" width="49%">
 </p>
 <p align="center">
-  <img src="assets/screenshots/agentrmc-system.jpg" alt="AgentRMC 系统页：桥接状态、运行时长、离线待补与七个 Worker 的在线状态" width="49%">
-  <img src="assets/screenshots/agentrmc-keymap.jpg" alt="AgentRMC 遥控器形态：13 键 BLE 遥控器逐键映射，语音 / 待机双模式与当前转写引擎" width="49%">
+  <img src="assets/screenshots/agentrmc-system.jpg" alt="AgentRMC 系统页：桥接状态、运行时长、离线待补与各 Worker 的在线状态，插件版本与运行中版本一并对账" width="49%">
+  <img src="assets/screenshots/agentrmc-keymap.jpg" alt="AgentRMC 按键映射页：按物理键列出单击 / 双击 / 长按，长按可绑成打开某个应用" width="49%">
 </p>
 <p align="center">
-  <img src="assets/screenshots/agentrmc-apps.jpg" alt="AgentRMC 应用页：本机应用与来源，说「打开剪映」就启动" width="49%">
-  <img src="assets/screenshots/agentrmc-guide.jpg" alt="AgentRMC 使用引导：有遥控器 / 没有遥控器两条路线" width="49%">
+  <img src="assets/screenshots/agentrmc-apps.jpg" alt="AgentRMC 应用页：本机应用与来源，说「打开剪映」就启动；底栏新增语音系统控制开关" width="49%">
+  <img src="assets/screenshots/agentrmc-guide.jpg" alt="AgentRMC 使用引导：没有遥控器也能用——全局热键、波形语音键、耳机播放键与桌宠四种入口" width="49%">
 </p>
 <p align="center">
-  <img src="assets/screenshots/agentrmc-desktop.jpg" alt="AgentRMC 桌宠 hover 浮窗：监听状态、转写结果、当前宿主与派活模式，热键 Ctrl+Alt+V 也能开始" width="100%">
+  <img src="assets/screenshots/agentrmc-desktop.jpg" alt="AgentRMC 桌宠与语音小窗：监听状态、转写结果、当前宿主与派活模式；等确认、任务完成、模型出错时冒泡 + 出声，热键 Ctrl+Alt+V 也能开始" width="100%">
 </p>
 
-*真机截图（0.4.0）：七路 Agent 待办、鲸鱼娘主题明暗两版、遥控器逐键映射；最后一张是桌宠 hover 浮窗。系统 / 应用 / 使用引导三张仍为 0.3.9，待重截。*
+*真机截图（0.4.1）：多 Agent 待办、鲸鱼娘主题明暗两版、系统 / 按键映射 / 应用 / 使用引导四页，最后一张是桌宠与语音小窗。截图里的待办为演示数据。*
 
 ```
 遥控器 → HID → Raw Input ─┬→ 按键 → 场景 Profile → 动作（按键/滚动/鼠标/模式/启动程序）

@@ -39,6 +39,7 @@
 #include <QShowEvent>
 #include <QResizeEvent>
 #include <QSignalBlocker>
+#include <QStyle>
 #include <QStringList>
 #include <QTimer>
 #include <QThread>
@@ -53,7 +54,12 @@ namespace {
 constexpr int kPetSize = 84;    // 桌宠球体直径
 constexpr int kPeek = 20;       // 贴边藏起来后露出的边条宽度
 constexpr int kSnapDist = 80;   // 拖到离屏幕边多近算贴边
-constexpr int kCardWidth = 280;  // 顶行模型下拉 + 中部宿主/会话两下拉需要比旧按钮排更宽
+// 卡片宽度：比旧按钮排时代宽一点，给「下次派活开新任务」这类长选项和
+// 左右留白留余地（宽度是呼吸感的一半，另一半是行距）。
+constexpr int kCardWidth = 300;
+// 转写区：空闲只占一行（不留一整块空箱子），有字才长到正文高度。
+constexpr int kTranscriptMinH = 64;   // 有正文时的最矮高度（约三行）
+constexpr int kTranscriptMaxH = 120;  // 再长就在框里滚/截，别把卡片顶出屏幕
 constexpr int kBubbleWidth = 220;  // 说话气泡箱体固定宽
 constexpr int kTailSpace = 12;     // 气泡尾巴侧预留高度（尾巴画在这里面）
 constexpr int kTextPadX = 12;      // 文字离箱体左右边的内边距
@@ -92,76 +98,94 @@ public:
         setFixedWidth(kCardWidth);
 
         auto *root = new QVBoxLayout(this);
-        root->setContentsMargins(12, 11, 12, 11);
-        root->setSpacing(7);
+        // 留白优先：卡片里元素已经只剩四行，行距比压缩更重要的是呼吸感。
+        root->setContentsMargins(15, 14, 15, 13);
+        root->setSpacing(10);
 
         // 顶行：监听状态 + 识别模型下拉。模型选择移到最顶部（同语音页），
         // 不再占中部一整排按钮。
+        // 状态是胶囊不是裸字：给个底色框住「● 监听中」，眼睛先落在这里。
         auto *top = new QHBoxLayout;
-        top->setSpacing(6);
+        top->setSpacing(8);
         status_ = new QLabel(this);
         status_->setObjectName("petStatus");
-        top->addWidget(status_, 1);
+        status_->setTextFormat(Qt::RichText);
+        status_->setAlignment(Qt::AlignCenter);
+        status_->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+        top->addWidget(status_, 0);
+        // 模型选择当次要设置放右上角，别让它跟胶囊平分注意力。
+        top->addStretch(1);
         backendCombo_ = new QComboBox(this);
         backendCombo_->setObjectName("petBackend");
         backendCombo_->setFocusPolicy(Qt::NoFocus);
         backendCombo_->setCursor(Qt::PointingHandCursor);
+        backendCombo_->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
         backendCombo_->addItem(QString::fromUtf8("转发"));
         backendCombo_->addItem(QString::fromUtf8("Sense"));
         backendCombo_->addItem(QString::fromUtf8("Qwen"));
         backendCombo_->addItem(QString::fromUtf8("云端"));
         connect(backendCombo_, &QComboBox::currentIndexChanged, this,
                 [this](int index) { pet_->setBackend(index); });
-        top->addWidget(backendCombo_);
+        top->addWidget(backendCombo_, 0);
         root->addLayout(top);
-
-        detail_ = new QLabel(this);
-        detail_->setObjectName("petDetail");
-        // 卡片是在文案还空的时候 adjustSize() 定高的：这里一旦折行，多出来的
-        // 那行会把下面的下拉行挤掉半截。所以状态行永远单行（自己 elide，
-        // QLabel 没有 setTextElideMode），全文进 tooltip；空态也占这一行，
-        // 卡片高度从头到尾不变。
-        detail_->setWordWrap(false);
-        detail_->setTextFormat(Qt::PlainText);
-        detail_->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
-        root->addWidget(detail_);
 
         // 中部原识别模型按钮排改为「宿主派任务」（宿主+会话两下拉），
         // 与语音页底部那行共用 DispatchPicker，选择同样持久化。
         dispatch_ = new DispatchPicker(pet_->store_, this);
         root->addWidget(dispatch_);
 
+        // 两行设置和正文之间多留一点：不加分割线，靠留白分区。
+        root->addSpacing(4);
+
         // 桌宠卡没有历史列表，这块转写就是唯一的正文显示，保留点击复制。
-        transcript_ = new QLabel(QString::fromUtf8("说了话会显示在这里，点击复制"), this);
+        // 空态只占一行（不留一整块空箱子），但那行要给够上下内边距，
+        // 别贴着框边——挤就挤在这一行上。
+        transcript_ = new QLabel(this);
         transcript_->setObjectName("petTranscript");
         transcript_->setWordWrap(true);
-        transcript_->setMinimumHeight(64);
-        transcript_->setMaximumHeight(120);
+        transcript_->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
         transcript_->setCursor(Qt::PointingHandCursor);
         transcript_->installEventFilter(this);
+        const int emptyHeight = transcriptEmptyHeight();
+        transcript_->setMinimumHeight(emptyHeight);
+        transcript_->setMaximumHeight(emptyHeight);
         root->addWidget(transcript_);
 
+        // 提示行：只在这一轮真有要说的（出错 / 名单）时才出现，空态不占位。
         hint_ = new QLabel(this);
         hint_->setObjectName("petDetail");
-        hint_->setWordWrap(true);
+        hint_->setWordWrap(false);  // 单行 + elide：折行会把下面的按钮排挤走
+        hint_->setTextFormat(Qt::PlainText);
+        hint_->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
         hint_->hide();
         root->addWidget(hint_);
 
+        // 动作区和正文之间多留一点：按钮是「下一件事」，不该跟正文贴着。
+        root->addSpacing(2);
+
         auto *tools = new QHBoxLayout;
-        tools->setSpacing(5);
-        const auto addButton = [this, tools](const QString &text, auto slot) {
+        tools->setSpacing(7);
+        // 快捷按钮：三个动作等宽，「✕」只当图标按钮（不该跟动作抢宽度）。
+        const auto addButton = [this, tools](const QString &text, int stretch,
+                                             auto slot) {
             auto *button = new QPushButton(text, this);
             button->setObjectName("ghostSmall");
             button->setCursor(Qt::PointingHandCursor);
             button->setFocusPolicy(Qt::NoFocus);
             connect(button, &QPushButton::clicked, button, std::move(slot));
-            tools->addWidget(button, 1);
+            tools->addWidget(button, stretch);
+            return button;
         };
-        addButton(QString::fromUtf8("面板"), [this] { pet_->openPanel(); });
-        addButton(QString::fromUtf8("主界面"), [this] { pet_->openFullUi(); });
-        addButton(QString::fromUtf8("贴边"), [this] { pet_->dockAndPeek(); });
-        addButton(QString::fromUtf8("✕"), [this] { pet_->closeFromUi(); });
+        addButton(QString::fromUtf8("面板"), 1, [this] { pet_->openPanel(); });
+        addButton(QString::fromUtf8("主界面"), 1, [this] { pet_->openFullUi(); });
+        addButton(QString::fromUtf8("贴边"), 1, [this] { pet_->dockAndPeek(); });
+        auto *closeBtn = addButton(QString::fromUtf8("✕"), 0,
+                                   [this] { pet_->closeFromUi(); });
+        closeBtn->setFixedWidth(30);
+        closeBtn->setToolTip(QString::fromUtf8("隐藏桌宠（右键菜单里也能找回）"));
         root->addLayout(tools);
+        setPlaceholder(QString::fromUtf8("说了话会显示在这里，点击复制"),
+                       QString::fromUtf8("点击复制最近一句"));
     }
 
     void setStatus(const QString &state, const QString &color,
@@ -171,31 +195,86 @@ public:
                              .arg(color, state));
     }
 
-    void setDetail(const QString &text) {
-        // 占位行一直有内容：空文案时兜底成「就绪」，别留一条缝。
-        detailFull_ = text.isEmpty() ? QString::fromUtf8("就绪") : text;
-        refitDetail();
+    void setHint(const QString &text) {
+        // 空文案不占位（卡片高度跟着变，见 refreshState）：常驻一行
+        // 「就绪」跟顶行「监听中」说的是一件事。
+        hintFull_ = text;
+        refitHint();
     }
 
     // QLabel 不会自己省略，超长按单行宽度算一遍：宁可少看几个字，
     // 也不能让这一行折成两行把下面的控件挤没。
-    void refitDetail() {
-        const int width = detail_->width() > 0
-                              ? detail_->width()
-                              : kCardWidth - 24;  // 卡片左右 contentsMargins 各 12
-        detail_->setText(QFontMetrics(detail_->font())
-                             .elidedText(detailFull_, Qt::ElideRight, width));
-        detail_->setToolTip(detailFull_);
+    void refitHint() {
+        if (hintFull_.isEmpty()) {
+            hint_->clear();
+            hint_->hide();
+            return;
+        }
+        const int width = hint_->width() > 0
+                              ? hint_->width()
+                              : kCardWidth - 30;  // 卡片左右 contentsMargins 各 15
+        hint_->setText(QFontMetrics(hint_->font())
+                           .elidedText(hintFull_, Qt::ElideRight, width));
+        hint_->setToolTip(hintFull_);
+        hint_->show();
+    }
+
+    // 空转写框那行不是装饰：它是「还没听到话」时唯一该说点什么的地方。
+    // 监听态和热键都换了，这行跟着换，热键值不再单独占一行。
+    void setPlaceholder(const QString &text, const QString &tooltip) {
+        placeholder_ = text;
+        placeholderTooltip_ = tooltip;
+        if (text_.isEmpty()) {
+            // 空态高度跟着字号走：换主题/改字号时这份 fixed 高度要重算，
+            // 否则文字会被上一套字体量出来的框切掉。
+            const int height = transcriptEmptyHeight();
+            transcript_->setMinimumHeight(height);
+            transcript_->setMaximumHeight(height);
+            refitTranscript();
+        }
+    }
+
+    // 一行的净高：QSS 上下 padding 9+9、边框 1+1，再加一点余量。
+    int transcriptEmptyHeight() {
+        transcript_->ensurePolished();  // font() 要拿到 QSS 里的字号再量
+        return transcript_->fontMetrics().height() + 26;
+    }
+
+    // 空态那行按框宽省略（换行会被 fixedHeight 切掉半截），正文照常换行。
+    void refitTranscript() {
+        if (!text_.isEmpty()) {
+            return;
+        }
+        transcript_->ensurePolished();  // font() 要拿到 QSS 里的字号再量
+        const int width = transcript_->width() > 0
+                              ? transcript_->width() - 22  // QSS padding 左右 11
+                              : kCardWidth - 52;           // 卡片 margins 30 + padding 22
+        transcript_->setText(QFontMetrics(transcript_->font())
+                                 .elidedText(placeholder_, Qt::ElideRight, width));
+        transcript_->setToolTip(placeholderTooltip_);
+        setTranscriptEmpty(true);
+    }
+
+    // 空态那句用次要色（QSS 里 [empty="true"]）：提示别和正文一个分量。
+    void setTranscriptEmpty(bool empty) {
+        if (transcript_->property("empty").toBool() == empty) {
+            return;
+        }
+        transcript_->setProperty("empty", empty);
+        transcript_->style()->unpolish(transcript_);
+        transcript_->style()->polish(transcript_);
     }
 
     void showEvent(QShowEvent *event) override {
         QWidget::showEvent(event);
-        refitDetail();
+        refitHint();
+        refitTranscript();
     }
 
     void resizeEvent(QResizeEvent *event) override {
         QWidget::resizeEvent(event);
-        refitDetail();
+        refitHint();
+        refitTranscript();
     }
 
     void setBackendChecked(int backend) {
@@ -206,27 +285,37 @@ public:
     void refreshDispatch() { dispatch_->refresh(); }
 
     void setTranscript(const QString &text, int costMs) {
+        const QString previous = text_;
         text_ = text;
-        transcript_->setText(text);
-        transcript_->setToolTip(
-            QStringLiteral("%1 · %2s")
-                .arg(text, QString::number(costMs / 1000.0, 'f', 1)));
-    }
-
-    void setHint(const QString &text) {
-        hint_->setText(text);
-        hint_->setToolTip(text);
-        hint_->setVisible(!text.isEmpty());
+        if (text.isEmpty()) {
+            // 回到空态：收成一行，再把上下文提示写回去。
+            transcript_->setMinimumHeight(transcriptEmptyHeight());
+            transcript_->setMaximumHeight(transcriptEmptyHeight());
+            refitTranscript();
+        } else {
+            transcript_->setMinimumHeight(kTranscriptMinH);
+            transcript_->setMaximumHeight(kTranscriptMaxH);
+            transcript_->setText(text);
+            setTranscriptEmpty(false);
+            transcript_->setToolTip(
+                QStringLiteral("%1 · %2s")
+                    .arg(text, QString::number(costMs / 1000.0, 'f', 1)));
+        }
+        // 空↔有字的切换会改卡片高度：位置跟着重算，别留空档也别被屏幕切掉。
+        if (isVisible() && previous.isEmpty() != text.isEmpty()) {
+            pet_->placeCard();
+        }
     }
 
     QLabel *status_ = nullptr;
-    QLabel *detail_ = nullptr;
     QLabel *transcript_ = nullptr;
     QLabel *hint_ = nullptr;
     QComboBox *backendCombo_ = nullptr;
     DispatchPicker *dispatch_ = nullptr;
     QString text_;
-    QString detailFull_;  // 状态行全文（显示的是按宽度 elide 后的版本，全文进 tooltip）
+    QString hintFull_;       // 提示行全文（显示的是按宽度 elide 后的版本）
+    QString placeholder_;    // 空转写框那行（监听态 + 热键）
+    QString placeholderTooltip_;
 
 protected:
     void paintEvent(QPaintEvent *event) override {
@@ -1438,6 +1527,15 @@ void VoicePet::expandCard() {
     ensureCard();
     refreshState();
     card_->refreshDispatch();  // 宿主存活/窗口可见会变，展开时重建列表
+    placeCard();
+    card_->show();
+    card_->raise();
+    raise();
+}
+
+// 量一次卡片、贴着球摆好。展开和「提示行藏/显后重排」共用：两边都只改几何，
+// 展开那边再多一步 show/raise。
+void VoicePet::placeCard() {
     card_->adjustSize();
     QScreen *scr = screen();
     if (scr == nullptr) {
@@ -1456,9 +1554,6 @@ void VoicePet::expandCard() {
                    available.bottom() - card_->height() - 4);
     }
     card_->move(x, y);
-    card_->show();
-    card_->raise();
-    raise();
 }
 
 void VoicePet::collapseCard() {
@@ -1592,6 +1687,13 @@ void VoicePet::setStatusDetailForShot(const QString &text) {
     refreshState();
 }
 
+void VoicePet::setTranscriptForShot(const QString &text) {
+    if (card_ == nullptr) {
+        ensureCard();
+    }
+    card_->setTranscript(text, 900);
+}
+
 void VoicePet::refreshState() {
     const VoiceOptions options = voice_->options();
     QString state;
@@ -1613,16 +1715,65 @@ void VoicePet::refreshState() {
     setToolTip(QStringLiteral("%1 · %2\n悬停展开 · 右键菜单 · 拖到屏幕边缘贴边")
                    .arg(state, backend));
     if (card_ != nullptr) {
+        // 先量一下旧高度：空态占位行、提示行都会改高度，差多少最后一次性重排。
+        const int before = card_->sizeHint().height();
         card_->setStatus(state, color, backend);
-        card_->setDetail(detailOverrideForShot_.isEmpty() ? detail_
-                                                          : detailOverrideForShot_);
         card_->setBackendChecked(int(options.backend));
-        card_->setHint(options.kbHotkeyEnabled
-                           ? QString::fromUtf8("热键 %1 也可以开始")
-                                 .arg(voiceComboText(options.kbHotkeyMods,
-                                                     options.kbHotkeyVk))
-                           : QString());
+        // 空转写框那行兼做「此刻该怎么做」：监听态 + 热键都并进这一行，
+        // 不再单独占一条常驻的「热键 Alt+V 也可以开始」。
+        const QString hotkey =
+            options.kbHotkeyEnabled
+                ? voiceComboText(options.kbHotkeyMods, options.kbHotkeyVk)
+                : QString();
+        QString placeholder;
+        if (recording_) {
+            // 顶行胶囊只说「录音中」；这一行说怎么结束（点击是切换、热键是松手）。
+            placeholder = QString::fromUtf8("正在听… 松手或再点一下结束");
+        } else if (transcribing_) {
+            placeholder = QString::fromUtf8("正在出结果…");
+        } else if (listening_) {
+            placeholder = QString::fromUtf8("说一句，结果显示在这里");
+        } else {
+            placeholder = QString::fromUtf8("点一下球开始监听");
+        }
+        QString placeholderTip = QString::fromUtf8("点击复制最近一句");
+        if (!hotkey.isEmpty() && !recording_ && !transcribing_) {
+            placeholder += QString::fromUtf8(" · %1").arg(hotkey);
+            placeholderTip += QString::fromUtf8(" · 热键 %1 开始说话").arg(hotkey);
+        }
+        card_->setPlaceholder(placeholder, placeholderTip);
+        // 提示行只放「这一轮真要多说一句」的内容：出错/名单、截图覆盖文案。
+        // 控制器给的「就绪」这类和顶行同义的状态不再抄一遍。
+        const QString notice = !detailOverrideForShot_.isEmpty()
+                                   ? detailOverrideForShot_
+                                   : detail_;
+        const QString hint = isNoticeText(notice) ? notice : QString();
+        card_->setHint(hint);
+        if (card_->isVisible() && card_->sizeHint().height() != before) {
+            // 高度变了：重新量一次并贴回球旁边，
+            // 别原地留一截空白，也别被屏幕下缘切掉。
+            placeCard();
+        }
     }
+}
+
+bool VoicePet::isNoticeText(const QString &text) {
+    // 顶行胶囊已经说了的状态，不再往提示行抄一遍：控制器在录音时会带一句
+    // 「录音中… 松手转写」，那是操作说明却和胶囊同义，用户看到的就是重复。
+    // 其余都是这一轮的临时信息（打不开…、成功名单、模型没装、「试一句」用法…）。
+    static const QStringList statusPrefixes{
+        QString::fromUtf8("就绪"), QString::fromUtf8("未监听"),
+        QString::fromUtf8("监听中"), QString::fromUtf8("录音中"),
+        QString::fromUtf8("转写中")};
+    if (text.isEmpty()) {
+        return false;
+    }
+    for (const QString &prefix : statusPrefixes) {
+        if (text.startsWith(prefix)) {
+            return false;
+        }
+    }
+    return true;
 }
 
 void VoicePet::tick() {

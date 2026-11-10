@@ -50,6 +50,8 @@ public:
     void expandCard();
     // 截图专用：往卡片状态行塞一句话术，用来验长文案不会把下拉行挤掉半截。
     void setStatusDetailForShot(const QString &text);
+    // 截图专用：塞一条转写，验「空态一行 → 有正文长高」不会裁字。
+    void setTranscriptForShot(const QString &text);
 
     // 会话级静音（不落盘）：截图/演示模式不想真发 TTS 请求时用。
     void setVoiceFeedbackMuted(bool muted);
@@ -121,6 +123,10 @@ private:
     void applyDockPos(bool peek);
     void maybeSnap();
     void refreshState();
+    // 量一次卡片并贴着球摆好（展开与提示行增减后的重排共用）。
+    void placeCard();
+    // 控制器文案是不是「这一轮多说一句」的提示（而不是顶行已经说过的状态）。
+    static bool isNoticeText(const QString &text);
     void applyTtsOptions();
     void applyLlmOptions();
     void setTtsEnabled(bool on);
@@ -188,8 +194,11 @@ private:
     bool listening_ = false;
     bool recording_ = false;
     bool transcribing_ = false;
+    // 卡片的「提示行」：只放这一轮的临时提醒（出错、名单、热键），状态本身
+    // 归顶行胶囊；空着时卡片不给它留位置。detail_ 照旧接控制器给的状态文案，
+    // 但不再往状态行下面抄一遍（和「监听中」重复）。
     QString detail_;
-    // 非空时覆盖卡片状态行文案，只给截图验收用（见 setStatusDetailForShot）。
+    // 非空时覆盖卡片提示行文案，只给截图验收用（见 setStatusDetailForShot）。
     QString detailOverrideForShot_;
     double level_ = 0.0;
     int phase_ = 0;  // 呼吸 / 旋转动画相位

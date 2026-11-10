@@ -225,14 +225,26 @@ int main(int argc, char *argv[]) {
             pet.setStatusDetailForShot(
                 QString::fromUtf8("亮度 50% · 光标所在屏 · 这条状态文案故意写得很长"));
         }
+        // 转写区空态只占一行，有正文才长高：这里塞一段，验「字没有被切掉」。
+        // AGENTRMC_PET_SHOT_TRANSCRIPT=1 时启用。
+        if (qEnvironmentVariableIsSet("AGENTRMC_PET_SHOT_TRANSCRIPT")) {
+            pet.setTranscriptForShot(QString::fromUtf8(
+                "把这句话写进桌宠卡片的转写区，看看有正文的时候盒子会不会自己长高、"
+                "文字有没有被切掉半截。"));
+        }
         pet.expandCard();
         pet.speak(QString::fromUtf8("你好，我是你的语音桌宠"));
         QTimer::singleShot(450, &pet, [&pet, petShot] {
-            QPixmap canvas(320, 480);
+            // 画布按最长的一块算：卡片 300 + 左边距，别把卡片右边裁掉。
+            int cardWidth = 300;
+            QWidget *card = pet.findChild<QWidget *>(QStringLiteral("petCard"));
+            if (card != nullptr) {
+                cardWidth = qMax(cardWidth, card->width());
+            }
+            QPixmap canvas(cardWidth + 60, 480);
             canvas.fill(Qt::transparent);
             QPainter painter(&canvas);
             painter.drawPixmap(30, 8, pet.grab());
-            QWidget *card = pet.findChild<QWidget *>(QStringLiteral("petCard"));
             if (card != nullptr) {
                 painter.drawPixmap(30, 110, card->grab());
             }

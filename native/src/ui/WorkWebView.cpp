@@ -582,8 +582,13 @@ QString WorkWebView::htmlFor(const QString &stateJson) const {
  .chip{font-size:var(--f11);font-weight:600;padding:2px 9px;border-radius:10px;
    background:var(--w6);border:1px solid var(--w14)}
  .spacer{margin-left:auto}
- select{font-size:var(--f11);color:var(--text);background:var(--raised);
-   border:1px solid var(--line);border-radius:8px;padding:3px 6px}
+ /* 下拉/输入框跟 Qt 侧一套：半透明底 + 细描边。原来用 --raised（不透明
+    #161d2a）+ --line（浅板岩灰），在美术主题的半透明卡片上是一块块实心
+    黑砖，2026-11-10 用户反馈「下拉颜色太重」。 */
+ select{font-size:var(--f11);color:var(--text);background:var(--w8);
+   border:1px solid var(--w14);border-radius:8px;padding:3px 6px}
+ select:hover{background:var(--w10);border-color:var(--w30)}
+ select:focus{outline:none;background:var(--w10);border-color:var(--accent)}
  .ghost{border:0;background:transparent;color:var(--text-dim);
    font-size:var(--f11);padding:2px 6px;cursor:default}
  .ghost:hover{color:var(--accent)}
@@ -786,10 +791,17 @@ QString WorkWebView::htmlFor(const QString &stateJson) const {
    color:var(--muted);font-size:var(--f11);text-align:center}
  .vdock{display:flex;flex-direction:column;gap:6px;flex:0 0 auto}
  .vrow{display:flex;gap:6px}
- .vrow input{flex:1;min-width:0;font-size:var(--f11);color:var(--text);
-   background:var(--raised);border:1px solid var(--line);border-radius:8px;
-   padding:5px 8px;font-family:inherit}
- .vrow input::placeholder{color:var(--muted2)}
+ /* 输入框和下拉同一套：半透明底 + 细描边，悬停加深一档、聚焦换主题色。
+    原来用 --raised（不透明 #161d2a）+ --line（浅板岩灰），在美术主题的
+    半透明卡片上就是一块实心黑砖（2026-11-10 用户反馈「就重在下拉/输入框」）。 */
+ .vrow input, #dpText{font-size:var(--f11);color:var(--text);
+   background:var(--w6);border:1px solid var(--w14);border-radius:8px;
+   font-family:inherit}
+ .vrow input{flex:1;min-width:0;padding:5px 8px}
+ .vrow input::placeholder, #dpText::placeholder{color:var(--muted2)}
+ .vrow input:hover, #dpText:hover{background:var(--w8);border-color:var(--w30)}
+ .vrow input:focus, #dpText:focus{outline:none;background:var(--w8);
+   border-color:var(--accent)}
  .btn.toggled{background:var(--a26);border-color:var(--a64);color:var(--accent)}
  #right{flex:1 1 auto;min-width:0;min-height:0;display:flex;
    flex-direction:column}
@@ -928,9 +940,7 @@ QString WorkWebView::htmlFor(const QString &stateJson) const {
   <span id="dpWrap" style="display:none;width:100%;gap:8px;align-items:center;
     margin-top:6px;flex-wrap:wrap">
     <input id="dpText" placeholder="派回这条会话的指令（Enter 或按钮发送，回执到了转进行中）"
-      style="flex:1 1 240px;min-width:0;font-size:var(--f11);color:var(--text);
-      background:var(--raised);border:1px solid var(--line);border-radius:8px;
-      padding:6px 10px">
+      style="flex:1 1 240px;min-width:0;padding:6px 10px">
     <button class="btn" id="dpSend" style="flex:0 0 auto;white-space:nowrap">派回会话</button>
     <button class="btn" id="dpRestart" style="flex:0 0 auto;white-space:nowrap;display:none"
       title="ZCode 对话区不热刷新：重启宿主后打开会话即可看到派发消息全文。会中断 ZCode 里正在跑的其它轮次">重启 ZCode</button>

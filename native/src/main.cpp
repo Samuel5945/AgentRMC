@@ -232,6 +232,11 @@ int main(int argc, char *argv[]) {
                 "把这句话写进桌宠卡片的转写区，看看有正文的时候盒子会不会自己长高、"
                 "文字有没有被切掉半截。"));
         }
+        // 强制状态拍状态环/外圈弧：AGENTRMC_PET_SHOT_STATE=transcribing 等。
+        const QString shotState = qEnvironmentVariable("AGENTRMC_PET_SHOT_STATE");
+        if (!shotState.isEmpty()) {
+            pet.setStateForShot(shotState);
+        }
         pet.expandCard();
         pet.speak(QString::fromUtf8("你好，我是你的语音桌宠"));
         QTimer::singleShot(450, &pet, [&pet, petShot] {

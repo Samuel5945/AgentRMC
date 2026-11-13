@@ -27,6 +27,7 @@
 #include <QGuiApplication>
 #include <QHBoxLayout>
 #include <QHideEvent>
+#include <QIcon>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QLabel>
@@ -52,7 +53,10 @@
 namespace {
 
 constexpr int kPetSize = 84;    // 桌宠球体直径
-constexpr int kPeek = 20;       // 贴边藏起来后露出的边条宽度
+// 透明外扩：转写外圈弧（r=43 + 半笔宽 2 = 45）和录音满级粗环（外缘 42.5）
+// 都超出球体半径 42，窗口不留边就会被裁成平口；顺带容下精灵浮动/摆动。
+constexpr int kPetPad = 4;
+constexpr int kPeek = 20 + kPetPad;  // 贴边露出的边条宽（含透明边，实际内容仍露 20）
 constexpr int kSnapDist = 80;   // 拖到离屏幕边多近算贴边
 // 卡片宽度：比旧按钮排时代宽一点，给「下次派活开新任务」这类长选项和
 // 左右留白留余地（宽度是呼吸感的一半，另一半是行距）。
@@ -165,7 +169,8 @@ public:
 
         auto *tools = new QHBoxLayout;
         tools->setSpacing(7);
-        // 快捷按钮：三个动作等宽，「✕」只当图标按钮（不该跟动作抢宽度）。
+        // 快捷按钮：文字动作等宽；贴边/隐藏收成跟下拉同款的小箭头，
+        // 不跟文字动作抢宽度。
         const auto addButton = [this, tools](const QString &text, int stretch,
                                              auto slot) {
             auto *button = new QPushButton(text, this);
@@ -178,11 +183,41 @@ public:
         };
         addButton(QString::fromUtf8("面板"), 1, [this] { pet_->openPanel(); });
         addButton(QString::fromUtf8("主界面"), 1, [this] { pet_->openFullUi(); });
-        addButton(QString::fromUtf8("贴边"), 1, [this] { pet_->dockAndPeek(); });
-        auto *closeBtn = addButton(QString::fromUtf8("✕"), 0,
-                                   [this] { pet_->closeFromUi(); });
-        closeBtn->setFixedWidth(30);
-        closeBtn->setToolTip(QString::fromUtf8("隐藏桌宠（右键菜单里也能找回）"));
+        // 对话模式占原来「贴边」的位置：可勾选 ghostSmall，开态主题色底
+        // （ghostSmall:checked）。勾选态由 chatModeChanged 广播同步。
+        chatBtn_ = new QPushButton(QString::fromUtf8("对话"), this);
+        chatBtn_->setObjectName("ghostSmall");
+        chatBtn_->setCheckable(true);
+        chatBtn_->setChecked(pet_->chatMode());
+        chatBtn_->setCursor(Qt::PointingHandCursor);
+        chatBtn_->setFocusPolicy(Qt::NoFocus);
+        chatBtn_->setToolTip(QString::fromUtf8(
+            "桌宠对话模式：说话发给模型聊，回复用 TTS 念出来\n"
+            "模型在「模型设置 → 桌宠对话」里配"));
+        connect(chatBtn_, &QPushButton::toggled, this,
+                [this](bool on) { pet_->setChatMode(on); });
+        tools->addWidget(chatBtn_, 1);
+        const auto addArrow = [this, tools](const QString &icon,
+                                            const QString &tip, auto slot) {
+            auto *button = new QPushButton(this);
+            button->setObjectName("petArrow");
+            button->setIcon(QIcon(icon));
+            button->setIconSize(QSize(10, 10));
+            button->setFixedWidth(20);
+            button->setCursor(Qt::PointingHandCursor);
+            button->setFocusPolicy(Qt::NoFocus);
+            button->setToolTip(tip);
+            connect(button, &QPushButton::clicked, button, std::move(slot));
+            tools->addWidget(button, 0);
+            return button;
+        };
+        addArrow(QStringLiteral(":/icons/chevron-right.svg"),
+                 QString::fromUtf8("贴边：藏到屏幕边露一条边，鼠标碰一下回来"),
+                 [this] { pet_->dockAndPeek(); });
+        // 隐藏用 ✕ 图标，跟贴边箭头同款同尺寸（都是裸 chevron 小按钮）。
+        addArrow(QStringLiteral(":/icons/close.svg"),
+                 QString::fromUtf8("隐藏桌宠（右键菜单里也能找回）"),
+                 [this] { pet_->closeFromUi(); });
         root->addLayout(tools);
         setPlaceholder(QString::fromUtf8("说了话会显示在这里，点击复制"),
                        QString::fromUtf8("点击复制最近一句"));
@@ -282,6 +317,13 @@ public:
         backendCombo_->setCurrentIndex(backend);
     }
 
+    // QPushButton::setChecked 会发 toggled：同步勾选态时挡住信号，
+    // 防止广播→setChecked→toggled→setChatMode 绕一圈。
+    void setChatMode(bool on) {
+        const QSignalBlocker block(chatBtn_);
+        chatBtn_->setChecked(on);
+    }
+
     void refreshDispatch() { dispatch_->refresh(); }
 
     void setTranscript(const QString &text, int costMs) {
@@ -311,6 +353,7 @@ public:
     QLabel *transcript_ = nullptr;
     QLabel *hint_ = nullptr;
     QComboBox *backendCombo_ = nullptr;
+    QPushButton *chatBtn_ = nullptr;
     DispatchPicker *dispatch_ = nullptr;
     QString text_;
     QString hintFull_;       // 提示行全文（显示的是按宽度 elide 后的版本）
@@ -551,7 +594,7 @@ VoicePet::VoicePet(ProfileStore *store, VoiceController *voice, QWidget *parent)
     setAttribute(Qt::WA_TranslucentBackground);
     setAttribute(Qt::WA_ShowWithoutActivating);
     setFocusPolicy(Qt::NoFocus);
-    setFixedSize(kPetSize, kPetSize);
+    setFixedSize(kPetSize + 2 * kPetPad, kPetSize + 2 * kPetPad);
 
     animTimer_ = new QTimer(this);
     connect(animTimer_, &QTimer::timeout, this, &VoicePet::tick);
@@ -604,10 +647,14 @@ VoicePet::VoicePet(ProfileStore *store, VoiceController *voice, QWidget *parent)
             [this](const QString &text) { handleUtterance(text); });
     // 对话模式可能在语音面板那边开关：控制器广播过来，桌宠缓存必须跟进，
     // 不然 hideEvent 判断的还是旧值，「收起即退出对话模式」会失效。
+    // 卡片上对话胶囊的勾选态也跟着广播走（setChatMode 里挡住 toggled）。
     connect(voice_, &VoiceController::chatModeChanged, this, [this](bool on) {
         chatMode_ = on;
         chatHistory_ = QJsonArray{};
         llmBusy_ = false;
+        if (card_ != nullptr) {
+            card_->setChatMode(on);
+        }
     });
     chatMode_ = store_->uiBool(QStringLiteral("pet_chat"), false);
     voice_->setChatMode(chatMode_);
@@ -1357,8 +1404,10 @@ void VoicePet::paintEvent(QPaintEvent *event) {
         painter.save();
         painter.translate(center.x(), center.y() + dy);
         painter.rotate(rotation);
+        // 形象保持球体直径：窗口为外圈弧扩了 kPetPad 透明边，
+        // 按 rect() 缩放会把形象跟着放大。
         const QSize scaled =
-            frame.size().scaled(rect().size(), Qt::KeepAspectRatio);
+            frame.size().scaled(QSize(kPetSize, kPetSize), Qt::KeepAspectRatio);
         painter.drawPixmap(
             QRect(-scaled.width() / 2, -scaled.height() / 2, scaled.width(),
                   scaled.height()),
@@ -1692,6 +1741,15 @@ void VoicePet::setTranscriptForShot(const QString &text) {
         ensureCard();
     }
     card_->setTranscript(text, 900);
+}
+
+void VoicePet::setStateForShot(const QString &state) {
+    recording_ = state == QStringLiteral("recording");
+    transcribing_ = state == QStringLiteral("transcribing");
+    listening_ = state == QStringLiteral("listening");
+    sprite_->setState(spriteState());
+    refreshState();
+    update();
 }
 
 void VoicePet::refreshState() {

@@ -52,6 +52,8 @@ public:
     void setStatusDetailForShot(const QString &text);
     // 截图专用：塞一条转写，验「空态一行 → 有正文长高」不会裁字。
     void setTranscriptForShot(const QString &text);
+    // 截图专用：强制某个状态（recording/transcribing/listening），验状态环/外圈弧。
+    void setStateForShot(const QString &state);
 
     // 会话级静音（不落盘）：截图/演示模式不想真发 TTS 请求时用。
     void setVoiceFeedbackMuted(bool muted);

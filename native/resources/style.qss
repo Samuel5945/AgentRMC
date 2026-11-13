@@ -1053,6 +1053,21 @@ QLabel#petStatus {
     padding: 3px 9px;
 }
 
+/* 贴边/隐藏：收成跟下拉同款的小箭头（裸 chevron，悬停才浮浅底），
+   把文字按钮的位置让给「对话」。 */
+QPushButton#petArrow {
+    background: transparent;
+    border: none;
+    border-radius: 7px;
+    padding: 4px;
+}
+QPushButton#petArrow:hover {
+    background: @w8@;
+}
+QPushButton#petArrow:pressed {
+    background: @w14@;
+}
+
 QLabel#petDetail {
     background: transparent;
     color: @muted@;

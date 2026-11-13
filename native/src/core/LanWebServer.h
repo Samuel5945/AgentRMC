@@ -46,6 +46,10 @@ public:
 
     // GET /m/state 的应答来源（主窗接 lanShellState）；缺省回 "{}"。
     void setStateProvider(std::function<QString()> provider);
+    // GET /m/transcript?id=&offset=&limit= 的应答来源（聊天页分页记录）；
+    // 返回空串＝待办不存在，服务端回 404。
+    void setTranscriptProvider(
+        std::function<QString(const QString &id, int offset, int limit)> provider);
     // POST /m/action 的处理器（白名单已在服务端验过）：
     // 返回 {"ok":bool,"code":200|400|403|409}，code 直接当 HTTP 状态。
     void setActionHandler(
@@ -79,8 +83,8 @@ private:
     void onConnected();
     void onReadable(QTcpSocket *socket);
     void route(QTcpSocket *socket, const QByteArray &method,
-               const QByteArray &path, const QList<QByteArray> &headerLines,
-               const QByteArray &body);
+               const QByteArray &path, const QByteArray &query,
+               const QList<QByteArray> &headerLines, const QByteArray &body);
     void routePair(QTcpSocket *socket, const QList<QByteArray> &headerLines,
                    const QByteArray &body);
     void routeTheme(QTcpSocket *socket, const QByteArray &path);
@@ -100,6 +104,7 @@ private:
     // 会发 RST 而不是 FIN，客户端连已收到的响应都会丢（lanweb_test 实测）。
     QHash<QTcpSocket *, qint64> drain_;
     std::function<QString()> stateProvider_;
+    std::function<QString(const QString &, int, int)> transcriptProvider_;
     std::function<QJsonObject(const QJsonObject &)> actionHandler_;
     QString themeRoot_;
     QJsonArray devices_;  // {id,name,tokenHash,pairedAt,lastSeen}

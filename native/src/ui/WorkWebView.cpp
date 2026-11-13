@@ -479,6 +479,18 @@ void WorkWebView::pushTheme(const QJsonObject &theme) {
                                nullptr);
 }
 
+void WorkWebView::pushChat(const QJsonObject &page) {
+    if (!documentReady_ || d_->webview == nullptr) {
+        return;
+    }
+    const QString json = QString::fromUtf8(
+        QJsonDocument(page).toJson(QJsonDocument::Compact));
+    const QString script = QStringLiteral("window.__setChatPage(")
+                           + jsEscape(json) + QStringLiteral(");");
+    d_->webview->ExecuteScript(reinterpret_cast<LPCWSTR>(script.utf16()),
+                               nullptr);
+}
+
 // 首帧只能整页给（NavigateToString 没有「换个 body」的写法）；文档一旦好了，
 // 后面一律 ExecuteScript 只喂数据。整页重载会把选中态、滚动位置、hover 全冲掉
 // （实测：标为已处理之后列表回到顶部、按钮变灰），事件一密还会闪。
@@ -716,6 +728,43 @@ QString WorkWebView::htmlFor(const QString &stateJson) const {
  .btn.primary:disabled{background:var(--w8);border-color:transparent}
  .placeholder{flex:1 1 auto;padding:40px;text-align:center;color:var(--muted);
    font-size:var(--f12)}
+ /* 聊天页：点待办进入，打开即最新记录；旧记录上翻按页加载。
+    滚动条隐藏（全局约定），上下渐隐暗示可滚；新消息 pill 不打断读历史。 */
+ .chathead{flex:0 0 auto;display:flex;align-items:center;gap:8px}
+ .chathead .name{font-weight:700;font-size:var(--f13);overflow:hidden;
+   text-overflow:ellipsis;white-space:nowrap}
+ .chatwrap{flex:1 1 auto;min-height:0;position:relative;margin-top:8px}
+ .chatlist{position:absolute;inset:0;overflow-y:auto;scrollbar-width:none;
+   display:flex;flex-direction:column;gap:8px;padding:12px 6px}
+ .chatlist::-webkit-scrollbar{width:0;height:0}
+ .chatfade{position:absolute;left:0;right:0;height:16px;pointer-events:none;z-index:1}
+ .chatfade.top{top:0;background:linear-gradient(180deg,var(--surface),transparent)}
+ .chatfade.bottom{bottom:0;background:linear-gradient(0deg,var(--surface2),transparent)}
+ /* Agent 回复平铺全文（长代码/长文不用气泡挤宽度），「我」的话保留右侧气泡。 */
+ .bub{flex:0 0 auto;font-size:var(--f12);line-height:1.6;white-space:pre-wrap;
+   word-break:break-word}
+ .bub.user{align-self:flex-end;max-width:82%;padding:8px 12px;border-radius:12px;
+   background:var(--a26);border:1px solid var(--a64);color:var(--text)}
+ .bub.assistant{align-self:stretch;max-width:100%;padding:2px 4px;
+   color:var(--text-soft)}
+ .bub .who{display:block;font-weight:600;font-size:var(--f10);color:var(--muted);
+   margin-bottom:2px}
+ .bub .bt{display:block;font-size:var(--f10);color:var(--muted2);margin-top:4px}
+ .chatload{align-self:center;font-size:var(--f10);color:var(--muted2);padding:4px;
+   flex:0 0 auto}
+ .chatempty{flex:1;display:flex;align-items:center;justify-content:center;
+   color:var(--muted);font-size:var(--f12);text-align:center;padding:20px;
+   line-height:1.7;white-space:pre-line}
+ .chatfoot{flex:0 0 auto;display:flex;gap:8px;margin-top:8px}
+ .chatfoot input{flex:1;min-width:0;font-size:var(--f12);color:var(--text);
+   background:var(--w6);border:1px solid var(--w14);border-radius:9px;
+   padding:7px 10px;font-family:inherit}
+ .chatfoot input::placeholder{color:var(--muted2)}
+ .chatfoot input:focus{outline:none;border-color:var(--accent);background:var(--w8)}
+ .newpill{position:absolute;left:50%;transform:translateX(-50%);bottom:10px;z-index:2;
+   border:1px solid var(--a64);background:var(--accent);color:var(--on-accent);
+   font-size:var(--f11);font-weight:600;border-radius:12px;padding:4px 12px;
+   cursor:default}
 
  /* ---------- 整窗外壳：顶栏 + 左栏（Qt chrome 藏起来后由这里画） ---------- */
  #topbar{flex:0 0 44px;display:flex;align-items:center;gap:10px;
@@ -880,6 +929,26 @@ QString WorkWebView::htmlFor(const QString &stateJson) const {
   </div>
   <div class="health" id="health"></div>
   <div class="list" id="list"></div>
+</div>
+<div id="chat" class="page" hidden>
+  <div class="chathead">
+    <button class="btn" id="chatBack" title="回到待办列表">‹ 待办</button>
+    <span class="name" id="chatTitle"></span>
+    <span class="stage" id="chatStage"></span>
+    <span class="spacer"></span>
+    <span class="time" id="chatMeta"></span>
+  </div>
+  <div class="chatwrap">
+    <div class="chatfade top"></div>
+    <div class="chatlist" id="chatList"></div>
+    <div class="chatfade bottom"></div>
+    <button class="newpill" id="chatNew" hidden>有新消息 ↓</button>
+  </div>
+  <div class="chatfoot">
+    <input id="chatText" placeholder="派回这条会话的指令（Enter 发送，回执到了转进行中）">
+    <button class="btn primary" id="chatSend">发送</button>
+  </div>
+  <div class="notice" id="chatNotice" hidden style="margin-top:6px"></div>
 </div>
 <div id="empty" class="empty" hidden>
   <h3>没有需要你处理的事</h3>
@@ -1150,7 +1219,8 @@ function row(it){
   l1.append(name,stage,wh,time);
   const l2=document.createElement('div');l2.className='l2';l2.textContent=it.message||'';
   el.append(bar,l1,l2);
-  el.addEventListener('click',()=>{selected=it.id;render();});
+  // 单击进聊天页（打开即最新记录）；双击仍是回到 Agent。
+  el.addEventListener('click',()=>{selected=it.id;postObj({cmd:'chatOpen',id:it.id});});
   el.addEventListener('dblclick',()=>{
     const dd=STATE.dispatch||{};
     post((dd.noticeId===it.id && dd.noticeExe==='ZCode.exe')?'raiseZcode':'open',it.id);
@@ -1421,7 +1491,9 @@ function render(){
   renderLeft();
   renderTabs();
   const workView=activeTab===0;
-  $('work').hidden=!workView;
+  const chatOn=workView&&!!(STATE.chat&&STATE.chat.id);
+  $('chat').hidden=!chatOn;
+  $('work').hidden=!workView||chatOn;
   $('foot').hidden=!workView;
   $('events').hidden=activeTab!==1;
   $('system').hidden=activeTab!==2;
@@ -1437,6 +1509,7 @@ function render(){
   if(!workView){
     return;
   }
+  if(chatOn){renderChatFrame();return;}
   const rows=sorted();
   if(!rows.length){
     const filtered=!!filterExe;
@@ -1668,9 +1741,140 @@ $('apRescan').onclick=()=>postObj({cmd:'appRescan'});
 document.addEventListener('keydown',e=>{
   // 快捷键只属于待办页：Qt 侧事件流是 NoSelection/NoFocus，别的页也不接。
   if(activeTab!==0 || !selected) return;
+  if(STATE.chat&&STATE.chat.id) return;  // 聊天页有自己的 Enter 发送
   if(e.target && e.target.tagName==='INPUT') return;
   if(e.key==='Enter'){post(window.ZC_NOTICE?'raiseZcode':'open',selected);}
   else if(e.key==='Delete'){post('ack',selected);}
+});
+// ---------- 聊天页：打开即最新，旧记录上翻按页加载 ----------
+let CHAT=null,chatMsgs=[],chatIds=new Set(),chatTotal=0,chatHasMore=false,
+    chatLoading=false,chatOpenedId='',chatAtBottom=true;
+function msgKey(m){return m.id||(m.at+'|'+m.role+'|'+(m.text||'').slice(0,80));}
+function bubble(m){
+  const d=document.createElement('div');
+  d.className='bub '+(m.role==='user'?'user':'assistant');
+  const who=document.createElement('span');who.className='who';
+  who.textContent=m.role==='user'?'我':'Agent';
+  const body=document.createElement('span');body.textContent=m.text||'';
+  d.append(who,body);
+  if(m.at){const t=document.createElement('span');t.className='bt';
+    t.textContent=hhmm(m.at);d.append(t);}
+  return d;
+}
+// 内容没填满视口时没有滚动事件，上翻加载永远不会触发——自动续载旧页
+// 直到填满或没有更旧（高窗口实测 bug）。
+function maybeAutoLoad(){
+  const list=$('chatList');
+  if(chatHasMore&&!chatLoading&&chatOpenedId&&
+     list.scrollHeight<=list.clientHeight+80){
+    chatLoading=true;
+    const ld=$('chatLoad');if(ld)ld.textContent='正在加载更早的记录…';
+    postObj({cmd:'chatOlder',id:chatOpenedId,offset:chatMsgs.length});
+  }
+}
+// mode: init＝首帧直接定位到最新（无滚动动画）；prepend＝上翻旧页保持视觉锚点；
+// append＝新消息，在底部就跟随，不在底部就亮 pill 不打断读历史。
+function paintChat(mode,prevH,prevTop){
+  const list=$('chatList');
+  list.replaceChildren();
+  if(chatHasMore){
+    const ld=document.createElement('div');ld.className='chatload';ld.id='chatLoad';
+    ld.textContent=chatLoading?'正在加载更早的记录…':'上翻加载更早的记录';
+    list.append(ld);
+  }
+  if(!chatMsgs.length){
+    const e=document.createElement('div');e.className='chatempty';
+    e.textContent=(CHAT&&CHAT.supported===false)
+      ?(CHAT.error||'暂不支持聊天记录查看'):'这条会话还没有对话记录';
+    list.append(e);
+  }
+  chatMsgs.forEach(m=>list.append(bubble(m)));
+  if(mode==='init'){
+    chatAtBottom=true;$('chatNew').hidden=true;
+    // 打开即最新：同步定位 + 多帧兜底（WebView2 解除隐藏后布局可能晚落定，
+    // 切换会话的边界场景实测会落空，setTimeout 重试兜住）。
+    const pin=()=>{list.scrollTop=list.scrollHeight;};
+    pin();
+    requestAnimationFrame(pin);
+    setTimeout(pin,60);setTimeout(pin,200);setTimeout(pin,500);
+  }else if(mode==='prepend'){
+    list.scrollTop=prevTop+(list.scrollHeight-prevH);
+  }else{
+    if(chatAtBottom){list.scrollTop=list.scrollHeight;$('chatNew').hidden=true;}
+    else{$('chatNew').hidden=false;}
+  }
+  maybeAutoLoad();
+}
+function mergeChatPage(p,mode){
+  chatTotal=p.total||0;
+  const msgs=p.messages||[];
+  if(mode==='init'){
+    chatMsgs=msgs.slice();chatIds=new Set(chatMsgs.map(msgKey));
+    paintChat('init');
+  }else{
+    const fresh=msgs.filter(m=>!chatIds.has(msgKey(m)));
+    if(fresh.length){
+      fresh.forEach(m=>{chatIds.add(msgKey(m));chatMsgs.push(m);});
+      paintChat('append');
+    }
+  }
+  // 本地算剩余：轮询推的是最新页，它的 hasMore 不代表已加载范围之外还有旧页。
+  chatHasMore=chatMsgs.length<chatTotal;
+  renderChatFrame();
+}
+function renderChatFrame(){
+  if(!CHAT)return;
+  $('chatTitle').textContent=CHAT.sessionTitle||CHAT.title||'会话';
+  const st=$('chatStage');st.textContent=LABEL[CHAT.stage]||'';
+  st.style.color=COLOR[CHAT.stage]||'var(--muted)';
+  $('chatMeta').textContent=(CHAT.agentExe||'')+' · 共 '+chatTotal+' 条';
+  const d=STATE.dispatch||{};
+  const notice=(d.noticeId===chatOpenedId)?(d.notice||''):'';
+  $('chatNotice').hidden=!notice;$('chatNotice').textContent=notice;
+  if(d.draftId===chatOpenedId&&d.draftText&&!$('chatText').value)
+    $('chatText').value=d.draftText;
+  // 兜底：只要用户停在底部，每次状态推送都重新贴底——首帧定位若因布局
+  // 晚落定而落空，这里最迟下一拍补上（高窗口/切换会话边界场景）。
+  if(chatAtBottom){const l=$('chatList');
+    if(l.scrollHeight>l.clientHeight)l.scrollTop=l.scrollHeight;}
+  renderFoot();
+  $('dpWrap').style.display='none';  // 聊天页有自己的输入框
+}
+// 上翻的旧页由 Qt 单独推来（chatOlder → pushChat），不进整份 state。
+window.__setChatPage=function(p){
+  if(!p||!p.id||p.id!==chatOpenedId)return;
+  chatLoading=false;chatTotal=p.total||chatTotal;
+  const fresh=(p.messages||[]).filter(m=>!chatIds.has(msgKey(m)));
+  if(!fresh.length){const ld=$('chatLoad');
+    if(ld)ld.textContent='上翻加载更早的记录';
+    chatHasMore=chatMsgs.length<chatTotal;return;}
+  const list=$('chatList');const prevH=list.scrollHeight,prevTop=list.scrollTop;
+  fresh.forEach(m=>chatIds.add(msgKey(m)));
+  chatMsgs=fresh.concat(chatMsgs);
+  chatHasMore=chatMsgs.length<chatTotal;
+  paintChat('prepend',prevH,prevTop);
+};
+function sendChat(){
+  const t=$('chatText').value.trim();
+  if(!t||!chatOpenedId)return;
+  postObj({cmd:'dispatch',id:chatOpenedId,text:t});
+  $('chatText').value='';
+}
+$('chatBack').onclick=()=>postObj({cmd:'chatBack'});
+$('chatSend').onclick=sendChat;
+$('chatText').addEventListener('keydown',e=>{
+  if(e.key==='Enter'){e.preventDefault();sendChat();}});
+$('chatNew').onclick=()=>{const l=$('chatList');l.scrollTop=l.scrollHeight;
+  chatAtBottom=true;$('chatNew').hidden=true;};
+$('chatList').addEventListener('scroll',()=>{
+  const list=$('chatList');
+  chatAtBottom=list.scrollHeight-list.scrollTop-list.clientHeight<60;
+  if(chatAtBottom)$('chatNew').hidden=true;
+  if(list.scrollTop<80&&chatHasMore&&!chatLoading&&chatOpenedId){
+    chatLoading=true;
+    const ld=$('chatLoad');if(ld)ld.textContent='正在加载更早的记录…';
+    postObj({cmd:'chatOlder',id:chatOpenedId,offset:chatMsgs.length});
+  }
 });
 function adopt(s){
   STATE=s||{};
@@ -1685,7 +1889,21 @@ function adopt(s){
   GUIDE=STATE.guide||{};
   now=Date.now();
   applyTheme(STATE.theme||{});
-  render();
+  const c=(STATE.chat&&STATE.chat.id)?STATE.chat:null;
+  if(c){
+    // 先 render 把聊天页显示出来，再喂数据：隐藏元素 scrollHeight=0，
+    // 「打开即最新」的定位会在不可见时落空（实测 bug）。
+    if(chatOpenedId!==c.id){
+      chatOpenedId=c.id;selected=c.id;
+      chatMsgs=[];chatIds=new Set();chatLoading=false;
+      CHAT=c;render();mergeChatPage(c,'init');
+    }else{
+      CHAT=c;render();mergeChatPage(c,'append');
+    }
+  }else{
+    if(chatOpenedId){chatOpenedId='';CHAT=null;chatMsgs=[];chatIds=new Set();}
+    render();
+  }
 }
 window.__setState=adopt;
 window.__setTheme=applyTheme;

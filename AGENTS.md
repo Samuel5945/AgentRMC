@@ -31,6 +31,12 @@
   明确不需要本地语音的临时构建。
 - 打包链路依赖：VS 自带 CMake、Qt 6.8.3（`native\.qt\`）、
   NSIS（`C:\Program Files (x86)\NSIS\makensis.exe`）。
+- **build.bat 只编 exe，不更新安装包**（2026-11-13 踩坑）：迭代时跑 build.bat
+  没问题，但**装机前必须重跑 package.bat**——否则装的是 dist 里上一版安装包，
+  NSIS 静默模式不报错，exe 时间戳不变，验证全跑在旧代码上。装机后先看
+  `D:\apps\AgentRMC\AgentRMCNative.exe`（以注册表 InstallDir 为准）时间戳是否
+  是本次构建，再启动验证。安装器 taskkill 偶发杀不净时先手动
+  `Stop-Process -Name AgentRMCNative -Force` 再装。
 - 临时验证用的 exe 不要留在 `native\build\Release`：installer.nsi 只按名字
   排除 `*Test.exe`，其它多余 exe 会被打进安装包。
 - Python 旧版 GUI（agentrc_gui.py）如需打包用 `tools\build_exe.bat`，产物在

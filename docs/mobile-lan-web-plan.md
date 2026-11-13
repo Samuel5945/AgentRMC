@@ -179,6 +179,32 @@ M1。AP 隔离/防火墙排查并入 M1 真机验收（手机页配对失败文�
   `curl --noproxy '*' http://127.0.0.1:45915/state` 验活。**不升版**（0.4.1），
   等用户明确说「升版」。
 
+### M1.5 · 聊天页（2026-11-13 用户追加，电脑待办页 + 手机待办页）
+- **交互口径（用户定）**：点待办进聊天页，**打开直接显示最新记录**（不做
+  「滚到底」动画）；旧记录**往上翻时按页加载**，保持视觉锚点不跳。
+- 读取器 `SessionTranscript`（只读、分页、进程内 mtime+size 缓存）：
+  WorkBuddy/Qoder 系 jsonl（两记法、剥 system-reminder/user_query、保留换行、
+  sidechain 过滤）、ZCode message+part 两表、OpenSquilla transcript_entries；
+  DSH zstd native 读不了 → 页面给提示（M2 插件通道）。单页 ≤100、单条 8000 字、
+  SQLite 全量缓存 ≤500。
+- 电脑外壳：待办卡单击 → `chatOpen` → 聊天视图（气泡：我右/Agent 左、时间戳、
+  上下渐隐暗示可滚、新消息 pill 不打断读历史、底部 composer 派回会话）；
+  上翻 → `chatOlder` → `pushChat` 单独推旧页；双击仍是回到 Agent。
+- 手机页：点卡片进聊天视图（隐藏页签），`GET /m/transcript?id=&offset=&limit=`
+  分页拉取，2.5s 轮询新消息，composer 同款；卡片按钮阻止冒泡。
+- 测试：`transcript_test`（两记法/分页游标/包装/SQLite/缓存失效/不支持宿主）
+  + `lanweb_test` 增 transcript 路由断言（401/200/参数透传/404）。
+- **真机反馈迭代（2026-11-13 晚，用户手机实测后）**：
+  ① Agent 回复**去气泡改平铺全文**（长代码/长文不再被 82% 宽气泡挤），
+  「我」的话保留右侧气泡；② 手机聊天输入行加 `env(safe-area-inset-bottom)`
+  安全区 + 左右留白，发送按钮不再被手机圆角/手势条裁切；③ 手机待办卡
+  **去掉单独的「派回会话」按钮**（第三按钮独占一行丑）——派发统一进聊天页
+  输入框，卡片只留「回到 Agent / 标为已处理」两个均分按钮。
+- **修掉的两个真 bug**：① 桌面首帧定位在元素解除隐藏前执行（scrollHeight=0
+  落空）→ 先 render 再喂数据 + 双 rAF 兜底；② 内容没填满高窗口时无滚动事件、
+  旧页永不加载 → `maybeAutoLoad` 自动续载直到填满；③ hasMore 改本地
+  「已加载<总数」计算，轮询不再把加载完的列表标成还有旧页。
+
 ### M2 · 体验
 SSE 推送（轮询兜底）；设备管理细化；美术主题观感复检；`clear`、更多只读
 控制；移动页与桌面外壳抽共享 CSS token（消两份拷贝）。

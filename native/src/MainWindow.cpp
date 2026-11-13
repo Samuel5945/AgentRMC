@@ -25,6 +25,7 @@
 #include "core/ModelImport.h"
 #include "core/Presets.h"
 #include "core/SessionDispatch.h"
+#include "core/SessionTranscript.h"
 #include "core/ZcodeDispatch.h"
 #include "core/ThemeManager.h"
 #include "core/Updater.h"
@@ -3061,6 +3062,7 @@ QString MainWindow::webShellState() {
                      {QStringLiteral("draftId"), dispatchDraftId_},
                      {QStringLiteral("draftText"), dispatchDraftText_},
                      {QStringLiteral("supported"), supportedDispatchExes()}}},
+        {QStringLiteral("chat"), chatState()},
     };
     return QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Compact));
 }
@@ -3073,6 +3075,9 @@ void MainWindow::ensureLanServer() {
     }
     lan_ = new LanWebServer(this);
     lan_->setStateProvider([this] { return lanShellState(); });
+    lan_->setTranscriptProvider([this](const QString &id, int offset, int limit) {
+        return lanTranscript(id, offset, limit);
+    });
     lan_->setThemeRoot(ThemeManager::themesRoot());
     // 白名单已在服务端验过；这里与桌面外壳走同一个 handleWebAction，
     // 做完它内部统一 refresh，桌面外壳自动跟着刷新，双端一致免费。
@@ -3154,6 +3159,60 @@ QJsonObject MainWindow::lanState() {
         {QStringLiteral("devices"),
          lan_ != nullptr ? lan_->devices() : QJsonArray()},
     };
+}
+
+// ---------- 聊天页：待办 → 会话记录（只读分页，电脑/手机同一读取器） ----------
+
+QJsonObject MainWindow::chatStateFor(const QString &id, int offset, int limit) {
+    if (workItems_ == nullptr || id.isEmpty()) {
+        return QJsonObject();
+    }
+    const WorkItem *item = nullptr;
+    for (const WorkItem &it : workItems_->items()) {
+        if (it.id == id) {
+            item = &it;
+            break;
+        }
+    }
+    if (item == nullptr) {
+        return QJsonObject();
+    }
+    const SessionTranscript::Result r =
+        SessionTranscript::read(item->agentExe, item->sessionId, limit, offset);
+    return QJsonObject{
+        {QStringLiteral("id"), item->id},
+        {QStringLiteral("title"), item->title},
+        {QStringLiteral("agentExe"), item->agentExe},
+        {QStringLiteral("sessionId"), item->sessionId},
+        {QStringLiteral("stage"), item->stage},
+        {QStringLiteral("supported"), r.supported},
+        {QStringLiteral("error"), r.error},
+        {QStringLiteral("sessionTitle"), r.title},
+        {QStringLiteral("messages"), r.messages},
+        {QStringLiteral("total"), r.total},
+        {QStringLiteral("hasMore"), r.hasMore},
+        {QStringLiteral("offset"), offset},
+    };
+}
+
+QJsonObject MainWindow::chatState() {
+    if (chatItemId_.isEmpty()) {
+        return QJsonObject();
+    }
+    const QJsonObject chat = chatStateFor(chatItemId_);
+    if (chat.isEmpty()) {
+        chatItemId_.clear();  // 待办被清掉了，退回列表
+        return QJsonObject();
+    }
+    return chat;
+}
+
+QString MainWindow::lanTranscript(const QString &id, int offset, int limit) {
+    const QJsonObject chat = chatStateFor(id, offset, limit);
+    if (chat.isEmpty()) {
+        return QString();  // 待办不存在 → 服务端回 404
+    }
+    return QString::fromUtf8(QJsonDocument(chat).toJson(QJsonDocument::Compact));
 }
 
 // 页面上的按钮/双击回到这里：全部转给既有实现，不在页面里另起一套状态机。
@@ -3282,6 +3341,23 @@ void MainWindow::handleWebAction(const QJsonObject &action) {
         if (lan_ != nullptr && lan_->revokeDevice(id)) {
             appendEvent(QStringLiteral("status"), QString(), QString(),
                         QString::fromUtf8("已吊销一台手机的访问令牌"), 0);
+        }
+    } else if (cmd == QStringLiteral("chatOpen")) {
+        // 点待办进聊天页：打开即最新一页（读取器从末尾切），旧记录上翻再加载。
+        chatItemId_ = id;
+        // 补一拍刷新：首帧定位若因 WebView2 布局晚落定落空，350ms 后再贴底。
+        QTimer::singleShot(350, this, [this] {
+            if (workWeb_ != nullptr) {
+                workWeb_->refresh();
+            }
+        });
+    } else if (cmd == QStringLiteral("chatBack")) {
+        chatItemId_.clear();
+    } else if (cmd == QStringLiteral("chatOlder")) {
+        // 上翻加载更旧的一页：单独推给页面（不进整份 state，避免重排列表）。
+        if (workWeb_ != nullptr) {
+            const int offset = action.value(QStringLiteral("offset")).toInt(0);
+            workWeb_->pushChat(chatStateFor(id, offset, 50));
         }
     } else if (cmd == QStringLiteral("keyScene")) {
         if (keymapPage_ != nullptr) {

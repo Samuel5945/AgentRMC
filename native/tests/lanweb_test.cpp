@@ -137,6 +137,17 @@ int main(int argc, char **argv) {
         return QJsonObject{{QStringLiteral("ok"), true},
                            {QStringLiteral("code"), 200}};
     });
+    QString lastTranscriptId;
+    int lastOffset = -1;
+    lan.setTranscriptProvider([&](const QString &id, int offset, int limit) {
+        lastTranscriptId = id;
+        lastOffset = offset;
+        if (id == QStringLiteral("item-1")) {
+            return QStringLiteral(
+                R"({"id":"item-1","supported":true,"messages":[],"total":0})");
+        }
+        return QString();  // 未知待办 → 404
+    });
     QJsonArray persisted;
     int persistCalls = 0;
     QObject::connect(&lan, &LanWebServer::devicesChanged,
@@ -341,7 +352,37 @@ int main(int argc, char **argv) {
                 },
                 next);
     });
-    // 17. 主题素材：正常图 200；越界（../ 与编码变体）404；非图 404；无令牌 401。
+    // 17. 聊天页记录路由：无令牌 401；有令牌 200 且分页参数透传；未知待办 404。
+    seq.add([&](std::function<void()> next) {
+        request(app, port, get("/m/transcript?id=item-1"),
+                [](const QByteArray &resp) {
+                    check(resp.startsWith("HTTP/1.1 401"), "transcript no token 401",
+                          resp);
+                },
+                next);
+    });
+    seq.add([&](std::function<void()> next) {
+        request(app, port,
+                get("/m/transcript?id=item-1&offset=50&limit=20",
+                    cookieHeader(token)),
+                [&](const QByteArray &resp) {
+                    check(resp.startsWith("HTTP/1.1 200"), "transcript 200", resp);
+                    check(resp.contains("item-1"), "transcript payload", resp);
+                    check(lastTranscriptId == QStringLiteral("item-1"),
+                          "transcript id passthrough");
+                    check(lastOffset == 50, "transcript offset passthrough");
+                },
+                next);
+    });
+    seq.add([&](std::function<void()> next) {
+        request(app, port, get("/m/transcript?id=nope", cookieHeader(token)),
+                [](const QByteArray &resp) {
+                    check(resp.startsWith("HTTP/1.1 404"), "transcript unknown 404",
+                          resp);
+                },
+                next);
+    });
+    // 18. 主题素材：正常图 200；越界（../ 与编码变体）404；非图 404；无令牌 401。
     seq.add([&](std::function<void()> next) {
         request(app, port, get("/m/theme/ok.png", cookieHeader(token)),
                 [](const QByteArray &resp) {

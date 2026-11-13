@@ -32,6 +32,8 @@ qt_add_executable(AgentRMCNative
     src/core/WorkItems.h
     src/core/SessionDispatch.cpp
     src/core/SessionDispatch.h
+    src/core/SessionTranscript.cpp
+    src/core/SessionTranscript.h
     src/core/UiDispatch.cpp
     src/core/UiDispatch.h
     src/core/ZcodeDispatch.cpp
@@ -324,6 +326,20 @@ add_executable(AgentRMCLanWebTest
 target_include_directories(AgentRMCLanWebTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(AgentRMCLanWebTest PRIVATE Qt6::Core Qt6::Network)
 target_compile_options(AgentRMCLanWebTest PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
+
+# 聊天页记录读取器：jsonl 两记法 / 分页游标 / SQLite 两表 / 缓存失效。
+# 全部用临时库，不碰真实宿主会话库。
+add_executable(AgentRMCTranscriptTest
+    tests/transcript_test.cpp
+    src/core/SessionTranscript.cpp
+    src/core/SessionTranscript.h
+    src/core/ZcodeDispatch.cpp
+    src/core/ZcodeDispatch.h
+)
+target_include_directories(AgentRMCTranscriptTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(AgentRMCTranscriptTest PRIVATE Qt6::Core Qt6::Sql shell32 ole32
+    user32 UIAutomationCore.lib)
+target_compile_options(AgentRMCTranscriptTest PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
 
 add_executable(AgentRMCPluginTest
     tests/plugin_upgrade_test.cpp

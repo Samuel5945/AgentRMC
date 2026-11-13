@@ -133,6 +133,11 @@ void LanWebServer::setStateProvider(std::function<QString()> provider) {
     stateProvider_ = std::move(provider);
 }
 
+void LanWebServer::setTranscriptProvider(
+    std::function<QString(const QString &, int, int)> provider) {
+    transcriptProvider_ = std::move(provider);
+}
+
 void LanWebServer::setActionHandler(
     std::function<QJsonObject(const QJsonObject &)> handler) {
     actionHandler_ = std::move(handler);
@@ -296,8 +301,10 @@ void LanWebServer::onReadable(QTcpSocket *socket) {
     }
     const QByteArray method = parts.at(0);
     QByteArray path = parts.at(1);
+    QByteArray query;
     const int queryAt = path.indexOf('?');
     if (queryAt >= 0) {
+        query = path.mid(queryAt + 1);
         path = path.left(queryAt);
     }
 
@@ -333,11 +340,11 @@ void LanWebServer::onReadable(QTcpSocket *socket) {
         if (body.size() < contentLength) {
             return;  // 还没收全，等下一段
         }
-        route(socket, method, path, headerLines, body.left(contentLength));
+        route(socket, method, path, query, headerLines, body.left(contentLength));
         return;
     }
     if (method == "GET") {
-        route(socket, method, path, headerLines, QByteArray());
+        route(socket, method, path, query, headerLines, QByteArray());
         return;
     }
     // OPTIONS 也落这里：不开 CORS，预检一律 404。
@@ -345,7 +352,7 @@ void LanWebServer::onReadable(QTcpSocket *socket) {
 }
 
 void LanWebServer::route(QTcpSocket *socket, const QByteArray &method,
-                         const QByteArray &path,
+                         const QByteArray &path, const QByteArray &query,
                          const QList<QByteArray> &headerLines,
                          const QByteArray &body) {
     // Origin 存在时必须与 Host 同源（浏览器跨站请求的第一道闸）。
@@ -380,6 +387,42 @@ void LanWebServer::route(QTcpSocket *socket, const QByteArray &method,
         const QString state =
             stateProvider_ ? stateProvider_() : QStringLiteral("{}");
         finish(socket, "200 OK", state.toUtf8(), "application/json");
+        return;
+    }
+    if (path == "/m/transcript" && method == "GET") {
+        if (authDevice(headerLines) < 0) {
+            finish(socket, "401 Unauthorized");
+            return;
+        }
+        // 聊天页分页：id=待办 id，offset=从最新往旧跳过条数，limit=页大小。
+        QString id;
+        int offset = 0;
+        int limit = 50;
+        const QList<QByteArray> pairs = query.split('&');
+        for (const QByteArray &pair : pairs) {
+            const int eq = pair.indexOf('=');
+            if (eq <= 0) {
+                continue;
+            }
+            const QByteArray key = pair.left(eq);
+            const QString value =
+                QUrl::fromPercentEncoding(pair.mid(eq + 1));
+            if (key == "id") {
+                id = value;
+            } else if (key == "offset") {
+                offset = value.toInt();
+            } else if (key == "limit") {
+                limit = value.toInt();
+            }
+        }
+        const QString transcript =
+            transcriptProvider_ ? transcriptProvider_(id, offset, limit)
+                                : QString();
+        if (transcript.isEmpty()) {
+            finish(socket, "404 Not Found");
+            return;
+        }
+        finish(socket, "200 OK", transcript.toUtf8(), "application/json");
         return;
     }
     if (path == "/m/action" && method == "POST") {
@@ -668,6 +711,7 @@ QString LanWebServer::mobileHtml() const {
    border-radius:8px;background:var(--w6);border:1px solid var(--w14);
    line-height:1.5;word-break:break-word}
  .acts{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
+ .acts .btn{flex:1 1 0;min-width:0}
  .btn{min-height:44px;border:1px solid var(--w18);background:var(--w6);
    color:var(--text-dim);font-size:14px;border-radius:10px;padding:8px 14px}
  .btn:active{background:var(--w10)}
@@ -676,15 +720,47 @@ QString LanWebServer::mobileHtml() const {
  .btn.primary:active{background:var(--accent-hover)}
  .btn.warn{color:var(--warn);border-color:var(--w30)}
  .btn:disabled{opacity:.5}
- /* 派回会话：点按钮后原位变成输入行（不再单独挂一个展开区），
-    输入框自动聚焦弹键盘，Enter/发送 投递，✕ 收起。 */
- .dpinline{display:flex;gap:8px;width:100%;align-items:center}
- .dpinline input{flex:1;min-width:0;min-height:44px;font-size:15px;
-   color:var(--text);background:var(--w6);border:1px solid var(--w14);
-   border-radius:10px;padding:8px 12px;font-family:inherit}
- .dpinline input:focus{outline:none;border-color:var(--accent);background:var(--w8)}
- .dpinline .btn{flex:0 0 auto}
- .dpcancel{min-width:44px;color:var(--muted);padding:8px 10px}
+ /* 聊天页：点卡片进入，打开即最新记录，旧记录上翻按页加载。
+    Agent 回复平铺全文（长代码/长文不用气泡挤宽度），「我」的话保留右侧气泡。 */
+ #pchat{padding:0 14px}
+ .chathead{flex:0 0 auto;display:flex;align-items:center;gap:10px;padding:4px 0 8px}
+ .chathead .btn{min-height:40px;padding:6px 12px;flex:0 0 auto}
+ .chtitles{flex:1;min-width:0}
+ .chtitles .name{font-weight:700;font-size:16px;overflow:hidden;
+   text-overflow:ellipsis;white-space:nowrap}
+ .chtitles .where{font-size:12px;color:var(--muted2);margin-top:1px;overflow:hidden;
+   text-overflow:ellipsis;white-space:nowrap}
+ .chatwrap{flex:1 1 auto;min-height:0;position:relative}
+ .chatlist{position:absolute;inset:0;overflow-y:auto;scrollbar-width:none;
+   display:flex;flex-direction:column;gap:10px;padding:10px 2px;
+   -webkit-overflow-scrolling:touch}
+ .chatlist::-webkit-scrollbar{width:0;height:0}
+ .bub{flex:0 0 auto}
+ .bub.user{align-self:flex-end;max-width:86%;padding:9px 12px;border-radius:13px;
+   font-size:14px;line-height:1.6;white-space:pre-wrap;word-break:break-word;
+   background:var(--a26);border:1px solid var(--a64);color:var(--text)}
+ .bub.assistant{align-self:stretch;max-width:100%;padding:2px 2px;
+   font-size:14px;line-height:1.65;white-space:pre-wrap;word-break:break-word;
+   color:var(--text-soft)}
+ .bub .who{display:block;font-weight:600;font-size:11px;color:var(--muted);
+   margin-bottom:2px}
+ .bub .bt{display:block;font-size:11px;color:var(--muted2);margin-top:4px}
+ .chatload{align-self:center;font-size:12px;color:var(--muted2);padding:4px;
+   flex:0 0 auto}
+ .chatempty{flex:1;display:flex;align-items:center;justify-content:center;
+   color:var(--muted);font-size:14px;text-align:center;padding:24px;
+   line-height:1.7;white-space:pre-line}
+ /* 底部输入行：左右留白 + 安全区，防手机圆角/手势条裁切发送按钮。 */
+ .chatfoot{flex:0 0 auto;display:flex;gap:8px;
+   padding:8px 0 calc(12px + env(safe-area-inset-bottom))}
+ .chatfoot input{flex:1;min-width:0;min-height:44px;font-size:15px;color:var(--text);
+   background:var(--w6);border:1px solid var(--w14);border-radius:10px;
+   padding:8px 12px;font-family:inherit}
+ .chatfoot input:focus{outline:none;border-color:var(--accent);background:var(--w8)}
+ .chatfoot .btn{flex:0 0 auto}
+ .newpill{position:absolute;left:50%;transform:translateX(-50%);bottom:10px;
+   border:1px solid var(--a64);background:var(--accent);color:var(--on-accent);
+   font-size:13px;font-weight:600;border-radius:14px;padding:6px 14px}
  .empty{flex:1;display:flex;flex-direction:column;align-items:center;
    justify-content:center;gap:8px;padding:40px 24px;text-align:center}
  .empty h3{margin:0;font-size:16px}
@@ -737,6 +813,21 @@ QString LanWebServer::mobileHtml() const {
   </div>
   <div id="pevents" class="page" hidden><div id="evList" class="scroll"></div></div>
   <div id="pstatus" class="page" hidden><div id="statusBody" class="scroll"></div></div>
+  <div id="pchat" class="page" hidden>
+   <div class="chathead">
+    <button class="btn" id="chatBack">‹ 待办</button>
+    <div class="chtitles"><div class="name" id="chatTitle"></div><div class="where" id="chatSub"></div></div>
+   </div>
+   <div class="chatwrap">
+    <div class="chatlist" id="chatList"></div>
+    <button class="newpill" id="chatNew" hidden>有新消息 ↓</button>
+   </div>
+   <div class="chatfoot">
+    <input id="chatText" type="text" placeholder="派回这条会话…" enterkeyhint="send">
+    <button class="btn primary" id="chatSend">发送</button>
+   </div>
+   <div class="notice" id="chatNotice" hidden></div>
+  </div>
  </div>
  <div id="tabbar">
   <button class="tab active" data-tab="0">待我处理<span class="count" id="tabCount" hidden></span></button>
@@ -745,7 +836,8 @@ QString LanWebServer::mobileHtml() const {
  </div>
 </div>
 <script>
-)HTML") + QString::fromUtf8(R"HTML(let STATE=null,tab=0,expanded='',drafts={},timer=null,pendingDispatch='',lastSig='',evSeen=0,focusAfterRender=false;
+)HTML") + QString::fromUtf8(R"HTML(let STATE=null,tab=0,timer=null,lastSig='',evSeen=0;
+let chatId='',chatMsgs=[],chatIds=new Set(),chatTotal=0,chatHasMore=false,chatLoading=false,chatAtBottom=true,chatMeta={};
 const $=id=>document.getElementById(id);
 const COLOR={'needs-me':'var(--pending)','review':'var(--ok)','working':'var(--info)'};
 const LABEL={'needs-me':'等你处理','review':'待验收','working':'进行中'};
@@ -802,10 +894,10 @@ async function load(){
 function startPoll(){
  if(timer)clearInterval(timer);
  load();
- timer=setInterval(()=>{if(!document.hidden)load();},2500);
+ timer=setInterval(()=>{if(!document.hidden){load();if(chatId)fetchTranscript(0,'append');}},2500);
 }
 document.addEventListener('visibilitychange',()=>{
- if(!document.hidden&&STATE)load();
+ if(!document.hidden&&STATE){load();if(chatId)fetchTranscript(0,'append');}
 });
 async function doPair(code){
  $('pairErr').textContent='';$('pairBtn').disabled=true;
@@ -879,63 +971,169 @@ function card(it){
  const wh=document.createElement('div');wh.className='where';wh.textContent=where(it);
  const msg=document.createElement('div');msg.className='msg';msg.textContent=it.message||'';
  el.append(bar,l1,wh,msg);
+ // 点卡片进聊天页（打开即最新记录）；按钮各自阻止冒泡。
+ el.onclick=()=>openChat(it.id);
  if(notice){const n=document.createElement('div');n.className='notice';n.textContent=notice;el.append(n);}
  const acts=document.createElement('div');acts.className='acts';
  const open=document.createElement('button');open.className='btn';
  open.textContent=zcodeNotice?'聚焦 ZCode':'回到 Agent';
  open.title='在电脑上打开对应会话';
- open.onclick=()=>act({cmd:zcodeNotice?'raiseZcode':'open',id:it.id});
+ open.onclick=(e)=>{e.stopPropagation();act({cmd:zcodeNotice?'raiseZcode':'open',id:it.id});};
  const ack=document.createElement('button');ack.className='btn primary';
  ack.textContent='标为已处理';
- ack.onclick=()=>act({cmd:'ack',id:it.id});
+ ack.onclick=(e)=>{e.stopPropagation();act({cmd:'ack',id:it.id});};
  acts.append(open,ack);
- const dpOk=!!(it.session_id&&(d.supported||[]).includes(it.agent_exe));
- if(dpOk){
-  if(expanded===it.id){
-   // 原位输入行：点「派回会话」后按钮直接变成输入框，自动聚焦弹键盘。
-   const row=document.createElement('div');row.className='dpinline';
-   const inp=document.createElement('input');
-   inp.type='text';inp.placeholder='派回这条会话的指令';
-   inp.setAttribute('enterkeyhint','send');
-   inp.value=drafts[it.id]||((d.draftId===it.id&&d.draftText)||'');
-   inp.oninput=()=>{drafts[it.id]=inp.value;};
-   inp.onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();sendDp(it.id,inp);}};
-   const send=document.createElement('button');send.className='btn primary';
-   send.textContent='发送';
-   send.onclick=()=>sendDp(it.id,inp);
-   const cancel=document.createElement('button');cancel.className='btn dpcancel';
-   cancel.textContent='✕';cancel.title='收起输入框';
-   cancel.onclick=()=>{expanded='';delete drafts[it.id];inp.blur();lastSig='';render();};
-   row.append(inp,send,cancel);acts.append(row);
-  }else{
-   const dp=document.createElement('button');dp.className='btn';
-   dp.textContent='派回会话';
-   dp.onclick=()=>{expanded=it.id;focusAfterRender=true;lastSig='';render();};
-   acts.append(dp);
-  }
-  if(zcodeNotice){
-   const rs=document.createElement('button');rs.className='btn warn';
-   rs.textContent='重启 ZCode';
-   rs.onclick=()=>{if(confirm('重启 ZCode 桌面？会中断它里面正在跑的其它轮次；重启后打开会话即可看到派发消息全文。'))act({cmd:'restartZcode'});};
-   acts.append(rs);
-  }
+ // 派发统一在聊天页的输入框做（点卡片即进聊天）；卡片只留两个均分按钮。
+ // ZCode 通知态的「重启」是配套动作，保留。
+ if(zcodeNotice){
+  const rs=document.createElement('button');rs.className='btn warn';
+  rs.textContent='重启 ZCode';
+  rs.onclick=(e)=>{e.stopPropagation();if(confirm('重启 ZCode 桌面？会中断它里面正在跑的其它轮次；重启后打开会话即可看到派发消息全文。'))act({cmd:'restartZcode'});};
+  acts.append(rs);
  }
  el.append(acts);
  return el;
 }
-function sendDp(id,inp){
- const t=inp.value.trim();if(!t)return;
- pendingDispatch=id;
- inp.blur();  // 先失焦：回执后的重排才不会被「输入中不打扰」守卫挡住
- act({cmd:'dispatch',id,text:t});
+// ---------- 聊天页：点卡片进入，打开即最新，旧记录上翻按页加载 ----------
+function msgKey(m){return m.id||(m.at+'|'+m.role+'|'+(m.text||'').slice(0,80));}
+function bubble(m){
+ const d=document.createElement('div');
+ d.className='bub '+(m.role==='user'?'user':'assistant');
+ const who=document.createElement('span');who.className='who';
+ who.textContent=m.role==='user'?'我':'Agent';
+ const body=document.createElement('span');body.textContent=m.text||'';
+ d.append(who,body);
+ if(m.at){const t=document.createElement('span');t.className='bt';
+  t.textContent=hhmm(m.at);d.append(t);}
+ return d;
 }
+function maybeAutoLoad(){
+ const list=$('chatList');
+ if(chatHasMore&&!chatLoading&&chatId&&
+    list.scrollHeight<=list.clientHeight+80){
+  chatLoading=true;
+  const ld=$('chatLoad');if(ld)ld.textContent='正在加载更早的记录…';
+  fetchTranscript(chatMsgs.length,'older');
+ }
+}
+function paintChat(mode,prevH,prevTop){
+ const list=$('chatList');
+ list.replaceChildren();
+ if(chatHasMore){
+  const ld=document.createElement('div');ld.className='chatload';ld.id='chatLoad';
+  ld.textContent=chatLoading?'正在加载更早的记录…':'上翻加载更早的记录';
+  list.append(ld);
+ }
+ if(!chatMsgs.length){
+  const e=document.createElement('div');e.className='chatempty';
+  e.textContent=(chatMeta.supported===false)
+   ?(chatMeta.error||'暂不支持聊天记录查看'):'这条会话还没有对话记录';
+  list.append(e);
+ }
+ chatMsgs.forEach(m=>list.append(bubble(m)));
+ if(mode==='init'){
+  list.scrollTop=list.scrollHeight;chatAtBottom=true;$('chatNew').hidden=true;
+  // 刚解除隐藏的元素布局可能下一帧才落定：双 rAF 兜底再定位。
+  requestAnimationFrame(()=>{list.scrollTop=list.scrollHeight;
+   requestAnimationFrame(()=>{list.scrollTop=list.scrollHeight;});});
+ }else if(mode==='prepend'){
+  list.scrollTop=prevTop+(list.scrollHeight-prevH);
+ }else{
+  if(chatAtBottom){list.scrollTop=list.scrollHeight;$('chatNew').hidden=true;}
+  else{$('chatNew').hidden=false;}
+ }
+ maybeAutoLoad();
+}
+function renderChatFrame(){
+ $('chatTitle').textContent=chatMeta.sessionTitle||chatMeta.title||'会话';
+ $('chatSub').textContent=(chatMeta.agentExe||'')+' · 共 '+chatTotal+' 条';
+ const d=(STATE||{}).dispatch||{};
+ const notice=(d.noticeId===chatId)?(d.notice||''):'';
+ $('chatNotice').hidden=!notice;$('chatNotice').textContent=notice;
+ if(d.draftId===chatId&&d.draftText&&!$('chatText').value)
+  $('chatText').value=d.draftText;
+}
+function mergeChatPage(p,mode){
+ chatTotal=p.total||0;
+ const msgs=p.messages||[];
+ if(mode==='init'){
+  chatMsgs=msgs.slice();chatIds=new Set(chatMsgs.map(msgKey));
+  paintChat('init');
+ }else{
+  const fresh=msgs.filter(m=>!chatIds.has(msgKey(m)));
+  if(fresh.length){
+   fresh.forEach(m=>{chatIds.add(msgKey(m));chatMsgs.push(m);});
+   paintChat('append');
+  }
+ }
+ // 本地算剩余：轮询推的是最新页，它的 hasMore 不代表已加载范围之外还有旧页。
+ chatHasMore=chatMsgs.length<chatTotal;
+ renderChatFrame();
+}
+async function fetchTranscript(offset,mode){
+ if(!chatId)return;
+ try{
+  const r=await fetch('/m/transcript?id='+encodeURIComponent(chatId)
+   +'&offset='+offset+'&limit=50',{cache:'no-store'});
+  if(r.status===401){showPair();return;}
+  if(r.status===404){closeChat();return;}
+  if(!r.ok)return;
+  const p=await r.json();
+  chatMeta=p;
+  if(mode==='older'){
+   chatLoading=false;chatTotal=p.total||chatTotal;
+   const fresh=(p.messages||[]).filter(m=>!chatIds.has(msgKey(m)));
+   if(fresh.length){
+    const list=$('chatList');const prevH=list.scrollHeight,prevTop=list.scrollTop;
+    fresh.forEach(m=>chatIds.add(msgKey(m)));
+    chatMsgs=fresh.concat(chatMsgs);
+    chatHasMore=chatMsgs.length<chatTotal;
+    paintChat('prepend',prevH,prevTop);
+   }else{const ld=$('chatLoad');if(ld)ld.textContent='上翻加载更早的记录';
+    chatHasMore=chatMsgs.length<chatTotal;}
+  }else{
+   mergeChatPage(p,mode);
+  }
+ }catch(e){/* 网络抖一下，下一轮再试 */}
+}
+function openChat(id){
+ chatId=id;chatMsgs=[];chatIds=new Set();chatLoading=false;chatMeta={};
+ $('chatText').value='';
+ render();
+ fetchTranscript(0,'init');
+}
+function closeChat(){chatId='';chatMsgs=[];chatIds=new Set();render();}
+function sendChat(){
+ const t=$('chatText').value.trim();
+ if(!t||!chatId)return;
+ $('chatText').blur();
+ act({cmd:'dispatch',id:chatId,text:t});
+ $('chatText').value='';
+ fetchTranscript(0,'append');
+}
+$('chatBack').onclick=closeChat;
+$('chatSend').onclick=sendChat;
+$('chatText').addEventListener('keydown',e=>{
+ if(e.key==='Enter'){e.preventDefault();sendChat();}});
+$('chatNew').onclick=()=>{const l=$('chatList');l.scrollTop=l.scrollHeight;
+ chatAtBottom=true;$('chatNew').hidden=true;};
+$('chatList').addEventListener('scroll',()=>{
+ const list=$('chatList');
+ chatAtBottom=list.scrollHeight-list.scrollTop-list.clientHeight<60;
+ if(chatAtBottom)$('chatNew').hidden=true;
+ if(list.scrollTop<80&&chatHasMore&&!chatLoading&&chatId){
+  chatLoading=true;
+  const ld=$('chatLoad');if(ld)ld.textContent='正在加载更早的记录…';
+  fetchTranscript(chatMsgs.length,'older');
+ }
+});
 function renderWork(){
  const items=sortedItems();
- const sig=JSON.stringify(items)+'|'+expanded+'|'+JSON.stringify((STATE||{}).dispatch||{});
+ const sig=JSON.stringify(items)+'|'+JSON.stringify((STATE||{}).dispatch||{});
  const ae=document.activeElement;
  // 正在打字时不重排：2.5s 一轮的刷新不能把输入焦点冲掉。
  if(ae&&(ae.tagName==='TEXTAREA'||ae.tagName==='INPUT')) return;
- if(sig===lastSig){focusAfterRender=false;return;}
+ if(sig===lastSig) return;
  lastSig=sig;
  const list=$('list');const keep=list.scrollTop;
  list.replaceChildren();
@@ -943,12 +1141,6 @@ function renderWork(){
  list.scrollTop=keep;
  $('empty').hidden=items.length>0;
  list.hidden=items.length===0;
- // 点「派回会话」展开的那一次：聚焦新输入框，同一手势内弹起键盘。
- if(focusAfterRender&&expanded){
-  const inp=document.querySelector('.dpinline input');
-  if(inp)inp.focus();
- }
- focusAfterRender=false;
 }
 function renderEvents(){
  const events=(STATE||{}).events||[];
@@ -995,18 +1187,17 @@ function render(){
  const meta=(STATE||{}).meta||{};
  $('listenPill').textContent=meta.listening?'监听中':'未监听';
  $('listenPill').className='pill'+(meta.listening?' on':'');
- $('pwork').hidden=tab!==0;$('pevents').hidden=tab!==1;$('pstatus').hidden=tab!==2;
+ const inChat=!!chatId;
+ $('tabbar').hidden=inChat;
+ $('pchat').hidden=!inChat;
+ $('pwork').hidden=inChat||tab!==0;
+ $('pevents').hidden=inChat||tab!==1;
+ $('pstatus').hidden=inChat||tab!==2;
  document.querySelectorAll('#tabbar .tab').forEach((b,i)=>b.classList.toggle('active',i===tab));
+ if(inChat){renderChatFrame();return;}
  if(tab===0)renderWork();else if(tab===1)renderEvents();else renderStatus();
 }
 function adopt(s){
- const d=s.dispatch||{};
- // 刚发过派发：被守卫拒绝（草稿回显）就保持展开，成功就收起。
- if(pendingDispatch){
-  if(d.draftId===pendingDispatch){expanded=pendingDispatch;drafts[pendingDispatch]=d.draftText||'';}
-  else{expanded='';delete drafts[pendingDispatch];}
-  pendingDispatch='';
- }
  STATE=s;lastSig='';
  applyTheme(s.theme||{});
  render();

@@ -98,6 +98,12 @@ private:
     // 局域网手机遥控（M1）：/m/state 的裁剪版状态（work/health/events/theme/
     // dispatch/meta），与外壳同一份数据源，不下发系统/按键等重交互页。
     QString lanShellState();
+    // 聊天页：点待办进会话记录（电脑外壳与手机共用 SessionTranscript 读取器，
+    // 打开即最新一页，旧记录往上翻按页加载）。chatState 给外壳，lanTranscript
+    // 给 /m/transcript?id=&offset=&limit=。
+    QJsonObject chatState();
+    QJsonObject chatStateFor(const QString &id, int offset = 0, int limit = 50);
+    QString lanTranscript(const QString &id, int offset = 0, int limit = 50);
     // 系统页「手机访问」卡片的状态：开关/监听/URL/配对/设备（配对码只给桌面）。
     QJsonObject lanState();
     // 懒创建 LAN 服务并接好 provider/持久化；开关与恢复启动都走这里。
@@ -292,6 +298,8 @@ private:
     bool bridgeRequested_ = false;
     // 局域网手机遥控口（默认关闭，系统页显式打开）；与桥双端口双信任区。
     LanWebServer *lan_ = nullptr;
+    // 聊天页当前打开的待办 id（空＝没开）；读取缓存在 SessionTranscript 内部。
+    QString chatItemId_;
     QTimer *healthTimer_ = nullptr;
     QString spoolPath_;
     QDateTime startedAt_;

@@ -28,17 +28,24 @@
 namespace {
 
 // 宿主会话环境隔离：AgentRMC 可能是从某个宿主的会话里被拉起来的（比如
-// 用户在 Qoder CN 里让 agent 起桌宠），进程环境会带着那套会话变量
-// （QODER_PRODUCT_ID / QODER_CONFIG_DIR / QODER_SEARCH_HOST_PID 等）。
-// 之后从这里启动的每一个应用都原样继承——国际版 Qoder 拿到 qoder-cn
-// 身份会在主进程直接拒绝启动（「产物内联的产品是 qoder，当前运行身份是
-// qoder-cn」弹窗），待办/应用页怎么点都撞；开始菜单能点是因为 Explorer
-// 的环境是干净的。所以进程一起来先把这些变量从自己的环境里摘掉，
-// 之后的子进程（待办启动、语音启动、注入 cmd）一并干净。列表按前缀
-// 匹配、大小写不敏感；新宿主再出现同类冲突时往 kPrefixes 里加前缀。
+// 用户在 Qoder CN 里让 agent 起桌宠，或 DSH 的 agent 静默装完顺手启动），
+// 进程环境会带着那套会话变量（QODER_PRODUCT_ID / QODER_CONFIG_DIR /
+// QODER_SEARCH_HOST_PID、ELECTRON_RUN_AS_NODE 等）。之后从这里启动的每一个
+// 应用都原样继承——国际版 Qoder 拿到 qoder-cn 身份会在主进程直接拒绝启动
+// （「产物内联的产品是 qoder，当前运行身份是 qoder-cn」弹窗）；
+// ELECTRON_RUN_AS_NODE=1 更隐蔽：Electron 宿主（WorkBuddy/Qoder/ZCode/DSH）
+// 会「当成裸 Node」启动即静默退出（exit 0，无窗口无报错），ShellExecute 还
+// 返回成功，待办双击「启动」看着没反应甚至被销账（2026-11-13 实测：
+// WorkBuddy 双击启动失灵，根因就是 AgentRMC 从 DSH shell 启动继承了它）。
+// 开始菜单能点是因为 Explorer 的环境是干净的。所以进程一起来先把这些变量
+// 从自己的环境里摘掉，之后的子进程（待办启动、语音启动、注入 cmd）一并干净。
+// 前缀列表大小写不敏感；新宿主再出现同类冲突时往 kPrefixes/kExact 里加。
 void scrubHostSessionEnv() {
     static const QStringList kPrefixes = {QStringLiteral("QODER"),
                                           QStringLiteral("__QODER_")};
+    // 精确名列表：只摘这一个变量，不动 ELECTRON_* 其它成员
+    // （ELECTRON_FORCE_RENDERER_ACCESSIBILITY 之类对宿主无害）。
+    static const QStringList kExact = {QStringLiteral("ELECTRON_RUN_AS_NODE")};
     wchar_t *block = GetEnvironmentStringsW();
     if (block == nullptr) {
         return;
@@ -51,11 +58,15 @@ void scrubHostSessionEnv() {
         }
         const QString upper =
             QString::fromWCharArray(p, int(eq - p)).toUpper();
+        bool victim = kExact.contains(upper);
         for (const QString &prefix : kPrefixes) {
             if (upper.startsWith(prefix)) {
-                victims.append(QString::fromWCharArray(p, int(eq - p)));
+                victim = true;
                 break;
             }
+        }
+        if (victim) {
+            victims.append(QString::fromWCharArray(p, int(eq - p)));
         }
     }
     FreeEnvironmentStringsW(block);

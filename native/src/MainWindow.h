@@ -33,6 +33,7 @@ class QTimer;
 class QToolButton;
 class QWidget;
 class AgentBridge;
+class LanWebServer;
 class InputEngine;
 class WorkWebView;
 class AppPage;
@@ -94,6 +95,14 @@ private:
     void openWorkItem(const QString &id);
     // WebView2 外壳：推一份完整状态过去，收回来的动作在这里分发。
     QString webShellState();
+    // 局域网手机遥控（M1）：/m/state 的裁剪版状态（work/health/events/theme/
+    // dispatch/meta），与外壳同一份数据源，不下发系统/按键等重交互页。
+    QString lanShellState();
+    // 系统页「手机访问」卡片的状态：开关/监听/URL/配对/设备（配对码只给桌面）。
+    QJsonObject lanState();
+    // 懒创建 LAN 服务并接好 provider/持久化；开关与恢复启动都走这里。
+    void ensureLanServer();
+    void setLanEnabled(bool on);
     // 外壳页的配色：把当前主题的 token 翻成 CSS 写法（含字号倍率）。
     QJsonObject webThemeJson();
     // 系统页显示就绪状态：Qt 标签/表格与外壳共用，文案只维护一遍。
@@ -153,6 +162,9 @@ private:
     void showGuide();
     // 一键接入：复制安装话术 + 各家装没装。新手引导的「联动插件」和系统页都走这里。
     void showAgentBridgeDialog();
+    // 手机访问（Qt 回退页用）：开关 + 网址 + 配对码 + 设备吊销。
+    // WebView2 外壳的系统页有同款卡片（带二维码），这里给纯文本配对码。
+    void showLanDialog();
     // 直接跳到「使用引导 → 接入 AI Agent」那一节（弹窗里的「详细说明」）。
     void openPluginGuide();
     void toggleListening();
@@ -278,6 +290,8 @@ private:
     QSystemTrayIcon *tray_ = nullptr;
     AgentBridge *bridge_ = nullptr;
     bool bridgeRequested_ = false;
+    // 局域网手机遥控口（默认关闭，系统页显式打开）；与桥双端口双信任区。
+    LanWebServer *lan_ = nullptr;
     QTimer *healthTimer_ = nullptr;
     QString spoolPath_;
     QDateTime startedAt_;

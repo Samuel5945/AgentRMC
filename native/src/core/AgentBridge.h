@@ -2,6 +2,7 @@
 
 #include <QByteArray>
 #include <QHash>
+#include <QHostAddress>
 #include <QJsonObject>
 #include <QObject>
 #include <QString>
@@ -48,6 +49,9 @@ public:
     // 起监听；失败（端口被占等）返回 false。
     bool start(quint16 port = kPort);
     bool isRunning() const { return server_ != nullptr; }
+    // 实际监听地址：桥必须是回环（无鉴权本机 IPC）。lanweb_test 拿它锁死
+    // 「别顺手改成 Any」——暴露到局域网的是 LanWebServer，不是这个口。
+    QHostAddress serverAddress() const;
     // GET /state 的应答来源（主窗接到 VoicePet::stateJson 上）；缺省回 "{}"。
     void setStateProvider(std::function<QString()> provider);
     // GET /work-items 的应答来源；缺省回空队列。

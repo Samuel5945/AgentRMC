@@ -88,6 +88,13 @@
   必须跑 AgentRMCAppTest。
 - Git Bash 里没有 cmake；用 VS 自带的
   `"C:\Program Files\Microsoft Visual Studio\18\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe"`。
+- **DSH 沙箱按「被启动程序的位置」限制子进程**（2026-11-13 实测）：从工作区内
+  启动的 exe 写用户 temp 会「拒绝访问」——测试的 `QTemporaryDir` 建不出目录
+  （一片 `FAIL temp dir`）、NSIS 安装器初始化即退（exit 1，什么都没装）。
+  同一个 exe 拷到工作区外跑就正常；系统位置的 cmd/python 不受限。对策：
+  ① 跑测试前把 `TEMP`/`TMP` 指到工作区内目录（如 `tmp_test`）；
+  ② 静默安装先把 `dist\AgentRMC-Setup.exe` 拷到工作区外（如 `D:\apps`）再 `/S`。
+  这不是代码错，别去改测试或安装脚本。
 
 ## 版本号：Native 与插件同号同步升
 

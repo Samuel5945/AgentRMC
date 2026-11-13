@@ -24,6 +24,8 @@ qt_add_executable(AgentRMCNative
     src/MainWindow.h
     src/core/AgentBridge.cpp
     src/core/AgentBridge.h
+    src/core/LanWebServer.cpp
+    src/core/LanWebServer.h
     src/core/ChatText.cpp
     src/core/ChatText.h
     src/core/WorkItems.cpp
@@ -309,6 +311,19 @@ add_executable(AgentRMCBridgeTest
 target_include_directories(AgentRMCBridgeTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(AgentRMCBridgeTest PRIVATE Qt6::Core Qt6::Network)
 target_compile_options(AgentRMCBridgeTest PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
+
+# 局域网手机遥控口（移动端 M1）：配对/鉴权/白名单/越界/吊销/防爆破，
+# 外加「桥必须回环」的锁死断言。全走临时端口，不碰真实 45915/45916。
+add_executable(AgentRMCLanWebTest
+    tests/lanweb_test.cpp
+    src/core/LanWebServer.cpp
+    src/core/LanWebServer.h
+    src/core/AgentBridge.cpp
+    src/core/AgentBridge.h
+)
+target_include_directories(AgentRMCLanWebTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(AgentRMCLanWebTest PRIVATE Qt6::Core Qt6::Network)
+target_compile_options(AgentRMCLanWebTest PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
 
 add_executable(AgentRMCPluginTest
     tests/plugin_upgrade_test.cpp

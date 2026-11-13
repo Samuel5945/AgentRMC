@@ -535,6 +535,13 @@ void WorkWebView::handleNavigationCompleted(bool success) {
 }
 
 QString WorkWebView::htmlFor(const QString &stateJson) const {
+    // 二维码库（qrcode-generator，MIT）：系统页「手机访问」卡片画配对码用。
+    // 从 qrc 读进来拼在页面脚本最前面；读不到就只影响二维码，别的照常。
+    QString qrLib;
+    QFile qrFile(QStringLiteral(":/qrcode.js"));
+    if (qrFile.open(QIODevice::ReadOnly)) {
+        qrLib = QString::fromUtf8(qrFile.readAll());
+    }
     // 状态由 Qt 侧一次推全（work / workers / health / theme / events）。页面只管三件事：
     // 排版、把动作发回 Qt、把 theme 里的 token 落成 CSS 变量。
     //
@@ -624,6 +631,17 @@ QString WorkWebView::htmlFor(const QString &stateJson) const {
  .wrow.head{color:var(--muted2);font-size:var(--f10);border-bottom:1px solid var(--w14)}
  .wrow:nth-child(even){background:var(--w6)}
  .wrow .wfg{color:var(--accent)}
+ /* 手机访问卡片：开关行常驻，开启后展开网址/配对二维码/设备列表。 */
+ .lanbox{flex:0 0 auto;margin-top:8px;padding:8px 10px;border-radius:10px;
+   border:1px solid var(--w14);background:var(--w6)}
+ .lanhead{display:flex;align-items:center;gap:8px}
+ .lanrow{display:flex;align-items:center;gap:8px;margin-top:6px;flex-wrap:wrap}
+ #lanQrWrap{display:flex;align-items:center;gap:12px;margin-top:8px}
+ #lanQr svg{display:block;border-radius:8px}
+ #lanDevices{margin-top:6px}
+ .landev{display:flex;align-items:center;gap:8px;padding:3px 0;font-size:var(--f11)}
+ .landev .dn{color:var(--text)}
+ .landev .dm{color:var(--muted2);font-size:var(--f10);margin-right:auto}
  /* 按键映射：场景行 + 键位/手势表 + 底部提示和接管开关。 */
  .keyhead{flex:0 0 auto;display:flex;align-items:flex-start;gap:8px}
  .scene{display:flex;align-items:baseline;gap:6px;min-width:0;flex:1}
@@ -885,6 +903,26 @@ QString WorkWebView::htmlFor(const QString &stateJson) const {
 <div id="system" class="page" hidden>
   <div class="head"><span class="sectitle">系统健康</span></div>
   <div class="lines" id="sysLines" style="margin-top:8px"></div>
+  <div class="lanbox" id="lanBox">
+    <div class="lanhead">
+      <span class="sectitle">手机访问</span>
+      <span class="swlabel" id="lanState">已关闭</span>
+      <span class="spacer"></span>
+      <button class="sw" id="lanSw" title="开启后局域网里的手机可配对访问待办与派发；默认关闭，可随时吊销设备"></button>
+    </div>
+    <div id="lanBody" hidden>
+      <div class="mutedline" id="lanUrls" style="margin-top:6px"></div>
+      <div class="lanrow">
+        <button class="btn" id="lanPairBtn">显示配对二维码</button>
+        <span class="mutedline" id="lanPairHint">手机扫码即可配对 · 10 分钟内有效</span>
+      </div>
+      <div id="lanQrWrap" hidden>
+        <div id="lanQr"></div>
+        <div class="mutedline" id="lanCode" style="flex:1;min-width:0;word-break:break-all"></div>
+      </div>
+      <div id="lanDevices"></div>
+    </div>
+  </div>
   <div class="wtable" id="sysWorkers"></div>
   <div class="foot" style="border-top:0;padding:8px 0 4px">
     <button class="btn" id="sysRefresh">刷新</button>
@@ -950,6 +988,9 @@ QString WorkWebView::htmlFor(const QString &stateJson) const {
 </div>
 </div>
 <script>
+)HTML")
+                         + qrLib
+                         + QString::fromUtf8(R"HTML(
 // 首帧的状态嵌在文档里；之后 Qt 只调 window.__setState(json) 换数据，不重载文档。
 let STATE = )HTML")
                          + jsEscape(stateJson)
@@ -1188,6 +1229,59 @@ function renderSystem(){
     const c=document.createElement('span'); c.textContent=w.working||0;
     const d=document.createElement('span'); d.textContent=w.last||'—';
     row.append(n,st,a,b,c,d); t.append(row);});
+  renderLan(s.lan||{});
+}
+// 手机访问卡片：开关/网址/配对二维码/设备吊销。配对码只在这张卡里出现，
+// 不下发手机（/m/state 里没有 lan 块）。二维码内容 = 首个 LAN 网址 + #pair=码。
+function renderLan(l){
+  const sw=$('lanSw');
+  sw.classList.toggle('on',!!l.enabled);
+  sw.onclick=()=>postObj({cmd:'lanToggle',on:!l.enabled});
+  $('lanState').textContent=l.running?('监听中 · 端口 '+(l.port||45916))
+    :(l.enabled?'启动失败（端口被占）':'已关闭');
+  $('lanBody').hidden=!l.enabled;
+  if(!l.enabled) return;
+  const urls=l.urls||[];
+  $('lanUrls').textContent=urls.length?('手机浏览器打开：'+urls.join('  ·  '))
+    :'找不到局域网 IPv4 地址（检查网卡）';
+  const p=l.pairing||{};
+  $('lanPairBtn').textContent=p.active?'收起二维码':'显示配对二维码';
+  $('lanPairBtn').onclick=()=>postObj({cmd:p.active?'lanPairEnd':'lanPair'});
+  $('lanPairHint').textContent=l.running?'手机扫码即可配对 · 10 分钟内有效'
+    :'先解决端口占用，再配对';
+  const wrap=$('lanQrWrap');
+  if(p.active&&urls.length&&typeof qrcode==='function'){
+    wrap.hidden=false;
+    const sig=p.code+'|'+urls[0];
+    if($('lanQr').dataset.sig!==sig){
+      $('lanQr').dataset.sig=sig;
+      try{
+        const qr=qrcode(0,'M');
+        qr.addData(urls[0]+'#pair='+p.code);
+        qr.make();
+        $('lanQr').innerHTML=qr.createSvgTag(4,8);
+      }catch(e){$('lanQr').textContent='二维码生成失败：'+e;}
+    }
+    $('lanCode').textContent='配对码 '+p.code+'（扫不了可在手机页手动输入）';
+  }else{
+    wrap.hidden=true;$('lanQr').dataset.sig='';
+  }
+  const dv=$('lanDevices');dv.replaceChildren();
+  (l.devices||[]).forEach(d=>{
+    const row=document.createElement('div');row.className='landev';
+    const n=document.createElement('span');n.className='dn';n.textContent=d.name||'手机';
+    const m=document.createElement('span');m.className='dm';
+    m.textContent='配对 '+hhmm(d.pairedAt)+' · 最近 '+hhmm(d.lastSeen);
+    const rev=document.createElement('button');rev.className='btn';
+    rev.textContent='吊销';rev.style.padding='2px 8px';
+    rev.title='吊销后这台手机的令牌立即失效，要重新配对';
+    rev.onclick=()=>postObj({cmd:'lanRevoke',id:d.id});
+    row.append(n,m,rev);dv.append(row);
+  });
+  if(!(l.devices||[]).length){
+    const none=document.createElement('div');none.className='mutedline';
+    none.textContent='还没有配对过的手机';dv.append(none);
+  }
 }
 function renderKeymap(){
   const k=KEYMAP||{};

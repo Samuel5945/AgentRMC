@@ -16,6 +16,7 @@
 #include "ui/WaveformButton.h"
 
 #include "core/AgentBridge.h"
+#include "core/LanWebServer.h"
 #include "core/PluginUpgrade.h"
 #include "core/AgentWindow.h"
 #include "core/HostRuntime.h"
@@ -1018,6 +1019,18 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
                         QString::fromUtf8(
                             "桥接端口 45915 被占用，5 秒后自动重试"),
                         0);
+        }
+        // 手机访问（局域网 Web）：默认关闭；上次开着才恢复监听。设备令牌
+        // 持久化在配置里，重启不用重新配对。截图模式（withTray=false）不起。
+        if (store_->uiBool(QStringLiteral("lan_enabled"), false)) {
+            ensureLanServer();
+            lan_->setDevices(store_->uiArray(QStringLiteral("lan_devices")));
+            if (!lan_->start()) {
+                appendEvent(QStringLiteral("error"), QString(), QString(),
+                            QString::fromUtf8(
+                                "手机访问端口 45916 被占用，可在系统页重试"),
+                            0);
+            }
         }
     }
     // 离线 spool 补投 + 健康行；5 秒一拍，启动时先补一次。
@@ -2420,6 +2433,7 @@ QJsonObject MainWindow::systemState() {
                    .arg(problems.join(QString::fromUtf8("；")))},
         {QStringLiteral("problemsOk"), problems.isEmpty()},
         {QStringLiteral("workers"), workerRows},
+        {QStringLiteral("lan"), lanState()},
     };
 }
 
@@ -3051,6 +3065,97 @@ QString MainWindow::webShellState() {
     return QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Compact));
 }
 
+// ---------- 局域网手机遥控（M1）：与外壳同一份数据源，动作同一个入口 ----------
+
+void MainWindow::ensureLanServer() {
+    if (lan_ != nullptr) {
+        return;
+    }
+    lan_ = new LanWebServer(this);
+    lan_->setStateProvider([this] { return lanShellState(); });
+    lan_->setThemeRoot(ThemeManager::themesRoot());
+    // 白名单已在服务端验过；这里与桌面外壳走同一个 handleWebAction，
+    // 做完它内部统一 refresh，桌面外壳自动跟着刷新，双端一致免费。
+    lan_->setActionHandler([this](const QJsonObject &action) {
+        handleWebAction(action);
+        return QJsonObject{{QStringLiteral("ok"), true},
+                           {QStringLiteral("code"), 200}};
+    });
+    connect(lan_, &LanWebServer::devicesChanged, this,
+            [this](const QJsonArray &devices) {
+                store_->setUiArray(QStringLiteral("lan_devices"), devices);
+            });
+}
+
+void MainWindow::setLanEnabled(bool on) {
+    store_->setUiBool(QStringLiteral("lan_enabled"), on);
+    if (on) {
+        ensureLanServer();
+        lan_->setDevices(store_->uiArray(QStringLiteral("lan_devices")));
+        if (lan_->start()) {
+            appendEvent(QStringLiteral("status"), QString(), QString(),
+                        QString::fromUtf8("手机访问已开启（端口 45916）"), 0);
+        } else {
+            appendEvent(QStringLiteral("error"), QString(), QString(),
+                        QString::fromUtf8("手机访问启动失败：端口 45916 被占用"),
+                        0);
+        }
+    } else if (lan_ != nullptr) {
+        lan_->endPairing();
+        lan_->stop();
+        appendEvent(QStringLiteral("status"), QString(), QString(),
+                    QString::fromUtf8("手机访问已关闭"), 0);
+    }
+}
+
+QString MainWindow::lanShellState() {
+    QJsonObject work;
+    if (workItems_ != nullptr) {
+        work = QJsonDocument::fromJson(workItems_->toJson().toUtf8()).object();
+    }
+    const QJsonObject root{
+        {QStringLiteral("work"), work},
+        {QStringLiteral("health"),
+         QJsonDocument::fromJson(healthJson().toUtf8()).object()},
+        {QStringLiteral("events"), webEvents_},
+        {QStringLiteral("theme"), webThemeJson()},
+        {QStringLiteral("dispatch"),
+         QJsonObject{{QStringLiteral("notice"), dispatchNotice_},
+                     {QStringLiteral("noticeId"), dispatchNoticeId_},
+                     {QStringLiteral("noticeExe"), dispatchNoticeExe_},
+                     {QStringLiteral("draftId"), dispatchDraftId_},
+                     {QStringLiteral("draftText"), dispatchDraftText_},
+                     {QStringLiteral("supported"), supportedDispatchExes()}}},
+        {QStringLiteral("meta"),
+         QJsonObject{
+             {QStringLiteral("version"), appVersion()},
+             {QStringLiteral("listening"),
+              engine_ != nullptr && engine_->isRunning()},
+             {QStringLiteral("devices"),
+              lan_ != nullptr ? lan_->devices().size() : 0}}},
+    };
+    return QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Compact));
+}
+
+QJsonObject MainWindow::lanState() {
+    const bool enabled = store_->uiBool(QStringLiteral("lan_enabled"), false);
+    const bool running = lan_ != nullptr && lan_->isRunning();
+    return QJsonObject{
+        {QStringLiteral("enabled"), enabled},
+        {QStringLiteral("running"), running},
+        {QStringLiteral("port"), static_cast<int>(LanWebServer::kPort)},
+        {QStringLiteral("urls"),
+         running ? QJsonArray::fromStringList(
+                       LanWebServer::lanUrls(lan_->port()))
+                 : QJsonArray()},
+        // 配对码只进桌面外壳（systemState），不进 lanShellState——手机拿不到。
+        {QStringLiteral("pairing"),
+         lan_ != nullptr ? lan_->pairingInfo() : QJsonObject()},
+        {QStringLiteral("devices"),
+         lan_ != nullptr ? lan_->devices() : QJsonArray()},
+    };
+}
+
 // 页面上的按钮/双击回到这里：全部转给既有实现，不在页面里另起一套状态机。
 // 改键菜单、组合键捕获、添加/移除应用这类重交互弹 Qt 原生弹窗，网页只负责
 // 把动作送回来；做完统一重推一次状态。
@@ -3163,6 +3268,21 @@ void MainWindow::handleWebAction(const QJsonObject &action) {
         upgradePlugins();
     } else if (cmd == QStringLiteral("sysBridge")) {
         showAgentBridgeDialog();
+    } else if (cmd == QStringLiteral("lanToggle")) {
+        // 手机访问开关：桌面专用命令，不在 LAN 白名单里（手机不能自己开自己）。
+        setLanEnabled(action.value(QStringLiteral("on")).toBool());
+    } else if (cmd == QStringLiteral("lanPair")) {
+        ensureLanServer();
+        lan_->beginPairing();
+    } else if (cmd == QStringLiteral("lanPairEnd")) {
+        if (lan_ != nullptr) {
+            lan_->endPairing();
+        }
+    } else if (cmd == QStringLiteral("lanRevoke")) {
+        if (lan_ != nullptr && lan_->revokeDevice(id)) {
+            appendEvent(QStringLiteral("status"), QString(), QString(),
+                        QString::fromUtf8("已吊销一台手机的访问令牌"), 0);
+        }
     } else if (cmd == QStringLiteral("keyScene")) {
         if (keymapPage_ != nullptr) {
             keymapPage_->webSetPinned(action.value(QStringLiteral("name")).toString());
@@ -3521,9 +3641,17 @@ QWidget *MainWindow::buildSystemPage() {
         "顺便看各家装没装、进程里跑的是哪一版。"));
     connect(connectAgent, &QPushButton::clicked, this,
             &MainWindow::showAgentBridgeDialog);
+    auto *lanBtn = new QPushButton(QString::fromUtf8("手机访问"));
+    lanBtn->setObjectName("ghostSmall");
+    lanBtn->setCursor(Qt::PointingHandCursor);
+    lanBtn->setToolTip(QString::fromUtf8(
+        "局域网手机遥控：开关、配对码、已配对设备。\n"
+        "默认关闭；开启后手机浏览器扫码或输入配对码即可访问。"));
+    connect(lanBtn, &QPushButton::clicked, this, &MainWindow::showLanDialog);
     actions->addWidget(refresh);
     actions->addWidget(connectAgent);
     actions->addWidget(pluginUpgrade_);
+    actions->addWidget(lanBtn);
     actions->addWidget(openDir);
     actions->addStretch(1);
     cl->addLayout(actions);
@@ -3531,6 +3659,133 @@ QWidget *MainWindow::buildSystemPage() {
     lay->addWidget(card);
     refreshSystemPage();
     return page;
+}
+
+// Qt 回退页（WebView2 运行库缺失时）的手机访问入口：开关 + 网址 + 配对码 +
+// 设备吊销。外壳版系统页有同款卡片且带二维码；这里配对码给纯文本手动输入。
+void MainWindow::showLanDialog() {
+    auto *dialog = new QDialog(this);
+    dialog->setWindowTitle(QString::fromUtf8("手机访问"));
+    dialog->setAttribute(Qt::WA_DeleteOnClose);
+    dialog->setMinimumWidth(440);
+    auto *lay = new QVBoxLayout(dialog);
+    lay->setSpacing(8);
+
+    auto *toggle = new QCheckBox(
+        QString::fromUtf8("启用手机访问（局域网 Web，端口 45916）"));
+    lay->addWidget(toggle);
+    auto *hint = new QLabel(QString::fromUtf8(
+        "手机和电脑连同一个 Wi-Fi，用手机浏览器打开下面的网址并输入配对码。\n"
+        "默认关闭；开启后局域网里的设备也要先配对才能访问，可随时吊销。"));
+    hint->setObjectName("muted");
+    hint->setWordWrap(true);
+    lay->addWidget(hint);
+    auto *urls = new QLabel;
+    urls->setObjectName("muted");
+    urls->setWordWrap(true);
+    urls->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    lay->addWidget(urls);
+    auto *pairRow = new QHBoxLayout;
+    auto *pairBtn = new QPushButton;
+    pairBtn->setObjectName("ghostSmall");
+    pairRow->addWidget(pairBtn);
+    auto *codeLabel = new QLabel;
+    codeLabel->setObjectName("muted");
+    codeLabel->setWordWrap(true);
+    codeLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    pairRow->addWidget(codeLabel, 1);
+    lay->addLayout(pairRow);
+    auto *devTitle = new QLabel(QString::fromUtf8("已配对设备"));
+    devTitle->setObjectName("cardTitle");
+    lay->addWidget(devTitle);
+    auto *devBox = new QVBoxLayout;
+    lay->addLayout(devBox);
+    auto *closeBtn = new QPushButton(QString::fromUtf8("关闭"));
+    closeBtn->setObjectName("ghostSmall");
+    connect(closeBtn, &QPushButton::clicked, dialog, &QDialog::close);
+    lay->addWidget(closeBtn);
+
+    auto refresh = std::make_shared<std::function<void()>>();
+    *refresh = [this, toggle, urls, pairBtn, codeLabel, devBox, refresh] {
+        const QJsonObject lan = lanState();
+        const bool enabled = lan.value(QStringLiteral("enabled")).toBool();
+        const bool running = lan.value(QStringLiteral("running")).toBool();
+        const QSignalBlocker block(toggle);
+        toggle->setChecked(enabled);
+        QStringList urlTexts;
+        const QJsonArray urlArray = lan.value(QStringLiteral("urls")).toArray();
+        for (const QJsonValue &value : urlArray) {
+            urlTexts << value.toString();
+        }
+        urls->setText(running
+                          ? urlTexts.join(QLatin1Char('\n'))
+                          : enabled ? QString::fromUtf8(
+                                          "启动失败：端口被占用，关闭后重开试试")
+                                    : QString::fromUtf8("未开启"));
+        const QJsonObject pairing =
+            lan.value(QStringLiteral("pairing")).toObject();
+        const bool active = pairing.value(QStringLiteral("active")).toBool();
+        pairBtn->setText(active ? QString::fromUtf8("收起配对码")
+                                : QString::fromUtf8("显示配对码"));
+        pairBtn->setEnabled(enabled && running);
+        codeLabel->setText(
+            active ? QString::fromUtf8("配对码：%1（10 分钟内有效）")
+                         .arg(pairing.value(QStringLiteral("code")).toString())
+                 : QString());
+        QLayoutItem *item;
+        while ((item = devBox->takeAt(0)) != nullptr) {
+            if (item->widget() != nullptr) {
+                item->widget()->deleteLater();
+            }
+            delete item;
+        }
+        const QJsonArray devices =
+            lan.value(QStringLiteral("devices")).toArray();
+        if (devices.isEmpty()) {
+            auto *none = new QLabel(QString::fromUtf8("还没有配对过的手机"));
+            none->setObjectName("muted");
+            devBox->addWidget(none);
+        }
+        for (const QJsonValue &value : devices) {
+            const QJsonObject device = value.toObject();
+            auto *row = new QWidget;
+            auto *rl = new QHBoxLayout(row);
+            rl->setContentsMargins(0, 0, 0, 0);
+            auto *name = new QLabel(
+                device.value(QStringLiteral("name")).toString());
+            rl->addWidget(name, 1);
+            auto *revoke = new QPushButton(QString::fromUtf8("吊销"));
+            revoke->setObjectName("ghostSmall");
+            const QString id = device.value(QStringLiteral("id")).toString();
+            connect(revoke, &QPushButton::clicked, this,
+                    [this, id, refresh] {
+                        if (lan_ != nullptr) {
+                            lan_->revokeDevice(id);
+                        }
+                        (*refresh)();
+                    });
+            rl->addWidget(revoke);
+            devBox->addWidget(row);
+        }
+    };
+    connect(toggle, &QCheckBox::toggled, this, [this, refresh](bool on) {
+        setLanEnabled(on);
+        (*refresh)();
+    });
+    connect(pairBtn, &QPushButton::clicked, this, [this, refresh] {
+        const bool active =
+            lan_ != nullptr &&
+            lan_->pairingInfo().value(QStringLiteral("active")).toBool();
+        if (active) {
+            lan_->endPairing();
+        } else {
+            ensureLanServer();
+            lan_->beginPairing();
+        }
+        (*refresh)();
+    });
+    (*refresh)();
+    dialog->show();
 }
 
 namespace {

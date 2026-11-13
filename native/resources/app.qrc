@@ -1,6 +1,7 @@
 <RCC>
     <qresource prefix="/">
         <file>style.qss</file>
+        <file>qrcode.js</file>
         <file>icons/check.svg</file>
         <file>icons/chevron-down.svg</file>
         <file>icons/chevron-right.svg</file>

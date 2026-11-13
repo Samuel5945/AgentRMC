@@ -29,6 +29,10 @@ QString defaultFor(const QString &kind) {
 
 AgentBridge::AgentBridge(QObject *parent) : QObject(parent) {}
 
+QHostAddress AgentBridge::serverAddress() const {
+    return server_ != nullptr ? server_->serverAddress() : QHostAddress();
+}
+
 bool AgentBridge::start(quint16 port) {
     if (server_ != nullptr) {
         return true;

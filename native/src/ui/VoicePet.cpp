@@ -593,6 +593,12 @@ class VoicePet::RequestCard final : public QWidget {
 public:
     explicit RequestCard(QWidget *parent) : QWidget(parent) {
         setObjectName(QStringLiteral("petRequestCard"));
+        // 同 PetBubble：必须设顶层窗口标志，否则作为子控件会被 92px 桌宠窗口
+        // 裁剪，浮在桌宠外的卡片永远看不见（2026-11-14 真机「没提示」根因）。
+        setWindowFlags(Qt::Tool | Qt::FramelessWindowHint |
+                       Qt::WindowStaysOnTopHint | Qt::NoDropShadowWindowHint);
+        setAttribute(Qt::WA_TranslucentBackground);
+        setAttribute(Qt::WA_ShowWithoutActivating);
         setFixedWidth(280);
         auto *lay = new QVBoxLayout(this);
         lay->setContentsMargins(14, 12, 14, 12);
@@ -1698,6 +1704,12 @@ void VoicePet::hideEvent(QHideEvent *event) {
     animTimer_->stop();
     if (bubble_ != nullptr) {
         bubble_->hide();
+    }
+    if (requestCard_ != nullptr) {
+        requestCard_->hide();  // 交互卡是独立顶层窗口，桌宠收起要跟着收
+    }
+    if (requestTimer_ != nullptr) {
+        requestTimer_->stop();
     }
     if (tts_ != nullptr) {
         tts_->stop();  // 桌宠收起时别让声音悬在半空

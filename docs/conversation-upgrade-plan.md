@@ -142,12 +142,24 @@ RequestQuestion(id, header, prompt, options[], multiple, secret,
   已记载）。插件要内联应答须在瀑布注册应答者，并与 Web UI **竞争/共存**：
   - 插件应答者排在 Web UI 前并 hold 请求 → RMC 独占应答，DSH GUI 不再弹（需取舍）；
   - 或两边竞速（谁先答谁生效，另一边作废）——实现复杂，碰不好会**卡住 agent 授权**。
-- **分期建议（降风险）**：
-  1. **B1 只读展示**：聊天页先把待答请求（授权命令/提问选项）渲染出来（插件暴露
-     pending 请求经桥路由），应答仍回 DSH GUI——零风险，先让手机「看得见」。
-  2. **B2 提问内联答**：先接 `userQuestions.answer()`（continued 提问，公开接口安全），
-     再评估前台提问 waterfall。
-  3. **B3 授权内联答**：waterfall 应答者 + 与 Web UI 共存策略，需用户拍板独占/竞速。
+- **分期落地（2026-11-14 全部完成）**：
+  1. **B1 只读展示** ✅：聊天页渲染待答请求（授权命令/提问选项），真机截图确认。
+  2. **B2 提问内联答** ✅（真机闭环验证）：聊天页可点选项卡（`request.answerable`＝
+     插件 15s 心跳在线 + kind=question）→ `/m/action cmd=answer`（白名单）→
+     `handleWebAction` 落 `pendingAnswers_` 收件箱 → 插件 1.2s 取件
+     `/request-answer/pending` → `answerQuestion` 两路：
+     - **timed**（profile 配 mode:timed，有前台 wait）→ `wait.completion.resolve(batch)`
+       即时回给等待中的轮次；
+     - **legacy**（桌面默认，无 wait）→ 直接 `agent.steer` 一条
+       `source.kind="user-question-reply"` 消息（与官方 `answer()` 同形同落点，
+       绕过 continued 状态门），Web UI 经投影收卡、agent 认领 reply 当答复。
+       inbox `nextTurn/nextStep` 查重防重复提交（官方 REPLY_QUEUED 同款判据）。
+     真机验证：手机提交「手机上提交一次」→ 本会话直接收到该答案（callId 匹配）。
+     插件测试 31/31（resolve/steer/查重三用例）、桥 /request-answer 路由测试全绿。
+  3. **B3 授权内联答** ⛔（结论：暂不接，等上游）：读包核实 `approval` 服务只有
+     `request()`，**没有按 id 的远程应答口**；插件硬注 `approval/request` waterfall
+     会与 Web UI 竞速、可能卡住 agent 授权（安全语义重）。聊天页对授权保持只读
+     （🔐 卡 + 「回电脑批」提示）。等上游给出明确按 id 应答接口再接。
   - OpenCode 的 permission/form reply 是干净 HTTP，无 waterfall 竞争，接 A 后 B 最易。
 
 ### C. 手机→PC 会话传文件（借鉴 §1.4，跨设备版）

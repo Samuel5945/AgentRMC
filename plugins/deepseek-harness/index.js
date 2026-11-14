@@ -277,6 +277,16 @@ export function apply(ctx, rawConfig) {
         try {
           const type = event && event.type;
           const data = (event && event.data) || {};
+          // 可选事件追踪（默认关）：设 AGENTRMC_TRACE_EVENTS=<文件路径> 后，把每条
+          // session/event 追加进去，用于排查「选方案/等授权偶发不发声」——监听器
+          // 偶尔停收事件时，对照日志即可区分是事件没发还是通知没送。不开则零开销。
+          if (process.env.AGENTRMC_TRACE_EVENTS) {
+            try {
+              fs.appendFileSync(process.env.AGENTRMC_TRACE_EVENTS,
+                JSON.stringify({ t: Date.now(), type, name: data && data.name,
+                  callId: data && data.callId, sid: sessionIdOf(session) }) + '\n');
+            } catch (e) {}
+          }
           if (type === 'approval/asked') {
             if (!config.notifyApproval) return;
             const toolName = String(data.toolName || '').trim();

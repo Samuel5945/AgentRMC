@@ -156,11 +156,31 @@ RequestQuestion(id, header, prompt, options[], multiple, secret,
        inbox `nextTurn/nextStep` 查重防重复提交（官方 REPLY_QUEUED 同款判据）。
      真机验证：手机提交「手机上提交一次」→ 本会话直接收到该答案（callId 匹配）。
      插件测试 31/31（resolve/steer/查重三用例）、桥 /request-answer 路由测试全绿。
-  3. **B3 授权内联答** ⛔（结论：暂不接，等上游）：读包核实 `approval` 服务只有
-     `request()`，**没有按 id 的远程应答口**；插件硬注 `approval/request` waterfall
-     会与 Web UI 竞速、可能卡住 agent 授权（安全语义重）。聊天页对授权保持只读
-     （🔐 卡 + 「回电脑批」提示）。等上游给出明确按 id 应答接口再接。
+  3. **B3 授权内联答** ⛔→🔓（2026-11-14 晚发现干净通路，待实施）：进程内 Cordis
+     `ctx.approval` 只有 `request()`、无按 id 应答口（硬注 waterfall 会与 Web UI 竞速、
+     可能卡住授权），故现阶段聊天页授权只读。**但开源 dsh-Go 的 `packages/dsh_client`
+     证实 DSH Web API 层有干净 RPC**：`DshClient.respondApproval` / `answerQuestion`，
+     走 `POST /api/<endpoint>` + `/api/remote.mux` WS（launch-token 登录 + cookie）。
+     即 Web UI 自己用的就是这条远程面，而非进程内 waterfall。B3 可改走该远程面
+     （插件进程内调对应 remote endpoint，或原生直连 dsh web），零竞态。
+     参考：OpenSquilla 蛋仔已用同构干净 RPC（`exec.approval.resolve` /
+     `chat.clarify_submit`）做内联审批/澄清，见下「横向对照」。
   - OpenCode 的 permission/form reply 是干净 HTTP，无 waterfall 竞争，接 A 后 B 最易。
+
+#### 横向对照（2026-11-14 晚：开源 dsh-Go × 本地 OpenSquilla 蛋仔 × AgentRMC）
+
+- **dsh-Go**（github.com/ccch1mneyyy/dsh-Go，Flutter/Dart，AGPL-3.0，sdk/examples MIT）：
+  手机本机跑 DSH（PRoot Ubuntu+Node，免 Root）或 SSH / DSHarness Remote 遥控电脑；
+  `dsh_client` = DSH Web API Dart 客户端（respondApproval/answerQuestion/prompt/steer）；
+  自带桌宠 Deepy/鲸娘 + 「App 外显示」桌面_overlay_。**只借协议事实/设计，不抄代码**
+  （AGPL + 作者要求改造前联系 + 品牌素材不在授权内）。
+- **OpenSquilla 蛋仔**（本地 desktop/pet，Electron 零依赖）：双角色——网关 WS 客户端
+  （`exec.approval.resolve`/`plugin.approval.resolve` {id,approved,choice}、
+  `chat.clarify_submit` {sessionKey,requestId,fields}、`sessions.send`）+ companion HTTP
+  **45915 复用 AgentRMC 桥契约**（/state /speak /notify /dispatch/pending /dispatch/ack）。
+  → OpenSquilla 侧内联审批/澄清是干净 RPC，无 waterfall；且与 AgentRMC 同端口契约可互通。
+- **AgentRMC（本仓）**：B1 只读 + B2 提问内联答（steer/resolve）已真机闭环；B3 待走
+  DSH Web API 远程面。三者命题同构：手机/桌面遥控 + 内联应答 + 桌宠提醒。
 
 ### C. 手机→PC 会话传文件（借鉴 §1.4，跨设备版）
 

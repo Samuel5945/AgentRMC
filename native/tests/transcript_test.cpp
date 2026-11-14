@@ -327,7 +327,16 @@ int main(int argc, char **argv) {
                                 dRoot);
     check(r.supported, "dsh supported");
     check(r.title == QStringLiteral("DSH 测试标题"), "dsh title from session/title");
-    check(r.messages.size() == 4, "dsh 4 msgs (reasoning+tool-only filtered)");
+    check(r.messages.size() == 4, "dsh 4 msgs (reasoning+tool-only+sys-inject filtered)");
+    {
+        bool hasSysInject = false;
+        for (const QJsonValue &m : r.messages) {
+            if (m.toObject().value("text").toString().contains("Time sampled")) {
+                hasSysInject = true;
+            }
+        }
+        check(!hasSysInject, "dsh time-context system injection filtered out");
+    }
     if (r.messages.size() == 4) {
         check(r.messages.at(0).toObject().value("text").toString() ==
                   QStringLiteral("第一句"),

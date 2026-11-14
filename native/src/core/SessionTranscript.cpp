@@ -594,6 +594,18 @@ SessionTranscript::Result readDsh(const QString &root, const QString &sessionId,
         QJsonValue content;
         if (type == QStringLiteral("user/message")) {
             const QJsonObject data = obj.value(QStringLiteral("data")).toObject();
+            // 只认真正的用户输入（source.kind=="user"）。DSH 把时间上下文、运行时
+            // 快照、skill 目录、workspace 指令、工具通知、审批变更等也记成
+            // user/message（kind=time-context/runtime-context/skill-catalog/
+            // agent-instructions/tool-jobs/user-approval…），那些是系统注入，
+            // 不该当成「我」的气泡显示（用户 2026-11-14 反馈多余气泡）。
+            const QString kind = data.value(QStringLiteral("source"))
+                                     .toObject()
+                                     .value(QStringLiteral("kind"))
+                                     .toString();
+            if (kind != QStringLiteral("user")) {
+                continue;
+            }
             role = QStringLiteral("user");
             content = data.value(QStringLiteral("content"));
             id = data.value(QStringLiteral("id")).toString();

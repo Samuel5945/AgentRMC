@@ -49,6 +49,11 @@ frame1 = [
 ]
 frame2 = [
     user(30, 2000, "u2", "第二句"),
+    # 系统注入（source.kind=time-context）：应被过滤，不当「我」的气泡显示
+    ev("user/message", 35, 2500,
+       {"role": "user", "id": "sys1",
+        "content": [{"type": "text", "text": "Time sampled while preparing turn 2"}],
+        "source": {"kind": "time-context"}}, surface=True),
     # 纯工具调用 assistant 消息：无 text part → 应被跳过
     assistant(40, 3000, "a2", [{"type": "tool-call", "name": "write"}]),
     assistant(50, 4000, "a3", [{"type": "text", "text": "回复二"}]),

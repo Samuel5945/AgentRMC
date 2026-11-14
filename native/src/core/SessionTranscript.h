@@ -12,6 +12,8 @@
 //   OpenSquilla：%APPDATA%/@opensquilla/<profile>/opensquilla/state/sessions.db
 //   DSH：~/.dsh/sessions/<slug>/session-<uuid>/session.v4.jsonl.zstd，多帧拼接，
 //        用 vendored libzstd（native/vendor/zstd）跨帧解压；标题取日志 session/title。
+//        用户消息只取 source.kind=="user"（DSH 把时间上下文/运行时快照/skill 目录等
+//        系统注入也记成 user/message，须滤掉，否则聊天页冒多余气泡）。
 // 只读、带帽（单页 ≤100 条、单条 8000 字、SQLite 全量缓存 ≤500 条），不写宿主库。
 // 进程内按库文件 mtime+size 缓存全量解析结果，翻页/轮询不重复解析。
 class SessionTranscript {

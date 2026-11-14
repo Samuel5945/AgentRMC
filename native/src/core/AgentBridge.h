@@ -78,6 +78,9 @@ public:
     // （插件注入成功 / 守卫拒绝的回执）。返回 false = dispatch_id 不认识。
     void setDispatchAckHandler(
         std::function<bool(const QJsonObject &)> handler);
+    // POST /requests 的处理器：DSH 插件推送某会话当前待答请求（B1 只读展示）
+    // {"exe","session_id","project","requests":[{kind,id,toolName?,reason?,questions?}]}。
+    void setRequestsHandler(std::function<void(const QJsonObject &)> handler);
 
 signals:
     // kind：/notify 透传 event 字段；/speak 固定为 "speak"。
@@ -114,4 +117,5 @@ private:
     std::function<QString()> healthProvider_;
     std::function<QString(const QString &exe)> dispatchPendingProvider_;
     std::function<bool(const QJsonObject &)> dispatchAckHandler_;
+    std::function<void(const QJsonObject &)> requestsHandler_;
 };

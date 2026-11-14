@@ -1,6 +1,7 @@
 # 对话能力升级：借鉴 Luma 的方案
 
-> 状态：**C 手机传文件已实现**（2026-11-14）；A/B 仍为设计。触发：用户给了
+> 状态：**C 手机传文件已实现；B1 待答请求只读展示已实现**（2026-11-14 真机验收）；
+> B2/B3 内联应答与 A OpenCode/Codex 接入仍为设计。触发：用户给了
 > [Luma](https://github.com/modao7067/luma)（安卓上跑 Codex/Claude Code/OpenCode/DSH
 > 等 CLI 的对话前端），要借鉴它的 OpenCode/Codex 接法、授权/选择项显示、文件传输，
 > 升级 AgentRMC 的对话能力。Luma 源码已浅克隆到 `out/luma-src`（GPL-3.0，
@@ -106,6 +107,15 @@ RequestQuestion(id, header, prompt, options[], multiple, secret,
 
 ### B. 聊天页内联授权/选择项（借鉴 §1.3 模型）
 
+- **B1 已实现（2026-11-14 真机验收通过）**：聊天页只读展示待答请求。
+  - 插件 `pendingRequests`（按会话攒）：`approval/asked`→`approval/decided`、
+    `ask_user_question` `tool/call` 解析 questions→`tool/result`/reply 清账；
+    变化经 `POST /requests {exe,session_id,project,requests}` 推原生。
+  - `AgentBridge::setRequestsHandler` 收账；`MainWindow::pendingRequests_`（内存账）；
+    `chatStateFor()` 带 `requests` 字段（桌面外壳 + 手机 `/m/transcript` 共用）。
+  - 聊天页（桌面+手机）在消息后渲染 `.reqcard`：🔐 授权（工具名+原因）、
+    ❓ 提问（问题+选项列表），提示「暂在 DSH 界面应答」。真机截图确认卡片显示。
+  - 桥测试增 /requests 204+payload 断言；插件测试 28/28、lanweb 81 全绿。
 - `SessionTranscript::Result` 增 `requests: [UserRequest]`（choices/questions），从宿主
   当前待答请求填（OpenCode 的 permission/form、DSH 的 approval/asked + ask_user_question）。
 - 聊天页渲染交互卡片：授权显示命令/路径 + 允许/拒绝/总是允许按钮；提问渲染选项
@@ -115,6 +125,30 @@ RequestQuestion(id, header, prompt, options[], multiple, secret,
 - 复用 RMC 已有的「待我处理」注意力队列做通知，聊天页做**就地应答**——提醒喊人、
   卡片点选，两条腿。`answering` 态防重复发送（照 Luma）。
 - 价值：手机上不用切回 PC 就能批授权/答提问，遥控闭环真正成立。
+
+#### B 的 DSH 应答 API（2026-11-14 解包核实，out/dsh-x/{uq-host,approval-host}.js）
+
+- **提问** `ctx.userQuestions`（`dsh-user-questions`）：
+  - `answer(agent, callId, {answers:[{id,selected,custom?}]})` 是公开 Remote 方法，
+    steer 一条 `source.kind="user-question-reply"` 用户消息进 agent。**但只认
+    `continued`（前台超时转待答）的提问**；前台提问走 `user-questions/request` waterfall。
+  - 待答提问在投影 `userQuestionProjectionHandle.stateOf(session).questions.active`
+    （state=open/continued）。
+- **授权** `ctx.approval`（`dsh-user-approval`）：`request(req)` 落 `approval/asked`
+  （id/toolName/callId/reason）→ `decide()` 跑 `approval/request` waterfall，应答者返回
+  `allowed-once / rejected / cancelled / unavailable`（仅 allowed-once 是放行）。
+- **核心难点（风险）**：前台提问与授权都走 **waterfall**，而 **DSH Web UI 本身就是
+  瀑布上的应答者**（一作答就不调 next()，排它后面的监听器永远轮不到——插件现有注释
+  已记载）。插件要内联应答须在瀑布注册应答者，并与 Web UI **竞争/共存**：
+  - 插件应答者排在 Web UI 前并 hold 请求 → RMC 独占应答，DSH GUI 不再弹（需取舍）；
+  - 或两边竞速（谁先答谁生效，另一边作废）——实现复杂，碰不好会**卡住 agent 授权**。
+- **分期建议（降风险）**：
+  1. **B1 只读展示**：聊天页先把待答请求（授权命令/提问选项）渲染出来（插件暴露
+     pending 请求经桥路由），应答仍回 DSH GUI——零风险，先让手机「看得见」。
+  2. **B2 提问内联答**：先接 `userQuestions.answer()`（continued 提问，公开接口安全），
+     再评估前台提问 waterfall。
+  3. **B3 授权内联答**：waterfall 应答者 + 与 Web UI 共存策略，需用户拍板独占/竞速。
+  - OpenCode 的 permission/form reply 是干净 HTTP，无 waterfall 竞争，接 A 后 B 最易。
 
 ### C. 手机→PC 会话传文件（借鉴 §1.4，跨设备版）
 

@@ -91,6 +91,11 @@ void AgentBridge::setDispatchAckHandler(
     dispatchAckHandler_ = std::move(handler);
 }
 
+void AgentBridge::setRequestsHandler(
+    std::function<void(const QJsonObject &)> handler) {
+    requestsHandler_ = std::move(handler);
+}
+
 void AgentBridge::onConnected() {
     while (server_->hasPendingConnections()) {
         auto *socket = server_->nextPendingConnection();
@@ -179,8 +184,9 @@ void AgentBridge::onReadable(QTcpSocket *socket) {
     const bool isUpdate = requestLine.startsWith("POST /work-items/update ");
     const bool isCommand = requestLine.startsWith("POST /command ");
     const bool isDispatchAck = requestLine.startsWith("POST /dispatch/ack ");
+    const bool isRequests = requestLine.startsWith("POST /requests ");
     if (!isNotify && !isSpeak && !isAck && !isUpdate && !isCommand &&
-        !isDispatchAck) {
+        !isDispatchAck && !isRequests) {
         finish(socket, "404 Not Found");
         return;
     }
@@ -216,6 +222,15 @@ void AgentBridge::onReadable(QTcpSocket *socket) {
             !dispatchId.isEmpty() && dispatchAckHandler_ &&
             dispatchAckHandler_(obj);
         finish(socket, handled ? "204 No Content" : "404 Not Found");
+        return;
+    }
+    if (isRequests) {
+        // DSH 插件推送某会话当前待答请求（B1 只读展示）。无 handler 也回 204，
+        // 别让插件以为失败反复重试。
+        if (requestsHandler_) {
+            requestsHandler_(obj);
+        }
+        finish(socket, "204 No Content");
         return;
     }
     if (isAck) {

@@ -1002,6 +1002,22 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
                 payload.value(QStringLiteral("ok")).toBool(),
                 payload.value(QStringLiteral("error")).toString());
         });
+        // B1：DSH 插件推送会话当前待答请求，存内存账供聊天页只读展示。
+        // 聊天页轮询/刷新时经 chatStateFor 带上，无需主动推。
+        bridge->setRequestsHandler([this](const QJsonObject &payload) {
+            const QString sid =
+                payload.value(QStringLiteral("session_id")).toString();
+            if (sid.isEmpty()) {
+                return;
+            }
+            const QJsonArray reqs =
+                payload.value(QStringLiteral("requests")).toArray();
+            if (reqs.isEmpty()) {
+                pendingRequests_.remove(sid);
+            } else {
+                pendingRequests_.insert(sid, reqs);
+            }
+        });
         connect(bridge, &AgentBridge::notify, this,
                 [this](const QString &kind, const QString &title,
                        const QString &message, const QString &raise,
@@ -3269,6 +3285,9 @@ QJsonObject MainWindow::chatStateFor(const QString &id, int offset, int limit) {
         {QStringLiteral("total"), r.total},
         {QStringLiteral("hasMore"), r.hasMore},
         {QStringLiteral("offset"), offset},
+        // B1：该会话当前待答请求（DSH 插件推送），聊天页只读渲染。
+        {QStringLiteral("requests"),
+         pendingRequests_.value(item->sessionId)},
     };
 }
 

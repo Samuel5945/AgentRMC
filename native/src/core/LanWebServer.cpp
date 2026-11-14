@@ -839,6 +839,15 @@ QString LanWebServer::mobileHtml() const {
  .bub .who{display:block;font-weight:600;font-size:11px;color:var(--muted);
    margin-bottom:2px}
  .bub .bt{display:block;font-size:11px;color:var(--muted2);margin-top:4px}
+ .reqcard{flex:0 0 auto;align-self:stretch;margin:6px 0;padding:10px 12px;
+   border-radius:12px;background:var(--w8);border:1px solid var(--a64)}
+ .reqhead{font-weight:600;font-size:13px;color:var(--text);margin-bottom:4px}
+ .reqreason{font-size:12px;color:var(--text-soft);white-space:pre-wrap;
+   word-break:break-word;margin-bottom:4px}
+ .reqq{margin:4px 0}
+ .reqqt{font-size:13px;color:var(--text);white-space:pre-wrap;word-break:break-word}
+ .reqopt{font-size:12px;color:var(--text-soft);padding:1px 0 1px 8px}
+ .reqhint{font-size:11px;color:var(--muted2);margin-top:6px}
  .chatload{align-self:center;font-size:12px;color:var(--muted2);padding:4px;
    flex:0 0 auto}
  .chatempty{flex:1;display:flex;align-items:center;justify-content:center;
@@ -1120,6 +1129,30 @@ function bubble(m){
   t.textContent=hhmm(m.at);d.append(t);}
  return d;
 }
+// B1：待答请求只读卡片（授权/提问）。内联应答是 B2/B3，这里先展示。
+function requestCard(req){
+ const d=document.createElement('div');d.className='reqcard';
+ const head=document.createElement('div');head.className='reqhead';
+ if(req.kind==='approval'){
+  head.textContent='🔐 等你授权'+(req.toolName?'：'+req.toolName:'');
+  d.append(head);
+  if(req.reason){const r=document.createElement('div');r.className='reqreason';
+   r.textContent=req.reason;d.append(r);}
+ }else{
+  head.textContent='❓ 等你选方案';d.append(head);
+  (req.questions||[]).forEach(q=>{
+   const qd=document.createElement('div');qd.className='reqq';
+   const qt=document.createElement('div');qt.className='reqqt';
+   qt.textContent=q.question||q.header||'';qd.append(qt);
+   (q.options||[]).forEach(o=>{const od=document.createElement('div');
+    od.className='reqopt';od.textContent='· '+o.label;qd.append(od);});
+   d.append(qd);
+  });
+ }
+ const hint=document.createElement('div');hint.className='reqhint';
+ hint.textContent='暂在 DSH 界面应答（内联应答开发中）';d.append(hint);
+ return d;
+}
 function maybeAutoLoad(){
  const list=$('chatList');
  if(chatHasMore&&!chatLoading&&chatId&&
@@ -1144,6 +1177,7 @@ function paintChat(mode,prevH,prevTop){
   list.append(e);
  }
  chatMsgs.forEach(m=>list.append(bubble(m)));
+ (chatMeta.requests||[]).forEach(req=>list.append(requestCard(req)));
  if(mode==='init'){
   list.scrollTop=list.scrollHeight;chatAtBottom=true;$('chatNew').hidden=true;
   // 刚解除隐藏的元素布局可能下一帧才落定：双 rAF 兜底再定位。

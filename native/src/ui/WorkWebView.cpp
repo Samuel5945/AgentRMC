@@ -1333,8 +1333,20 @@ function renderLan(l){
   $('lanBody').hidden=!l.enabled;
   if(!l.enabled) return;
   const urls=l.urls||[];
-  $('lanUrls').textContent=urls.length?('手机浏览器打开：'+urls.join('  ·  '))
-    :'找不到局域网 IPv4 地址（检查网卡）';
+  const lu=$('lanUrls');lu.replaceChildren();
+  if(!urls.length){lu.textContent='找不到局域网 IPv4 地址（检查网卡）';}
+  else{
+    // 多网卡都列出来让人挑；192.168（家用 WiFi）标「推荐」，手机一般用这个。
+    lu.append('手机浏览器打开：');
+    urls.forEach((u,i)=>{
+      if(i)lu.append('  ·  ');
+      const s=document.createElement('span');s.textContent=u;
+      if(u.indexOf('://192.168.')>=0){s.style.color='var(--ok)';
+        const b=document.createElement('span');b.textContent='（推荐）';
+        b.style.color='var(--ok)';lu.append(s,b);}
+      else{lu.append(s);}
+    });
+  }
   const p=l.pairing||{};
   $('lanPairBtn').textContent=p.active?'收起二维码':'显示配对二维码';
   $('lanPairBtn').onclick=()=>postObj({cmd:p.active?'lanPairEnd':'lanPair'});
@@ -1348,12 +1360,14 @@ function renderLan(l){
       $('lanQr').dataset.sig=sig;
       try{
         const qr=qrcode(0,'M');
-        qr.addData(urls[0]+'#pair='+p.code);
+        // 配对词是中文：fragment 用 percent 编码成纯 ASCII，二维码不必处理 UTF-8，
+        // 手机页 decodeURIComponent 还原（hex 回退码也兼容）。
+        qr.addData(urls[0]+'#pair='+encodeURIComponent(p.code));
         qr.make();
         $('lanQr').innerHTML=qr.createSvgTag(4,8);
       }catch(e){$('lanQr').textContent='二维码生成失败：'+e;}
     }
-    $('lanCode').textContent='配对码 '+p.code+'（扫不了可在手机页手动输入）';
+    $('lanCode').textContent='配对词 '+p.code+'（扫不了可在手机页手动输入）';
   }else{
     wrap.hidden=true;$('lanQr').dataset.sig='';
   }

@@ -9,6 +9,7 @@
 #include <QJsonDocument>
 #include <QNetworkInterface>
 #include <QRandomGenerator>
+#include <QRegularExpression>
 #include <QTcpServer>
 #include <QTcpSocket>
 #include <QTimer>
@@ -31,6 +32,49 @@ QByteArray randomBytes(int n) {
         out[i] = char(rng->bounded(256));
     }
     return out;
+}
+
+// 配对助记词表：2048 个常用双字词（qrc，rc_probe/gen_pair_wordlist.py 生成）。
+// 2048=2^11，12 词≈132-bit 熵。读一次缓存；读不到回退空表（生成退回 hex）。
+const QStringList &pairWordList() {
+    static QStringList words = [] {
+        QFile f(QStringLiteral(":/pair_words_zh.txt"));
+        QStringList list;
+        if (f.open(QIODevice::ReadOnly | QIODevice::Text)) {
+            const QStringList lines =
+                QString::fromUtf8(f.readAll()).split(QLatin1Char('\n'));
+            for (const QString &line : lines) {
+                const QString w = line.trimmed();
+                if (!w.isEmpty()) {
+                    list << w;
+                }
+            }
+        }
+        return list;
+    }();
+    return words;
+}
+
+// 12 个随机词，空格分隔；词表缺失时退回 32 位 hex（配对绝不能因词表坏掉）。
+QString makePairCode() {
+    const QStringList &words = pairWordList();
+    if (words.size() < 2048) {
+        return QString::fromLatin1(randomBytes(16).toHex());
+    }
+    auto *rng = QRandomGenerator::system();
+    QStringList picked;
+    for (int i = 0; i < 12; ++i) {
+        picked << words.at(rng->bounded(2048));
+    }
+    return picked.join(QLatin1Char(' '));
+}
+
+// 配对码归一化：去掉所有空白、转小写。汉字无大小写、词间空格可有可无
+// （手机上可能连着打「中国国家…」），hex 回退码也兼容。不降低熵：词序仍须一致。
+QString normalizePairCode(const QString &raw) {
+    QString s = raw;
+    s.remove(QRegularExpression(QStringLiteral("\\s+")));
+    return s.toLower();
 }
 
 // 令牌/配对码比较：长度不是秘密（都是定长 hex），内容逐字节累积异或，
@@ -152,7 +196,7 @@ void LanWebServer::setDevices(const QJsonArray &devices) {
 }
 
 QString LanWebServer::beginPairing() {
-    pairingCode_ = QString::fromLatin1(randomBytes(16).toHex());
+    pairingCode_ = makePairCode();
     pairingExpires_ = QDateTime::currentDateTimeUtc().addMSecs(pairingTtlMs_);
     return pairingCode_;
 }
@@ -485,9 +529,10 @@ void LanWebServer::routePair(QTcpSocket *socket,
     }
     const QJsonObject obj = QJsonDocument::fromJson(body).object();
     const QString code =
-        obj.value(QStringLiteral("code")).toString().trimmed().toLower();
+        normalizePairCode(obj.value(QStringLiteral("code")).toString());
     const bool ok = !pairingCode_.isEmpty() && now < pairingExpires_ &&
-                    constantTimeEqual(code.toUtf8(), pairingCode_.toUtf8());
+                    constantTimeEqual(code.toUtf8(),
+                                      normalizePairCode(pairingCode_).toUtf8());
     if (!ok) {
         ++fail.count;
         if (fail.count >= kPairFailLimit) {
@@ -788,9 +833,9 @@ QString LanWebServer::mobileHtml() const {
  <div class="pbox">
   <div class="plogo">A</div>
   <h2>配对这台手机</h2>
-  <p>在电脑上打开 AgentRMC → 系统 → 手机访问，扫二维码；扫不了就输入配对码。配对码 10 分钟内有效。</p>
+  <p>在电脑上打开 AgentRMC → 系统 → 手机访问，扫二维码；扫不了就输入 12 个配对词（空格隔开，连着打也行）。10 分钟内有效。</p>
   <input id="pairName" placeholder="设备名字" maxlength="40">
-  <input id="pairCode" placeholder="配对码" autocomplete="off" autocapitalize="off" spellcheck="false">
+  <input id="pairCode" placeholder="12 个配对词" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
   <button id="pairBtn" class="btn primary">配对</button>
   <div id="pairErr"></div>
  </div>
@@ -1227,8 +1272,9 @@ document.querySelectorAll('#tabbar .tab').forEach(b=>{
 });
 (function(){
  $('pairName').value=autoName();
- const m=location.hash.match(/pair=([0-9a-fA-F]+)/);
- if(m){$('pairCode').value=m[1];doPair(m[1]);}
+ const m=location.hash.match(/pair=([^&]+)/);
+ if(m){let c=m[1];try{c=decodeURIComponent(c);}catch(e){}
+  $('pairCode').value=c;doPair(c);}
  else{startPoll();}
 })();
 </script></body></html>)HTML");

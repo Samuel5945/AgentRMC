@@ -339,6 +339,7 @@ add_executable(AgentRMCLanWebTest
     src/core/LanWebServer.h
     src/core/AgentBridge.cpp
     src/core/AgentBridge.h
+    resources/app.qrc
 )
 target_include_directories(AgentRMCLanWebTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(AgentRMCLanWebTest PRIVATE Qt6::Core Qt6::Network)

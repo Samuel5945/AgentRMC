@@ -76,10 +76,20 @@ app-server / DSH followup / OpenSquilla RPC）全部现成。
 ### 4.2 配对与鉴权
 
 - **配对码**：系统页「手机访问」卡片里按需生成（按钮「显示配对二维码」），
-  128-bit 随机，**10 分钟有效**，窗口内可配对多台设备，过期自动作废。
+  **10 分钟有效**，窗口内可配对多台设备，过期自动作废。
   二维码在桌面外壳页内用一段内嵌 JS QR 编码画（系统页本来就是 HTML，
   不引 C++ 依赖），内容 `http://<LAN-IP>:45916/m/#pair=<码>`——
   放 fragment，不进服务端日志与 Referer。
+  - **中文助记词（2026-11-14 用户拍板，取代 32 位 hex）**：12 个常用双字词
+    （如「中国 国家 发展 工作…」），词表 2048 词（2^11）由
+    `rc_probe/gen_pair_wordlist.py` 从 jieba 词典按词频取前 2048、滤纯虚词，
+    入库 `native/resources/pair_words_zh.txt`（qrc）。12 词≈132-bit 熵≥128-bit。
+    词表读不到回退 hex（配对绝不因词表坏掉）。服务端比对**去全部空白+小写**
+    归一化（手机连着打「中国国家…」也行）；二维码 fragment 用
+    `encodeURIComponent` 编成纯 ASCII（QR 不必处理 UTF-8），手机页
+    `decodeURIComponent` 还原。`lanweb_test` 增 12 词/去空格归一化断言。
+  - **推荐地址（2026-11-14）**：多网卡候选都列出，192.168（家用 WiFi）段标绿
+    「推荐」，手机一眼知道用哪个；二维码仍取首个（192.168 优先）。
 - **换设备令牌**：手机页 JS 拿 fragment 里的码 POST `/m/pair` → 服务端生成
   该设备的随机令牌，存**哈希**（`store_` 配置，含设备名/配对时间/最后可见），
   回 `Set-Cookie: armc_dev=<令牌>; HttpOnly; SameSite=Strict; Path=/m`，

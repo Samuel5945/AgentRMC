@@ -278,6 +278,36 @@ int main(int argc, char **argv) {
                 },
                 next);
     });
+    // 9b. 助记词格式 + 空格归一化：12 个词；手机连着打（去空格）也能配对。
+    seq.add([&](std::function<void()> next) {
+        const QString code = lan.beginPairing();
+        const QStringList words = code.split(QLatin1Char(' '));
+        check(words.size() == 12, "pair code is 12 words", code.toUtf8());
+        QString noSpace = code;
+        noSpace.remove(QLatin1Char(' '));
+        const QByteArray body =
+            QByteArray("{\"code\":\"") + noSpace.toUtf8() + "\"}";
+        request(app, port, post("/m/pair", body, csrf()),
+                [](const QByteArray &resp) {
+                    check(resp.startsWith("HTTP/1.1 200"),
+                          "pair no-space normalized 200", resp);
+                },
+                next);
+    });
+    // 9c. 推荐地址排序：192.168 段（若有）必须排在其它网卡前面。
+    {
+        const QStringList urls = LanWebServer::lanUrls(45916);
+        int first192 = -1, firstOther = -1;
+        for (int i = 0; i < urls.size(); ++i) {
+            if (urls.at(i).contains(QStringLiteral("://192.168."))) {
+                if (first192 < 0) first192 = i;
+            } else if (firstOther < 0) {
+                firstOther = i;
+            }
+        }
+        check(first192 < 0 || firstOther < 0 || first192 < firstOther,
+              "192.168 recommended url first");
+    }
     // 10. cookie 鉴权读状态。
     seq.add([&](std::function<void()> next) {
         request(app, port, get("/m/state", cookieHeader(token)),

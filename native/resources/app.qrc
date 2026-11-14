@@ -2,6 +2,7 @@
     <qresource prefix="/">
         <file>style.qss</file>
         <file>qrcode.js</file>
+        <file>pair_words_zh.txt</file>
         <file>icons/check.svg</file>
         <file>icons/chevron-down.svg</file>
         <file>icons/chevron-right.svg</file>

@@ -3151,6 +3151,10 @@ void MainWindow::ensureLanServer() {
     lan_->setTranscriptProvider([this](const QString &id, int offset, int limit) {
         return lanTranscript(id, offset, limit);
     });
+    lan_->setUploadHandler([this](const QString &id, const QString &filename,
+                                  const QByteArray &data) {
+        return lanUpload(id, filename, data);
+    });
     lan_->setThemeRoot(ThemeManager::themesRoot());
     // 白名单已在服务端验过；这里与桌面外壳走同一个 handleWebAction，
     // 做完它内部统一 refresh，桌面外壳自动跟着刷新，双端一致免费。
@@ -3286,6 +3290,80 @@ QString MainWindow::lanTranscript(const QString &id, int offset, int limit) {
         return QString();  // 待办不存在 → 服务端回 404
     }
     return QString::fromUtf8(QJsonDocument(chat).toJson(QJsonDocument::Compact));
+}
+
+QJsonObject MainWindow::lanUpload(const QString &id, const QString &filename,
+                                  const QByteArray &data) {
+    const auto fail = [](int code, const QString &why) {
+        return QJsonObject{{QStringLiteral("ok"), false},
+                           {QStringLiteral("code"), code},
+                           {QStringLiteral("error"), why}};
+    };
+    if (workItems_ == nullptr || id.isEmpty()) {
+        return fail(404, QStringLiteral("待办不存在"));
+    }
+    const WorkItem *item = nullptr;
+    for (const WorkItem &it : workItems_->items()) {
+        if (it.id == id) {
+            item = &it;
+            break;
+        }
+    }
+    if (item == nullptr) {
+        return fail(404, QStringLiteral("待办不存在"));
+    }
+    if (data.isEmpty()) {
+        return fail(400, QStringLiteral("空文件"));
+    }
+    // 文件名 sanitize：只取 basename，去路径分隔符/控制字符，限长保扩展名。
+    // 服务端不信任客户端文件名，杜绝 ../ 穿越。
+    QString name = filename;
+    name.replace(QLatin1Char('\\'), QLatin1Char('/'));
+    const int slash = name.lastIndexOf(QLatin1Char('/'));
+    if (slash >= 0) {
+        name = name.mid(slash + 1);
+    }
+    name.remove(QRegularExpression(QStringLiteral("[\\x00-\\x1f]")));
+    name = name.trimmed();
+    if (name.isEmpty() || name == QLatin1String(".") || name == QLatin1String("..")) {
+        name = QStringLiteral("file");
+    }
+    if (name.size() > 120) {
+        name = name.right(120);
+    }
+    // 落盘：会话工作目录下 .agentrmc/inbox/<session>/（agent 天然可达）；
+    // 无项目退统一 uploads 目录。时间戳前缀防重名。
+    const QString sessionKey =
+        item->sessionId.isEmpty() ? item->id : item->sessionId;
+    QString dir;
+    if (!item->project.isEmpty()) {
+        dir = item->project + QStringLiteral("/.agentrmc/inbox/") + sessionKey;
+    } else {
+        dir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) +
+              QStringLiteral("/uploads/") + sessionKey;
+    }
+    const QString stamp = QDateTime::currentDateTimeUtc().toString(
+        QStringLiteral("yyyyMMdd-HHmmss-zzz"));
+    const QString path = dir + QLatin1Char('/') + stamp + QLatin1Char('-') + name;
+    if (!QDir().mkpath(dir)) {
+        return fail(400, QStringLiteral("无法创建上传目录"));
+    }
+    QFile f(path);
+    if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        return fail(400, QStringLiteral("无法写入文件"));
+    }
+    if (f.write(data) != data.size()) {
+        f.close();
+        return fail(400, QStringLiteral("写入不完整"));
+    }
+    f.close();
+    const QString abs = QFileInfo(path).absoluteFilePath();
+    appendEvent(QStringLiteral("status"), QString(), QString(),
+                QString::fromUtf8("手机上传文件：%1").arg(name), 0);
+    return QJsonObject{{QStringLiteral("ok"), true},
+                       {QStringLiteral("code"), 200},
+                       {QStringLiteral("path"), abs},
+                       {QStringLiteral("name"), name}};
 }
 
 // 页面上的按钮/双击回到这里：全部转给既有实现，不在页面里另起一套状态机。

@@ -108,10 +108,10 @@ if scan("收起二维码"):
 activate("显示配对二维码")
 time.sleep(0.8)
 code = ""
-for el in scan("配对码 "):
-    m = re.search(r"[0-9a-f]{32}", el.CurrentName or "")
+for el in scan("配对词 "):
+    m = re.search(r"配对词 (.+?)（", el.CurrentName or "")
     if m:
-        code = m.group(0)
+        code = m.group(1).strip()
         break
 urls = []
 for el in scan("手机浏览器打开"):

@@ -649,7 +649,7 @@ QString WorkWebView::htmlFor(const QString &stateJson) const {
  .lanhead{display:flex;align-items:center;gap:8px}
  .lanrow{display:flex;align-items:center;gap:8px;margin-top:6px;flex-wrap:wrap}
  #lanQrWrap{display:flex;align-items:center;gap:12px;margin-top:8px}
- #lanQr svg{display:block;border-radius:8px}
+ #lanQr svg{display:block;width:200px;height:200px;border-radius:8px}
  #lanDevices{margin-top:6px}
  .landev{display:flex;align-items:center;gap:8px;padding:3px 0;font-size:var(--f11)}
  .landev .dn{color:var(--text)}

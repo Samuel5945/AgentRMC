@@ -104,6 +104,10 @@ private:
     QJsonObject chatState();
     QJsonObject chatStateFor(const QString &id, int offset = 0, int limit = 50);
     QString lanTranscript(const QString &id, int offset = 0, int limit = 50);
+    // 手机传文件落盘：按待办 id 找到会话工作目录，存进 .agentrmc/inbox/<session>/，
+    // 返回 PC 绝对路径供派发文本引用（agent 按路径读）。
+    QJsonObject lanUpload(const QString &id, const QString &filename,
+                          const QByteArray &data);
     // 系统页「手机访问」卡片的状态：开关/监听/URL/配对/设备（配对码只给桌面）。
     QJsonObject lanState();
     // 懒创建 LAN 服务并接好 provider/持久化；开关与恢复启动都走这里。

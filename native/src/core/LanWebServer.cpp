@@ -19,6 +19,8 @@ namespace {
 
 constexpr int kMaxHeaderBytes = 16 * 1024;
 constexpr int kMaxBodyBytes = 64 * 1024;
+// 手机传文件单独放宽（图片/文档）；局域网传输，25MB 足够且能在 stale 超时内收完。
+constexpr qint64 kMaxUploadBytes = 25 * 1024 * 1024;
 constexpr int kStaleMs = 10000;
 constexpr int kPairFailLimit = 5;
 constexpr qint64 kPairLockMs = 15 * 60 * 1000;
@@ -55,7 +57,9 @@ const QStringList &pairWordList() {
     return words;
 }
 
-// 12 个随机词，空格分隔；词表缺失时退回 32 位 hex（配对绝不能因词表坏掉）。
+// 6 个随机词，空格分隔；词表缺失时退回 32 位 hex（配对绝不能因词表坏掉）。
+// 6 词×11bit=66bit，配合「每 IP 5 次失败锁 15 分钟 + 10 分钟时效」的在线防爆破，
+// 局域网配对足够安全；用户裁决 6 词（12 词太长，2026-11-14）。
 QString makePairCode() {
     const QStringList &words = pairWordList();
     if (words.size() < 2048) {
@@ -63,7 +67,7 @@ QString makePairCode() {
     }
     auto *rng = QRandomGenerator::system();
     QStringList picked;
-    for (int i = 0; i < 12; ++i) {
+    for (int i = 0; i < 6; ++i) {
         picked << words.at(rng->bounded(2048));
     }
     return picked.join(QLatin1Char(' '));
@@ -189,6 +193,12 @@ void LanWebServer::setActionHandler(
 
 void LanWebServer::setThemeRoot(const QString &root) {
     themeRoot_ = root;
+}
+
+void LanWebServer::setUploadHandler(
+    std::function<QJsonObject(const QString &, const QString &, const QByteArray &)>
+        handler) {
+    uploadHandler_ = std::move(handler);
 }
 
 void LanWebServer::setDevices(const QJsonArray &devices) {
@@ -362,7 +372,10 @@ void LanWebServer::onReadable(QTcpSocket *socket) {
             finish(socket, "400 Bad Request");
             return;
         }
-        if (contentLength > kMaxBodyBytes) {
+        // 上传路由单独放宽到 25MB；其余路由仍 64KB。
+        const qint64 bodyLimit =
+            (path == "/m/upload") ? kMaxUploadBytes : kMaxBodyBytes;
+        if (contentLength > bodyLimit) {
             // 排干再回 413（见 drain_ 注释）。声称超过 1MB 的 body 不陪跑：
             // 直接断开，这种客户端不是浏览器就是攻击。
             constexpr qint64 kDrainCap = 1024 * 1024;
@@ -495,6 +508,42 @@ void LanWebServer::route(QTcpSocket *socket, const QByteArray &method,
         const char *status = code == 200   ? "200 OK"
                              : code == 403 ? "403 Forbidden"
                              : code == 409 ? "409 Conflict"
+                                           : "400 Bad Request";
+        finish(socket, status,
+               QJsonDocument(result).toJson(QJsonDocument::Compact),
+               "application/json");
+        return;
+    }
+    if (path == "/m/upload" && method == "POST") {
+        if (!hasCsrfHeader(headerLines)) {
+            finish(socket, "403 Forbidden");
+            return;
+        }
+        if (authDevice(headerLines) < 0) {
+            finish(socket, "401 Unauthorized");
+            return;
+        }
+        // id=待办 id（query）；文件名走 X-AgentRMC-Filename 头（percent 编码，
+        // 兼容中文）。body 是文件原始字节。落盘与路径解析在主窗 uploadHandler。
+        QString id;
+        const QList<QByteArray> pairs = query.split('&');
+        for (const QByteArray &pair : pairs) {
+            const int eq = pair.indexOf('=');
+            if (eq > 0 && pair.left(eq) == "id") {
+                id = QUrl::fromPercentEncoding(pair.mid(eq + 1));
+            }
+        }
+        const QString filename = QUrl::fromPercentEncoding(
+            headerValue(headerLines, "x-agentrmc-filename"));
+        const QJsonObject result =
+            uploadHandler_
+                ? uploadHandler_(id, filename, body)
+                : QJsonObject{{QStringLiteral("ok"), false},
+                              {QStringLiteral("code"), 400}};
+        const int code = result.value(QStringLiteral("code")).toInt(400);
+        const char *status = code == 200   ? "200 OK"
+                             : code == 404 ? "404 Not Found"
+                             : code == 413 ? "413 Payload Too Large"
                                            : "400 Bad Request";
         finish(socket, status,
                QJsonDocument(result).toJson(QJsonDocument::Compact),
@@ -833,9 +882,9 @@ QString LanWebServer::mobileHtml() const {
  <div class="pbox">
   <div class="plogo">A</div>
   <h2>配对这台手机</h2>
-  <p>在电脑上打开 AgentRMC → 系统 → 手机访问，扫二维码；扫不了就输入 12 个配对词（空格隔开，连着打也行）。10 分钟内有效。</p>
+  <p>在电脑上打开 AgentRMC → 系统 → 手机访问，扫二维码；扫不了就输入 6 个配对词（空格隔开，连着打也行）。10 分钟内有效。</p>
   <input id="pairName" placeholder="设备名字" maxlength="40">
-  <input id="pairCode" placeholder="12 个配对词" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
+  <input id="pairCode" placeholder="6 个配对词" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
   <button id="pairBtn" class="btn primary">配对</button>
   <div id="pairErr"></div>
  </div>
@@ -869,7 +918,9 @@ QString LanWebServer::mobileHtml() const {
    </div>
    <div class="chatfoot">
     <input id="chatText" type="text" placeholder="派回这条会话…" enterkeyhint="send">
-    <button class="btn primary" id="chatSend">发送</button>
+    <input id="chatFile" type="file" hidden>
+     <button class="btn" id="chatAttach" title="传文件">📎</button>
+     <button class="btn primary" id="chatSend">发送</button>
    </div>
    <div class="notice" id="chatNotice" hidden></div>
   </div>
@@ -1175,6 +1226,26 @@ function sendChat(){
 }
 $('chatBack').onclick=closeChat;
 $('chatSend').onclick=sendChat;
+$('chatAttach').onclick=()=>$('chatFile').click();
+$('chatFile').onchange=async()=>{
+ const f=$('chatFile').files[0];$('chatFile').value='';
+ if(!f||!chatId)return;
+ const note=$('chatNotice');note.hidden=false;
+ if(f.size>25*1024*1024){note.textContent='文件超过 25MB，传不了';return;}
+ note.textContent='上传中… '+f.name;
+ try{
+  const r=await fetch('/m/upload?id='+encodeURIComponent(chatId),{method:'POST',
+   headers:{'X-Requested-With':'fetch','X-AgentRMC-Filename':encodeURIComponent(f.name),'Content-Type':'application/octet-stream'},
+   body:f});
+  const j=await r.json();
+  if(r.ok&&j.path){
+   const cur=$('chatText').value;
+   $('chatText').value=(cur?cur+'\n':'')+'请查看文件：'+j.path;
+   note.textContent='已上传 '+j.name+'，路径已填入输入框，点发送让 agent 读取';
+   $('chatText').focus();
+  }else{note.textContent='上传失败：'+(j.error||('HTTP '+r.status));}
+ }catch(e){note.textContent='上传失败：连不上电脑';}
+};
 $('chatText').addEventListener('keydown',e=>{
  if(e.key==='Enter'){e.preventDefault();sendChat();}});
 $('chatNew').onclick=()=>{const l=$('chatList');l.scrollTop=l.scrollHeight;

@@ -50,6 +50,11 @@ public:
     // 返回空串＝待办不存在，服务端回 404。
     void setTranscriptProvider(
         std::function<QString(const QString &id, int offset, int limit)> provider);
+    // POST /m/upload?id=<待办id> 的落盘处理器：把手机传来的文件存进该会话的
+    // inbox，返回 {ok, path, code}（path 为 PC 绝对路径，供派发文本引用）。
+    void setUploadHandler(
+        std::function<QJsonObject(const QString &id, const QString &filename,
+                                  const QByteArray &data)> handler);
     // POST /m/action 的处理器（白名单已在服务端验过）：
     // 返回 {"ok":bool,"code":200|400|403|409}，code 直接当 HTTP 状态。
     void setActionHandler(
@@ -105,6 +110,8 @@ private:
     QHash<QTcpSocket *, qint64> drain_;
     std::function<QString()> stateProvider_;
     std::function<QString(const QString &, int, int)> transcriptProvider_;
+    std::function<QJsonObject(const QString &, const QString &, const QByteArray &)>
+        uploadHandler_;
     std::function<QJsonObject(const QJsonObject &)> actionHandler_;
     QString themeRoot_;
     QJsonArray devices_;  // {id,name,tokenHash,pairedAt,lastSeen}

@@ -148,6 +148,22 @@ int main(int argc, char **argv) {
         }
         return QString();  // 未知待办 → 404
     });
+    QString upId, upName;
+    QByteArray upData;
+    lan.setUploadHandler([&](const QString &id, const QString &filename,
+                             const QByteArray &data) {
+        upId = id;
+        upName = filename;
+        upData = data;
+        if (id != QStringLiteral("item-1")) {
+            return QJsonObject{{QStringLiteral("ok"), false},
+                               {QStringLiteral("code"), 404}};
+        }
+        return QJsonObject{{QStringLiteral("ok"), true},
+                           {QStringLiteral("code"), 200},
+                           {QStringLiteral("path"),
+                            QStringLiteral("/inbox/") + filename}};
+    });
     QJsonArray persisted;
     int persistCalls = 0;
     QObject::connect(&lan, &LanWebServer::devicesChanged,
@@ -282,7 +298,7 @@ int main(int argc, char **argv) {
     seq.add([&](std::function<void()> next) {
         const QString code = lan.beginPairing();
         const QStringList words = code.split(QLatin1Char(' '));
-        check(words.size() == 12, "pair code is 12 words", code.toUtf8());
+        check(words.size() == 6, "pair code is 6 words", code.toUtf8());
         QString noSpace = code;
         noSpace.remove(QLatin1Char(' '));
         const QByteArray body =
@@ -308,6 +324,64 @@ int main(int argc, char **argv) {
         check(first192 < 0 || firstOther < 0 || first192 < firstOther,
               "192.168 recommended url first");
     }
+    // 9d. 上传：无令牌 → 401。
+    seq.add(ask(post("/m/upload?id=item-1", "FILEBYTES",
+                     csrf() + "X-AgentRMC-Filename: a.png\r\n"),
+                [](const QByteArray &resp) {
+                    check(resp.startsWith("HTTP/1.1 401"), "upload no token 401",
+                          resp);
+                }));
+    // 9e. 上传：有令牌但无 CSRF → 403。
+    seq.add([&](std::function<void()> next) {
+        request(app, port,
+                post("/m/upload?id=item-1", "FILEBYTES",
+                     cookieHeader(token) + "X-AgentRMC-Filename: a.png\r\n"),
+                [](const QByteArray &resp) {
+                    check(resp.startsWith("HTTP/1.1 403"), "upload no csrf 403",
+                          resp);
+                },
+                next);
+    });
+    // 9f. 上传：令牌+CSRF+有效待办 → 200；id/文件名（percent 解码）/字节都到位。
+    seq.add([&](std::function<void()> next) {
+        request(app, port,
+                post("/m/upload?id=item-1", "FILEBYTES",
+                     cookieHeader(token) + csrf() +
+                         "X-AgentRMC-Filename: %E5%9B%BE%E7%89%87.png\r\n"),
+                [&](const QByteArray &resp) {
+                    check(resp.startsWith("HTTP/1.1 200"), "upload 200", resp);
+                    check(upId == QStringLiteral("item-1"), "upload id passed");
+                    check(upName == QString::fromUtf8("图片.png"),
+                          "upload filename percent-decoded");
+                    check(upData == QByteArray("FILEBYTES"), "upload bytes passed");
+                    check(resp.contains("/inbox/"), "upload path returned", resp);
+                },
+                next);
+    });
+    // 9g. 上传：未知待办 → 404。
+    seq.add([&](std::function<void()> next) {
+        request(app, port,
+                post("/m/upload?id=nope", "X",
+                     cookieHeader(token) + csrf() + "X-AgentRMC-Filename: a.png\r\n"),
+                [](const QByteArray &resp) {
+                    check(resp.startsWith("HTTP/1.1 404"), "upload unknown id 404",
+                          resp);
+                },
+                next);
+    });
+    // 9h. 上传：100KB body（超普通路由 64KB 上限）→ 200，证明上传走放宽的限。
+    seq.add([&](std::function<void()> next) {
+        const QByteArray big(100 * 1024, 'x');
+        request(app, port,
+                post("/m/upload?id=item-1", big,
+                     cookieHeader(token) + csrf() + "X-AgentRMC-Filename: big.bin\r\n"),
+                [&](const QByteArray &resp) {
+                    check(resp.startsWith("HTTP/1.1 200"),
+                          "upload 100KB over 64KB limit ok", resp);
+                    check(upData.size() == 100 * 1024, "upload 100KB bytes intact");
+                },
+                next);
+    });
     // 10. cookie 鉴权读状态。
     seq.add([&](std::function<void()> next) {
         request(app, port, get("/m/state", cookieHeader(token)),

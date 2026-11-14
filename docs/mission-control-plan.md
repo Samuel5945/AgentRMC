@@ -353,6 +353,21 @@ Task/WorkItem 的**会话归属**与**可验证投递**，这两块得自己补�
   包装对象），传错了守卫静默跳过、轮询器根本不注册。
 - 离线 resume 未接：`resolveAgent` 对离线会话会从盘上 resume，但 composition/
   presets 那套在插件里复制不划算——V1 只派活会话，不在活表就拒绝（裁决 6）。
+- **会话记录补待办身份（2026-11-14）**：会话正文虽是 zstd 多帧 native 不读，
+  但宿主同时把每个会话的投影写在
+  `~/.dsh/storages/session_projcache/sessions/<session-id>.json`——**plain JSON**，
+  含 AI 标题（`rows.title.val`）、首条用户正文（`rows.titleInput.val.first.text`，
+  标题异步生成前的回落）、工作目录（`rows.workingDirectory.val` / `identity.cwd`）。
+  `core/DshSessions` 只读这份投影（按 mtime+size 缓存，主线程调用不加锁；
+  id 哨兵与派发同口径，只认 `session-` 前缀、限字母数字连字符，杜绝穿越目录），
+  待办侧三处消费：① `/work-items` 与外壳共用的 `workItemsJson()` 补
+  `session_title`、空项目回填 cwd（只补显示不落盘，标题是异步生成的，落盘会钉死
+  旧值）；② Qt 列表与 Web 外壳的行身份同口径升级：项目目录名 > 会话标题 >
+  会话 <短 id>，同宿主同项目重名时优先补标题（截 12 字）而不是短 id——Web 外壳
+  此前根本没有重名消歧，两条同项目会话只剩正文可分；③ Qt 行 tooltip 补标题行。
+  桩：`dsh_sessions_test.cpp`（临时家目录假投影，22 项断言：标题回落/截断、
+  cwd 优先级、坏 JSON、id 哨兵、缓存失效与文件删除）。派发守卫不受影响——
+  归属证明仍在插件侧活表，投影只供显示。
 
 #### OpenSquilla 系实测与接线（2026-11-08，探针 `rc_probe/osquilla_dispatch_probe.mjs` / `osquilla_dispatch_e2e.py`）
 

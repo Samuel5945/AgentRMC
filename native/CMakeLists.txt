@@ -28,6 +28,8 @@ qt_add_executable(AgentRMCNative
     src/core/ChatText.h
     src/core/WorkItems.cpp
     src/core/WorkItems.h
+    src/core/DshSessions.cpp
+    src/core/DshSessions.h
     src/core/SessionDispatch.cpp
     src/core/SessionDispatch.h
     src/core/UiDispatch.cpp
@@ -329,6 +331,15 @@ add_executable(AgentRMCWorkItemTest
 target_include_directories(AgentRMCWorkItemTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(AgentRMCWorkItemTest PRIVATE Qt6::Core)
 target_compile_options(AgentRMCWorkItemTest PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
+
+add_executable(AgentRMCDshSessionsTest
+    tests/dsh_sessions_test.cpp
+    src/core/DshSessions.cpp
+    src/core/DshSessions.h
+)
+target_include_directories(AgentRMCDshSessionsTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(AgentRMCDshSessionsTest PRIVATE Qt6::Core)
+target_compile_options(AgentRMCDshSessionsTest PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
 
 add_executable(AgentRMCDispatchTest
     tests/dispatch_test.cpp

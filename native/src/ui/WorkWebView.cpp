@@ -1000,7 +1000,28 @@ function base(p){const t=(p||'').replace(/[\/\\]+$/,'');
   const i=Math.max(t.lastIndexOf('/'),t.lastIndexOf('\\'));return i<0?t:t.slice(i+1);}
 function where(it){if(!it.session_id) return '未关联会话';
   const b=base(it.project);
-  return (b==='.'||b==='..'||!b)?('会话 '+String(it.session_id).slice(0,8)):b;}
+  if(b!=='.'&&b!=='..'&&b) return b;
+  // 项目缺失时退会话标题（DSH 投影缓存补的），再退短 id——与 Qt 侧同口径。
+  if(it.session_title) return it.session_title;
+  return '会话 '+String(it.session_id).slice(0,8);}
+// 同宿主同项目重名时才补会话身份：优先标题（截 12 字），没标题才退短 id。
+// WHERE_HITS 在 render 里按可见行数一遍，避免每行各数一遍。
+let WHERE_HITS={};
+function agentName(it){return it.title||
+  ((WORKERS.find(w=>w.exe===it.agent_exe)||{}).name||'');}
+function whereLabel(it){
+  let w=where(it);
+  if(!it.session_id||w.indexOf('会话 ')===0||w==='未关联会话') return w;
+  if((WHERE_HITS[agentName(it)+'|'+w]||0)>1){
+    if(it.session_title&&w!==it.session_title){
+      const t=it.session_title;
+      w+=' · '+(t.length>12?t.slice(0,12)+'…':t);
+    }else{
+      w+=' · '+String(it.session_id).slice(0,6);
+    }
+  }
+  return w;
+}
 function waitText(it){if(!it.attention_since) return '';
   const secs=(now-Date.parse(it.attention_since))/1000;
   if(!(secs>=600)) return '';const m=secs/60;
@@ -1103,7 +1124,7 @@ function row(it){
   const name=document.createElement('span');name.className='name';name.textContent=it.title||'';
   const stage=document.createElement('span');stage.className='stage';
   stage.style.color=stageColor(it);stage.textContent=stageLabel(it);
-  const wh=document.createElement('span');wh.className='where';wh.textContent=where(it);
+  const wh=document.createElement('span');wh.className='where';wh.textContent=whereLabel(it);
   const time=document.createElement('span');time.className='time';
   time.textContent=hhmm(it.updated_at)+waitText(it);
   l1.append(name,stage,wh,time);
@@ -1357,6 +1378,10 @@ function render(){
   }
   $('total').textContent=rows.length+' 件待办';
   renderChips();renderFilter();renderHealth();
+  // 重名计数与 Qt 侧 whereHits 同一口径：agent|where 出现几次。
+  WHERE_HITS={};
+  rows.forEach(r=>{const k=agentName(r)+'|'+where(r);
+    WHERE_HITS[k]=(WHERE_HITS[k]||0)+1;});
   // 增量刷新：整页不重载，滚动位置自己留着（原来每次 NavigateToString 都会回顶部）。
   const list=$('list');const keep=list.scrollTop;
   list.replaceChildren();

@@ -324,6 +324,121 @@ export function apply(ctx, rawConfig) {
     }
     if (changed) pushRequests(session);
   }
+  // 会话 id → session：应答落账后重推该会话请求集要拿原始 session（同对象）。
+  // session/event 是 global 监听、所有 (session, event) 都路过，顺手建索引；
+  // agent/disposed 清账（无事件可挂）。
+  const sessionsById = new Map();
+
+  // B2：内联应答。桌面 profile 的 tool-ask-user 默认 legacy 模式——前台提问没有
+  // timed wait；插件再注册应答者就是跟 Web UI 抢 waterfall（注册顺序碰运气），不做。
+  // 直答路（2026-11-14 读包核实官方 answer 的落点）：一条
+  // source.kind="user-question-reply" 的用户消息 steer 进 agent——Web UI 卡片
+  // 经投影监听同一事件收卡，agent 认领 reply 当作 ask_user_question 的答复。
+  // 绕过 uq.answer 的 continued 状态门（legacy 提问没有 continued 态），自己 steer
+  // 同形消息；重复答案先查 inbox（官方 REPLY_QUEUED 同款判据）。
+  // 若 profile 配了 timed（有前台 wait），优先 completion.resolve 即时回给等待中
+  // 的轮次——两条路都通。
+  function findWait(sessionId, callId) {
+    // ctx.userQuestions：宿主 compose 期把服务实例挂到 ctx 上；兼容多种拿法。
+    const uq = ctx.userQuestions ||
+      (ctx.get ? ctx.get('userQuestions') : undefined) ||
+      (ctx.services ? ctx.services.userQuestions : undefined);
+    if (!uq || !uq.waits || typeof uq.waits.get !== 'function') return null;
+    const agents = ctx.get ? ctx.get('agents') : undefined;
+    const agent = agents && agents.get ? agents.get(sessionId) : undefined;
+    if (agent) {
+      const direct = uq.waits.get(agent);
+      if (direct && typeof direct.get === 'function' && direct.get(callId)) {
+        return direct.get(callId);
+      }
+    }
+    // 活表实例与 wait 键可能不同一（跨 compose），兜底扫全表。
+    for (const calls of uq.waits.values()) {
+      if (calls && typeof calls.get === 'function') {
+        const w = calls.get(callId);
+        if (w) return w;
+      }
+    }
+    return null;
+  }
+  function deliverToWait(wait, batch) {
+    // completion.resolve 是 askTimed 等待的 promise 本体：答案原路返回、卡片同步消失。
+    if (wait && wait.completion && typeof wait.completion.resolve === 'function') {
+      wait.completion.resolve(batch);
+      return true;
+    }
+    return false;
+  }
+  async function answerQuestion(sessionId, callId, answers) {
+    const batch = { answers: answers || [] };
+    // ① 有 timed wait 就先 resolve。
+    try {
+      if (deliverToWait(findWait(sessionId, callId), batch)) return { ok: true };
+    } catch (e) { /* wait 路不通就走 steer 路 */ }
+    // ② 主路：steer user-question-reply（与官方 answer 同形同落点）。
+    try {
+      const agents = ctx.get('agents');
+      const agent = agents && agents.get(sessionId);
+      if (!agent) {
+        return { ok: false, error: '会话不在活表里（未打开？），未应答' };
+      }
+      if (typeof agent.steer !== 'function' || !agent.inbox) {
+        return { ok: false, error: 'Agent 接口不认识（DSH 版本变了？），未应答' };
+      }
+      const queued = (m) => m && m.source && m.source.kind === 'user-question-reply' &&
+        m.source.callId === callId;
+      const inTurn = agent.inbox.nextTurn && agent.inbox.nextTurn.some(queued);
+      const inStep = agent.inbox.nextStep && agent.inbox.nextStep.some(queued);
+      if (inTurn || inStep) {
+        return { ok: false, error: '这条回答已经在路上了（别重复提交）' };
+      }
+      const payload = {
+        kind: 'answer_to_pending_question',
+        tool: 'ask_user_question',
+        callId,
+        answers: batch.answers,
+      };
+      // 带上问题原文（照 Web UI 的 reply 内容形）；拿不到也照送，答案里有 id。
+      try {
+        const uq = ctx.userQuestions;
+        const continued = uq && typeof uq.continued === 'function'
+          ? uq.continued(agent) : undefined;
+        const entry = Array.isArray(continued)
+          ? continued.find((q) => q.callId === callId) : undefined;
+        if (entry && entry.questions) payload.questions = entry.questions;
+      } catch (e) { /* 问题原文可选 */ }
+      agent.steer({
+        id: randomUUID(),
+        role: 'user',
+        content: [{ type: 'text', text: JSON.stringify(payload) }],
+        source: { kind: 'user-question-reply', callId, outcome: 'answered' },
+      });
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, error: '应答失败：' + ((e && e.message) || e) };
+    }
+  }
+  // 授权：approval 服务只有 request()，没有按 id 的公开应答口（读包核实）；
+  // 远程批授权会直接放行工具执行，安全语义重——等上游给出明确接口再接，
+  // 现阶段聊天页对授权保持只读展示。
+  async function answerApproval() {
+    return { ok: false, error: '当前 DSH 版本不支持远程批授权，请回电脑应答' };
+  }
+  async function handleAnswerMessage(item) {
+    // 桥 JSON 是 snake_case（session_id），与派发通道取件同口径。
+    const sessionId = String((item && (item.session_id || item.sessionId)) || '');
+    const res = item.kind === 'approval'
+      ? await answerApproval(sessionId, item.id, item.outcome || 'rejected')
+      : await answerQuestion(sessionId, item.id, item.answers || []);
+    const sid = sessionId;
+    const byId = pendingRequests.get(sid);
+    if (res.ok && byId) {
+      byId.delete(item.id);
+      const session = sessionsById.get(sid);
+      if (session) pushRequests(session);
+    }
+    return res;
+  }
 
   if (typeof ctx.on === 'function') {
     // 等授权 / 等选方案：挂**持久会话事件**，不挂那两个瀑布。
@@ -341,6 +456,12 @@ export function apply(ctx, rawConfig) {
         try {
           const type = event && event.type;
           const data = (event && event.data) || {};
+          // 会话索引：global session/event 所有事件都路过，顺手记住 session 对象，
+          // 应答落账后重推该会话请求集要用它（agent/disposed 清账）。
+          {
+            const sIdx = sessionIdOf(session);
+            if (sIdx) sessionsById.set(sIdx, session);
+          }
           // 可选事件追踪（默认关）：设 AGENTRMC_TRACE_EVENTS=<文件路径> 后，把每条
           // session/event 追加进去，用于排查「选方案/等授权偶发不发声」——监听器
           // 偶尔停收事件时，对照日志即可区分是事件没发还是通知没送。不开则零开销。
@@ -510,8 +631,11 @@ export function apply(ctx, rawConfig) {
         lastReply.delete(agent.id);
         lastTurnStarted.delete(agent.id);
         if (pendingRequests.delete(agent.id)) {
+          sessionsById.delete(agent.id);
           bridge.post('/requests', { exe: config.raiseExe || '',
             session_id: agent.id, project: '', requests: [] }).catch(() => {});
+        } else {
+          sessionsById.delete(agent.id);
         }
       },
       { global: true },
@@ -786,16 +910,56 @@ export function apply(ctx, rawConfig) {
     }
   }
 
-  // B1：定时重推待答请求（原生端重启后恢复展示），不依赖 dispatch 开关。
+  // B2/B3：待答请求重推（原生端重启后恢复展示）+ 应答收件轮询（手机/桌面下发的
+  // choice → wait.settle → ack）。不依赖 dispatch 开关——交互应答与派发是两条事。
   if (typeof ctx.effect === 'function') {
-    const reqTimer = setInterval(() => {
+    let answerBusy = false;
+    const pollAnswers = async () => {
+      if (answerBusy) return;
+      answerBusy = true;
+      try {
+        const res = await bridge.get(
+          '/request-answer/pending?exe=' + encodeURIComponent(config.raiseExe || ''),
+        );
+        if (res.status !== 200) return; // 旧原生端：安静跳过
+        let items;
+        try { items = JSON.parse(res.body || '[]'); } catch { return; }
+        if (!Array.isArray(items) || items.length === 0) return;
+        for (const item of items) {
+          let r;
+          try { r = await handleAnswerMessage(item); }
+          catch (e) { r = { ok: false, error: ((e && e.message) || String(e)) }; }
+          try {
+            await bridge.post('/request-answer/ack', {
+              answer_id: (item && item.answer_id) || '',
+              ok: !!(r && r.ok),
+              ...(r && r.error ? { error: r.error } : {}),
+            });
+          } catch (e) { /* 原生没开：60s 取件超时兜底 */ }
+        }
+      } catch (e) { /* 轮询失败安静 */ }
+      finally { answerBusy = false; }
+    };
+    const rePush = () => {
       for (const [sid, byId] of pendingRequests) {
         bridge.post('/requests', { exe: config.raiseExe || '', session_id: sid,
           project: '', requests: [...byId.values()] }).catch(() => {});
       }
-    }, 10000);
-    if (typeof reqTimer.unref === 'function') reqTimer.unref();
-    ctx.effect(() => () => clearInterval(reqTimer), 'agentrmc-bridge requests re-push');
+    };
+    // 收件 1.2s、重推 10s——都用 ref 计时器：DSH 常驻前台，每 1.2s 一次本机 GET
+    // 开销可忽略；unref 在某些宿主生命周期下会让计时器不触发（实测踩坑），
+    // 宁可多一笔流量也要保证手机点的答案能被取走。dispose 时清理。
+    // 首拍也挂在 effect 里：假 ctx（测试）在 execute 返回后同步跑 disposer，
+    // 裸写的提前 poll 会被随后的 clear 掐灭；effect 生命周期下 setup 必然先跑。
+    ctx.effect(() => {
+      const ansTimer = setInterval(() => { pollAnswers().catch(() => {}); }, 1200);
+      const reqTimer = setInterval(rePush, 10000);
+      pollAnswers().catch(() => {});
+      return () => {
+        clearInterval(ansTimer);
+        clearInterval(reqTimer);
+      };
+    }, 'agentrmc-bridge answer poll / requests push');
   }
 }
 

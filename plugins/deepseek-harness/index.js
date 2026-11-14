@@ -58,6 +58,10 @@ const DEFAULTS = {
   // 独占应答者——授权改由 RMC 聊天页允许/拒绝，桌面 Web UI 的授权卡不再弹。
   // 默认关保持安全只读（进程内无按 id 应答口，硬抢瀑布会卡住授权）。
   approvalInline: false,
+  // 提问内联答·独占模式（opt-in，默认关）：开启后插件成为 user-questions/request
+  // 瀑布的独占应答者，提问改由 RMC 聊天页/桌宠卡作答，桌面 Web UI 提问卡不再弹
+  // （也就没有「旁路答完 GUI 卡残留」的问题）。默认关走 steer 旁路（GUI 卡可能残留）。
+  questionInline: false,
   // 只打印将要发送的 payload，不真发（排查用；与 AGENTRMC_DRY_RUN=1 等价）。
   dryRun: false,
 };
@@ -118,6 +122,7 @@ function normalizeConfig(raw) {
     registerSkill: asBool(input.registerSkill, DEFAULTS.registerSkill),
     dispatch: asBool(input.dispatch, DEFAULTS.dispatch),
     approvalInline: asBool(input.approvalInline, DEFAULTS.approvalInline),
+    questionInline: asBool(input.questionInline, DEFAULTS.questionInline),
     dryRun,
   };
 }
@@ -324,9 +329,11 @@ export function apply(ctx, rawConfig) {
         byId.delete(callId);
         changed = true;
       }
+      questionWaiters.delete(sid);  // 题已结（别处答/取消），独占 waiter 清账
     } else if (type === 'user/message' && data.source &&
                data.source.kind === 'user-question-reply') {
       const callId = data.source.callId;
+      questionWaiters.delete(sid);
       if (callId && byId && byId.delete(callId)) changed = true;
     }
     if (changed) pushRequests(session);
@@ -376,8 +383,43 @@ export function apply(ctx, rawConfig) {
     }
     return false;
   }
+  // 提问·独占模式（questionInline）：插件 hold 住 user-questions/request 瀑布，
+  // 桌面 Web UI 拿不到请求→提问卡不弹→无「旁路答完 GUI 卡残留」。按会话攒 waiter
+  // （legacy 提问的 waterfall request 不带 callId，一会话通常仅一道活跃题）。
+  const questionWaiters = new Map(); // sid -> {resolve}
+  if (config.questionInline && typeof ctx.on === 'function') {
+    ctx.on('user-questions/request', (request, next) => {
+      const sid = request && request.agent && request.agent.id;
+      if (!sid) return next();
+      return new Promise((resolve) => {
+        const done = (batch) => {
+          questionWaiters.delete(sid);
+          if (request.signal) request.signal.removeEventListener('abort', onAbort);
+          resolve(batch);
+        };
+        const onAbort = () => {
+          questionWaiters.delete(sid);
+          resolve(next());  // 取消时放行给下游（Web UI  likewise 已 abort）
+        };
+        questionWaiters.set(sid, { resolve: done });
+        if (request.signal) {
+          if (request.signal.aborted) return onAbort();
+          request.signal.addEventListener('abort', onAbort, { once: true });
+        }
+      });
+    });
+  }
   async function answerQuestion(sessionId, callId, answers) {
     const batch = { answers: answers || [] };
+    // ⓪ 独占模式：直接 resolve 插件 hold 住的瀑布（Web UI 卡不弹，无残留）。
+    if (config.questionInline) {
+      const w = questionWaiters.get(sessionId);
+      if (w) {
+        w.resolve(batch);
+        return { ok: true };
+      }
+      // 没 hold 住（注册时序等）→ 落回下面旁路。
+    }
     // ① 有 timed wait 就先 resolve。
     try {
       if (deliverToWait(findWait(sessionId, callId), batch)) return { ok: true };

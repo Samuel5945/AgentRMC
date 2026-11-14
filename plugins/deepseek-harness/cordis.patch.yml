@@ -12,3 +12,6 @@
       config:
         agentName: DeepSeek Harness
         raiseExe: DeepSeek Harness.exe
+        # B3 授权内联答（用户 2026-11-14 22:09 明确开启）：插件成为 approval/request
+        # 独占应答者，授权改由 RMC 聊天页允许/拒绝，桌面 Web UI 授权卡不再弹。
+        approvalInline: true

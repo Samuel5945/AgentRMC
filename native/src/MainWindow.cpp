@@ -420,13 +420,13 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
                                        QStringLiteral("progress"),
                                        AgentWindow::displayName(exe), text, exe);
                 }
-                dispatchNotice_ =
-                    QStringLiteral("会话 %1 回执已落账").arg(sid.left(8));
+                // 回执落账＝送达成功。聊天页已能直接看记录，不再弹「回执已落账」
+                // 通知（用户 2026-11-14 反馈冗余）；ZCode 桌面端不热刷新，保留重启提示。
                 if (ZcodeDispatch::supports(exe)) {
-                    // 对话区不热刷新（上游架构使然）：告诉人全文在卡上，
-                    // 回会话前重启一次宿主即可见。
-                    dispatchNotice_ += QStringLiteral(
-                        "；ZCode 对话区要重启后才显示新消息，回复先看卡片");
+                    dispatchNotice_ = QStringLiteral(
+                        "ZCode 对话区要重启后才显示新消息，回复先看卡片");
+                } else {
+                    dispatchNotice_.clear();
                 }
                 dispatchNoticeId_ = itemIdForSession(sid);
                 dispatchNoticeExe_ = exe;
@@ -3347,6 +3347,18 @@ QJsonObject MainWindow::lanUpload(const QString &id, const QString &filename,
     const QString path = dir + QLatin1Char('/') + stamp + QLatin1Char('-') + name;
     if (!QDir().mkpath(dir)) {
         return fail(400, QStringLiteral("无法创建上传目录"));
+    }
+    // 项目相对落盘时自动写 .agentrmc/.gitignore（忽略全部），防止上传文件被误
+    // 提交进项目仓库（用户 2026-11-14 顾虑仓库污染）；中央 uploads 目录无需。
+    if (!item->project.isEmpty()) {
+        const QString gi = item->project + QStringLiteral("/.agentrmc/.gitignore");
+        if (!QFileInfo::exists(gi)) {
+            QFile g(gi);
+            if (g.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+                g.write("*\n");
+                g.close();
+            }
+        }
     }
     QFile f(path);
     if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate)) {

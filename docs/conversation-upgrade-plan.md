@@ -139,6 +139,11 @@ RequestQuestion(id, header, prompt, options[], multiple, secret,
     `%APPDATA%/LIG/AgentRMCNative/uploads/<session>/`）→ 返回 PC 绝对路径 + 事件流记一笔。
   - 手机聊天页 composer 加 📎（`<input type=file>`）：选文件 → 上传 → 路径自动填入
     输入框（「请查看文件：<path>」），用户可补话再发送，agent 按路径读。
+  - **落盘位置（用户 2026-11-14 裁决：保持项目相对）**：`<agent工作目录>/.agentrmc/inbox/`，
+    跟的是**会话的项目目录**而非 AgentRMC 安装目录（agent 天然可达）。落盘时自动写
+    `.agentrmc/.gitignore`（`*`）防上传文件误提交进项目仓库。
+  - **去冗余回执通知（用户 2026-11-14）**：聊天页已能直接看记录，派发成功不再弹
+    「会话 X 回执已落账」；ZCode 桌面端不热刷新，保留重启提示；失败通知保留。
   - `lanweb_test` 增 10 项（401/403/200/404/中文文件名解码/100KB 超 64KB 限）。
 
 ## 4. 分期建议

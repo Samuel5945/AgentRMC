@@ -17,6 +17,9 @@
 
 #include <algorithm>
 
+#include <zstd.h>
+
+#include "core/DshSessions.h"
 #include "core/ZcodeDispatch.h"
 
 namespace {
@@ -480,6 +483,161 @@ bool SessionTranscript::messageOf(const QByteArray &line, QString *role,
     return true;
 }
 
+// —— DSH：session.v4.jsonl.zstd（多帧拼接）——
+// 宿主把每个会话的事件日志压成 zstd，追加轮次落在后续帧里。ZSTD_decompressStream
+// 循环喂入即跨帧（一帧解完 ret=0，输入还有剩就接着解下一帧），等价于探针里
+// zstandard 的 read_across_frames=True。只读、带帽，不写宿主库。
+constexpr qint64 kMaxPlainBytes = 256 * 1024 * 1024;  // 解压上限，防病态文件吃满内存
+
+QByteArray decompressZstd(const QByteArray &compressed, bool *ok) {
+    *ok = false;
+    ZSTD_DCtx *dctx = ZSTD_createDCtx();
+    if (dctx == nullptr) {
+        return {};
+    }
+    QByteArray out;
+    const size_t outCap = ZSTD_DStreamOutSize();
+    QByteArray buf(static_cast<int>(outCap), Qt::Uninitialized);
+    ZSTD_inBuffer input{compressed.constData(),
+                        static_cast<size_t>(compressed.size()), 0};
+    bool error = false;
+    while (input.pos < input.size) {
+        ZSTD_outBuffer output{buf.data(), outCap, 0};
+        const size_t before = input.pos;
+        const size_t ret = ZSTD_decompressStream(dctx, &output, &input);
+        if (ZSTD_isError(ret)) {
+            error = true;
+            break;
+        }
+        out.append(buf.constData(), static_cast<int>(output.pos));
+        if (out.size() > kMaxPlainBytes) {
+            error = true;  // 过大：当损坏处理，不无限吃内存
+            break;
+        }
+        // 无进展保护：坏文件不该让循环空转（正常流每步必 consumed 或 produced）。
+        if (input.pos == before && output.pos == 0) {
+            break;
+        }
+    }
+    ZSTD_freeDCtx(dctx);
+    *ok = !error;
+    return out;
+}
+
+QString findDshFile(const QString &root, const QString &sessionId) {
+    QDir sessions(root + QStringLiteral("/sessions"));
+    const QStringList slugs = sessions.entryList(QDir::Dirs | QDir::NoDotAndDotDot);
+    for (const QString &slug : slugs) {
+        const QString file = sessions.filePath(
+            slug + QLatin1Char('/') + sessionId +
+            QStringLiteral("/session.v4.jsonl.zstd"));
+        if (QFileInfo::exists(file)) {
+            return file;
+        }
+    }
+    return QString();
+}
+
+SessionTranscript::Result readDsh(const QString &root, const QString &sessionId,
+                                  int limit, int offset) {
+    SessionTranscript::Result out;
+    const QString path = findDshFile(root, sessionId);
+    if (path.isEmpty()) {
+        out.supported = true;
+        out.error = QStringLiteral("会话记录不在本机库里（可能已清理）");
+        return out;
+    }
+    const QString key = QStringLiteral("dsh|") + path;
+    const QString stamp = fileStamp(path);
+    auto it = g_cache.constFind(key);
+    if (it != g_cache.constEnd() && it->stamp == stamp) {
+        return slicePage(*it, limit, offset);
+    }
+    QFile f(path);
+    if (!f.open(QIODevice::ReadOnly)) {
+        out.supported = true;
+        out.error = QStringLiteral("会话记录打不开");
+        return out;
+    }
+    const QByteArray compressed = f.readAll();
+    f.close();
+    bool ok = false;
+    const QByteArray plain = decompressZstd(compressed, &ok);
+    if (!ok) {
+        out.supported = true;
+        out.error = QStringLiteral("会话记录解压失败（文件可能损坏或过大）");
+        return out;
+    }
+    FullCache full;
+    full.stamp = stamp;
+    QString firstUser;
+    const QList<QByteArray> lines = plain.split('\n');
+    for (const QByteArray &rawLine : lines) {
+        const QByteArray line = rawLine.trimmed();
+        if (line.isEmpty()) {
+            continue;
+        }
+        const QJsonObject obj = QJsonDocument::fromJson(line).object();
+        const QString type = obj.value(QStringLiteral("type")).toString();
+        // 标题取日志里最后一条 session/title（AI 异步生成，与投影缓存同源）。
+        if (type == QStringLiteral("session/title")) {
+            const QString t = obj.value(QStringLiteral("data"))
+                                  .toObject()
+                                  .value(QStringLiteral("title"))
+                                  .toString();
+            if (!t.isEmpty()) {
+                full.title = t;
+            }
+            continue;
+        }
+        QString role, id;
+        QJsonValue content;
+        if (type == QStringLiteral("user/message")) {
+            const QJsonObject data = obj.value(QStringLiteral("data")).toObject();
+            role = QStringLiteral("user");
+            content = data.value(QStringLiteral("content"));
+            id = data.value(QStringLiteral("id")).toString();
+        } else if (type == QStringLiteral("assistant/message")) {
+            const QJsonObject msg = obj.value(QStringLiteral("data"))
+                                        .toObject()
+                                        .value(QStringLiteral("message"))
+                                        .toObject();
+            role = QStringLiteral("assistant");
+            content = msg.value(QStringLiteral("content"));
+            id = msg.value(QStringLiteral("id")).toString();
+        } else {
+            continue;  // tool/call、step/*、reasoning 等不进聊天页
+        }
+        // contentText 只取 text/input_text/output_text，天然滤掉 reasoning/tool-call。
+        const QString text = SessionTranscript::unwrap(contentText(content));
+        if (text.isEmpty()) {
+            continue;  // 纯工具调用的 assistant 消息不出气泡
+        }
+        const QString at = normalizeTs(obj.value(QStringLiteral("time")));
+        if (id.isEmpty()) {
+            id = at + QLatin1Char('|') + role + QLatin1Char('|') + text.left(80);
+        }
+        if (role == QStringLiteral("user") && firstUser.isEmpty()) {
+            firstUser = text;
+        }
+        full.all.append(QJsonObject{
+            {QStringLiteral("id"), id},
+            {QStringLiteral("role"), role},
+            {QStringLiteral("text"), capText(text)},
+            {QStringLiteral("at"), at},
+        });
+    }
+    if (full.title.isEmpty() && !firstUser.isEmpty()) {
+        full.title = firstUser.simplified();
+        if (full.title.size() > 60) {
+            full.title = full.title.left(60) + QStringLiteral("…");
+        }
+    }
+    full.realTotal = full.all.size();
+    cachePut(key, full);
+    return slicePage(full, limit, offset);
+}
+
 SessionTranscript::Result SessionTranscript::read(const QString &agentExe,
                                                   const QString &sessionId,
                                                   int limit, int offsetFromEnd,
@@ -513,9 +671,8 @@ SessionTranscript::Result SessionTranscript::read(const QString &agentExe,
     }
     if (agentExe.compare(QStringLiteral("DeepSeek Harness.exe"),
                          Qt::CaseInsensitive) == 0) {
-        out.error = QStringLiteral(
-            "DeepSeek Harness 的会话库是 zstd 压缩，聊天记录查看后续经插件通道支持");
-        return out;
+        return readDsh(rootOverride.isEmpty() ? DshSessions::home() : rootOverride,
+                       sessionId, limit, offsetFromEnd);
     }
     out.error = QStringLiteral("该宿主暂不支持聊天记录查看");
     return out;

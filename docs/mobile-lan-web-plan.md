@@ -184,9 +184,9 @@ M1。AP 隔离/防火墙排查并入 M1 真机验收（手机页配对失败文�
   「滚到底」动画）；旧记录**往上翻时按页加载**，保持视觉锚点不跳。
 - 读取器 `SessionTranscript`（只读、分页、进程内 mtime+size 缓存）：
   WorkBuddy/Qoder 系 jsonl（两记法、剥 system-reminder/user_query、保留换行、
-  sidechain 过滤）、ZCode message+part 两表、OpenSquilla transcript_entries；
-  DSH zstd native 读不了 → 页面给提示（M2 插件通道）。单页 ≤100、单条 8000 字、
-  SQLite 全量缓存 ≤500。
+  sidechain 过滤）、ZCode message+part 两表、OpenSquilla transcript_entries、
+  **DSH session.v4.jsonl.zstd**（vendored libzstd 跨帧解压，见下）。单页 ≤100、
+  单条 8000 字、SQLite 全量缓存 ≤500。
 - 电脑外壳：待办卡单击 → `chatOpen` → 聊天视图（气泡：我右/Agent 左、时间戳、
   上下渐隐暗示可滚、新消息 pill 不打断读历史、底部 composer 派回会话）；
   上翻 → `chatOlder` → `pushChat` 单独推旧页；双击仍是回到 Agent。
@@ -204,6 +204,26 @@ M1。AP 隔离/防火墙排查并入 M1 真机验收（手机页配对失败文�
   落空）→ 先 render 再喂数据 + 双 rAF 兜底；② 内容没填满高窗口时无滚动事件、
   旧页永不加载 → `maybeAutoLoad` 自动续载直到填满；③ hasMore 改本地
   「已加载<总数」计算，轮询不再把加载完的列表标成还有旧页。
+- **DSH 会话记录接入（2026-11-14，用户裁决 native 内置 libzstd，不走插件通道）**：
+  原 M2 设想是插件通道，但那样要 DSH 开着、离线看不了，与其余四宿主「只读/缓存/
+  离线可看」口径不一致。改为 **vendored libzstd**（`native/vendor/zstd`，BSD，
+  源码入库；只编 common+decompress 解压子集，CMake 静态库 `zstd_decompress`，
+  关压缩/字典/legacy/ASM）。`SessionTranscript::readDsh` 读
+  `~/.dsh/sessions/<slug>/session-<uuid>/session.v4.jsonl.zstd`：
+  `ZSTD_decompressStream` 循环喂入即跨帧（多帧拼接，等价探针 read_across_frames）；
+  事件流里只取 `user/message`（`data.content[].text`）与 `assistant/message`
+  （`data.message.content[].text`，`contentText` 天然滤掉 reasoning/tool-call，
+  纯工具消息不出气泡）；标题取日志最后一条 `session/title.data.title`，无则退
+  首条用户正文。解压上限 256MB 防病态文件。测试 fixture 由
+  `rc_probe/gen_dsh_transcript_fixture.py` 预生成多帧 zstd 入库（native 无压缩
+  子集），`transcript_test` 增 DSH 用例（多帧/reasoning 过滤/标题/分页/追加帧缓存
+  失效/缺文件）。**离线可看**：DSH 关着也能翻历史。
+- **待办卡会话标题补全（2026-11-14，自 bettermissioncontrol 并入）**：
+  `DshSessions` 只读宿主投影缓存 `~/.dsh/storages/session_projcache/sessions/<id>.json`
+  （plain JSON，AI 标题/首条正文/cwd，mtime+size 缓存）。`workItemsJson()` 给
+  `/work-items`、桌面外壳、手机页三处统一补 `session_title`、空项目回填 cwd；
+  行身份同口径升级（项目目录名 > 会话标题 > 短 id，同宿主同项目重名优先补标题
+  截 12 字）。Qt 列表/桌面 Web/手机页三端一致。`dsh_sessions_test` 22 项断言。
 
 ### M2 · 体验
 SSE 推送（轮询兜底）；设备管理细化；美术主题观感复检；`clear`、更多只读

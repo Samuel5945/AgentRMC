@@ -17,6 +17,21 @@ set(CMAKE_AUTORCC ON)
 find_package(Qt6 6.8 REQUIRED COMPONENTS Widgets Network Sql)
 qt_standard_project_setup()
 
+# vendored libzstd（BSD，native/vendor/zstd，源码入库）：只编解压子集
+# （common+decompress），供 SessionTranscript 读 DSH 的 session.v4.jsonl.zstd
+# （多帧拼接，ZSTD_decompressStream 循环喂入即跨帧）。不编压缩/字典/legacy。
+enable_language(C)
+set(ZSTD_DIR "${CMAKE_CURRENT_SOURCE_DIR}/vendor/zstd/lib")
+file(GLOB ZSTD_SOURCES "${ZSTD_DIR}/common/*.c" "${ZSTD_DIR}/decompress/*.c")
+add_library(zstd_decompress STATIC ${ZSTD_SOURCES})
+target_include_directories(zstd_decompress PUBLIC "${ZSTD_DIR}")
+target_compile_definitions(zstd_decompress PRIVATE
+    ZSTD_DISABLE_ASM ZSTD_LEGACY_SUPPORT=0 _CRT_SECURE_NO_WARNINGS)
+if(MSVC)
+    # 第三方代码不吃本项目的警告等级；源码是 ASCII，/utf-8 仅为统一。
+    target_compile_options(zstd_decompress PRIVATE /utf-8 /W0)
+endif()
+
 qt_add_executable(AgentRMCNative
     src/main.cpp
     "${CMAKE_CURRENT_BINARY_DIR}/generated/app.rc"
@@ -153,7 +168,7 @@ target_include_directories(AgentRMCNative PRIVATE
 # powrprof = 睡眠/休眠，wbemuuid + oleaut32 = 笔记本背光的 WMI 回退。
 set(AGENTRMC_SYSTEM_LIBS powrprof wbemuuid oleaut32)
 target_link_libraries(AgentRMCNative PRIVATE Qt6::Widgets Qt6::Network Qt6::Sql winmm
-    shell32 ole32 UIAutomationCore.lib ${AGENTRMC_SYSTEM_LIBS})
+    shell32 ole32 UIAutomationCore.lib zstd_decompress ${AGENTRMC_SYSTEM_LIBS})
 target_compile_options(AgentRMCNative PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
 target_compile_definitions(AgentRMCNative PRIVATE AGENTRMC_VERSION="${PROJECT_VERSION}")
 
@@ -335,12 +350,16 @@ add_executable(AgentRMCTranscriptTest
     tests/transcript_test.cpp
     src/core/SessionTranscript.cpp
     src/core/SessionTranscript.h
+    src/core/DshSessions.cpp
+    src/core/DshSessions.h
     src/core/ZcodeDispatch.cpp
     src/core/ZcodeDispatch.h
 )
 target_include_directories(AgentRMCTranscriptTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_compile_definitions(AgentRMCTranscriptTest PRIVATE
+    FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures")
 target_link_libraries(AgentRMCTranscriptTest PRIVATE Qt6::Core Qt6::Sql shell32 ole32
-    user32 UIAutomationCore.lib)
+    user32 UIAutomationCore.lib zstd_decompress)
 target_compile_options(AgentRMCTranscriptTest PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
 
 add_executable(AgentRMCPluginTest

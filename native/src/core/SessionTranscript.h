@@ -10,7 +10,8 @@
 //   WorkBuddy 系 / Qoder 系：~/.workbuddy(-ai)/.qoder(-cn)/projects/<slug>/<id>.jsonl
 //   ZCode：~/.zcode/cli/db/db.sqlite 的 message+part 两表
 //   OpenSquilla：%APPDATA%/@opensquilla/<profile>/opensquilla/state/sessions.db
-//   DSH：zstd 多帧压缩 native 读不了 → supported=false，页面给提示（M2 插件通道）。
+//   DSH：~/.dsh/sessions/<slug>/session-<uuid>/session.v4.jsonl.zstd，多帧拼接，
+//        用 vendored libzstd（native/vendor/zstd）跨帧解压；标题取日志 session/title。
 // 只读、带帽（单页 ≤100 条、单条 8000 字、SQLite 全量缓存 ≤500 条），不写宿主库。
 // 进程内按库文件 mtime+size 缓存全量解析结果，翻页/轮询不重复解析。
 class SessionTranscript {

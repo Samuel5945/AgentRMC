@@ -38,6 +38,12 @@ void writeLines(const QString &path, const QStringList &lines) {
     }
 }
 
+void copyBytes(const QString &from, const QString &to) {
+    QDir().mkpath(QFileInfo(to).absolutePath());
+    QFile::remove(to);
+    QFile::copy(from, to);
+}
+
 QString wbLine(const QString &id, const QString &role, const QString &text,
                qint64 ts, const QString &sid) {
     QJsonObject obj{
@@ -79,6 +85,23 @@ QString qoderLine(const QString &uuid, const QString &type, const QString &text,
 
 int main(int argc, char **argv) {
     QCoreApplication app(argc, argv);
+    // --live <session-id>：读真实 ~/.dsh 的 DSH 会话（不碰临时库），打印最新一页，
+    // 供装机后对真实数据冒烟；正常无参跑仍是全套临时库自测。
+    if (argc >= 3 && QByteArray(argv[1]) == "--live") {
+        const QString sid = QString::fromUtf8(argv[2]);
+        auto r = SessionTranscript::read(QStringLiteral("DeepSeek Harness.exe"),
+                                         sid, 20, 0);
+        std::printf("supported=%d total=%d hasMore=%d\n", r.supported, r.total,
+                    r.hasMore);
+        std::printf("title=%s\n", r.title.toUtf8().constData());
+        std::printf("error=%s\n", r.error.toUtf8().constData());
+        for (const QJsonValue &m : r.messages) {
+            const QJsonObject o = m.toObject();
+            std::printf("[%s] %s\n", o.value("role").toString().toUtf8().constData(),
+                        o.value("text").toString().left(100).toUtf8().constData());
+        }
+        return (r.supported && r.total > 0) ? 0 : 1;
+    }
     QTemporaryDir temp;
     if (!temp.isValid()) {
         std::fprintf(stderr, "FAIL temp dir\n");
@@ -291,10 +314,61 @@ int main(int argc, char **argv) {
               QStringLiteral("OSQ 问"),
           "osq chronological");
 
+    // ---- DSH：多帧 zstd + reasoning/tool 过滤 + session/title + 缓存失效 ----
+    // fixture 由 rc_probe/gen_dsh_transcript_fixture.py 预生成（native 只 vendored
+    // 解压子集，压缩靠 Python）：帧1+帧2 共 4 条对话，帧3 一条追加。
+    const QString dRoot = temp.filePath("dsh");
+    const QString dshSid = QStringLiteral("session-") + sid;
+    const QString dFile = dRoot + QStringLiteral("/sessions/slug-x/") + dshSid +
+                          QStringLiteral("/session.v4.jsonl.zstd");
+    const QString fixture = QStringLiteral(FIXTURE_DIR);
+    copyBytes(fixture + QStringLiteral("/dsh_session.zstd"), dFile);
+    r = SessionTranscript::read(QStringLiteral("DeepSeek Harness.exe"), dshSid, 50, 0,
+                                dRoot);
+    check(r.supported, "dsh supported");
+    check(r.title == QStringLiteral("DSH 测试标题"), "dsh title from session/title");
+    check(r.messages.size() == 4, "dsh 4 msgs (reasoning+tool-only filtered)");
+    if (r.messages.size() == 4) {
+        check(r.messages.at(0).toObject().value("text").toString() ==
+                  QStringLiteral("第一句"),
+              "dsh user text");
+        check(r.messages.at(1).toObject().value("text").toString() ==
+                  QStringLiteral("回复一"),
+              "dsh assistant text only (reasoning/tool-call dropped)");
+        check(r.messages.at(1).toObject().value("id").toString() ==
+                  QStringLiteral("a1"),
+              "dsh assistant id from data.message.id");
+        check(r.messages.at(3).toObject().value("text").toString() ==
+                  QStringLiteral("回复二"),
+              "dsh multi-frame: frame2 message present");
+        check(!r.messages.at(0).toObject().value("at").toString().isEmpty(),
+              "dsh ts normalized");
+    }
+    check(r.total == 4 && !r.hasMore, "dsh total/hasMore");
+    r = SessionTranscript::read(QStringLiteral("DeepSeek Harness.exe"), dshSid, 2, 0,
+                                dRoot);
+    check(r.messages.size() == 2 && r.hasMore, "dsh page size/hasMore");
+    check(r.messages.at(0).toObject().value("text").toString() ==
+              QStringLiteral("第二句"),
+          "dsh page0 latest-2 starts at 第二句");
+    {
+        QFile f(dFile);
+        f.open(QIODevice::Append);
+        QFile ap(fixture + QStringLiteral("/dsh_append.zstd"));
+        ap.open(QIODevice::ReadOnly);
+        f.write(ap.readAll());
+    }
+    r = SessionTranscript::read(QStringLiteral("DeepSeek Harness.exe"), dshSid, 50, 0,
+                                dRoot);
+    check(r.total == 5, "dsh cache invalidated on frame append");
+    check(r.messages.at(4).toObject().value("text").toString() ==
+              QStringLiteral("追加句"),
+          "dsh newest after append (multi-frame)");
+
     // ---- 不支持 / 边界 ----
     r = SessionTranscript::read(QStringLiteral("DeepSeek Harness.exe"),
-                                QStringLiteral("session-abc"));
-    check(!r.supported && !r.error.isEmpty(), "dsh unsupported with reason");
+                                QStringLiteral("session-abc"), 50, 0, dRoot);
+    check(r.supported && !r.error.isEmpty(), "dsh missing file: supported with reason");
     r = SessionTranscript::read(QStringLiteral("Unknown.exe"), sid);
     check(!r.supported, "unknown unsupported");
     r = SessionTranscript::read(QStringLiteral("WorkBuddyAI.exe"), QString());

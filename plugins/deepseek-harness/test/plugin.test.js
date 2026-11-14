@@ -825,6 +825,41 @@ await check('B3: approvalInline 默认关 → 不注册应答者，answerApprova
     '默认关不应注册 approval/request 应答者');
 });
 
+// —— B2 提问·独占模式（questionInline）：hold 瀑布，RMC 答案 resolve，无 GUI 残留 ——
+await check('B2独占: questionInline 开启 → hold user-questions/request，RMC 答案 resolve', async () => {
+  const sid = 'session-abcd1111-2222-4333-8444-555555555555';
+  const callId = 'call-q-excl';
+  const { server, seen } = makeAnswerServer([
+    { answer_id: 'a-qx', session_id: sid, kind: 'question', id: callId,
+      answers: [{ id: 'q1', selected: ['甲'] }] },
+  ]);
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const stub = makeCtx();
+    const keep = setInterval(() => {}, 300);
+    try {
+      apply(stub.ctx, { port: server.address().port, registerSkill: false,
+        registerTools: false, questionInline: true });
+      const handler = (stub.listeners.get('user-questions/request') || [])[0];
+      assert.ok(handler, 'questionInline 开启应注册 user-questions/request 应答者');
+      let nextCalled = false;
+      const outcomePromise = handler(
+        { agent: { id: sid }, questions: [{ id: 'q1' }] },
+        () => { nextCalled = true; return Promise.resolve({ answers: [] }); });
+      assert.ok(await waitUntil(() => seen.acks.length >= 1), 'ack 未到');
+      assert.strictEqual(seen.acks[0].ok, true, JSON.stringify(seen.acks[0]));
+      const resolved = await outcomePromise;
+      assert.deepStrictEqual(resolved, { answers: [{ id: 'q1', selected: ['甲'] }] });
+      assert.strictEqual(nextCalled, false, '独占应答者不应 next() 放行（Web UI 卡不弹）');
+    } finally {
+      clearInterval(keep);
+      for (const dispose of stub.effects) dispose();
+    }
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
 await check('派发通道: followup 抛错 → ack ok:false 带原因，不炸轮询', async () => {
   const agents = {
     get: () => ({

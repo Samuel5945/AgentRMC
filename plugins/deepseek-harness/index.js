@@ -54,6 +54,10 @@ const DEFAULTS = {
   registerSkill: true,
   // 定向派发通道：轮询原生端取件 → agent.followup() 注入 → ack 回执。
   dispatch: true,
+  // B3 授权内联答（opt-in，默认关）：开启后插件成为 approval/request 瀑布的
+  // 独占应答者——授权改由 RMC 聊天页允许/拒绝，桌面 Web UI 的授权卡不再弹。
+  // 默认关保持安全只读（进程内无按 id 应答口，硬抢瀑布会卡住授权）。
+  approvalInline: false,
   // 只打印将要发送的 payload，不真发（排查用；与 AGENTRMC_DRY_RUN=1 等价）。
   dryRun: false,
 };
@@ -113,6 +117,7 @@ function normalizeConfig(raw) {
     registerTools: asBool(input.registerTools, DEFAULTS.registerTools),
     registerSkill: asBool(input.registerSkill, DEFAULTS.registerSkill),
     dispatch: asBool(input.dispatch, DEFAULTS.dispatch),
+    approvalInline: asBool(input.approvalInline, DEFAULTS.approvalInline),
     dryRun,
   };
 }
@@ -288,10 +293,12 @@ export function apply(ctx, rawConfig) {
     let changed = false;
     if (type === 'approval/asked' && data.id) {
       ensure().set(data.id, { kind: 'approval', id: data.id,
-        toolName: String(data.toolName || ''), reason: String(data.reason || '') });
+        toolName: String(data.toolName || ''), reason: String(data.reason || ''),
+        answerable: !!config.approvalInline });
       changed = true;
     } else if (type === 'approval/decided' && data.id) {
       if (byId && byId.delete(data.id)) changed = true;
+      approvalWaiters.delete(sid + '|' + data.id);
     } else if ((type === 'tool/call' || type === 'tool/ptc-dispatch') &&
                data.name === 'ask_user_question') {
       const callId = data.callId || data.subCallId;
@@ -307,7 +314,7 @@ export function apply(ctx, rawConfig) {
         }));
       } catch (e) { /*  arguments 解析失败仍记一个空提问卡 */ }
       if (callId) {
-        ensure().set(callId, { kind: 'question', id: callId, questions });
+        ensure().set(callId, { kind: 'question', id: callId, questions, answerable: true });
         changed = true;
       }
     } else if (type === 'tool/result') {
@@ -418,11 +425,43 @@ export function apply(ctx, rawConfig) {
       return { ok: false, error: '应答失败：' + ((e && e.message) || e) };
     }
   }
-  // 授权：approval 服务只有 request()，没有按 id 的公开应答口（读包核实）；
-  // 远程批授权会直接放行工具执行，安全语义重——等上游给出明确接口再接，
-  // 现阶段聊天页对授权保持只读展示。
-  async function answerApproval() {
-    return { ok: false, error: '当前 DSH 版本不支持远程批授权，请回电脑应答' };
+  // B3 授权内联答（opt-in 独占）：进程内 Cordis approval 服务只有 request()、
+  // 无按 id 应答口；Web UI 自己是 approval/request 瀑布的应答者。开启
+  // approvalInline 后插件注册为**独占**应答者：hold 住请求等 RMC 聊天页的
+  // 允许/拒绝（pull 模型成立——我们是应答者，答案何时到都能 resolve），桌面
+  // Web UI 授权卡不再弹。默认关＝不注册，保持安全只读。
+  const approvalWaiters = new Map(); // `${sid}|${approvalId}` -> {resolve}
+  if (config.approvalInline && typeof ctx.on === 'function') {
+    ctx.on('approval/request', (request, next) => {
+      const sid = request && request.agent && request.agent.id;
+      const id = request && request.id;
+      if (!sid || !id) return next();
+      return new Promise((resolve) => {
+        const key = sid + '|' + id;
+        const done = (outcome) => {
+          approvalWaiters.delete(key);
+          if (request.signal) request.signal.removeEventListener('abort', onAbort);
+          resolve(outcome);
+        };
+        const onAbort = () => done('cancelled');
+        approvalWaiters.set(key, { resolve: done });
+        if (request.signal) {
+          if (request.signal.aborted) return onAbort();
+          request.signal.addEventListener('abort', onAbort, { once: true });
+        }
+      });
+    });
+  }
+  async function answerApproval(sessionId, approvalId, outcome) {
+    if (!config.approvalInline) {
+      return { ok: false, error: '授权内联答未开启（approvalInline=false），请回电脑应答' };
+    }
+    const waiter = approvalWaiters.get(sessionId + '|' + approvalId);
+    if (!waiter) {
+      return { ok: false, error: '这条授权已不在等待（可能已应答/取消），未生效' };
+    }
+    waiter.resolve(outcome === 'allowed-once' ? 'allowed-once' : 'rejected');
+    return { ok: true };
   }
   async function handleAnswerMessage(item) {
     // 桥 JSON 是 snake_case（session_id），与派发通道取件同口径。
@@ -946,14 +985,16 @@ export function apply(ctx, rawConfig) {
           project: '', requests: [...byId.values()] }).catch(() => {});
       }
     };
-    // 收件 1.2s、重推 10s——都用 ref 计时器：DSH 常驻前台，每 1.2s 一次本机 GET
-    // 开销可忽略；unref 在某些宿主生命周期下会让计时器不触发（实测踩坑），
-    // 宁可多一笔流量也要保证手机点的答案能被取走。dispose 时清理。
+    // 收件 1.2s、重推 10s。unref：不撑住宿主/测试进程的事件循环（DSH 常驻前台
+    // 自有其它 ref _handle_保活；测试里 B2 用例自带 keep 计时器）。dispose 时清理。
     // 首拍也挂在 effect 里：假 ctx（测试）在 execute 返回后同步跑 disposer，
     // 裸写的提前 poll 会被随后的 clear 掐灭；effect 生命周期下 setup 必然先跑。
     ctx.effect(() => {
       const ansTimer = setInterval(() => { pollAnswers().catch(() => {}); }, 1200);
       const reqTimer = setInterval(rePush, 10000);
+      for (const t of [ansTimer, reqTimer]) {
+        if (typeof t.unref === 'function') t.unref();
+      }
       pollAnswers().catch(() => {});
       return () => {
         clearInterval(ansTimer);

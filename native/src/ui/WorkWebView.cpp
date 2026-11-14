@@ -761,6 +761,8 @@ QString WorkWebView::htmlFor(const QString &stateJson) const {
    padding:8px 10px;border-radius:8px;border:1px solid var(--a36);
    background:transparent;font-size:var(--f12);color:var(--text)}
  .reqsend{margin-top:6px}
+ .reqrow{display:flex;gap:8px;margin-top:6px}
+ .reqrow .reqbtn{flex:1;width:auto;text-align:center}
  .reqstate{font-size:var(--f11);color:var(--muted);margin-top:4px}
  .reqhead{font-weight:600;font-size:var(--f12);color:var(--text);margin-bottom:4px}
  .reqreason{font-size:var(--f11);color:var(--text-soft);white-space:pre-wrap;
@@ -1830,6 +1832,18 @@ function requestCard(req){
     d.append(head);
     if(req.reason){const r=document.createElement('div');r.className='reqreason';
       r.textContent=req.reason;d.append(r);}
+    if(req.answerable){
+      // B3：可答授权——允许/拒绝两键，提交 outcome 走 answer 动作。
+      const row=document.createElement('div');row.className='reqrow';
+      const mk=(label,outcome,primary)=>{const b=document.createElement('button');
+        b.className='btn reqbtn'+(primary?' primary':'');b.textContent=label;
+        b.onclick=()=>{row.querySelectorAll('button').forEach(x=>x.disabled=true);
+          b.textContent='已提交…';
+          postObj({cmd:'answer',id:chatOpenedId,requestId:req.id,outcome:outcome});};
+        return b;};
+      row.append(mk('允许','allowed-once',true),mk('拒绝','rejected',false));
+      d.append(row);
+    }
   }else if(!req.answerable){
     head.textContent='❓ 等你选方案';d.append(head);
     (req.questions||[]).forEach(q=>{
@@ -1887,7 +1901,9 @@ function requestCard(req){
     d.append(send,stateEl);
   }
   const hint=document.createElement('div');hint.className='reqhint';
-  hint.textContent=req.answerable?'点选项后提交——等于替你在电脑 DSH 界面里点了按钮':'暂在 DSH 界面应答（内联应答开发中）';
+  hint.textContent=!req.answerable?'暂在宿主界面应答（内联应答未开启）'
+    :(req.kind==='approval'?'允许/拒绝直接生效——等于替你在电脑上点了按钮'
+    :'点选项后提交——等于替你在电脑 DSH 界面里点了按钮');
   d.append(hint);
   return d;
 }

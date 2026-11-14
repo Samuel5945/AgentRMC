@@ -156,15 +156,22 @@ RequestQuestion(id, header, prompt, options[], multiple, secret,
        inbox `nextTurn/nextStep` 查重防重复提交（官方 REPLY_QUEUED 同款判据）。
      真机验证：手机提交「手机上提交一次」→ 本会话直接收到该答案（callId 匹配）。
      插件测试 31/31（resolve/steer/查重三用例）、桥 /request-answer 路由测试全绿。
-  3. **B3 授权内联答** ⛔→🔓（2026-11-14 晚发现干净通路，待实施）：进程内 Cordis
-     `ctx.approval` 只有 `request()`、无按 id 应答口（硬注 waterfall 会与 Web UI 竞速、
-     可能卡住授权），故现阶段聊天页授权只读。**但开源 dsh-Go 的 `packages/dsh_client`
-     证实 DSH Web API 层有干净 RPC**：`DshClient.respondApproval` / `answerQuestion`，
-     走 `POST /api/<endpoint>` + `/api/remote.mux` WS（launch-token 登录 + cookie）。
-     即 Web UI 自己用的就是这条远程面，而非进程内 waterfall。B3 可改走该远程面
-     （插件进程内调对应 remote endpoint，或原生直连 dsh web），零竞态。
-     参考：OpenSquilla 蛋仔已用同构干净 RPC（`exec.approval.resolve` /
-     `chat.clarify_submit`）做内联审批/澄清，见下「横向对照」。
+  3. **B3 授权内联答** ✅（opt-in 独占，2026-11-14 晚实现+单测）：进程内 Cordis
+     `ctx.approval` 只有 `request()`、无按 id 应答口，Web UI 自己是 approval/request
+     瀑布应答者。故做成 **opt-in 独占**：配置 `approvalInline:true` 时插件注册为
+     独占应答者 hold 住请求，等 RMC 聊天页允许/拒绝（pull 模型成立——我们是应答者），
+     桌面 Web UI 授权卡不再弹；**默认 false 保持安全只读**。聊天页授权卡 answerable
+     时渲染 允许/拒绝 两键 → `cmd=answer{outcome:'allowed-once'|'rejected'}`。
+     单测：B3 独占 resolve / 默认关不注册 两例绿（插件 33/33）。
+     另证实 DSH Web API 层有干净 `respondApproval`/`answerQuestion`（dsh-Go
+     dsh_client），若将来要「不独占、与 Web UI 共存」可改走该远程面。
+  4. **OpenSquilla 内联应答** ✅（2026-11-14 晚，子代理实现+端到端自检）：外部桥
+     `opensquilla-pet-bridge.mjs` 增「推待答+取应答」：approval_required/plan_presentation/
+     交互式 user_input → POST /requests（answerable:true）；poll /request-answer →
+     网关干净 RPC `exec/plugin.approval.resolve {id,approved,choice}` /
+     `chat.clarify_submit {sessionKey,requestId,fields}` → ack。无 waterfall 竞争。
+     `--no-answer` 可关。test-inline-answer.mjs 全绿（事件→/requests、答案→RPC、
+     ack/销账/清账、--no-answer 零流量）。
   - OpenCode 的 permission/form reply 是干净 HTTP，无 waterfall 竞争，接 A 后 B 最易。
 
 #### 横向对照（2026-11-14 晚：开源 dsh-Go × 本地 OpenSquilla 蛋仔 × AgentRMC）

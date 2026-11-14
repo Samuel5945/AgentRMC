@@ -16,6 +16,15 @@
 //   node opensquilla-pet-bridge.mjs --raise AgentRMCNative.exe   # 改拉哪个窗口（--no-raise 不拉）
 //   node opensquilla-pet-bridge.mjs --include-cron --log out.log
 //   node opensquilla-pet-bridge.mjs --selftest            # 只测一次 /notify，不连网关
+//   node opensquilla-pet-bridge.mjs --selftest-mapping    # 内联应答纯逻辑自检，不连网关/桥
+//
+// 内联应答（与 DSH 插件同款契约，--no-answer 可关，默认开）：
+//   待审批/待澄清按会话攒账，变化即 POST {bridge}/requests（手机/桌面聊天页据此
+//   渲染可答卡片），另每 10s 重推（推送同时是插件在线心跳，原生 15s 没收到就
+//   把卡片退回只读）。每 1.2s GET {bridge}/request-answer/pending?exe=OpenSquilla.exe
+//   取用户在聊天页点的答案：审批 → exec/plugin.approval.resolve（按 namespace），
+//   澄清/方案 → chat.clarify_submit，然后 POST {bridge}/request-answer/ack 回执。
+//   免打扰只静音提醒，不影响攒账/应答——人不在电脑前也能在手机上批。
 //
 // 文案模板（{session}=会话标题，泛标题 WebChat 回落项目目录名；{text}=回复开头，
 // 仅 --relay 时用；默认文案宿主名开头，与 hooks 系同口径）：
@@ -59,6 +68,8 @@ const CFG = {
   includeCron: flag("include-cron"),
   quiet: flag("quiet"),
   relay: flag("relay"),
+  // 内联应答（攒账推 /requests + 轮询答案调网关 RPC）默认开，--no-answer 整体关掉。
+  answerInline: !flag("no-answer"),
   refreshMs: Number(opt("refresh", "30000")),
   callTimeoutMs: Number(opt("call-timeout", "15000")),
   // sessions.send 的受理比普通 RPC 慢（网关要落 ingress 账），单给一个上限；
@@ -197,6 +208,19 @@ if (flag("selftest")) {
     process.exit(0);
   } catch (e) {
     log(`SELFTEST FAIL ${e.message}`);
+    process.exit(1);
+  }
+}
+
+// 内联应答纯逻辑自检：只跑「事件→请求卡」「答案→网关 RPC」的映射函数，
+// 不连网关、不碰桥 HTTP（函数声明提升，定义在文件末尾的内联应答段）。
+if (flag("selftest-mapping")) {
+  try {
+    selftestMapping();
+    log("SELFTEST-MAPPING OK");
+    process.exit(0);
+  } catch (e) {
+    log(`SELFTEST-MAPPING FAIL ${e.message}`);
     process.exit(1);
   }
 }
@@ -363,10 +387,13 @@ async function onFrame(frame) {
 
   // 事件名在 frame.event 顶层；个别版本会塞进 payload.event。
   const evName = p.event || name;
+  const sessionKey = p.session_key || p.key || "?";
+  // 内联应答账本：先于 notify 的去重/免打扰记账——静音只压出声，
+  // 不能吞掉可答卡片（免打扰时人也能在手机上批审批/答澄清）。
+  if (CFG.answerInline) trackSessionEvent(evName, sessionKey, p);
   const mapped = eventKind(evName);
   if (!mapped) return;
 
-  const sessionKey = p.session_key || p.key || "?";
   if (!CFG.includeCron && String(sessionKey).startsWith("cron:")) return;
   const identity = eventIdentity(p);
   if (mapped.kind === "turn-start") {
@@ -568,6 +595,397 @@ async function pollDispatches() {
 }
 setInterval(pollDispatches, 1500);
 
+// —— 内联应答通道（B2/B3，与 DSH 插件同款契约）：会话事件 → 待答账本 →
+// POST /requests 推可答卡片；手机/桌面聊天页的答案 → pollAnswers 取件 →
+// 网关 RPC 应答 → /request-answer/ack 回执。字段映射依据蛋仔实现：
+//   approval_required payload：approval_id/namespace/tool_name/command/warning/destructive
+//     （Opensquilla desktop/pet/main.js:185-199）
+//   plan_presentation payload：request_id/message|text|summary/options|choices（main.js:206-217）
+//   交互式 user_input：搭载 session.event.tool_result，result.kind=user_input 且
+//     paused=true，request_id + clarify_schema.fields（main.js:161-175、pet/events.py:108-135）
+//   RPC 形状：exec/plugin.approval.resolve {id,approved,choice?}（gateway.js:261-266）、
+//     chat.clarify_submit {sessionKey,requestId,fields}（gateway.js:268-270），
+//     fields 是「字段名→值」平铺对象（renderer/pet.js:215-217）。
+// --no-answer 整体关闭；关掉后 /requests、/request-answer 零流量。
+
+// 待答账本：sessionKey -> Map(requestId -> 请求卡)。清空后外层键暂不删——
+// 10s 定时器还要补推一阵空集让原生端撤卡（见 emptySince）。
+const pendingRequests = new Map();
+const emptySince = new Map();
+
+// 推某会话当前待答集。fire-and-forget：原生没开就静默，变化/定时会再推；
+// 推送本身也是插件在线心跳（原生 15s 没收到就把卡片退回只读）。
+function pushRequests(sessionKey) {
+  const byId = pendingRequests.get(sessionKey);
+  fetch(`${CFG.bridge}/requests`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json; charset=utf-8" },
+    body: JSON.stringify({
+      exe: "OpenSquilla.exe",
+      session_id: sessionKey,
+      project: sessionProjects.get(sessionKey) || "",
+      requests: byId ? [...byId.values()] : [],
+    }),
+    signal: AbortSignal.timeout(5000),
+  }).catch(() => { /* 原生没开就静默：变化/定时再推 */ });
+}
+
+// 取第一个能拿去做 RPC 应答的非空 id；seq:N 是去重水位不是业务 id，
+// 拿它去 resolve 只会得到网关 NOT_FOUND，宁可不记账。
+function trackableId(...candidates) {
+  for (const c of candidates) {
+    const s = String(c ?? "").trim();
+    if (s && !s.startsWith("seq:")) return s;
+  }
+  return "";
+}
+
+// 选项归一成 {label,description}（聊天页按 label 渲染、按 label 回传）；
+// 蛋仔选项 value 可能与 label 不同（renderer/pet.js:142-144），不同才留 value
+// 供应答时映射回去，原生端忽略多余键。
+function optionLabelDesc(o) {
+  if (typeof o === "string") return { label: o, description: "" };
+  const label = String(o?.label ?? o?.title ?? o?.value ?? "");
+  const out = { label, description: String(o?.description || "") };
+  if (o?.value !== undefined && o?.value !== null && String(o.value) !== label) {
+    out.value = String(o.value);
+  }
+  return out;
+}
+
+// approval_required → 审批卡。reason 先 command（要执行什么）再 warning；
+// destructive 追加不可逆警示（蛋仔 renderer/pet.js:118 同款文案）。
+function approvalRequestFrom(p) {
+  const id = trackableId(p.approval_id, p.approvalId, eventIdentity(p));
+  if (!id) return null;
+  const command = String(p.command || p.display_target || "");
+  const warning = String(p.warning || "");
+  let reason = command && warning ? `${command}（⚠ ${warning}）` : (command || warning);
+  if (p.destructive) reason += (reason ? "；" : "") + "⚠ 该操作可能不可逆，请谨慎确认";
+  return {
+    kind: "approval", id, answerable: true,
+    toolName: String(p.tool_name || ""),
+    reason,
+    // resolve 按 namespace 分流（gateway.js:262）；原生端忽略多余键。
+    namespace: String(p.namespace || "exec"),
+  };
+}
+
+// tool_result 的 result/user_input_request 可能是对象或 JSON 字符串（main.js:162-166）。
+function userInputResult(p) {
+  let result = p?.result;
+  if (typeof result === "string") { try { result = JSON.parse(result); } catch { return null; } }
+  if (!result || typeof result !== "object") result = p?.user_input_request;
+  if (typeof result === "string") { try { result = JSON.parse(result); } catch { return null; } }
+  if (!result || typeof result !== "object" || result.kind !== "user_input") return null;
+  return result;
+}
+
+// clarify_schema.fields → 问题列表（蛋仔 renderer/pet.js:134-145 的字段形状）：
+// name|key 是字段名，prompt|label|title 是问题，options|choices|enum 是选项；
+// boolean 字段没选项，合成 是/否（网关 user_input_broker._coerce_bool 认「是/否」）。
+function clarifyQuestionsFrom(result, schema) {
+  if (Array.isArray(result.questions) && result.questions.length) {
+    // plan_control 等工具直接带归一化 questions（plan_control.py:300-337），优先用。
+    return result.questions.map((q) => ({
+      id: String(q?.id || ""),
+      question: String(q?.question || q?.header || ""),
+      options: (Array.isArray(q?.options) ? q.options : []).map(optionLabelDesc),
+      multi_select: !!q?.multi_select,
+    })).filter((q) => q.id);
+  }
+  return schema.fields.map((f) => {
+    const name = String(f?.name || f?.key || "");
+    const type = String(f?.type || "string").toLowerCase();
+    const rawOpts = (Array.isArray(f?.options) && f.options.length)
+      ? f.options : (f?.choices || f?.enum || []);
+    let options = (Array.isArray(rawOpts) ? rawOpts : []).map(optionLabelDesc);
+    if ((type === "boolean" || type === "bool") && !options.length) {
+      options = [{ label: "是", description: "" }, { label: "否", description: "" }];
+    }
+    return {
+      id: name,
+      question: String(f?.prompt || f?.label || f?.title || name),
+      options,
+      // OpenSquilla 澄清逐字段单值（user_input_broker 逐字段校验），没有多选。
+      multi_select: !!f?.multi_select,
+    };
+  }).filter((q) => q.id);
+}
+
+// plan_presentation / 交互式 user_input → 提问卡；不是待答表单返回 null。
+function questionRequestFrom(evName, p) {
+  if (evName === "session.event.plan_presentation") {
+    const id = trackableId(p.request_id, p.requestId, p.clientRequestId, eventIdentity(p));
+    if (!id) return null;
+    const rawOpts = Array.isArray(p.options) ? p.options
+      : (Array.isArray(p.choices) ? p.choices : []);
+    return {
+      kind: "question", id, answerable: true,
+      questions: [{
+        id, question: String(p.message || p.text || p.summary || "有个方案等你选择"),
+        options: rawOpts.map(optionLabelDesc), multi_select: false,
+      }],
+    };
+  }
+  // 交互式 user_input 搭载 tool_result（main.js:224-236）：paused=true 且
+  // status 缺省或 input_required 才是待答表单。
+  const result = userInputResult(p);
+  if (!result || result.paused !== true) return null;
+  if (result.status != null && result.status !== "input_required") return null;
+  const id = trackableId(result.request_id, result.requestId);
+  if (!id) return null;
+  let schema = result.clarify_schema;
+  if (typeof schema === "string") { try { schema = JSON.parse(schema); } catch { schema = null; } }
+  if (!schema || !Array.isArray(schema.fields) || !schema.fields.length) return null;
+  const questions = clarifyQuestionsFrom(result, schema);
+  if (!questions.length) return null;
+  return { kind: "question", id, answerable: true, questions };
+}
+
+// 同一 requestId 的 user_input 结果不再 paused = 已在别处应答/取消/过期 → 给销账用。
+function resolvedUserInputId(p) {
+  const result = userInputResult(p);
+  if (!result || result.paused === true) return "";
+  return trackableId(result.request_id, result.requestId);
+}
+
+// 聊天页答案 [{id,selected:[labels],custom?}] → 蛋仔 submitClarify 的 fields 平铺对象
+// （renderer/pet.js:215-217）。OpenSquilla enum 的 choices 就是 label 本身
+// （plan_control.py:299）；custom（其他）优先；选项带独立 value 时按 label 映射回去。
+// bool/int 字段传字符串即可，网关 user_input_broker._coerce_field 会自己转
+// （「是/否」、数字字符串都认）。
+function clarifyFieldsFrom(questions, answers) {
+  const byQid = new Map((questions || []).map((q) => [q.id, q]));
+  const fields = {};
+  for (const a of answers || []) {
+    const qid = String(a?.id || "");
+    if (!qid) continue;
+    const custom = String(a?.custom || "").trim();
+    let value = custom;
+    if (!value) {
+      const labels = (Array.isArray(a?.selected) ? a.selected : []).map(String).filter(Boolean);
+      if (!labels.length) continue;
+      const opt = byQid.get(qid)?.options?.find((o) => o.label === labels[0]);
+      // 澄清逐字段单值：多选也只取首项（网关不收数组）。
+      value = opt && opt.value !== undefined ? opt.value : labels[0];
+    }
+    fields[qid] = value;
+  }
+  return fields;
+}
+
+// 应答件 → 网关 RPC。审批按账本记的 namespace 分流（plugin → plugin.approval.resolve，
+// gateway.js:262）；账本丢失（桥重启）退回 exec，网关不认会带原因回执。
+function answerRpcFrom(item, tracked) {
+  if (item.kind === "approval") {
+    const method = tracked?.namespace === "plugin" ? "plugin.approval.resolve" : "exec.approval.resolve";
+    const params = { id: String(item.id), approved: item.outcome === "allowed-once" };
+    if (item.choice) params.choice = String(item.choice);
+    return { method, params };
+  }
+  return {
+    method: "chat.clarify_submit",
+    params: {
+      sessionKey: String(item.session_id),
+      requestId: String(item.id),
+      fields: clarifyFieldsFrom(tracked?.questions, item.answers),
+    },
+  };
+}
+
+// 会话事件 → 账本增删 + 变化即推。审批已解决（exec/plugin.approval.resolved）是
+// 全局广播（approval_events.py:363-367），session_key 可能缺失，按 approval_id 全账找。
+function trackSessionEvent(evName, sessionKey, p) {
+  if (!CFG.includeCron && String(sessionKey).startsWith("cron:")) return;
+  if (/\.approval\.resolved$/.test(evName)) {
+    const id = trackableId(p.approval_id, p.approvalId, p.id);
+    if (!id) return;
+    const keys = sessionKey !== "?" ? [sessionKey] : [...pendingRequests.keys()];
+    for (const key of keys) {
+      const byId = pendingRequests.get(key);
+      if (byId && byId.delete(id)) pushRequests(key);
+    }
+    return;
+  }
+  if (sessionKey === "?") return;
+  let byId = pendingRequests.get(sessionKey);
+  const ensure = () => {
+    if (!byId) { byId = new Map(); pendingRequests.set(sessionKey, byId); }
+    return byId;
+  };
+  let changed = false;
+  if (evName === "session.event.approval_required") {
+    const req = approvalRequestFrom(p);
+    if (req) { ensure().set(req.id, req); changed = true; }
+  } else if (evName === "session.event.plan_presentation" || evName === "session.event.tool_result") {
+    const req = questionRequestFrom(evName, p);
+    if (req) {
+      ensure().set(req.id, req); changed = true;
+    } else if (evName === "session.event.tool_result") {
+      const rid = resolvedUserInputId(p);
+      if (rid && byId && byId.delete(rid)) changed = true;
+    }
+  } else if (evName === "session.event.turn_committed" || evName === "session.event.done" ||
+             evName === "chat.done" || evName === "task.succeeded") {
+    // 新轮开始/本轮结束：整会话销账（蛋仔 done 时也收掉 permission/plan/clarify 气泡，main.js:246）。
+    if (byId && byId.size) { byId.clear(); changed = true; }
+  }
+  if (changed) pushRequests(sessionKey);
+}
+
+// 取应答：与 pollDispatches 同款——busy 防重入、非 200 安静（旧原生端没这条路由）、
+// 超时/重连是「送达未知」口径、真实拒绝带网关错误。ok 才销账重推，失败留卡给聊天页重试。
+let answerBusy = false;
+let answerLogAt = 0;
+const answerWarn = (msg) => {
+  const now = Date.now();
+  if (now - answerLogAt > 60000) { answerLogAt = now; log(msg); }
+};
+async function pollAnswers() {
+  if (answerBusy || !CFG.answerInline) return;
+  answerBusy = true;
+  try {
+    const res = await fetch(`${CFG.bridge}/request-answer/pending?exe=OpenSquilla.exe`, {
+      signal: AbortSignal.timeout(5000),
+    });
+    if (res.status !== 200) return;
+    let items;
+    try { items = JSON.parse(await res.text()); } catch { return; }
+    if (!Array.isArray(items) || items.length === 0) return;
+    for (const item of items) {
+      const answerId = String(item?.answer_id || "");
+      const sessionId = String(item?.session_id || "");
+      const reqId = String(item?.id || "");
+      const tracked = pendingRequests.get(sessionId)?.get(reqId);
+      let error = "";
+      if (!answerId || !sessionId || !reqId) {
+        error = "取件缺字段（answer_id/session_id/id）";
+      } else if (!gatewayUp) {
+        error = "网关没连上，未应答";
+      } else {
+        const rpc = answerRpcFrom(item, tracked);
+        if (item.kind === "question" && !Object.keys(rpc.params.fields).length) {
+          error = "提问应答缺 answers，未提交";
+        } else {
+          try {
+            await call(rpc.method, rpc.params);
+          } catch (e) {
+            const msg = (e && e.message) || String(e);
+            error = isUncertain(msg)
+              ? `应答送达未知：${msg}（网关可能已受理，先去会话里确认再重试）`
+              : `网关拒绝应答：${msg}`;
+          }
+        }
+      }
+      if (!error) {
+        const byId = pendingRequests.get(sessionId);
+        if (byId && byId.delete(reqId)) pushRequests(sessionId);
+      }
+      try {
+        await fetch(`${CFG.bridge}/request-answer/ack`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json; charset=utf-8" },
+          body: JSON.stringify({
+            answer_id: answerId, ok: error === "", ...(error ? { error } : {}),
+          }),
+          signal: AbortSignal.timeout(5000),
+        });
+      } catch (e) {
+        // ack 发不回去：原生端 60s 取件超时会兜底取消，节流记一笔。
+        answerWarn("answer ack failed: " + e.message);
+      }
+      log(`ANSWER ${answerId.slice(0, 8)} sess=${sessionId} ${item.kind} ok=${error === ""}${error ? " " + error : ""}`);
+    }
+  } catch (e) {
+    // 原生端没开：轮询失败保持安静，60s 记一次。
+    answerWarn("answer poll failed: " + e.message);
+  } finally {
+    answerBusy = false;
+  }
+}
+setInterval(pollAnswers, 1200);
+
+// 10s 定时重推：原生端重启/丢账后恢复展示；有账才推——清空的账补推 30s 空集
+// （确保原生端撤卡，也兜住单次推送失败），之后丢弃，长期无账零流量。
+setInterval(() => {
+  if (!CFG.answerInline || pendingRequests.size === 0) return;
+  const now = Date.now();
+  for (const [key, byId] of [...pendingRequests]) {
+    if (byId.size > 0) {
+      emptySince.delete(key);
+    } else {
+      const t = emptySince.get(key) || now;
+      emptySince.set(key, t);
+      if (now - t > 30000) { pendingRequests.delete(key); emptySince.delete(key); continue; }
+    }
+    pushRequests(key);
+  }
+}, 10000);
+
+// --selftest-mapping：纯逻辑自检（不连网关/桥）。用例按蛋仔 payload 形状构造。
+function selftestMapping() {
+  const eq = (got, want, msg) => {
+    const g = JSON.stringify(got); const w = JSON.stringify(want);
+    if (g !== w) throw new Error(`${msg}: got ${g} want ${w}`);
+  };
+  // 审批卡：approval_id/namespace/tool_name/command/warning（main.js:185-199）。
+  const ap = approvalRequestFrom({
+    approval_id: "ap-1", namespace: "exec", tool_name: "shell",
+    command: "rm -rf x", warning: "会删文件", destructive: true,
+  });
+  eq(ap.kind, "approval", "approval kind");
+  eq(ap.id, "ap-1", "approval id");
+  eq(ap.answerable, true, "approval answerable");
+  eq(ap.toolName, "shell", "approval toolName");
+  eq(ap.namespace, "exec", "approval namespace");
+  if (!ap.reason.includes("rm -rf x") || !ap.reason.includes("会删文件")) {
+    throw new Error("approval reason 应含 command 与 warning: " + ap.reason);
+  }
+  // seq 水位不是业务 id：不记账。
+  eq(approvalRequestFrom({ stream_seq: 7 }), null, "seq-only approval not trackable");
+  // 审批应答：allowed-once→approved:true；namespace 分流 plugin（gateway.js:261-266）。
+  eq(answerRpcFrom({ kind: "approval", id: "ap-1", outcome: "allowed-once" }, ap),
+    { method: "exec.approval.resolve", params: { id: "ap-1", approved: true } }, "exec resolve");
+  eq(answerRpcFrom({ kind: "approval", id: "ap-2", outcome: "rejected", choice: "no" },
+    { namespace: "plugin" }),
+    { method: "plugin.approval.resolve", params: { id: "ap-2", approved: false, choice: "no" } },
+    "plugin resolve + choice");
+  // 交互式 user_input：tool_result + JSON 字符串 result（main.js:161-175）。
+  const q = questionRequestFrom("session.event.tool_result", {
+    session_key: "s",
+    result: JSON.stringify({
+      kind: "user_input", paused: true, status: "input_required", request_id: "rq-1",
+      clarify_schema: { fields: [{ name: "q1", prompt: "选一个", type: "enum", choices: ["甲", "乙"], allow_other: true }] },
+    }),
+  });
+  eq(q.kind, "question", "question kind");
+  eq(q.id, "rq-1", "question requestId");
+  eq(q.questions, [{ id: "q1", question: "选一个", options: [{ label: "甲", description: "" }, { label: "乙", description: "" }], multi_select: false }], "schema fields → questions");
+  // 答案映射：selected label 即值；custom 优先（pet.js:194/215-217）。
+  eq(answerRpcFrom({ kind: "question", session_id: "s", id: "rq-1", answers: [{ id: "q1", selected: ["乙"] }] }, q),
+    { method: "chat.clarify_submit", params: { sessionKey: "s", requestId: "rq-1", fields: { q1: "乙" } } },
+    "clarify selected");
+  eq(clarifyFieldsFrom(q.questions, [{ id: "q1", selected: ["甲"], custom: "自己写" }]),
+    { q1: "自己写" }, "clarify custom overrides");
+  // 账本丢失时退回直接取 label 当值（OpenSquilla choices 即 label，plan_control.py:299）。
+  eq(clarifyFieldsFrom(undefined, [{ id: "q1", selected: ["乙"] }]), { q1: "乙" }, "clarify without tracked");
+  // 已应答（paused=false）不再是待答表单，且可用来销账。
+  eq(questionRequestFrom("session.event.tool_result", {
+    result: { kind: "user_input", paused: false, request_id: "rq-1" },
+  }), null, "resolved user_input not pending");
+  eq(resolvedUserInputId({ result: { kind: "user_input", paused: false, request_id: "rq-1" } }),
+    "rq-1", "resolved user_input id");
+  // plan_presentation：options/choices + message（main.js:206-217）。
+  const plan = questionRequestFrom("session.event.plan_presentation",
+    { request_id: "pl-1", message: "选个方案", choices: ["A", "B"] });
+  eq(plan.id, "pl-1", "plan requestId");
+  eq(plan.questions[0].options, [{ label: "A", description: "" }, { label: "B", description: "" }], "plan choices → options");
+  // 选项 value 与 label 不同时，应答映射回 value（pet.js:142-144）。
+  eq(clarifyFieldsFrom([{ id: "q", options: [{ label: "显示", value: "v", description: "" }] }],
+    [{ id: "q", selected: ["显示"] }]), { q: "v" }, "label → value mapping");
+}
+
 process.on("SIGINT", () => {
   shuttingDown = true;
   log("shutting down");
@@ -575,7 +993,7 @@ process.on("SIGINT", () => {
   process.exit(0);
 });
 
-log(`pet-bridge start: raise=${CFG.raise || "(none)"} bridge=${CFG.bridge} cron=${CFG.includeCron ? "on" : "off"}`);
+log(`pet-bridge start: raise=${CFG.raise || "(none)"} bridge=${CFG.bridge} cron=${CFG.includeCron ? "on" : "off"} answer=${CFG.answerInline ? "on" : "off"}`);
 touchHeartbeat();
 setInterval(touchHeartbeat, Math.min(30000, CFG.refreshMs));
 connect();

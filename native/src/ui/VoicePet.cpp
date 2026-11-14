@@ -586,6 +586,152 @@ private:
     Tail tail_ = Tail::Down;
 };
 
+// 借鉴 OpenSquilla 蛋仔的富气泡：待答请求（授权/提问）渲染成可交互卡片。
+// 做成桌宠的子控件（同 PetBubble），自绘鲸鱼风圆角底，避免顶层窗口透明问题。
+// 按钮点击经回调交给 VoicePet 发信号，主窗落收件箱走插件/桥应答（同聊天页）。
+class VoicePet::RequestCard final : public QWidget {
+public:
+    explicit RequestCard(QWidget *parent) : QWidget(parent) {
+        setObjectName(QStringLiteral("petRequestCard"));
+        setFixedWidth(280);
+        auto *lay = new QVBoxLayout(this);
+        lay->setContentsMargins(14, 12, 14, 12);
+        lay->setSpacing(6);
+        title_ = new QLabel(this);
+        title_->setWordWrap(true);
+        body_ = new QLabel(this);
+        body_->setWordWrap(true);
+        lay->addWidget(title_);
+        lay->addWidget(body_);
+        btnBox_ = new QVBoxLayout();
+        btnBox_->setSpacing(6);
+        lay->addLayout(btnBox_);
+        applyTheme();
+    }
+
+    void applyTheme() {
+        auto &tm = ThemeManager::instance();
+        const QString text = tm.color(QStringLiteral("text")).name();
+        const QString muted = tm.color(QStringLiteral("muted")).name();
+        title_->setStyleSheet(QStringLiteral("color:%1;font-weight:600;font-size:13px;").arg(text));
+        body_->setStyleSheet(QStringLiteral("color:%1;font-size:12px;").arg(muted));
+    }
+
+    void clearButtons() {
+        while (QLayoutItem *it = btnBox_->takeAt(0)) {
+            if (QWidget *w = it->widget()) { w->deleteLater(); }
+            delete it;
+        }
+    }
+
+    QPushButton *makeButton(const QString &label, bool primary) {
+        auto &tm = ThemeManager::instance();
+        auto *b = new QPushButton(label, this);
+        b->setCursor(Qt::PointingHandCursor);
+        b->setMinimumHeight(30);
+        const QString accent = tm.color(QStringLiteral("accent")).name();
+        const QString border = tm.color(QStringLiteral("bubble.border")).name();
+        const QString text = tm.color(QStringLiteral("text")).name();
+        if (primary) {
+            b->setStyleSheet(QStringLiteral(
+                "QPushButton{background:%1;color:#fff;border:none;border-radius:8px;"
+                "font-size:12px;padding:4px 10px;}"
+                "QPushButton:disabled{opacity:.6;}").arg(accent));
+        } else {
+            b->setStyleSheet(QStringLiteral(
+                "QPushButton{background:transparent;color:%1;border:1px solid %2;"
+                "border-radius:8px;font-size:12px;padding:4px 10px;}"
+                "QPushButton:hover{background:rgba(127,127,127,.15);}").arg(text, border));
+        }
+        return b;
+    }
+
+    // req: /requests 单条。onAnswer(outcome, answers)；onOpenChat()。
+    void configure(const QJsonObject &req,
+                   std::function<void(QString, QJsonArray)> onAnswer,
+                   std::function<void()> onOpenChat) {
+        clearButtons();
+        applyTheme();
+        const QString kind = req.value(QStringLiteral("kind")).toString();
+        const bool answerable = req.value(QStringLiteral("answerable")).toBool();
+        if (kind == QStringLiteral("approval")) {
+            title_->setText(QStringLiteral("🔐 等你授权") +
+                            (req.value(QStringLiteral("toolName")).toString().isEmpty()
+                                 ? QString()
+                                 : QStringLiteral("：") + req.value(QStringLiteral("toolName")).toString()));
+            body_->setText(req.value(QStringLiteral("reason")).toString());
+            body_->setVisible(!body_->text().isEmpty());
+            if (answerable) {
+                auto *row = new QHBoxLayout();
+                row->setSpacing(8);
+                auto *allow = makeButton(QStringLiteral("允许"), true);
+                auto *reject = makeButton(QStringLiteral("拒绝"), false);
+                connect(allow, &QPushButton::clicked, this, [onAnswer] {
+                    onAnswer(QStringLiteral("allowed-once"), QJsonArray());
+                });
+                connect(reject, &QPushButton::clicked, this, [onAnswer] {
+                    onAnswer(QStringLiteral("rejected"), QJsonArray());
+                });
+                row->addWidget(allow);
+                row->addWidget(reject);
+                btnBox_->addLayout(row);
+            }
+        } else {
+            title_->setText(QStringLiteral("❓ 等你选方案"));
+            const QJsonArray qs = req.value(QStringLiteral("questions")).toArray();
+            const QJsonObject q0 = qs.isEmpty() ? QJsonObject() : qs.at(0).toObject();
+            body_->setText(q0.value(QStringLiteral("question")).toString());
+            body_->setVisible(!body_->text().isEmpty());
+            const QJsonArray opts = q0.value(QStringLiteral("options")).toArray();
+            const bool simple = answerable && qs.size() == 1 &&
+                                !q0.value(QStringLiteral("multi_select")).toBool() &&
+                                opts.size() >= 1 && opts.size() <= 4;
+            if (simple) {
+                const QString qid = q0.value(QStringLiteral("id")).toString();
+                for (const QJsonValue &v : opts) {
+                    const QString label = v.toObject().value(QStringLiteral("label")).toString();
+                    auto *b = makeButton(label, false);
+                    connect(b, &QPushButton::clicked, this, [onAnswer, qid, label] {
+                        QJsonArray sel;
+                        sel.append(label);
+                        QJsonObject a;
+                        a.insert(QStringLiteral("id"), qid);
+                        a.insert(QStringLiteral("selected"), sel);
+                        QJsonArray answers;
+                        answers.append(a);
+                        onAnswer(QString(), answers);
+                    });
+                    btnBox_->addWidget(b);
+                }
+            }
+            // 复杂（多选/多题/选项多）或不可答：给一个去聊天页的入口。
+            auto *chat = makeButton(QStringLiteral("去聊天页作答"), !simple && answerable);
+            connect(chat, &QPushButton::clicked, this, [onOpenChat] { onOpenChat(); });
+            btnBox_->addWidget(chat);
+        }
+        adjustSize();
+    }
+
+protected:
+    void paintEvent(QPaintEvent *) override {
+        auto &tm = ThemeManager::instance();
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing);
+        const QRectF box = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
+        QLinearGradient grad(box.topLeft(), box.bottomLeft());
+        grad.setColorAt(0, tm.color(QStringLiteral("bubble.bg")));
+        grad.setColorAt(1, tm.color(QStringLiteral("bubble.bg2")));
+        painter.setBrush(grad);
+        painter.setPen(QPen(tm.color(QStringLiteral("bubble.border")), 1.0));
+        painter.drawRoundedRect(box, 12, 12);
+    }
+
+private:
+    QLabel *title_ = nullptr;
+    QLabel *body_ = nullptr;
+    QVBoxLayout *btnBox_ = nullptr;
+};
+
 VoicePet::VoicePet(ProfileStore *store, VoiceController *voice, QWidget *parent)
     : QWidget(parent), store_(store), voice_(voice) {
     setObjectName("voicePet");
@@ -835,6 +981,87 @@ void VoicePet::hideBubble() {
         if (auto *pet = static_cast<PetBubble *>(bubble_)) {
             pet->setClickHandler(nullptr);
         }
+    }
+}
+
+// —— 借鉴蛋仔的富气泡：待答请求交互卡 ——
+void VoicePet::ensureRequestCard() {
+    if (requestCard_ != nullptr) {
+        return;
+    }
+    requestCard_ = new RequestCard(this);
+    requestCard_->hide();
+    if (requestTimer_ == nullptr) {
+        requestTimer_ = new QTimer(this);
+        requestTimer_->setSingleShot(true);
+        connect(requestTimer_, &QTimer::timeout, this, [this] {
+            if (requestCard_ != nullptr) {
+                requestCard_->hide();
+            }
+        });
+    }
+}
+
+void VoicePet::placeRequestCard() {
+    if (requestCard_ == nullptr) {
+        return;
+    }
+    const QScreen *screen = this->screen() ? this->screen()
+                                           : QGuiApplication::primaryScreen();
+    const QRect available = screen ? screen->availableGeometry() : QRect(0, 0, 1920, 1080);
+    int x = this->x() + width() / 2 - requestCard_->width() / 2;
+    x = qMax(available.left() + 4,
+             qMin(x, available.right() - requestCard_->width() - 4));
+    const int y = dock_ == Dock::Top
+                      ? this->y() + height() + 8
+                      : this->y() - requestCard_->height() - 8;
+    requestCard_->move(x, qMax(available.top() + 4, y));
+}
+
+void VoicePet::showRequestCard(const QString &sessionId, const QJsonObject &req) {
+    if (!petEnabled() || !isVisible()) {
+        return;  // 桌宠收起时不弹卡（提醒仍走气泡/托盘/语音）
+    }
+    ensureRequestCard();
+    requestSession_ = sessionId;
+    requestId_ = req.value(QStringLiteral("id")).toString();
+    const QString kind = req.value(QStringLiteral("kind")).toString();
+    const QString rid = requestId_;
+    const QString sid = sessionId;
+    requestCard_->configure(
+        req,
+        [this, sid, rid, kind](QString outcome, QJsonArray answers) {
+            if (requestCard_ != nullptr) {
+                requestCard_->hide();
+            }
+            if (requestTimer_ != nullptr) {
+                requestTimer_->stop();
+            }
+            emit requestAnswered(sid, rid, kind, answers, outcome);
+        },
+        [this, sid] {
+            if (requestCard_ != nullptr) {
+                requestCard_->hide();
+            }
+            if (requestTimer_ != nullptr) {
+                requestTimer_->stop();
+            }
+            emit requestOpenChat(sid);
+        });
+    hideBubble();  // 交互卡和普通气泡不叠着
+    placeRequestCard();
+    requestCard_->show();
+    requestCard_->raise();
+    requestTimer_->start(120000);  // 两分钟没人理就收起，别留陈旧卡片
+}
+
+void VoicePet::clearRequestCard(const QString &requestId) {
+    if (requestCard_ != nullptr && requestId_ == requestId) {
+        requestCard_->hide();
+        if (requestTimer_ != nullptr) {
+            requestTimer_->stop();
+        }
+        requestId_.clear();
     }
 }
 

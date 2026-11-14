@@ -105,6 +105,10 @@ private:
     QJsonObject chatStateFor(const QString &id, int offset = 0, int limit = 50);
     // B2：给推送来的待答请求标可答性（只有 question 能内联应答）。
     QJsonArray requestsWithAnswerable(const QString &sessionId) const;
+    // B2/B3：把一条应答落收件箱（聊天页 answer 与桌宠交互卡共用）。返回拒绝原因，
+    // 空串=已排队。kind 从待答清单认（question/approval），不信调用方自报。
+    QString enqueueAnswer(const QString &workItemId, const QString &requestId,
+                          const QJsonArray &answers, const QString &outcome);
     // B2：手机/桌面下发的应答件收件箱（会话 id → 待取 answer 数组）与清理。
     QString takeAnswerPending(const QString &exe);
     void ackAnswer(const QString &answerId, bool ok, const QString &error);

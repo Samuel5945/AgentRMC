@@ -920,6 +920,39 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
     // 点气泡回跳：提醒不再靠自动抢前台，用户点了才把宿主窗口拉回来。
     connect(voicePet_, &VoicePet::bubbleActivated, this,
             [](const QString &exe) { AgentWindow::raise(exe); });
+    // 桌宠交互卡（借鉴蛋仔）：允许/拒绝/选项 → 落收件箱走插件/桥应答（同聊天页）。
+    connect(voicePet_, &VoicePet::requestAnswered, this,
+            [this](const QString &sessionId, const QString &requestId,
+                   const QString &kind, const QJsonArray &answers,
+                   const QString &outcome) {
+                Q_UNUSED(kind);
+                QString workItemId;
+                for (const WorkItem &it : workItems_->items()) {
+                    if (it.sessionId == sessionId) {
+                        workItemId = it.id;
+                        break;
+                    }
+                }
+                const QString why =
+                    enqueueAnswer(workItemId, requestId, answers, outcome);
+                if (!why.isEmpty()) {
+                    appendEvent(QStringLiteral("error"), QString(), QString(),
+                                QStringLiteral("桌宠应答未提交：%1").arg(why), 0);
+                }
+                refreshWorkItems();
+            });
+    // 交互卡「去聊天页」：打开该会话聊天页（复杂多选/多题去那里答）。
+    connect(voicePet_, &VoicePet::requestOpenChat, this,
+            [this](const QString &sessionId) {
+                for (const WorkItem &it : workItems_->items()) {
+                    if (it.sessionId == sessionId) {
+                        handleWebAction(QJsonObject{
+                            {QStringLiteral("cmd"), QStringLiteral("chatOpen")},
+                            {QStringLiteral("id"), it.id}});
+                        return;
+                    }
+                }
+            });
     connect(voicePet_, &VoicePet::voiceFeedbackError, this,
             [this](const QString &error) {
                 appendEvent(QStringLiteral("error"), QString(), QString(),
@@ -1017,6 +1050,7 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
             }
             const QJsonArray reqs =
                 payload.value(QStringLiteral("requests")).toArray();
+            const QJsonArray old = pendingRequests_.value(sid);
             if (reqs.isEmpty()) {
                 pendingRequests_.remove(sid);
                 // 卡片在 DSH 侧已关闭/已答：排队中还没送的应答件一并作废，
@@ -1024,6 +1058,33 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
                 dropAnswerPendingForSession(sid);
             } else {
                 pendingRequests_.insert(sid, reqs);
+            }
+            // 借鉴蛋仔：待答请求驱动桌宠交互卡（新增可答→弹卡，移除→收卡）。
+            if (voicePet_ != nullptr) {
+                QSet<QString> oldIds;
+                for (const QJsonValue &v : old) {
+                    oldIds.insert(v.toObject().value(QStringLiteral("id")).toString());
+                }
+                QSet<QString> newIds;
+                QString showId;
+                QJsonObject showReq;
+                for (const QJsonValue &v : reqs) {
+                    const QJsonObject r = v.toObject();
+                    const QString rid = r.value(QStringLiteral("id")).toString();
+                    newIds.insert(rid);
+                    if (r.value(QStringLiteral("answerable")).toBool()) {
+                        showId = rid;
+                        showReq = r;
+                    }
+                }
+                for (const QString &rid : oldIds) {
+                    if (!newIds.contains(rid)) {
+                        voicePet_->clearRequestCard(rid);
+                    }
+                }
+                if (!showId.isEmpty() && !oldIds.contains(showId)) {
+                    voicePet_->showRequestCard(sid, showReq);
+                }
             }
         });
         // B2：插件轮询取应答件 / 应答结果回执。
@@ -3305,6 +3366,64 @@ QJsonArray MainWindow::requestsWithAnswerable(const QString &sessionId) const {
     return out;
 }
 
+// B2/B3：聊天页 answer 与桌宠交互卡共用的落收件箱逻辑。kind 从待答清单认，
+// 校验后插 pendingAnswers_ 等插件/桥取件。返回拒绝原因（空=已排队）。
+QString MainWindow::enqueueAnswer(const QString &workItemId, const QString &requestId,
+                                  const QJsonArray &answers, const QString &outcome) {
+    const WorkItem *item = nullptr;
+    for (const WorkItem &it : workItems_->items()) {
+        if (it.id == workItemId) {
+            item = &it;
+            break;
+        }
+    }
+    if (item == nullptr || requestId.isEmpty()) {
+        return QStringLiteral("应答缺字段（待办/requestId）");
+    }
+    if (!SessionDispatch::supportsPluginChannel(item->agentExe)) {
+        return QStringLiteral("该宿主暂不支持内联应答");
+    }
+    QString kind;
+    const QJsonArray reqs = pendingRequests_.value(item->sessionId);
+    for (const QJsonValue &v : reqs) {
+        const QJsonObject r = v.toObject();
+        if (r.value(QStringLiteral("id")).toString() == requestId) {
+            kind = r.value(QStringLiteral("kind")).toString();
+            break;
+        }
+    }
+    if (kind.isEmpty()) {
+        return QStringLiteral("这条请求已不在待答清单（可能刚被别处应答）");
+    }
+    if (kind == QStringLiteral("question") && answers.isEmpty()) {
+        return QStringLiteral("提问应答缺 answers");
+    }
+    if (kind == QStringLiteral("approval") &&
+        outcome != QStringLiteral("allowed-once") &&
+        outcome != QStringLiteral("rejected")) {
+        return QStringLiteral("授权应答 outcome 须为 allowed-once/rejected");
+    }
+    PendingAnswer pa;
+    pa.sessionId = item->sessionId;
+    pa.kind = kind;
+    pa.id = requestId;
+    pa.answers = answers;
+    pa.outcome = outcome;
+    pa.exe = item->agentExe;
+    pa.enqueuedAt = QDateTime::currentDateTimeUtc();
+    pendingAnswers_.insert(QUuid::createUuid().toString(QUuid::WithoutBraces), pa);
+    dispatchNotice_ = kind == QStringLiteral("approval")
+                          ? QStringLiteral("授权应答已排队，等宿主确认…")
+                          : QStringLiteral("应答已排队，等插件送 DSH…");
+    dispatchNoticeId_ = workItemId;
+    dispatchNoticeExe_ = item->agentExe;
+    appendEvent(QStringLiteral("status"), QString(), QString(),
+                QStringLiteral("内联应答已排队：会话 %1 %2 %3")
+                    .arg(item->sessionId.left(8), kind, requestId.left(12)),
+                0);
+    return QString();
+}
+
 // B2：插件 1.2s 轮询取走本 exe 的应答件（未取走的超时 60s 作废：插件没在跑，
 // 别攒一肚子旧答案）。下发后标 handed，ack 时核销。
 QString MainWindow::takeAnswerPending(const QString &exe) {
@@ -3886,72 +4005,14 @@ void MainWindow::handleWebAction(const QJsonObject &action) {
             }
             refreshWorkItems();
         } else if (cmd == QStringLiteral("answer")) {
-            // B2/B3：聊天页内联应答。提问 {cmd:'answer', id, requestId,
-            // answers:[{id,selected,custom?}]}；授权 {cmd:'answer', id, requestId,
-            // outcome:'allowed-once'|'rejected'}。落收件箱等插件/桥取件应答。
-            const QString requestId =
-                action.value(QStringLiteral("requestId")).toString();
-            const QJsonArray answers =
-                action.value(QStringLiteral("answers")).toArray();
-            const QString outcome =
-                action.value(QStringLiteral("outcome")).toString();
-            const WorkItem *item = nullptr;
-            for (const WorkItem &it : workItems_->items()) {
-                if (it.id == id) {
-                    item = &it;
-                    break;
-                }
-            }
-            QString why;
-            if (item == nullptr || requestId.isEmpty()) {
-                why = QStringLiteral("应答缺字段（待办/requestId）");
-            } else if (!SessionDispatch::supportsPluginChannel(item->agentExe)) {
-                why = QStringLiteral("该宿主暂不支持内联应答");
-            } else {
-                // 从待答清单认这条请求的 kind（提问/授权），别信前端自报。
-                QString kind;
-                const QJsonArray reqs = pendingRequests_.value(item->sessionId);
-                for (const QJsonValue &v : reqs) {
-                    const QJsonObject r = v.toObject();
-                    if (r.value(QStringLiteral("id")).toString() == requestId) {
-                        kind = r.value(QStringLiteral("kind")).toString();
-                        break;
-                    }
-                }
-                if (kind.isEmpty()) {
-                    why = QStringLiteral("这条请求已不在待答清单（可能刚被别处应答）");
-                } else if (kind == QStringLiteral("question") && answers.isEmpty()) {
-                    why = QStringLiteral("提问应答缺 answers");
-                } else if (kind == QStringLiteral("approval") &&
-                           outcome != QStringLiteral("allowed-once") &&
-                           outcome != QStringLiteral("rejected")) {
-                    why = QStringLiteral("授权应答 outcome 须为 allowed-once/rejected");
-                } else {
-                    PendingAnswer pa;
-                    pa.sessionId = item->sessionId;
-                    pa.kind = kind;
-                    pa.id = requestId;
-                    pa.answers = answers;
-                    pa.outcome = outcome;
-                    pa.exe = item->agentExe;
-                    pa.enqueuedAt = QDateTime::currentDateTimeUtc();
-                    pendingAnswers_.insert(
-                        QUuid::createUuid().toString(QUuid::WithoutBraces), pa);
-                    dispatchNotice_ = kind == QStringLiteral("approval")
-                                          ? QStringLiteral("授权应答已排队，等宿主确认…")
-                                          : QStringLiteral("应答已排队，等插件送 DSH…");
-                    dispatchNoticeId_ = id;
-                    dispatchNoticeExe_ = item->agentExe;
-                    appendEvent(QStringLiteral("status"), QString(), QString(),
-                                QStringLiteral("内联应答已排队：会话 %1 %2 %3")
-                                    .arg(item->sessionId.left(8), kind, requestId.left(12)),
-                                0);
-                }
-            }
+            // B2/B3：聊天页内联应答（提问 answers / 授权 outcome），落收件箱。
+            const QString why = enqueueAnswer(
+                id, action.value(QStringLiteral("requestId")).toString(),
+                action.value(QStringLiteral("answers")).toArray(),
+                action.value(QStringLiteral("outcome")).toString());
             if (!why.isEmpty()) {
                 dispatchNotice_ = why;
                 dispatchNoticeId_ = id;
-                dispatchNoticeExe_ = item != nullptr ? item->agentExe : QString();
                 appendEvent(QStringLiteral("error"), QString(), QString(),
                             QStringLiteral("内联应答未提交：%1").arg(why), 0);
             }

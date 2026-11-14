@@ -777,6 +777,54 @@ await check('B2: 重复答案被挡 → ack ok:false 带原因', async () => {
   }
 });
 
+// —— B3 授权内联答（opt-in 独占应答者）——
+await check('B3: approvalInline 开启 → 独占应答者 hold，RMC 允许 → resolve allowed-once', async () => {
+  const sid = 'session-ffff1111-2222-4333-8444-555555555555';
+  const approvalId = 'ap-b3';
+  const { server, seen } = makeAnswerServer([
+    { answer_id: 'a-b3', session_id: sid, kind: 'approval', id: approvalId,
+      outcome: 'allowed-once' },
+  ]);
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const stub = makeCtx();
+    const keep = setInterval(() => {}, 300);
+    try {
+      apply(stub.ctx, { port: server.address().port, registerSkill: false,
+        registerTools: false, approvalInline: true });
+      // 模拟宿主发起授权瀑布：插件应答者 hold 住（不 next）。
+      const handler = (stub.listeners.get('approval/request') || [])[0];
+      assert.ok(handler, 'approvalInline 开启应注册 approval/request 应答者');
+      let nextCalled = false;
+      const outcomePromise = handler(
+        { agent: { id: sid }, id: approvalId },
+        () => { nextCalled = true; return Promise.resolve('unavailable'); });
+      // 推一条 approval/asked 进账（answerable 应为 true）。
+      emitOn(stub, 'session/event', { id: sid }, {
+        type: 'approval/asked', data: { id: approvalId, toolName: 'pwsh', reason: 'rm' } });
+      assert.ok(await waitUntil(() => seen.pushes.some(p =>
+        p.session_id === sid && p.requests.some(r => r.kind === 'approval' && r.answerable === true))),
+        'approval 推送应带 answerable:true');
+      assert.ok(await waitUntil(() => seen.acks.length >= 1), 'ack 未到');
+      assert.strictEqual(seen.acks[0].ok, true, JSON.stringify(seen.acks[0]));
+      assert.strictEqual(await outcomePromise, 'allowed-once');
+      assert.strictEqual(nextCalled, false, '独占应答者不应 next() 放行');
+    } finally {
+      clearInterval(keep);
+      for (const dispose of stub.effects) dispose();
+    }
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+await check('B3: approvalInline 默认关 → 不注册应答者，answerApproval 明确拒绝', async () => {
+  const stub = makeCtx();
+  apply(stub.ctx, { port: 1, registerSkill: false, registerTools: false });
+  assert.strictEqual((stub.listeners.get('approval/request') || []).length, 0,
+    '默认关不应注册 approval/request 应答者');
+});
+
 await check('派发通道: followup 抛错 → ack ok:false 带原因，不炸轮询', async () => {
   const agents = {
     get: () => ({

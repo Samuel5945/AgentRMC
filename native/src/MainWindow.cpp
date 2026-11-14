@@ -940,6 +940,9 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
                                 QStringLiteral("桌宠应答未提交：%1").arg(why), 0);
                 }
                 refreshWorkItems();
+                if (workWeb_ != nullptr) {
+                    workWeb_->refresh();  // 桌宠答完同步收掉桌面聊天页的卡
+                }
             });
     // 交互卡「去聊天页」：打开该会话聊天页（复杂多选/多题去那里答）。
     connect(voicePet_, &VoicePet::requestOpenChat, this,
@@ -1085,6 +1088,10 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
                 if (!showId.isEmpty() && !oldIds.contains(showId)) {
                     voicePet_->showRequestCard(sid, showReq);
                 }
+            }
+            // 待答清单变化（新增/被别处应答移除）→ 刷新桌面聊天页，收掉残留卡。
+            if (workWeb_ != nullptr) {
+                workWeb_->refresh();
             }
         });
         // B2：插件轮询取应答件 / 应答结果回执。

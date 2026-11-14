@@ -929,7 +929,24 @@ function base(p){const t=(p||'').replace(/[\/\\]+$/,'');
  const i=Math.max(t.lastIndexOf('/'),t.lastIndexOf('\\'));return i<0?t:t.slice(i+1);}
 function where(it){if(!it.session_id) return '未关联会话';
  const b=base(it.project);
- return (b==='.'||b==='..'||!b)?('会话 '+String(it.session_id).slice(0,8)):b;}
+ if(b!=='.'&&b!=='..'&&b) return b;
+ if(it.session_title) return it.session_title;
+ return '会话 '+String(it.session_id).slice(0,8);}
+// 同宿主同项目重名时补会话身份：优先标题（截 12 字），没标题才退短 id。
+let WHERE_HITS={};
+function whereLabel(it){
+ let w=where(it);
+ if(!it.session_id||w.indexOf('会话 ')===0||w==='未关联会话') return w;
+ if((WHERE_HITS[(it.title||'')+'|'+w]||0)>1){
+  if(it.session_title&&w!==it.session_title){
+   const t=it.session_title;
+   w+=' · '+(t.length>12?t.slice(0,12)+'…':t);
+  }else{
+   w+=' · '+String(it.session_id).slice(0,6);
+  }
+ }
+ return w;
+}
 function hhmm(iso){const t=Date.parse(iso||'');if(isNaN(t)) return '';
  const d=new Date(t);
  return String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0');}
@@ -968,7 +985,7 @@ function card(it){
  const time=document.createElement('span');time.className='time';
  time.textContent=hhmm(it.updated_at)+waitText(it);
  l1.append(name,stage,time);
- const wh=document.createElement('div');wh.className='where';wh.textContent=where(it);
+ const wh=document.createElement('div');wh.className='where';wh.textContent=whereLabel(it);
  const msg=document.createElement('div');msg.className='msg';msg.textContent=it.message||'';
  el.append(bar,l1,wh,msg);
  // 点卡片进聊天页（打开即最新记录）；按钮各自阻止冒泡。
@@ -1137,6 +1154,9 @@ function renderWork(){
  lastSig=sig;
  const list=$('list');const keep=list.scrollTop;
  list.replaceChildren();
+ WHERE_HITS={};
+ items.forEach(it=>{const k=(it.title||'')+'|'+where(it);
+  WHERE_HITS[k]=(WHERE_HITS[k]||0)+1;});
  items.forEach(it=>list.append(card(it)));
  list.scrollTop=keep;
  $('empty').hidden=items.length>0;

@@ -109,6 +109,10 @@ private:
     // 懒创建 LAN 服务并接好 provider/持久化；开关与恢复启动都走这里。
     void ensureLanServer();
     void setLanEnabled(bool on);
+    // 待办队列 JSON（/work-items 与外壳共用）：在存储的原始字段上补会话身份
+    // ——DSH 卡从宿主投影缓存读标题（session_title）、空项目回填工作目录。
+    // 只补显示，不落盘：标题是宿主异步生成的，落盘会把旧值钉死。
+    QString workItemsJson();
     // 外壳页的配色：把当前主题的 token 翻成 CSS 写法（含字号倍率）。
     QJsonObject webThemeJson();
     // 系统页显示就绪状态：Qt 标签/表格与外壳共用，文案只维护一遍。

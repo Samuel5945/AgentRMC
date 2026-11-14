@@ -16,6 +16,7 @@
 #include "ui/WaveformButton.h"
 
 #include "core/AgentBridge.h"
+#include "core/DshSessions.h"
 #include "core/LanWebServer.h"
 #include "core/PluginUpgrade.h"
 #include "core/AgentWindow.h"
@@ -969,10 +970,7 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
                                         : QStringLiteral("{}");
         });
         bridge->setHealthProvider([this] { return healthJson(); });
-        bridge->setWorkItemsProvider([this] {
-            return workItems_ != nullptr ? workItems_->toJson()
-                                         : QStringLiteral("{}");
-        });
+        bridge->setWorkItemsProvider([this] { return workItemsJson(); });
         bridge->setWorkItemAckHandler([this](const QString &id) {
             if (workItems_ == nullptr || !workItems_->ack(id)) {
                 return false;
@@ -1589,20 +1587,39 @@ void MainWindow::refreshWorkItems() {
 
     const QVector<WorkItem> items = workItems_->displayOrder();
 
-    // 「在哪儿」：项目目录名比会话 id 好认；两者都没有就直说是未关联会话，
-    // 不拿宿主名冒充身份（同宿主并行两个会话时那是唯一的区分）。
-    const auto whereFor = [](const WorkItem &item) {
+    // 「在哪儿」：项目目录名 > 会话标题 > 会话 <短 id>；都没有就直说是未关联
+    // 会话，不拿宿主名冒充身份（同宿主并行两个会话时那是唯一的区分）。
+    // DSH 的标题/工作目录来自宿主投影缓存（只读、按 mtime 缓存）：AI 标题
+    // 比短 id 好认，项目为空的老卡也能补回 cwd。
+    const auto dshInfoFor = [](const WorkItem &item) {
+        if (item.sessionId.isEmpty() ||
+            item.agentExe.compare(QStringLiteral("DeepSeek Harness.exe"),
+                                  Qt::CaseInsensitive) != 0) {
+            return DshSessions::Info{};
+        }
+        return DshSessions::find(item.sessionId);
+    };
+    const auto whereFor = [&dshInfoFor](const WorkItem &item) {
         if (item.sessionId.isEmpty()) {
             return QString::fromUtf8("未关联会话");
         }
-        QString dirName = QDir(item.project).dirName();
+        const DshSessions::Info info = dshInfoFor(item);
+        QString project = item.project;
+        if (project.isEmpty() && info.valid) {
+            project = info.cwd;
+        }
+        QString dirName = QDir(project).dirName();
         // 宿主给的是相对路径时 dirName 会是 "." ".."，读起来像坏数据。
         if (dirName == QLatin1String(".") || dirName == QLatin1String("..")) {
             dirName.clear();
         }
-        return dirName.isEmpty() ? QString::fromUtf8("会话 %1")
-                                       .arg(item.sessionId.left(8))
-                                 : dirName;
+        if (!dirName.isEmpty()) {
+            return dirName;
+        }
+        if (!info.title.isEmpty()) {
+            return info.title;
+        }
+        return QString::fromUtf8("会话 %1").arg(item.sessionId.left(8));
     };
     const auto matchesFilter = [&filterExe](const WorkItem &item) {
         if (filterExe.isEmpty()) {
@@ -1617,7 +1634,7 @@ void MainWindow::refreshWorkItems() {
                                     : item.title;
     };
     // 同宿主同项目并行两个会话时，两行都只写「Agentrmc」等于没写：
-    // 先数一遍重名，重名的行才补会话短 id。
+    // 先数一遍重名，重名的行才补会话标题（没标题才退短 id）。
     QHash<QString, int> whereHits;
     for (const WorkItem &item : items) {
         if (item.done || !matchesFilter(item)) {
@@ -1666,12 +1683,22 @@ void MainWindow::refreshWorkItems() {
                                                         : item.createdAt;
 
         QString where = whereFor(item);
-        // 只有「按项目分不出来」时才占用宽度：会话短 id 是最后手段，不是常态。
+        // 只有「按项目分不出来」时才占用宽度：优先补会话标题（DSH 投影缓存），
+        // 没标题才退短 id——短 id 是最后手段，不是常态。
+        const DshSessions::Info info = dshInfoFor(item);
         if (!item.sessionId.isEmpty() &&
             !where.startsWith(QString::fromUtf8("会话 ")) &&
             where != QString::fromUtf8("未关联会话") &&
             whereHits.value(agent + QLatin1Char('|') + where) > 1) {
-            where += QString::fromUtf8(" · %1").arg(item.sessionId.left(6));
+            if (!info.title.isEmpty() && where != info.title) {
+                QString suffix = info.title.left(12);
+                if (info.title.size() > 12) {
+                    suffix += QString::fromUtf8("…");
+                }
+                where += QString::fromUtf8(" · %1").arg(suffix);
+            } else {
+                where += QString::fromUtf8(" · %1").arg(item.sessionId.left(6));
+            }
         }
 
         // 行内不再拼「[待验收] Xxx」这种字符串：阶段色、Agent、时间各占各的位置，
@@ -1703,6 +1730,17 @@ void MainWindow::refreshWorkItems() {
         row->setData(Qt::UserRole + 5, whenText);
         row->setData(Qt::UserRole + 6, where);
         row->setSizeHint(QSize(0, 56));
+        QString tipProject = item.project;
+        if (tipProject.isEmpty() && info.valid) {
+            tipProject = info.cwd;
+        }
+        QString tipSession;
+        if (!item.sessionId.isEmpty()) {
+            tipSession = QString::fromUtf8("\n会话：%1").arg(item.sessionId);
+            if (!info.title.isEmpty()) {
+                tipSession += QString::fromUtf8("\n标题：%1").arg(info.title);
+            }
+        }
         row->setToolTip(
             QString::fromUtf8("%1 · %2  %3\n%4\n%5%6")
                 .arg(stage, agent,
@@ -1711,13 +1749,10 @@ void MainWindow::refreshWorkItems() {
                                QStringLiteral("MM-dd HH:mm"))
                          : QString(),
                      item.message,
-                     item.project.isEmpty()
+                     tipProject.isEmpty()
                          ? QStringLiteral("（无项目路径）")
-                         : QString::fromUtf8("项目：%1").arg(item.project),
-                     item.sessionId.isEmpty()
-                         ? QString()
-                         : QString::fromUtf8("\n会话：%1")
-                               .arg(item.sessionId)));
+                         : QString::fromUtf8("项目：%1").arg(tipProject),
+                     tipSession));
         if (item.id == selected) {
             workList_->setCurrentItem(row);
         }
@@ -3015,10 +3050,48 @@ QJsonArray MainWindow::supportedDispatchExes() const {
     return out;
 }
 
+QString MainWindow::workItemsJson() {
+    if (workItems_ == nullptr) {
+        return QStringLiteral("{}");
+    }
+    QJsonObject root =
+        QJsonDocument::fromJson(workItems_->toJson().toUtf8()).object();
+    QJsonArray items = root.value(QStringLiteral("items")).toArray();
+    for (int i = 0; i < items.size(); ++i) {
+        QJsonObject obj = items.at(i).toObject();
+        if (obj.value(QStringLiteral("agent_exe"))
+                .toString()
+                .compare(QStringLiteral("DeepSeek Harness.exe"),
+                         Qt::CaseInsensitive) != 0) {
+            continue;
+        }
+        const QString sessionId = obj.value(QStringLiteral("session_id")).toString();
+        if (sessionId.isEmpty()) {
+            continue;
+        }
+        const DshSessions::Info info = DshSessions::find(sessionId);
+        if (!info.valid) {
+            continue;
+        }
+        if (!info.title.isEmpty()) {
+            obj.insert(QStringLiteral("session_title"), info.title);
+        }
+        // 老卡/workingDirectory 服务缺位时项目可能为空：投影里有 cwd 就补上，
+        // 行身份不必退到「会话 <短 id>」。
+        if (obj.value(QStringLiteral("project")).toString().isEmpty() &&
+            !info.cwd.isEmpty()) {
+            obj.insert(QStringLiteral("project"), info.cwd);
+        }
+        items.replace(i, obj);
+    }
+    root.insert(QStringLiteral("items"), items);
+    return QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Compact));
+}
+
 QString MainWindow::webShellState() {
     QJsonObject work;
     if (workItems_ != nullptr) {
-        work = QJsonDocument::fromJson(workItems_->toJson().toUtf8()).object();
+        work = QJsonDocument::fromJson(workItemsJson().toUtf8()).object();
     }
     QJsonArray sections;
     for (const GuideSection &section : guideSections()) {
@@ -3116,7 +3189,7 @@ void MainWindow::setLanEnabled(bool on) {
 QString MainWindow::lanShellState() {
     QJsonObject work;
     if (workItems_ != nullptr) {
-        work = QJsonDocument::fromJson(workItems_->toJson().toUtf8()).object();
+        work = QJsonDocument::fromJson(workItemsJson().toUtf8()).object();
     }
     const QJsonObject root{
         {QStringLiteral("work"), work},

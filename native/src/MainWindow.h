@@ -103,6 +103,12 @@ private:
     // 给 /m/transcript?id=&offset=&limit=。
     QJsonObject chatState();
     QJsonObject chatStateFor(const QString &id, int offset = 0, int limit = 50);
+    // B2：给推送来的待答请求标可答性（只有 question 能内联应答）。
+    QJsonArray requestsWithAnswerable(const QString &sessionId) const;
+    // B2：手机/桌面下发的应答件收件箱（会话 id → 待取 answer 数组）与清理。
+    QString takeAnswerPending(const QString &exe);
+    void ackAnswer(const QString &answerId, bool ok, const QString &error);
+    void dropAnswerPendingForSession(const QString &sessionId);
     QString lanTranscript(const QString &id, int offset = 0, int limit = 50);
     // 手机传文件落盘：按待办 id 找到会话工作目录，存进 .agentrmc/inbox/<session>/，
     // 返回 PC 绝对路径供派发文本引用（agent 按路径读）。
@@ -224,6 +230,22 @@ private:
     // B1：DSH 插件推送的会话当前待答请求（会话 id → requests 数组），聊天页只读
     // 展示。内存账，插件变化即推、定时重推；不落盘。
     QHash<QString, QJsonArray> pendingRequests_;
+    // B2：插件推送心跳（exe 小写 → 最近一次 /requests 推送时刻）。15s 内到过账
+    // 视为插件在线，聊天页的提问卡才给点选应答。
+    QHash<QString, QDateTime> pluginSeenAt_;
+    // B2：手机/桌面下发的应答件（answer_id → {sessionId,kind,id,answers,outcome,exe}）。
+    // 插件 1.2s 轮询取件 → 远程面/Web UI 应答 → ack 落账。内存账，超时未取作废。
+    struct PendingAnswer {
+        QString sessionId;
+        QString kind;       // question / approval
+        QString id;         // callId / approvalId
+        QJsonArray answers; // question 的回答批次
+        QString outcome;    // approval 的结果（暂不启用）
+        QString exe;
+        QDateTime enqueuedAt;
+        bool handed = false;  // 已下发给插件，等 ack
+    };
+    QHash<QString, PendingAnswer> pendingAnswers_;
     // 右半区默认交给 WebView2 渲染（AGENTRMC_WORKWEB=0 或运行库缺失时回退 Qt 页签）。
     WorkWebView *workWeb_ = nullptr;
     // 外壳版事件流：Qt 侧 logList_ 只有合成好的文本，这里多存一份 kind，

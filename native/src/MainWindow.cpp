@@ -1002,21 +1002,43 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
                 payload.value(QStringLiteral("ok")).toBool(),
                 payload.value(QStringLiteral("error")).toString());
         });
-        // B1：DSH 插件推送会话当前待答请求，存内存账供聊天页只读展示。
-        // 聊天页轮询/刷新时经 chatStateFor 带上，无需主动推。
+        // B1：DSH 插件推送会话当前待答请求，存内存账供聊天页展示。
+        // 插件 1.2s 轮询应答件 = 在线心跳：每次推送都刷新该 exe 的在线表
+        // （answerable 据此标，掉线 5s 内自动退回只读）。
         bridge->setRequestsHandler([this](const QJsonObject &payload) {
             const QString sid =
                 payload.value(QStringLiteral("session_id")).toString();
             if (sid.isEmpty()) {
                 return;
             }
+            const QString exe = payload.value(QStringLiteral("exe")).toString();
+            if (!exe.isEmpty()) {
+                pluginSeenAt_.insert(exe.toLower(), QDateTime::currentDateTimeUtc());
+            }
             const QJsonArray reqs =
                 payload.value(QStringLiteral("requests")).toArray();
             if (reqs.isEmpty()) {
                 pendingRequests_.remove(sid);
+                // 卡片在 DSH 侧已关闭/已答：排队中还没送的应答件一并作废，
+                // 否则会把答案送给已经不存在的请求。
+                dropAnswerPendingForSession(sid);
             } else {
                 pendingRequests_.insert(sid, reqs);
             }
+        });
+        // B2：插件轮询取应答件 / 应答结果回执。
+        bridge->setAnswerPendingProvider(
+            [this](const QString &exe) { return takeAnswerPending(exe); });
+        bridge->setAnswerAckHandler([this](const QJsonObject &payload) {
+            const QString answerId =
+                payload.value(QStringLiteral("answer_id")).toString();
+            const bool ok = payload.value(QStringLiteral("ok")).toBool();
+            if (answerId.isEmpty() || !pendingAnswers_.contains(answerId)) {
+                return false;
+            }
+            ackAnswer(answerId, ok,
+                      payload.value(QStringLiteral("error")).toString());
+            return true;
         });
         connect(bridge, &AgentBridge::notify, this,
                 [this](const QString &kind, const QString &title,
@@ -3256,6 +3278,96 @@ QJsonObject MainWindow::lanState() {
 
 // ---------- 聊天页：待办 → 会话记录（只读分页，电脑/手机同一读取器） ----------
 
+// B2：给推送来的待答请求标可答性（answerable）。只认提问 kind（授权没有远程
+// 应答接口，等上游），且该会话的插件推送在 15s 内到过账（= 插件活着、取件
+// 轮询在跑）——插件掉线时退回只读，别让用户点了石沉大海。
+QJsonArray MainWindow::requestsWithAnswerable(const QString &sessionId) const {
+    QJsonArray out;
+    const QJsonArray reqs = pendingRequests_.value(sessionId);
+    bool pluginLive = false;
+    for (auto it = pluginSeenAt_.constBegin(); it != pluginSeenAt_.constEnd(); ++it) {
+        if (it.value().secsTo(QDateTime::currentDateTimeUtc()) <= 15) {
+            pluginLive = true;
+            break;
+        }
+    }
+    for (const QJsonValue &v : reqs) {
+        QJsonObject r = v.toObject();
+        r.insert(QStringLiteral("answerable"),
+                 pluginLive &&
+                     r.value(QStringLiteral("kind")).toString() ==
+                         QStringLiteral("question"));
+        out.append(r);
+    }
+    return out;
+}
+
+// B2：插件 1.2s 轮询取走本 exe 的应答件（未取走的超时 60s 作废：插件没在跑，
+// 别攒一肚子旧答案）。下发后标 handed，ack 时核销。
+QString MainWindow::takeAnswerPending(const QString &exe) {
+    const QDateTime now = QDateTime::currentDateTimeUtc();
+    QJsonArray out;
+    for (auto it = pendingAnswers_.begin(); it != pendingAnswers_.end();) {
+        if (it->enqueuedAt.secsTo(now) > 60) {
+            dropAnswerPendingForSession(it->sessionId);
+            it = pendingAnswers_.erase(it);
+            continue;
+        }
+        if (!it->handed && (exe.isEmpty() ||
+                            it->exe.compare(exe, Qt::CaseInsensitive) == 0)) {
+            it->handed = true;
+            QJsonObject item{{QStringLiteral("answer_id"), it.key()},
+                             {QStringLiteral("session_id"), it->sessionId},
+                             {QStringLiteral("kind"), it->kind},
+                             {QStringLiteral("id"), it->id}};
+            if (it->kind == QStringLiteral("question")) {
+                item.insert(QStringLiteral("answers"), it->answers);
+            } else {
+                item.insert(QStringLiteral("outcome"), it->outcome);
+            }
+            out.append(item);
+        }
+        ++it;
+    }
+    return QString::fromUtf8(QJsonDocument(out).toJson(QJsonDocument::Compact));
+}
+
+// B2：插件应答回执。ok=true：从账上核销 + 推空刷新聊天页（卡片由插件的推送
+// 消失，这里只清自己这侧）；ok=false：保留请求展示并把原因写进事件流。
+void MainWindow::ackAnswer(const QString &answerId, bool ok, const QString &error) {
+    const auto it = pendingAnswers_.constFind(answerId);
+    if (it == pendingAnswers_.constEnd()) {
+        return;
+    }
+    const PendingAnswer pa = it.value();
+    if (ok) {
+        pendingAnswers_.remove(answerId);
+        appendEvent(QStringLiteral("status"), QString(), QString(),
+                    QStringLiteral("内联应答送达：会话 %1 %2")
+                        .arg(pa.sessionId.left(8), pa.kind), 0);
+    } else {
+        // 插件明确拒绝（不可达/无活表/界面没在线）：撤掉这条待发，避免反复
+        // 取件；请求卡留在 pendingRequests_（插件推送为准），聊天页仍可重试。
+        pendingAnswers_.remove(answerId);
+        appendEvent(QStringLiteral("error"), QString(), QString(),
+                    QStringLiteral("内联应答失败：%1").arg(error), 0);
+    }
+    if (workWeb_ != nullptr) {
+        workWeb_->refresh();
+    }
+}
+
+// 会话的插件账没了（推送空列表 = 卡片在 DSH 侧被关闭/已答）：连带清待发件。
+void MainWindow::dropAnswerPendingForSession(const QString &sessionId) {
+    for (auto it = pendingAnswers_.begin(); it != pendingAnswers_.end();) {
+        if (it->sessionId == sessionId) {
+            it = pendingAnswers_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
 QJsonObject MainWindow::chatStateFor(const QString &id, int offset, int limit) {
     if (workItems_ == nullptr || id.isEmpty()) {
         return QJsonObject();
@@ -3285,9 +3397,8 @@ QJsonObject MainWindow::chatStateFor(const QString &id, int offset, int limit) {
         {QStringLiteral("total"), r.total},
         {QStringLiteral("hasMore"), r.hasMore},
         {QStringLiteral("offset"), offset},
-        // B1：该会话当前待答请求（DSH 插件推送），聊天页只读渲染。
-        {QStringLiteral("requests"),
-         pendingRequests_.value(item->sessionId)},
+        // B1：该会话当前待答请求（DSH 插件推送），聊天页渲染；B2 带可答性。
+        {QStringLiteral("requests"), requestsWithAnswerable(item->sessionId)},
     };
 }
 
@@ -3769,6 +3880,67 @@ void MainWindow::handleWebAction(const QJsonObject &action) {
                 dispatchDraftText_ = text;
                 appendEvent(QStringLiteral("error"), QString(), QString(),
                             QStringLiteral("定向派发未发：%1").arg(reason), 0);
+            }
+            refreshWorkItems();
+        } else if (cmd == QStringLiteral("answer")) {
+            // B2：聊天页内联应答。{cmd:'answer', id(待办), requestId,
+            // answers:[{id,selected,custom?}]}。落收件箱等插件取件，插件远程面
+            // 应答 Web UI 的 waiter（等于替人点了 DSH 按钮）。
+            const QString requestId =
+                action.value(QStringLiteral("requestId")).toString();
+            const QJsonArray answers =
+                action.value(QStringLiteral("answers")).toArray();
+            const WorkItem *item = nullptr;
+            for (const WorkItem &it : workItems_->items()) {
+                if (it.id == id) {
+                    item = &it;
+                    break;
+                }
+            }
+            QString why;
+            if (item == nullptr || requestId.isEmpty() || answers.isEmpty()) {
+                why = QStringLiteral("应答缺字段（待办/requestId/answers）");
+            } else if (!SessionDispatch::supportsPluginChannel(item->agentExe)) {
+                why = QStringLiteral("该宿主暂不支持内联应答");
+            } else {
+                const QJsonArray reqs = pendingRequests_.value(item->sessionId);
+                bool known = false;
+                for (const QJsonValue &v : reqs) {
+                    const QJsonObject r = v.toObject();
+                    if (r.value(QStringLiteral("id")).toString() == requestId &&
+                        r.value(QStringLiteral("kind")).toString() ==
+                            QStringLiteral("question")) {
+                        known = true;
+                        break;
+                    }
+                }
+                if (!known) {
+                    why = QStringLiteral("这条请求已不在待答清单（可能刚被别处应答）");
+                } else {
+                    PendingAnswer pa;
+                    pa.sessionId = item->sessionId;
+                    pa.kind = QStringLiteral("question");
+                    pa.id = requestId;
+                    pa.answers = answers;
+                    pa.exe = item->agentExe;
+                    pa.enqueuedAt = QDateTime::currentDateTimeUtc();
+                    pendingAnswers_.insert(
+                        QUuid::createUuid().toString(QUuid::WithoutBraces), pa);
+                    dispatchNotice_ = QStringLiteral("应答已排队，等插件送 DSH…");
+                    dispatchNoticeId_ = id;
+                    dispatchNoticeExe_ = item->agentExe;
+                    appendEvent(QStringLiteral("status"), QString(), QString(),
+                                QStringLiteral("内联应答已排队：会话 %1 %2")
+                                    .arg(item->sessionId.left(8), requestId.left(12)),
+                                0);
+                }
+            }
+            if (!why.isEmpty()) {
+                dispatchNotice_ = why;
+                dispatchNoticeId_ = id;
+                dispatchNoticeExe_ = item != nullptr ? item->agentExe : QString();
+                appendEvent(QStringLiteral("error"), QString(), QString(),
+                            QStringLiteral("内联应答未提交：%1").arg(why), 0);
             }
             refreshWorkItems();
         }

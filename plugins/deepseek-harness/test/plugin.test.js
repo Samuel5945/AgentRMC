@@ -109,7 +109,13 @@ function makeCtx() {
     },
     effect(execute) {
       const disposer = execute();
-      effects.push(disposer);
+      if (typeof disposer === 'function') {
+        effects.push(disposer);
+      } else if (disposer && typeof disposer.dispose === 'function') {
+        effects.push(() => disposer.dispose());
+      } else {
+        effects.push(() => {});
+      }
       return () => {};
     },
     get(service) {
@@ -363,28 +369,33 @@ await check('工具执行: body 带 session_id / project / agent_exe，与 hook 
     req.on('end', () => {
       received.push({ method: req.method, url: req.url, body });
       res.setHeader('Content-Type', 'application/json');
-      res.end('{"ok":true,"id":"x"}');
+      // 取件轮询（B2）与派发取件要回 JSON 数组；别的回工具用的对象。
+      res.end(req.url.startsWith('/request-answer/pending') ||
+        req.url.startsWith('/dispatch/pending') ? '[]' : '{"ok":true,"id":"x"}');
     });
   });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   const port = server.address().port;
   try {
     const stub = makeCtx();
-    apply(stub.ctx, { port, registerSkill: false });
+    apply(stub.ctx, { port, registerSkill: false, dispatch: false });
     const exec = { agent: AGENT };
     const notify = stub.tools.find((tool) => tool.name === 'pet_notify');
     await notify.execute({ message: '阶段进度' }, exec);
     const work = stub.tools.find((tool) => tool.name === 'pet_work_update');
     await work.execute({ stage: 'ready', message: '做完了' }, exec);
 
-    const notifyBody = JSON.parse(received[0].body);
-    assert.strictEqual(received[0].url, '/notify');
+    // B2 收件轮询与工具调用共走一条 HTTP 连接：只看业务 POST 的。
+    const relevant = received.filter((r) =>
+      r.url === '/notify' || r.url === '/work-items/update');
+    const notifyBody = JSON.parse(relevant[0].body);
+    assert.strictEqual(relevant[0].url, '/notify');
     assert.strictEqual(notifyBody.session_id, 'sess-1');
     assert.strictEqual(notifyBody.project, 'D:/repo');
     assert.strictEqual(notifyBody.title, 'DeepSeek Harness');
 
-    const workBody = JSON.parse(received[1].body);
-    assert.strictEqual(received[1].url, '/work-items/update');
+    const workBody = JSON.parse(relevant[1].body);
+    assert.strictEqual(relevant[1].url, '/work-items/update');
     assert.strictEqual(workBody.stage, 'ready');
     assert.strictEqual(workBody.session_id, 'sess-1');
     assert.strictEqual(workBody.agent_exe, 'DeepSeek Harness.exe');
@@ -597,6 +608,170 @@ await check('派发通道: 会话不在活表 / agents 不可达 → ack ok:fals
     assert.strictEqual(seen.acks[2].dispatch_id, 'd-4');
     assert.strictEqual(seen.acks[2].ok, false);
     assert.ok(/agents 服务不可达/.test(seen.acks[2].error), seen.acks[2].error);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+/** 假原生端（B2）：/request-answer/pending 一次性吐完 items，ack 记账；
+ *  /requests 推送也记账（验证插件在应答后重推空集）。响应必须 Connection: close。 */
+function makeAnswerServer(pendingItems) {
+  const seen = { pushes: [], acks: [] };
+  const queue = pendingItems.slice();
+  const server = http.createServer((req, res) => {
+    let body = '';
+    req.on('data', (chunk) => { body += chunk; });
+    req.on('end', () => {
+      res.setHeader('Connection', 'close');
+      if (req.url.startsWith('/request-answer/pending')) {
+        res.setHeader('Content-Type', 'application/json');
+        res.end(JSON.stringify(queue.splice(0)));
+        return;
+      }
+      if (req.url.startsWith('/request-answer/ack')) {
+        seen.acks.push(JSON.parse(body || '{}'));
+        res.end('{}');
+        return;
+      }
+      if (req.url.startsWith('/requests')) {
+        seen.pushes.push(JSON.parse(body || '{}'));
+        res.end('{}');
+        return;
+      }
+      res.end('{}');
+    });
+  });
+  return { server, seen };
+}
+
+function makeWaitStub() {
+  return { completion: { resolve: (v) => { makeWaitStub.resolved = v; } } };
+}
+
+// stub ctx 的事件 emit（顶层 harness 的 emit 绑在固定实例上）。
+function emitOn(stub, event, ...args) {
+  for (const listener of stub.listeners.get(event) || []) listener(...args);
+}
+
+
+// —— B2 内联应答：取件 → wait.resolve（或 steer 直答）→ ack ok → 重推空集 ——
+await check('B2: 手机答案经取件 → timed wait.resolve → ack ok → 推空集', async () => {
+  const sid = 'session-bbbb1111-2222-4333-8444-555555555555';
+  const callId = 'call_b2test';
+  const { server, seen } = makeAnswerServer([
+    { answer_id: 'a-1', session_id: sid, kind: 'question', id: callId,
+      answers: [{ id: 'q1', selected: ['甲'] }] },
+  ]);
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const wait = { completion: { resolve: (v) => { wait.resolved = v; } } };
+    const agents = { get: (id) => (id === sid ? { id, session: {} } : undefined) };
+    const stub = makeCtx();
+    const innerGet = stub.ctx.get;
+    stub.ctx.get = (service) => (service === 'agents' ? agents : innerGet(service));
+    stub.ctx.userQuestions = { waits: new Map([[agents.get(sid), new Map([[callId, wait]])]]) };
+    const keep = setInterval(() => {}, 300);
+    try {
+      apply(stub.ctx, { port: server.address().port, registerSkill: false, registerTools: false });
+      emitOn(stub, 'session/event', { id: sid }, {
+        type: 'tool/call',
+        data: { name: 'ask_user_question', callId,
+          arguments: JSON.stringify({ questions: [{ id: 'q1', question: '选一个', options: [{ label: '甲' }] }] }) },
+      });
+      assert.ok(await waitUntil(() => seen.acks.length >= 1), 'ack 未到');
+      assert.strictEqual(seen.acks[0].answer_id, 'a-1');
+      assert.strictEqual(seen.acks[0].ok, true, JSON.stringify(seen.acks[0]));
+      assert.deepStrictEqual(wait.resolved,
+        { answers: [{ id: 'q1', selected: ['甲'] }] });
+      assert.ok(await waitUntil(() => seen.pushes.some(p => p.session_id === sid && p.requests.length === 0)),
+        '应答成功后要重推空集让卡片消失');
+    } finally {
+      clearInterval(keep);
+      for (const dispose of stub.effects) dispose();
+    }
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+await check('B2: legacy 无 wait → steer user-question-reply 直答（与官方 answer 同形）', async () => {
+  const sid = 'session-dddd1111-2222-4333-8444-555555555555';
+  const callId = 'call_b2steer';
+  const { server, seen } = makeAnswerServer([
+    { answer_id: 'a-3', session_id: sid, kind: 'question', id: callId,
+      answers: [{ id: 'q1', selected: ['乙'] }] },
+  ]);
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const steered = [];
+    const agent = {
+      id: sid,
+      session: {},
+      inbox: { nextTurn: [], nextStep: [] },
+      steer: (m) => steered.push(m),
+    };
+    const agents = { get: (id) => (id === sid ? agent : undefined) };
+    const stub = makeCtx();
+    const innerGet = stub.ctx.get;
+    stub.ctx.get = (service) => (service === 'agents' ? agents : innerGet(service));
+    stub.ctx.userQuestions = { waits: new Map() };
+    const keep = setInterval(() => {}, 300);
+    try {
+      apply(stub.ctx, { port: server.address().port, registerSkill: false, registerTools: false });
+      assert.ok(await waitUntil(() => seen.acks.length >= 1), 'ack 未到');
+      assert.strictEqual(seen.acks[0].ok, true, JSON.stringify(seen.acks[0]));
+      assert.strictEqual(steered.length, 1);
+      const msg = steered[0];
+      assert.strictEqual(msg.role, 'user');
+      assert.strictEqual(msg.source.kind, 'user-question-reply');
+      assert.strictEqual(msg.source.callId, callId);
+      assert.strictEqual(msg.source.outcome, 'answered');
+      const payload = JSON.parse(msg.content[0].text);
+      assert.strictEqual(payload.kind, 'answer_to_pending_question');
+      assert.strictEqual(payload.callId, callId);
+      assert.deepStrictEqual(payload.answers, [{ id: 'q1', selected: ['乙'] }]);
+    } finally {
+      clearInterval(keep);
+      for (const dispose of stub.effects) dispose();
+    }
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+await check('B2: 重复答案被挡 → ack ok:false 带原因', async () => {
+  const sid = 'session-eeee1111-2222-4333-8444-555555555555';
+  const callId = 'call_b2dup';
+  const { server, seen } = makeAnswerServer([
+    { answer_id: 'a-4', session_id: sid, kind: 'question', id: callId,
+      answers: [{ id: 'q1', selected: ['甲'] }] },
+  ]);
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const agent = {
+      id: sid,
+      session: {},
+      inbox: {
+        nextTurn: [{ source: { kind: 'user-question-reply', callId } }],
+        nextStep: [],
+      },
+      steer: () => { throw new Error('不该再 steer'); },
+    };
+    const agents = { get: (id) => (id === sid ? agent : undefined) };
+    const stub = makeCtx();
+    const innerGet = stub.ctx.get;
+    stub.ctx.get = (service) => (service === 'agents' ? agents : innerGet(service));
+    stub.ctx.userQuestions = { waits: new Map() };
+    const keep = setInterval(() => {}, 300);
+    try {
+      apply(stub.ctx, { port: server.address().port, registerSkill: false, registerTools: false });
+      assert.ok(await waitUntil(() => seen.acks.length >= 1), 'ack 未到');
+      assert.strictEqual(seen.acks[0].ok, false);
+      assert.ok(/已经在路上/.test(seen.acks[0].error), seen.acks[0].error);
+    } finally {
+      clearInterval(keep);
+      for (const dispose of stub.effects) dispose();
+    }
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }

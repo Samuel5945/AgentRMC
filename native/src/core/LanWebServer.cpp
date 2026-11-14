@@ -254,6 +254,7 @@ bool LanWebServer::isAllowedAction(const QString &cmd) {
     // 白名单制：手机上点了会在 PC 弹 Qt 对话框或改本机配置的命令一律不进。
     // tts 会弹 TtsSettingsDialog，readLast 只是让 PC 念最近转写，可以进。
     return cmd == QStringLiteral("ack") || cmd == QStringLiteral("dispatch") ||
+           cmd == QStringLiteral("answer") ||
            cmd == QStringLiteral("open") ||
            cmd == QStringLiteral("raiseZcode") ||
            cmd == QStringLiteral("restartZcode") ||
@@ -841,6 +842,15 @@ QString LanWebServer::mobileHtml() const {
  .bub .bt{display:block;font-size:11px;color:var(--muted2);margin-top:4px}
  .reqcard{flex:0 0 auto;align-self:stretch;margin:6px 0;padding:10px 12px;
    border-radius:12px;background:var(--w8);border:1px solid var(--a64)}
+ .reqbtn{display:block;width:100%;text-align:left;margin:4px 0;padding:9px 10px;
+   border-radius:9px;border:1px solid var(--a36);background:transparent;
+   font-size:13px;color:var(--text);min-height:38px}
+ .reqbtn.on{border-color:var(--accent);background:var(--a26)}
+ .reqcustom{display:block;width:100%;box-sizing:border-box;margin:4px 0;
+   padding:9px 10px;border-radius:9px;border:1px solid var(--a36);
+   background:transparent;font-size:13px;color:var(--text);min-height:38px}
+ .reqsend{margin-top:6px}
+ .reqstate{font-size:12px;color:var(--muted);margin-top:4px}
  .reqhead{font-weight:600;font-size:13px;color:var(--text);margin-bottom:4px}
  .reqreason{font-size:12px;color:var(--text-soft);white-space:pre-wrap;
    word-break:break-word;margin-bottom:4px}
@@ -1140,18 +1150,74 @@ function requestCard(req){
    r.textContent=req.reason;d.append(r);}
  }else{
   head.textContent='❓ 等你选方案';d.append(head);
-  (req.questions||[]).forEach(q=>{
-   const qd=document.createElement('div');qd.className='reqq';
-   const qt=document.createElement('div');qt.className='reqqt';
-   qt.textContent=q.question||q.header||'';qd.append(qt);
-   (q.options||[]).forEach(o=>{const od=document.createElement('div');
-    od.className='reqopt';od.textContent='· '+o.label;qd.append(od);});
-   d.append(qd);
-  });
+  if(!req.answerable){
+   (req.questions||[]).forEach(q=>{
+    const qd=document.createElement('div');qd.className='reqq';
+    const qt=document.createElement('div');qt.className='reqqt';
+    qt.textContent=q.question||q.header||'';qd.append(qt);
+    (q.options||[]).forEach(o=>{const od=document.createElement('div');
+     od.className='reqopt';od.textContent='· '+o.label;qd.append(od);});
+    d.append(qd);
+   });
+  }else{
+   // B2：可答——每题一列按钮，点即提交；选项不够时给「自定义」输入。
+   const sel={};const custom={};
+   (req.questions||[]).forEach(q=>{
+    const qd=document.createElement('div');qd.className='reqq';
+    const qt=document.createElement('div');qt.className='reqqt';
+    qt.textContent=q.question||q.header||'';qd.append(qt);
+    sel[q.id]=new Set();
+    (q.options||[]).forEach(o=>{
+     const b=document.createElement('button');b.className='reqbtn';
+     b.textContent=o.label;
+     if(o.description){b.title=o.description;}
+     b.onclick=()=>{
+      if(q.multi_select){sel[q.id].has(o.label)?sel[q.id].delete(o.label):sel[q.id].add(o.label);}
+      else{sel[q.id]=new Set([o.label]);custom[q.id]='';renderReqBtns(qd,q,sel,custom);}
+      renderReqBtns(qd,q,sel,custom);
+     };
+     qd.append(b);
+    });
+    const ci=document.createElement('input');ci.className='reqcustom';
+    ci.type='text';ci.placeholder='或自己写一个回答…';
+    ci.oninput=()=>{custom[q.id]=ci.value;
+     if(ci.value.trim()){sel[q.id].clear();renderReqBtns(qd,q,sel,custom);}};
+    qd.append(ci);
+    d.append(qd);
+    renderReqBtns(qd,q,sel,custom);
+   });
+   const send=document.createElement('button');send.className='btn primary reqsend';
+   send.textContent='提交回答';
+   send.onclick=()=>{
+    const batch=(req.questions||[]).map(q=>({id:q.id,
+     selected:[...(sel[q.id]||[])],
+     ...(String(custom[q.id]||'').trim()?{custom:String(custom[q.id]).trim()}:{}),
+    }));
+    if(batch.some(a=>!a.selected.length&&!a.custom)){
+     reqState(d,'每个问题都要选一项或写一句');return;}
+    send.disabled=true;send.textContent='已提交，等确认…';
+    act({cmd:'answer',id:chatId,requestId:req.id,answers:batch});
+   };
+   d.append(send);
+   const st=document.createElement('div');st.className='reqstate';st.hidden=true;d.append(st);
+   d._reqState=st;
+  }
  }
  const hint=document.createElement('div');hint.className='reqhint';
- hint.textContent='暂在 DSH 界面应答（内联应答开发中）';d.append(hint);
+ hint.textContent=req.answerable?'点选项后提交——等于替你在电脑 DSH 界面里点了按钮':'暂在 DSH 界面应答（内联应答开发中）';
+ d.append(hint);
  return d;
+}
+// 选中态渲染：高亮所选按钮（纯文本比对，重建不丢状态：状态在 sel/custom 里）。
+function renderReqBtns(qd,q,sel,custom){
+ qd.querySelectorAll('.reqbtn').forEach((b,i)=>{
+  const o=(q.options||[])[i];if(!o)return;
+  b.classList.toggle('on',(sel[q.id]||new Set()).has(o.label));
+ });
+}
+function reqState(card,msg){
+ const el=card._reqstate||(card.parentElement&&card.parentElement._reqstate);
+ if(el){el.hidden=false;el.textContent=msg;}
 }
 function maybeAutoLoad(){
  const list=$('chatList');

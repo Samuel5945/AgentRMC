@@ -752,6 +752,16 @@ QString WorkWebView::htmlFor(const QString &stateJson) const {
  .bub .bt{display:block;font-size:var(--f10);color:var(--muted2);margin-top:4px}
  .reqcard{flex:0 0 auto;align-self:stretch;margin:6px 0;padding:10px 12px;
    border-radius:10px;background:var(--w8);border:1px solid var(--a64)}
+ .reqbtn{display:block;width:100%;text-align:left;margin:4px 0;padding:8px 10px;
+   border-radius:8px;border:1px solid var(--a36);background:transparent;
+   font-size:var(--f12);color:var(--text)}
+ .reqbtn:hover{background:var(--w6)}
+ .reqbtn.on{border-color:var(--accent);background:var(--a26)}
+ .reqcustom{display:block;width:100%;box-sizing:border-box;margin:4px 0;
+   padding:8px 10px;border-radius:8px;border:1px solid var(--a36);
+   background:transparent;font-size:var(--f12);color:var(--text)}
+ .reqsend{margin-top:6px}
+ .reqstate{font-size:var(--f11);color:var(--muted);margin-top:4px}
  .reqhead{font-weight:600;font-size:var(--f12);color:var(--text);margin-bottom:4px}
  .reqreason{font-size:var(--f11);color:var(--text-soft);white-space:pre-wrap;
    word-break:break-word;margin-bottom:4px}
@@ -1820,7 +1830,7 @@ function requestCard(req){
     d.append(head);
     if(req.reason){const r=document.createElement('div');r.className='reqreason';
       r.textContent=req.reason;d.append(r);}
-  }else{
+  }else if(!req.answerable){
     head.textContent='❓ 等你选方案';d.append(head);
     (req.questions||[]).forEach(q=>{
       const qd=document.createElement('div');qd.className='reqq';
@@ -1830,9 +1840,55 @@ function requestCard(req){
         od.className='reqopt';od.textContent='· '+o.label;qd.append(od);});
       d.append(qd);
     });
+  }else{
+    // B2：可答——每题一列按钮，点即选；「提交回答」经 handleWebAction 排队给插件。
+    head.textContent='❓ 等你选方案';d.append(head);
+    const sel={};const custom={};
+    (req.questions||[]).forEach(q=>{
+      const qd=document.createElement('div');qd.className='reqq';
+      const qt=document.createElement('div');qt.className='reqqt';
+      qt.textContent=q.question||q.header||'';qd.append(qt);
+      sel[q.id]=new Set();
+      (q.options||[]).forEach(o=>{
+        const b=document.createElement('button');b.className='reqbtn';
+        b.textContent=o.label;
+        if(o.description){b.title=o.description;}
+        b.onclick=()=>{
+          if(q.multi_select){sel[q.id].has(o.label)?sel[q.id].delete(o.label):sel[q.id].add(o.label);}
+          else{sel[q.id]=new Set([o.label]);custom[q.id]='';}
+          syncSel();
+        };
+        qd.append(b);
+      });
+      const ci=document.createElement('input');ci.className='reqcustom';
+      ci.type='text';ci.placeholder='或自己写一个回答…';
+      ci.oninput=()=>{custom[q.id]=ci.value.trim();
+        if(custom[q.id]){sel[q.id].clear();syncSel();}};
+      qd.append(ci);
+      const syncSel=()=>{
+        const btns=qd.querySelectorAll('.reqbtn');
+        (q.options||[]).forEach((o,i)=>{if(btns[i])btns[i].classList.toggle('on',sel[q.id].has(o.label));});
+      };
+      d.append(qd);
+    });
+    const send=document.createElement('button');send.className='btn primary reqsend';
+    send.textContent='提交回答';
+    send.onclick=()=>{
+      const batch=(req.questions||[]).map(q=>({id:q.id,
+        selected:[...(sel[q.id]||[])],
+        ...(String(custom[q.id]||'')?{custom:String(custom[q.id])}:{}),
+      }));
+      if(batch.some(a=>!a.selected.length&&!a.custom)){
+        stateEl.textContent='每个问题都要选一项或写一句';return;}
+      send.disabled=true;send.textContent='已提交，等确认…';
+      postObj({cmd:'answer',id:chatOpenedId,requestId:req.id,answers:batch});
+    };
+    const stateEl=document.createElement('div');stateEl.className='reqstate';
+    d.append(send,stateEl);
   }
   const hint=document.createElement('div');hint.className='reqhint';
-  hint.textContent='暂在 DSH 界面应答（内联应答开发中）';d.append(hint);
+  hint.textContent=req.answerable?'点选项后提交——等于替你在电脑 DSH 界面里点了按钮':'暂在 DSH 界面应答（内联应答开发中）';
+  d.append(hint);
   return d;
 }
 function maybeAutoLoad(){

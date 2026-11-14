@@ -261,6 +261,70 @@ export function apply(ctx, rawConfig) {
   const lastReply = new Map(); // agentId -> 本轮最后一段正文
   const lastTurnStarted = new Map(); // agentId -> 已上报过的 turn
 
+  // —— B1：待答请求跟踪（只读展示用）——
+  // 授权（approval/asked→decided）与提问（ask_user_question→tool/result/reply）的
+  // 当前待答集，按会话攒，变化即推给原生端 /requests，聊天页据此渲染卡片。
+  // 这里只「看」不「答」（应答是 B2/B3），不碰 waterfall，零风险。
+  const pendingRequests = new Map(); // sessionId -> Map(requestId -> request)
+  function pushRequests(session) {
+    const sid = sessionIdOf(session);
+    if (!sid) return;
+    const byId = pendingRequests.get(sid);
+    bridge.post('/requests', {
+      exe: config.raiseExe || '',
+      session_id: sid,
+      project: projectFor(session),
+      requests: byId ? [...byId.values()] : [],
+    }).catch(() => {});  // 原生没开就静默；变化/定时再推
+  }
+  function trackRequest(session, type, data) {
+    const sid = sessionIdOf(session);
+    if (!sid) return;
+    let byId = pendingRequests.get(sid);
+    const ensure = () => {
+      if (!byId) { byId = new Map(); pendingRequests.set(sid, byId); }
+      return byId;
+    };
+    let changed = false;
+    if (type === 'approval/asked' && data.id) {
+      ensure().set(data.id, { kind: 'approval', id: data.id,
+        toolName: String(data.toolName || ''), reason: String(data.reason || '') });
+      changed = true;
+    } else if (type === 'approval/decided' && data.id) {
+      if (byId && byId.delete(data.id)) changed = true;
+    } else if ((type === 'tool/call' || type === 'tool/ptc-dispatch') &&
+               data.name === 'ask_user_question') {
+      const callId = data.callId || data.subCallId;
+      let questions = [];
+      try {
+        const args = typeof data.arguments === 'string'
+          ? JSON.parse(data.arguments) : (data.arguments || {});
+        questions = (args.questions || []).map((q) => ({
+          id: q.id, question: q.question || '', header: q.header || '',
+          options: (q.options || []).map((o) => ({
+            label: o.label || '', description: o.description || '' })),
+          multi_select: !!q.multi_select,
+        }));
+      } catch (e) { /*  arguments 解析失败仍记一个空提问卡 */ }
+      if (callId) {
+        ensure().set(callId, { kind: 'question', id: callId, questions });
+        changed = true;
+      }
+    } else if (type === 'tool/result') {
+      const callId = data.message && data.message.toolCallId;
+      if (callId && byId && byId.get(callId) &&
+          byId.get(callId).kind === 'question') {
+        byId.delete(callId);
+        changed = true;
+      }
+    } else if (type === 'user/message' && data.source &&
+               data.source.kind === 'user-question-reply') {
+      const callId = data.source.callId;
+      if (callId && byId && byId.delete(callId)) changed = true;
+    }
+    if (changed) pushRequests(session);
+  }
+
   if (typeof ctx.on === 'function') {
     // 等授权 / 等选方案：挂**持久会话事件**，不挂那两个瀑布。
     //
@@ -287,6 +351,8 @@ export function apply(ctx, rawConfig) {
                   callId: data && data.callId, sid: sessionIdOf(session) }) + '\n');
             } catch (e) {}
           }
+          // B1：先跟踪待答请求（与通知开关无关，展示始终可用），再发通知。
+          trackRequest(session, type, data);
           if (type === 'approval/asked') {
             if (!config.notifyApproval) return;
             const toolName = String(data.toolName || '').trim();
@@ -443,6 +509,10 @@ export function apply(ctx, rawConfig) {
         liveStreams.delete(agent.id);
         lastReply.delete(agent.id);
         lastTurnStarted.delete(agent.id);
+        if (pendingRequests.delete(agent.id)) {
+          bridge.post('/requests', { exe: config.raiseExe || '',
+            session_id: agent.id, project: '', requests: [] }).catch(() => {});
+        }
       },
       { global: true },
     );
@@ -714,6 +784,18 @@ export function apply(ctx, rawConfig) {
         'agentrmc-bridge dispatch poll',
       );
     }
+  }
+
+  // B1：定时重推待答请求（原生端重启后恢复展示），不依赖 dispatch 开关。
+  if (typeof ctx.effect === 'function') {
+    const reqTimer = setInterval(() => {
+      for (const [sid, byId] of pendingRequests) {
+        bridge.post('/requests', { exe: config.raiseExe || '', session_id: sid,
+          project: '', requests: [...byId.values()] }).catch(() => {});
+      }
+    }, 10000);
+    if (typeof reqTimer.unref === 'function') reqTimer.unref();
+    ctx.effect(() => () => clearInterval(reqTimer), 'agentrmc-bridge requests re-push');
   }
 }
 

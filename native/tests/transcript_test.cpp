@@ -229,14 +229,20 @@ int main(int argc, char **argv) {
         q.addBindValue(QStringLiteral("ZCode 会话标题"));
         q.exec();
         const QString zsid = sid;
-        auto insMsg = [&](const QString &id, const QString &role, int seq) {
+        auto insMsg = [&](const QString &id, const QString &role, int seq,
+                          const QJsonObject &extra = {}) {
             QSqlQuery m(db);
             m.prepare("INSERT INTO message VALUES(?,?,?,?,?,?)");
             m.addBindValue(id);
             m.addBindValue(zsid);
             m.addBindValue(base + seq * 1000);
             m.addBindValue(base + seq * 1000);
-            m.addBindValue(QStringLiteral(R"({"role":")") + role + QStringLiteral(R"("})"));
+            QJsonObject data{{QStringLiteral("role"), role}};
+            for (auto it = extra.begin(); it != extra.end(); ++it) {
+                data.insert(it.key(), it.value());
+            }
+            m.addBindValue(
+                QString::fromUtf8(QJsonDocument(data).toJson(QJsonDocument::Compact)));
             m.addBindValue(seq);
             m.exec();
         };
@@ -266,18 +272,68 @@ int main(int argc, char **argv) {
         insPart("zm2", "text", QStringLiteral("第二段"), 2);
         insMsg("zm3", "assistant", 3);  // 纯工具消息：无 text part → 不进
         insPart("zm3", "tool", QString(), 0);
+        // harness 注入的 user 行（环境快照 / todo nudge / 静默轮提醒）→ 不进。
+        // 三种标记形态照真实库记法各来一条。
+        insMsg("zi1", "user", 4,
+               QJsonObject{
+                   {QStringLiteral("synthetic"), true},
+                   {QStringLiteral("visibility"), QStringLiteral("model-only")},
+                   {QStringLiteral("metadata"),
+                    QJsonObject{{QStringLiteral("runtimeMessage"),
+                                 QJsonObject{{QStringLiteral("source"),
+                                              QStringLiteral("environment")}}}}}});
+        insPart("zi1", "text",
+                QStringLiteral("# Environment\nYou have been invoked in the "
+                               "following environment:"),
+                0);
+        insMsg("zi2", "user", 5,
+               QJsonObject{{QStringLiteral("visibility"),
+                            QStringLiteral("model-only")}});  // 顶层 visibility
+        insPart("zi2", "text",
+                QStringLiteral("<total_tokens>15000000 tokens left</total_tokens>"),
+                0);
+        insMsg("zi3", "user", 6,
+               QJsonObject{
+                   {QStringLiteral("metadata"),
+                    QJsonObject{{QStringLiteral("runtimeMessage"),
+                                 QJsonObject{{QStringLiteral("source"),
+                                              QStringLiteral(
+                                                  "silent_turn_reminder")}}}}}});
+        insPart("zi3", "text",
+                QStringLiteral("The user hasn't heard from you in a while."), 0);
+        insMsg("zm4", "user", 7);
+        insPart("zm4", "text", QStringLiteral("第二问"), 0);
         db.close();
     }
     QSqlDatabase::removeDatabase(QStringLiteral("setup_z"));
     r = SessionTranscript::read(QStringLiteral("ZCode.exe"), sid, 50, 0, zRoot);
     check(r.supported, "zcode supported");
     check(r.title == QStringLiteral("ZCode 会话标题"), "zcode title");
-    check(r.messages.size() == 2, "zcode tool-only skipped");
-    if (r.messages.size() == 2) {
+    check(r.messages.size() == 3, "zcode tool-only + injected user rows skipped");
+    if (r.messages.size() == 3) {
+        check(r.messages.at(0).toObject().value("text").toString() ==
+                  QStringLiteral("ZCode 问"),
+              "zcode first user text");
         check(r.messages.at(1).toObject().value("text").toString() ==
                   QStringLiteral("第一段\n第二段"),
               "zcode parts joined by sequence");
+        check(r.messages.at(2).toObject().value("text").toString() ==
+                  QStringLiteral("第二问"),
+              "zcode real user after injections");
     }
+    {
+        bool hasInject = false;
+        for (const QJsonValue &m : r.messages) {
+            const QString t = m.toObject().value("text").toString();
+            if (t.contains(QStringLiteral("# Environment")) ||
+                t.contains(QStringLiteral("total_tokens")) ||
+                t.contains(QStringLiteral("hasn't heard"))) {
+                hasInject = true;
+            }
+        }
+        check(!hasInject, "zcode injected user rows filtered out");
+    }
+    check(r.total == 3 && !r.hasMore, "zcode total counts renderable only");
 
     // ---- OpenSquilla：transcript_entries 明文 ----
     const QString oRoot = temp.filePath("osq");

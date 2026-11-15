@@ -122,7 +122,7 @@ struct FullCache {
     QString stamp;
     QVector<QJsonObject> all;  // 正序
     QString title;
-    int realTotal = 0;  // jsonl＝真实总数；SQLite＝封顶后的总数
+    int realTotal = 0;  // 实际可渲染条数（SQLite 封顶 500 内、滤掉注入后）
 };
 QHash<QString, FullCache> g_cache;
 
@@ -225,6 +225,28 @@ private:
     bool ok_ = false;
 };
 
+// ZCode 把环境快照/模型说明/agent 与 skills 清单/AGENTS 与 gitStatus 上下文/
+// token 余量/各种 nudge（含 task-notification）全记成独立 user message，但带
+// 结构化标记（synthetic / visibility=model-only / metadata.runtimeMessage），
+// 真用户输入没有这些标记（本机全库 1939 条 user 行交叉验证 0 漏判）。不过滤
+// 的话聊天页全是「我」的注入气泡（用户 2026-11-15 反馈）。
+bool isZcodeInjectedUser(const QJsonObject &data) {
+    if (data.value(QStringLiteral("synthetic")).toBool(false)) {
+        return true;
+    }
+    if (data.value(QStringLiteral("visibility")).toString() ==
+        QStringLiteral("model-only")) {
+        return true;
+    }
+    const QJsonObject meta = data.value(QStringLiteral("metadata")).toObject();
+    if (meta.contains(QStringLiteral("runtimeMessage")) ||
+        meta.value(QStringLiteral("visibility")).toString() ==
+            QStringLiteral("model-only")) {
+        return true;
+    }
+    return false;
+}
+
 SessionTranscript::Result readZcode(const QString &root, const QString &sessionId,
                                     int limit, int offset) {
     SessionTranscript::Result out;
@@ -273,6 +295,7 @@ SessionTranscript::Result readZcode(const QString &root, const QString &sessionI
         QString id;
         QString role;
         QString at;
+        bool injected = false;  // harness 注入的 user 行（不进聊天页）
     };
     QVector<Msg> msgs;
     if (mq.exec()) {
@@ -283,6 +306,7 @@ SessionTranscript::Result readZcode(const QString &root, const QString &sessionI
             m.id = mq.value(0).toString();
             m.role = data.value(QStringLiteral("role")).toString();
             m.at = isoFromMs(mq.value(2).toLongLong());
+            m.injected = isZcodeInjectedUser(data);
             msgs.append(m);
         }
     }
@@ -324,6 +348,10 @@ SessionTranscript::Result readZcode(const QString &root, const QString &sessionI
             m.role != QStringLiteral("assistant")) {
             continue;
         }
+        // 系统注入的 user 行不进聊天页（见 isZcodeInjectedUser）。
+        if (m.role == QStringLiteral("user") && m.injected) {
+            continue;
+        }
         const QString text = textByMsg.value(m.id).trimmed();
         if (text.isEmpty()) {
             continue;
@@ -335,7 +363,8 @@ SessionTranscript::Result readZcode(const QString &root, const QString &sessionI
             {QStringLiteral("at"), m.at},
         });
     }
-    full.realTotal = qMin(total, kSqliteCap);
+    // total 口径与 jsonl/DSH 对齐：滤掉注入后实际可渲染条数（fetch 已封顶）。
+    full.realTotal = full.all.size();
     cachePut(key, full);
     return slicePage(full, limit, offset);
 }

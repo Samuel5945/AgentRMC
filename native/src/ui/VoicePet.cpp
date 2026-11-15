@@ -609,8 +609,9 @@ const char kRecommendedSuffix[] = " (Recommended)";
 
 // 两行选项行（ChoiceCard 同款思路）：QPushButton 自己的文本不换行，长描述
 // 会被裁掉两头，所以 label/desc 放进对鼠标透明的子 QLabel——点击照旧落在
-// 按钮上；hover 底色走主题 token，不再写死灰色。不可点（只读/复杂单）时
-// 行整体禁用、颜色降一档，充当纯展示。
+// 按钮上。视觉是软填充：无边框圆角色块（w6），hover 加深（w10）；推荐行整
+// 行叠一层 accent 调子（a24），「推荐」chip 内联在标题行尾。不可点（只读/
+// 复杂单）时行整体禁用、颜色降一档，充当纯展示。
 class OptionRow final : public QPushButton {
 public:
     // textW：定卡后的行内正文宽，描述/长 label 按它折行算高。
@@ -623,19 +624,23 @@ public:
                               ? label
                               : label + QStringLiteral(" · ") + desc);
         auto &tm = ThemeManager::instance();
-        const QString border = tm.color(QStringLiteral("bubble.border")).name();
+        // 推荐行整行叠 accent 调子（a58 足够明显），普通行软填充（w6）。
+        const QString base = recommended ? tm.css(QStringLiteral("a58"))
+                                         : tm.css(QStringLiteral("w6"));
+        const QString hover = recommended ? tm.css(QStringLiteral("a72"))
+                                          : tm.css(QStringLiteral("w10"));
         setStyleSheet(QStringLiteral(
-            "QPushButton{background:transparent;border:1px solid %1;"
-            "border-radius:8px;}"
-            "QPushButton:hover{background:%2;border-color:%3;}"
-            "QPushButton:disabled{background:transparent;border:1px solid %1;}")
-            .arg(border, tm.css(QStringLiteral("w10")),
-                 tm.css(QStringLiteral("w26"))));
+            "QPushButton{background:%1;border:none;border-radius:10px;}"
+            "QPushButton:hover{background:%2;}"
+            "QPushButton:disabled{background:%1;}")
+            .arg(base, hover));
         auto *lay = new QHBoxLayout(this);
-        lay->setContentsMargins(10, 6, 10, 6);
-        lay->setSpacing(6);
+        lay->setContentsMargins(12, 7, 12, 7);
+        lay->setSpacing(0);
         auto *col = new QVBoxLayout();
-        col->setSpacing(2);
+        col->setSpacing(3);
+        auto *titleRow = new QHBoxLayout();
+        titleRow->setSpacing(6);
         title_ = new QLabel(this);
         title_->setText(displayLabel(label, recommended));
         title_->setWordWrap(true);
@@ -645,7 +650,20 @@ public:
             tm.color(interactive ? QStringLiteral("text")
                                  : QStringLiteral("text.dim"))
                 .name()));
-        col->addWidget(title_);
+        titleRow->addWidget(title_, 1);
+        if (recommended) {
+            // 行已经整行叠了 accent 调子，chip 只做次级标记：弱底（a24）+
+            // accent.text 文字，不抢行身颜色的戏。
+            auto *chip = new QLabel(QStringLiteral("推荐"), this);
+            chip->setAttribute(Qt::WA_TransparentForMouseEvents);
+            setLineFont(chip, 10, QFont::DemiBold);
+            chip->setStyleSheet(QStringLiteral(
+                "color:%1;background:%2;border-radius:6px;padding:1px 7px;")
+                                    .arg(tm.color(QStringLiteral("accent.text")).name(),
+                                         tm.css(QStringLiteral("a24"))));
+            titleRow->addWidget(chip, 0, Qt::AlignVCenter);
+        }
+        col->addLayout(titleRow);
         if (!desc.isEmpty()) {
             desc_ = new QLabel(desc, this);
             desc_->setWordWrap(true);
@@ -658,27 +676,17 @@ public:
             col->addWidget(desc_);
         }
         lay->addLayout(col, 1);
-        if (recommended) {
-            auto *chip = new QLabel(QStringLiteral("推荐"), this);
-            chip->setAttribute(Qt::WA_TransparentForMouseEvents);
-            setLineFont(chip, 10, QFont::DemiBold);
-            chip->setStyleSheet(QStringLiteral(
-                "color:%1;background:%2;border-radius:7px;padding:1px 7px;")
-                                    .arg(tm.color(QStringLiteral("accent")).name(),
-                                         tm.css(QStringLiteral("a24"))));
-            lay->addWidget(chip, 0, Qt::AlignTop);
-        }
     }
 
     QSize sizeHint() const override {
         // 换行 QLabel 的 sizeHint 在没有宽度约束时会给出整行宽，行高跟着算
         // 错；这里按定卡后的正文宽手动折行测高（PetBubble 同款思路）。
         const QFontMetrics ft(title_->font());
-        int h = 12 + 2 + ft.boundingRect(QRect(0, 0, qMax(40, textW_), 100000),
-                                         Qt::TextWordWrap, title_->text()).height();
+        int h = 14 + ft.boundingRect(QRect(0, 0, qMax(40, textW_), 100000),
+                                     Qt::TextWordWrap, title_->text()).height();
         if (desc_ != nullptr) {
             const QFontMetrics fd(desc_->font());
-            h += 2 + fd.boundingRect(QRect(0, 0, qMax(40, textW_), 100000),
+            h += 3 + fd.boundingRect(QRect(0, 0, qMax(40, textW_), 100000),
                                      Qt::TextWordWrap, desc_->text()).height();
         }
         return QSize(QPushButton::sizeHint().width(), h);
@@ -724,19 +732,20 @@ public:
         setLineFont(progress_, 11, QFont::Normal);
         progress_->hide();
         top->addWidget(title_, 1);
-        top->addWidget(progress_, 0, Qt::AlignBottom);
+        top->addWidget(progress_, 0, Qt::AlignVCenter);
         lay->addLayout(top);
         body_ = new QLabel(this);
         body_->setWordWrap(true);
         setLineFont(body_, 12, QFont::Normal);
         lay->addWidget(body_);
         optionsBox_ = new QVBoxLayout();
-        optionsBox_->setSpacing(5);
+        optionsBox_->setSpacing(6);
         lay->addLayout(optionsBox_);
         auto *footer = new QHBoxLayout();
         footer->setSpacing(6);
         backBtn_ = makeButton(QStringLiteral("上一步"), false);
         backBtn_->setMinimumHeight(26);
+        styleLink(backBtn_);
         backBtn_->hide();
         connect(backBtn_, &QPushButton::clicked, this, [this] {
             if (idx_ > 0) {
@@ -747,12 +756,17 @@ public:
         });
         chatBtn_ = makeButton(QString(), false);
         chatBtn_->setMinimumHeight(26);
+        styleLink(chatBtn_);
         connect(chatBtn_, &QPushButton::clicked, this,
                 [this] { if (openChat_) { openChat_(); } });
         footer->addWidget(backBtn_);
         footer->addStretch(1);
         footer->addWidget(chatBtn_);
         lay->addLayout(footer);
+        // 卡高若一度算错（adjustSize 跑在布局激活前），show 后顶层重算会把
+        // 多余高度摊给中间各行，题干上方炸开大空洞；尾部 stretch 收留余量，
+        // 内容永远从顶部扎实排起。
+        lay->addStretch(1);
         applyTheme();
         connect(&ThemeManager::instance(), &ThemeManager::themeChanged, this,
                 [this](const Theme &) { applyTheme(); });
@@ -796,6 +810,18 @@ public:
             .arg(tm.color(QStringLiteral("accent")).name(),
                  tm.color(QStringLiteral("on.accent")).name(),
                  tm.color(QStringLiteral("muted")).name()));
+    }
+
+    // 页脚链接样式：无框、accent.text 文字，hover 才垫一层 w8——
+    // 「去聊天页查看」这类次级动作不该抢选项行的戏。
+    void styleLink(QPushButton *b) {
+        auto &tm = ThemeManager::instance();
+        b->setStyleSheet(QStringLiteral(
+            "QPushButton{background:transparent;color:%1;border:none;"
+            "border-radius:8px;font-size:12px;padding:4px 8px;}"
+            "QPushButton:hover{background:%2;}")
+            .arg(tm.color(QStringLiteral("accent.text")).name(),
+                 tm.css(QStringLiteral("w8"))));
     }
 
     void styleGhost(QPushButton *b) {
@@ -853,6 +879,8 @@ public:
                 optionsBox_->addLayout(row);
             }
             fitWidth();
+            pinTextHeights();
+            fitHeight();
             adjustSize();
             return;
         }
@@ -877,9 +905,9 @@ public:
         chatBtn_->setText(answerable ? QStringLiteral("去聊天页作答")
                                      : QStringLiteral("去聊天页查看"));
         if (!inlineAnswerable_ && answerable) {
-            stylePrimary(chatBtn_);
+            stylePrimary(chatBtn_);  // 复杂可答单：聊天页是唯一作答口，才用主按钮
         } else {
-            styleGhost(chatBtn_);
+            styleLink(chatBtn_);
         }
         adjustSize();
     }
@@ -899,14 +927,65 @@ protected:
     }
 
 private:
+    // 换行 QLabel 的 sizeHint 在无宽度约束时会按极窄宽度折行估算，短句也会
+    // 被撑成好几行高，标题/题干上下全是虚空（2026-11-16 用户指出）。高度
+    // 一律按最终卡宽手动测量钉死——OptionRow/PetBubble 同款思路。
+    // 注意 configure 跑在 show() 之前，isVisible()（有效可见性，含祖先链）
+    // 恒为 false，判空只能看 text()。
+    void pinTextHeights() {
+        const int textW = qMax(40, width() - 28);  // 卡片左右内边距
+        const QFontMetrics ft(title_->font());
+        titleH_ = qMax(1, ft.boundingRect(
+            QRect(0, 0, textW, 100000), Qt::TextWordWrap,
+            title_->text().isEmpty() ? QStringLiteral(" ") : title_->text()).height());
+        title_->setFixedHeight(titleH_);
+        if (body_->text().isEmpty()) {
+            body_->setFixedHeight(0);
+            bodyH_ = 0;
+            return;
+        }
+        bodyH_ = qMax(1, QFontMetrics(body_->font()).boundingRect(
+            QRect(0, 0, textW, 100000), Qt::TextWordWrap, body_->text()).height());
+        body_->setFixedHeight(bodyH_);
+    }
+
+    // 卡片总高也手动算死：adjustSize 跑在布局激活前拿不到真实 content 高，
+    // show 后顶层重算会多出一截，要么炸开中部、要么沉到卡底留白。
+    // 行高全部可测（OptionRow/按钮都有确定高度），直接合计后 setFixedHeight；
+    // 尾部 stretch 兜底吸收 ±几像素的估计误差。
+    void fitHeight() {
+        int h = 24 + titleH_;               // 上下边距 + 标题行
+        if (bodyH_ > 0) {
+            h += 6 + bodyH_;                // spacing + 题干
+        }
+        h += 6;                             // 到选项区
+        int items = 0;
+        for (int i = 0; i < optionsBox_->count(); ++i) {
+            const QLayoutItem *it = optionsBox_->itemAt(i);
+            if (it->isEmpty()) {
+                continue;
+            }
+            h += it->sizeHint().height();
+            ++items;
+        }
+        if (items > 1) {
+            h += optionsBox_->spacing() * (items - 1);
+        }
+        h += 6 + 26;                        // spacing + 页脚行（按钮 minHeight 26）
+        setFixedHeight(h);
+    }
+
     // 按内容测宽：取题干/选项 label/desc 的不换行自然宽取 max，夹在
     // [kReqCardMinW, kReqCardMaxW]；desc 超宽按上限计，最终靠 wordWrap 折行。
     void fitWidth() {
         int natural = 0;
+        const int nQ = questions_.size();
         const QFontMetrics ft(title_->font());
         const QFontMetrics fb(body_->font());
+        // 多题时标题行右侧要放「第 1/2 题」，预留一截（不能问 isVisible：
+        // configure 跑在 show() 前，有效可见性恒 false）。
         natural = qMax(natural, ft.horizontalAdvance(title_->text()) + 36 +
-                                    (progress_->isVisible() ? 70 : 0));
+                                    (nQ > 1 ? 70 : 0));
         auto stem = [](const QJsonObject &q) {
             const QString question = q.value(QStringLiteral("question")).toString();
             return question.isEmpty()
@@ -938,16 +1017,19 @@ private:
                 const QString raw = o.value(QStringLiteral("label")).toString();
                 const bool rec = raw.endsWith(QLatin1String(kRecommendedSuffix));
                 int w = fr.horizontalAdvance(OptionRow::displayLabel(raw, rec)) +
-                        (rec ? 52 : 0) + 52;
+                        (rec ? 40 : 0) + 52;
                 const QString desc = o.value(QStringLiteral("description")).toString();
                 if (!desc.isEmpty()) {
                     w = qMax(w, qMin(fd.horizontalAdvance(desc),
-                                     kReqCardMaxW - 86) + 52);
+                                     kReqCardMaxW - 52) + 52);
                 }
                 natural = qMax(natural, w);
             }
         }
         setFixedWidth(qBound(kReqCardMinW, natural, kReqCardMaxW));
+        // setFixedWidth 只改 min/max，不保证立刻改到 width()；后面
+        // renderQuestion/pinTextHeights 都按 width() 测量，同步钉住。
+        resize(qBound(kReqCardMinW, natural, kReqCardMaxW), height());
     }
 
     void renderQuestion() {
@@ -964,7 +1046,7 @@ private:
         progress_->setText(inlineAnswerable_
                                ? QStringLiteral("第 %1/%2 题").arg(idx_ + 1).arg(n)
                                : QStringLiteral("共 %1 题").arg(n));
-        const int baseTextW = width() - 50;  // 卡内边距 28 + 描边 2 + 行内边距 20
+        const int baseTextW = width() - 52;  // 卡内边距 28 + 行内边距 24
         for (const QJsonValue &v : q.value(QStringLiteral("options")).toArray()) {
             const QJsonObject o = v.toObject();
             const QString raw = o.value(QStringLiteral("label")).toString();
@@ -988,6 +1070,8 @@ private:
             optionsBox_->addWidget(row);
         }
         backBtn_->setVisible(inlineAnswerable_ && idx_ > 0);
+        pinTextHeights();
+        fitHeight();
         adjustSize();
     }
 
@@ -1019,6 +1103,8 @@ private:
     QJsonObject picked_;
     int idx_ = 0;
     bool inlineAnswerable_ = false;
+    int titleH_ = 18;
+    int bodyH_ = 0;
     std::function<void(QString, QJsonArray)> answer_;
     std::function<void()> openChat_;
     std::function<void()> interact_;
@@ -1375,9 +1461,11 @@ bool VoicePet::showRequestCard(const QString &sessionId,
     requestCard_->show();
     requestCard_->raise();
     requestTimer_->start(120000);  // 两分钟没人理就收起，别留陈旧卡片
-    // QSS polish 可能微调尺寸，落定后再贴一次锚位。
+    // QSS polish 可能微调尺寸，落定后再贴一次锚位；布局激活后的真实
+    // content 高度此刻才可得，补一次 adjustSize 把卡高修正。
     QTimer::singleShot(0, this, [this] {
         if (requestCard_ != nullptr && requestCard_->isVisible()) {
+            requestCard_->adjustSize();
             placeRequestCard();
         }
     });

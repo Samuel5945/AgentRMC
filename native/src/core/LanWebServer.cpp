@@ -614,8 +614,11 @@ void LanWebServer::routePair(QTcpSocket *socket,
     lastPersist_ = now;
     emit devicesChanged(devices_);
     // 配对码/令牌不落日志。cookie 限 /m 路径，HttpOnly 防脚本偷，Strict 防跨站带。
+    // Max-Age 必须带：不带是会话级 Cookie，手机浏览器一关就丢，每次重启宿主
+    // 都要重新扫码（用户 2026-11-16）。设备随时可在系统页吊销，长 Cookie 无妨。
     const QByteArray cookie = "Set-Cookie: armc_dev=" + token +
-                              "; Path=/m; HttpOnly; SameSite=Strict\r\n";
+                              "; Path=/m; HttpOnly; SameSite=Strict; " +
+                              "Max-Age=31536000\r\n";
     finish(socket, "200 OK", QByteArrayLiteral("{\"ok\":true}"),
            "application/json", cookie);
 }
@@ -1017,19 +1020,24 @@ function showPair(){
  $('app').hidden=true;$('pair').hidden=false;
  if(timer){clearInterval(timer);timer=null;}
 }
+let netFails=0;  // 连续失败计数：2.5s 轮询偶发抖一两次不值得亮掉线横幅
 async function load(){
  try{
-  const r=await fetch('/m/state',{cache:'no-store'});
+  const r=await fetch('/m/state',{cache:'no-store',
+   signal:AbortSignal.timeout(8000)});
   if(r.status===401){showPair();return;}
-  if(!r.ok){setNet(false);return;}
-  const s=await r.json();
+  if(!r.ok) throw new Error('http '+r.status);
+  netFails=0;
   setNet(true);
+  const s=await r.json();
   $('pair').hidden=true;$('app').hidden=false;
   adopt(s);
  }catch(e){
+  // 抖动容忍：连挂 3 轮（约 8s）才判掉线亮横幅，期间保留旧画面不闪。
+  netFails++;
   if(!STATE){showPair();
    $('pairErr').textContent='连不上电脑：确认手机和电脑在同一个 Wi-Fi、电脑端已开启「手机访问」、防火墙已放行。';}
-  else setNet(false);
+  else if(netFails>=3) setNet(false);
  }
 }
 function startPoll(){
@@ -1143,24 +1151,15 @@ function card(it){
   el.append(chk);
   return el;
  }
- // 单选态只留一个「回到 Agent」小按钮（图标化；ZCode 派发通知态变聚焦）。
- // 长按 500ms 直接进多选并勾上这一条（头部「多选」开关是另一条路）。
- const acts=document.createElement('div');acts.className='acts single';
- const open=document.createElement('button');open.className='icobtn';
- open.textContent='↗';open.title='在电脑上回到这个 Agent';
- open.onclick=(e)=>{e.stopPropagation();act({cmd:zcodeNotice?'raiseZcode':'open',id:it.id});};
- acts.append(open);
- // ZCode 通知态的「重启」是配套动作，保留。
+ // 手势操作（按钮不再占行）：右滑回到 Agent（ZCode 派发通知态=聚焦），
+ // 左滑标为已处理；长按 500ms 进多选并勾上这一条（头部「多选」开关是另一条路）。
+ // ZCode 通知态的「重启」是配套动作，保留文字按钮（手势没承载这个动作）。
  if(zcodeNotice){
   const rs=document.createElement('button');rs.className='btn warn';
   rs.textContent='重启 ZCode';
   rs.onclick=(e)=>{e.stopPropagation();if(confirm('重启 ZCode 桌面？会中断它里面正在跑的其它轮次；重启后打开会话即可看到派发消息全文。'))act({cmd:'restartZcode'});};
-  acts.append(rs);
+  el.append(rs);
  }
- el.append(acts);
- // 左滑标记已处理：横向位移过阈值直接销账（销账后下轮刷新自然消失）。
- // 长按进多选：按住不动 500ms 触发，手指挪动（滑动）即取消计时；
- // 触发后紧跟的 click（touchend 合成）要吞掉，别顺手进了聊天页。
  let sx=0,sy=0,lpTimer=null,lpFired=false;
  const cancelLp=()=>{if(lpTimer){clearTimeout(lpTimer);lpTimer=null;}};
  el.addEventListener('touchstart',(e)=>{const t=e.touches[0];sx=t.clientX;sy=t.clientY;
@@ -1171,14 +1170,18 @@ function card(it){
  el.addEventListener('touchmove',(e)=>{
   const t=e.touches[0];const dx=t.clientX-sx;const dy=t.clientY-sy;
   if(Math.abs(dx)>10||Math.abs(dy)>10) cancelLp();
-  if(Math.abs(dx)>Math.abs(dy)&&dx<0){el.style.transform='translateX('+dx+'px)';
-   el.style.opacity=String(Math.max(.35,1+dx/220));}
+  if(Math.abs(dx)>Math.abs(dy)&&Math.abs(dx)>8){
+   el.style.transform='translateX('+dx+'px)';
+   el.style.opacity=String(Math.max(.35,1-Math.abs(dx)/320));
+   el.style.borderColor=dx<0?'var(--danger)':(dx>0?'var(--accent)':'');}
  },{passive:true});
  el.addEventListener('touchend',(e)=>{
   cancelLp();
   const t=e.changedTouches[0];const dx=t.clientX-sx;const dy=t.clientY-sy;
-  el.style.transform='';el.style.opacity='';
-  if(dx<-56&&Math.abs(dx)>Math.abs(dy)*1.2){SWIPE_ACK=it.id;act({cmd:'ack',id:it.id});}
+  el.style.transform='';el.style.opacity='';el.style.borderColor='';
+  const horiz=Math.abs(dx)>Math.abs(dy)*1.2;
+  if(dx<-56&&horiz){SWIPE_ACK=it.id;act({cmd:'ack',id:it.id});}
+  else if(dx>56&&horiz){act({cmd:zcodeNotice?'raiseZcode':'open',id:it.id});}
  },{passive:true});
  el.addEventListener('click',(e)=>{
   if(lpFired){e.stopPropagation();e.preventDefault();lpFired=false;}

@@ -48,6 +48,7 @@
 #include <QVector>
 
 #include <cmath>
+#include <cstring>
 #include <functional>
 
 namespace {
@@ -61,6 +62,10 @@ constexpr int kSnapDist = 80;   // 拖到离屏幕边多近算贴边
 // 卡片宽度：比旧按钮排时代宽一点，给「下次派活开新任务」这类长选项和
 // 左右留白留余地（宽度是呼吸感的一半，另一半是行距）。
 constexpr int kCardWidth = 300;
+// 请求卡宽度自适应：下限沿用旧固定宽 280，上限比悬停卡(300)略宽——
+// 两行选项要装下描述，再宽就要压到屏幕边了。
+constexpr int kReqCardMinW = 280;
+constexpr int kReqCardMaxW = 340;
 // 转写区：空闲只占一行（不留一整块空箱子），有字才长到正文高度。
 constexpr int kTranscriptMinH = 64;   // 有正文时的最矮高度（约三行）
 constexpr int kTranscriptMaxH = 120;  // 再长就在框里滚/截，别把卡片顶出屏幕
@@ -589,6 +594,112 @@ private:
 // 借鉴 OpenSquilla 蛋仔的富气泡：待答请求（授权/提问）渲染成可交互卡片。
 // 做成桌宠的子控件（同 PetBubble），自绘鲸鱼风圆角底，避免顶层窗口透明问题。
 // 按钮点击经回调交给 VoicePet 发信号，主窗落收件箱走插件/桥应答（同聊天页）。
+// 卡内文字统一在代码里定字体（px + 字重）：QSS 的 font-size 要 polish 后才
+// 生效，而卡片要在 show 前按 font() 手动测宽测高，字体必须当场就是准的。
+static void setLineFont(QLabel *label, int px, QFont::Weight weight) {
+    QFont f = label->font();
+    f.setPixelSize(px);
+    f.setWeight(weight);
+    label->setFont(f);
+}
+
+// ZCode 会在推荐项的 label 后面缀这个后缀原文透传：展示层剥掉换成「推荐」
+// chip，作答仍发完整原始 label（宿主按原文匹配，不能动）。
+const char kRecommendedSuffix[] = " (Recommended)";
+
+// 两行选项行（ChoiceCard 同款思路）：QPushButton 自己的文本不换行，长描述
+// 会被裁掉两头，所以 label/desc 放进对鼠标透明的子 QLabel——点击照旧落在
+// 按钮上；hover 底色走主题 token，不再写死灰色。不可点（只读/复杂单）时
+// 行整体禁用、颜色降一档，充当纯展示。
+class OptionRow final : public QPushButton {
+public:
+    // textW：定卡后的行内正文宽，描述/长 label 按它折行算高。
+    OptionRow(const QString &label, const QString &desc, bool recommended,
+              bool interactive, int textW, QWidget *parent = nullptr)
+        : QPushButton(parent), textW_(textW) {
+        setEnabled(interactive);
+        setCursor(interactive ? Qt::PointingHandCursor : Qt::ArrowCursor);
+        setAccessibleName(desc.isEmpty()
+                              ? label
+                              : label + QStringLiteral(" · ") + desc);
+        auto &tm = ThemeManager::instance();
+        const QString border = tm.color(QStringLiteral("bubble.border")).name();
+        setStyleSheet(QStringLiteral(
+            "QPushButton{background:transparent;border:1px solid %1;"
+            "border-radius:8px;}"
+            "QPushButton:hover{background:%2;border-color:%3;}"
+            "QPushButton:disabled{background:transparent;border:1px solid %1;}")
+            .arg(border, tm.css(QStringLiteral("w10")),
+                 tm.css(QStringLiteral("w26"))));
+        auto *lay = new QHBoxLayout(this);
+        lay->setContentsMargins(10, 6, 10, 6);
+        lay->setSpacing(6);
+        auto *col = new QVBoxLayout();
+        col->setSpacing(2);
+        title_ = new QLabel(this);
+        title_->setText(displayLabel(label, recommended));
+        title_->setWordWrap(true);
+        title_->setAttribute(Qt::WA_TransparentForMouseEvents);
+        setLineFont(title_, 12, QFont::DemiBold);
+        title_->setStyleSheet(QStringLiteral("color:%1;").arg(
+            tm.color(interactive ? QStringLiteral("text")
+                                 : QStringLiteral("text.dim"))
+                .name()));
+        col->addWidget(title_);
+        if (!desc.isEmpty()) {
+            desc_ = new QLabel(desc, this);
+            desc_->setWordWrap(true);
+            desc_->setAttribute(Qt::WA_TransparentForMouseEvents);
+            setLineFont(desc_, 11, QFont::Normal);
+            desc_->setStyleSheet(QStringLiteral("color:%1;").arg(
+                tm.color(interactive ? QStringLiteral("muted")
+                                     : QStringLiteral("ghost"))
+                    .name()));
+            col->addWidget(desc_);
+        }
+        lay->addLayout(col, 1);
+        if (recommended) {
+            auto *chip = new QLabel(QStringLiteral("推荐"), this);
+            chip->setAttribute(Qt::WA_TransparentForMouseEvents);
+            setLineFont(chip, 10, QFont::DemiBold);
+            chip->setStyleSheet(QStringLiteral(
+                "color:%1;background:%2;border-radius:7px;padding:1px 7px;")
+                                    .arg(tm.color(QStringLiteral("accent")).name(),
+                                         tm.css(QStringLiteral("a24"))));
+            lay->addWidget(chip, 0, Qt::AlignTop);
+        }
+    }
+
+    QSize sizeHint() const override {
+        // 换行 QLabel 的 sizeHint 在没有宽度约束时会给出整行宽，行高跟着算
+        // 错；这里按定卡后的正文宽手动折行测高（PetBubble 同款思路）。
+        const QFontMetrics ft(title_->font());
+        int h = 12 + 2 + ft.boundingRect(QRect(0, 0, qMax(40, textW_), 100000),
+                                         Qt::TextWordWrap, title_->text()).height();
+        if (desc_ != nullptr) {
+            const QFontMetrics fd(desc_->font());
+            h += 2 + fd.boundingRect(QRect(0, 0, qMax(40, textW_), 100000),
+                                     Qt::TextWordWrap, desc_->text()).height();
+        }
+        return QSize(QPushButton::sizeHint().width(), h);
+    }
+
+    QSize minimumSizeHint() const override { return sizeHint(); }
+
+    static QString displayLabel(const QString &label, bool recommended) {
+        QString shown = label;
+        if (recommended && shown.endsWith(QLatin1String(kRecommendedSuffix))) {
+            shown.chop(int(static_cast<qsizetype>(strlen(kRecommendedSuffix))));
+        }
+        return shown;
+    }
+
+private:
+    QLabel *title_ = nullptr;
+    QLabel *desc_ = nullptr;
+    int textW_ = 0;
+};
+
 class VoicePet::RequestCard final : public QWidget {
 public:
     explicit RequestCard(QWidget *parent) : QWidget(parent) {
@@ -599,68 +710,127 @@ public:
                        Qt::WindowStaysOnTopHint | Qt::NoDropShadowWindowHint);
         setAttribute(Qt::WA_TranslucentBackground);
         setAttribute(Qt::WA_ShowWithoutActivating);
-        setFixedWidth(280);
+        // 宽度不再写死：configure 里按内容测宽（fitWidth），夹在
+        // [kReqCardMinW, kReqCardMaxW]。
         auto *lay = new QVBoxLayout(this);
         lay->setContentsMargins(14, 12, 14, 12);
         lay->setSpacing(6);
+        auto *top = new QHBoxLayout();
+        top->setSpacing(6);
         title_ = new QLabel(this);
         title_->setWordWrap(true);
+        setLineFont(title_, 13, QFont::DemiBold);
+        progress_ = new QLabel(this);
+        setLineFont(progress_, 11, QFont::Normal);
+        progress_->hide();
+        top->addWidget(title_, 1);
+        top->addWidget(progress_, 0, Qt::AlignBottom);
+        lay->addLayout(top);
         body_ = new QLabel(this);
         body_->setWordWrap(true);
-        lay->addWidget(title_);
+        setLineFont(body_, 12, QFont::Normal);
         lay->addWidget(body_);
-        btnBox_ = new QVBoxLayout();
-        btnBox_->setSpacing(6);
-        lay->addLayout(btnBox_);
+        optionsBox_ = new QVBoxLayout();
+        optionsBox_->setSpacing(5);
+        lay->addLayout(optionsBox_);
+        auto *footer = new QHBoxLayout();
+        footer->setSpacing(6);
+        backBtn_ = makeButton(QStringLiteral("上一步"), false);
+        backBtn_->setMinimumHeight(26);
+        backBtn_->hide();
+        connect(backBtn_, &QPushButton::clicked, this, [this] {
+            if (idx_ > 0) {
+                --idx_;
+                renderQuestion();
+                if (interact_) { interact_(); }  // 改选也是交互：续计时
+            }
+        });
+        chatBtn_ = makeButton(QString(), false);
+        chatBtn_->setMinimumHeight(26);
+        connect(chatBtn_, &QPushButton::clicked, this,
+                [this] { if (openChat_) { openChat_(); } });
+        footer->addWidget(backBtn_);
+        footer->addStretch(1);
+        footer->addWidget(chatBtn_);
+        lay->addLayout(footer);
         applyTheme();
+        connect(&ThemeManager::instance(), &ThemeManager::themeChanged, this,
+                [this](const Theme &) { applyTheme(); });
     }
 
     void applyTheme() {
         auto &tm = ThemeManager::instance();
-        const QString text = tm.color(QStringLiteral("text")).name();
-        const QString muted = tm.color(QStringLiteral("muted")).name();
-        title_->setStyleSheet(QStringLiteral("color:%1;font-weight:600;font-size:13px;").arg(text));
-        body_->setStyleSheet(QStringLiteral("color:%1;font-size:12px;").arg(muted));
+        title_->setStyleSheet(QStringLiteral("color:%1;").arg(
+            tm.color(QStringLiteral("text")).name()));
+        body_->setStyleSheet(QStringLiteral("color:%1;").arg(
+            tm.color(QStringLiteral("muted")).name()));
+        progress_->setStyleSheet(QStringLiteral("color:%1;").arg(
+            tm.color(QStringLiteral("muted")).name()));
     }
 
-    void clearButtons() {
-        while (QLayoutItem *it = btnBox_->takeAt(0)) {
+    void clearOptions() {
+        while (QLayoutItem *it = optionsBox_->takeAt(0)) {
             if (QWidget *w = it->widget()) { w->deleteLater(); }
             delete it;
         }
     }
 
     QPushButton *makeButton(const QString &label, bool primary) {
-        auto &tm = ThemeManager::instance();
         auto *b = new QPushButton(label, this);
         b->setCursor(Qt::PointingHandCursor);
         b->setMinimumHeight(30);
-        const QString accent = tm.color(QStringLiteral("accent")).name();
-        const QString border = tm.color(QStringLiteral("bubble.border")).name();
-        const QString text = tm.color(QStringLiteral("text")).name();
         if (primary) {
-            b->setStyleSheet(QStringLiteral(
-                "QPushButton{background:%1;color:#fff;border:none;border-radius:8px;"
-                "font-size:12px;padding:4px 10px;}"
-                "QPushButton:disabled{opacity:.6;}").arg(accent));
+            stylePrimary(b);
         } else {
-            b->setStyleSheet(QStringLiteral(
-                "QPushButton{background:transparent;color:%1;border:1px solid %2;"
-                "border-radius:8px;font-size:12px;padding:4px 10px;}"
-                "QPushButton:hover{background:rgba(127,127,127,.15);}").arg(text, border));
+            styleGhost(b);
         }
         return b;
     }
 
-    // req: /requests 单条。onAnswer(outcome, answers)；onOpenChat()。
+    void stylePrimary(QPushButton *b) {
+        auto &tm = ThemeManager::instance();
+        b->setStyleSheet(QStringLiteral(
+            "QPushButton{background:%1;color:%2;border:none;border-radius:8px;"
+            "font-size:12px;padding:4px 10px;}"
+            "QPushButton:disabled{background:%1;color:%3;}")
+            .arg(tm.color(QStringLiteral("accent")).name(),
+                 tm.color(QStringLiteral("on.accent")).name(),
+                 tm.color(QStringLiteral("muted")).name()));
+    }
+
+    void styleGhost(QPushButton *b) {
+        auto &tm = ThemeManager::instance();
+        b->setStyleSheet(QStringLiteral(
+            "QPushButton{background:transparent;color:%1;border:1px solid %2;"
+            "border-radius:8px;font-size:12px;padding:4px 10px;}"
+            "QPushButton:hover{background:%3;border-color:%4;}")
+            .arg(tm.color(QStringLiteral("text")).name(),
+                 tm.color(QStringLiteral("bubble.border")).name(),
+                 tm.css(QStringLiteral("w8")),
+                 tm.css(QStringLiteral("w26"))));
+    }
+
+    // req: /requests 单条。onAnswer(outcome, answers)；onOpenChat()；
+    // onInteract()：行内多题每答一题都会触发（外部借此续 120s 计时 + 重贴锚位）。
     void configure(const QJsonObject &req,
                    std::function<void(QString, QJsonArray)> onAnswer,
-                   std::function<void()> onOpenChat) {
-        clearButtons();
+                   std::function<void()> onOpenChat,
+                   std::function<void()> onInteract) {
+        answer_ = std::move(onAnswer);
+        openChat_ = std::move(onOpenChat);
+        interact_ = std::move(onInteract);
         applyTheme();
+        progress_->hide();
+        backBtn_->hide();
+        questions_ = QJsonArray();
+        picked_ = QJsonObject();
+        idx_ = 0;
+        inlineAnswerable_ = false;
         const QString kind = req.value(QStringLiteral("kind")).toString();
         const bool answerable = req.value(QStringLiteral("answerable")).toBool();
         if (kind == QStringLiteral("approval")) {
+            clearOptions();
+            chatBtn_->hide();
             title_->setText(QStringLiteral("🔐 等你授权") +
                             (req.value(QStringLiteral("toolName")).toString().isEmpty()
                                  ? QString()
@@ -672,52 +842,44 @@ public:
                 row->setSpacing(8);
                 auto *allow = makeButton(QStringLiteral("允许"), true);
                 auto *reject = makeButton(QStringLiteral("拒绝"), false);
-                connect(allow, &QPushButton::clicked, this, [onAnswer] {
-                    onAnswer(QStringLiteral("allowed-once"), QJsonArray());
+                connect(allow, &QPushButton::clicked, this, [this] {
+                    if (answer_) { answer_(QStringLiteral("allowed-once"), QJsonArray()); }
                 });
-                connect(reject, &QPushButton::clicked, this, [onAnswer] {
-                    onAnswer(QStringLiteral("rejected"), QJsonArray());
+                connect(reject, &QPushButton::clicked, this, [this] {
+                    if (answer_) { answer_(QStringLiteral("rejected"), QJsonArray()); }
                 });
                 row->addWidget(allow);
                 row->addWidget(reject);
-                btnBox_->addLayout(row);
+                optionsBox_->addLayout(row);
             }
+            fitWidth();
+            adjustSize();
+            return;
+        }
+        title_->setText(QStringLiteral("❓ 等你选方案"));
+        body_->clear();  // 别让上一单的题干残留进 fitWidth 的测宽
+        questions_ = req.value(QStringLiteral("questions")).toArray();
+        // 行内作答门槛：所有题都是单选且选项 1..4（all-or-nothing——提交时批
+        // 必须完整，跟聊天页「每题都要选」的校验对齐）。
+        inlineAnswerable_ = answerable && !questions_.isEmpty();
+        for (const QJsonValue &v : questions_) {
+            const QJsonObject q = v.toObject();
+            const int opts = q.value(QStringLiteral("options")).toArray().size();
+            if (q.value(QStringLiteral("multi_select")).toBool() || opts < 1 || opts > 4) {
+                inlineAnswerable_ = false;
+            }
+        }
+        fitWidth();
+        renderQuestion();
+        chatBtn_->show();
+        // 复杂（多选/多题/选项多）→ 去聊天页作答；不可答（ZCode 只读卡）
+        // → 去聊天页查看（那头也只能看，答案得回宿主窗口给）。
+        chatBtn_->setText(answerable ? QStringLiteral("去聊天页作答")
+                                     : QStringLiteral("去聊天页查看"));
+        if (!inlineAnswerable_ && answerable) {
+            stylePrimary(chatBtn_);
         } else {
-            title_->setText(QStringLiteral("❓ 等你选方案"));
-            const QJsonArray qs = req.value(QStringLiteral("questions")).toArray();
-            const QJsonObject q0 = qs.isEmpty() ? QJsonObject() : qs.at(0).toObject();
-            body_->setText(q0.value(QStringLiteral("question")).toString());
-            body_->setVisible(!body_->text().isEmpty());
-            const QJsonArray opts = q0.value(QStringLiteral("options")).toArray();
-            const bool simple = answerable && qs.size() == 1 &&
-                                !q0.value(QStringLiteral("multi_select")).toBool() &&
-                                opts.size() >= 1 && opts.size() <= 4;
-            if (simple) {
-                const QString qid = q0.value(QStringLiteral("id")).toString();
-                for (const QJsonValue &v : opts) {
-                    const QString label = v.toObject().value(QStringLiteral("label")).toString();
-                    auto *b = makeButton(label, false);
-                    connect(b, &QPushButton::clicked, this, [onAnswer, qid, label] {
-                        QJsonArray sel;
-                        sel.append(label);
-                        QJsonObject a;
-                        a.insert(QStringLiteral("id"), qid);
-                        a.insert(QStringLiteral("selected"), sel);
-                        QJsonArray answers;
-                        answers.append(a);
-                        onAnswer(QString(), answers);
-                    });
-                    btnBox_->addWidget(b);
-                }
-            }
-            // 复杂（多选/多题/选项多）→ 去聊天页作答；不可答（ZCode 只读卡）
-            // → 去聊天页查看（那头也只能看，答案得回宿主窗口给）。
-            auto *chat = makeButton(
-                answerable ? QStringLiteral("去聊天页作答")
-                           : QStringLiteral("去聊天页查看"),
-                !simple && answerable);
-            connect(chat, &QPushButton::clicked, this, [onOpenChat] { onOpenChat(); });
-            btnBox_->addWidget(chat);
+            styleGhost(chatBtn_);
         }
         adjustSize();
     }
@@ -737,9 +899,129 @@ protected:
     }
 
 private:
+    // 按内容测宽：取题干/选项 label/desc 的不换行自然宽取 max，夹在
+    // [kReqCardMinW, kReqCardMaxW]；desc 超宽按上限计，最终靠 wordWrap 折行。
+    void fitWidth() {
+        int natural = 0;
+        const QFontMetrics ft(title_->font());
+        const QFontMetrics fb(body_->font());
+        natural = qMax(natural, ft.horizontalAdvance(title_->text()) + 36 +
+                                    (progress_->isVisible() ? 70 : 0));
+        auto stem = [](const QJsonObject &q) {
+            const QString question = q.value(QStringLiteral("question")).toString();
+            return question.isEmpty()
+                       ? q.value(QStringLiteral("header")).toString()
+                       : question;
+        };
+        if (!body_->text().isEmpty()) {
+            natural = qMax(natural, fb.boundingRect(
+                QRect(0, 0, kReqCardMaxW - 34, 10000), Qt::TextWordWrap,
+                body_->text()).width() + 34);
+        }
+        QFont rfont = title_->font();
+        rfont.setPixelSize(12);
+        rfont.setWeight(QFont::DemiBold);
+        QFont dfont = body_->font();
+        dfont.setPixelSize(11);
+        const QFontMetrics fr(rfont);
+        const QFontMetrics fd(dfont);
+        for (const QJsonValue &qv : questions_) {
+            const QJsonObject q = qv.toObject();
+            const QString s = stem(q);
+            if (!s.isEmpty()) {
+                natural = qMax(natural, fb.boundingRect(
+                    QRect(0, 0, kReqCardMaxW - 34, 10000), Qt::TextWordWrap,
+                    s).width() + 34);
+            }
+            for (const QJsonValue &ov : q.value(QStringLiteral("options")).toArray()) {
+                const QJsonObject o = ov.toObject();
+                const QString raw = o.value(QStringLiteral("label")).toString();
+                const bool rec = raw.endsWith(QLatin1String(kRecommendedSuffix));
+                int w = fr.horizontalAdvance(OptionRow::displayLabel(raw, rec)) +
+                        (rec ? 52 : 0) + 52;
+                const QString desc = o.value(QStringLiteral("description")).toString();
+                if (!desc.isEmpty()) {
+                    w = qMax(w, qMin(fd.horizontalAdvance(desc),
+                                     kReqCardMaxW - 86) + 52);
+                }
+                natural = qMax(natural, w);
+            }
+        }
+        setFixedWidth(qBound(kReqCardMinW, natural, kReqCardMaxW));
+    }
+
+    void renderQuestion() {
+        clearOptions();
+        const QJsonObject q = questions_.at(idx_).toObject();
+        const QString question = q.value(QStringLiteral("question")).toString();
+        const QString stemText = question.isEmpty()
+                                     ? q.value(QStringLiteral("header")).toString()
+                                     : question;
+        body_->setText(stemText);
+        body_->setVisible(!stemText.isEmpty());
+        const int n = questions_.size();
+        progress_->setVisible(n > 1);
+        progress_->setText(inlineAnswerable_
+                               ? QStringLiteral("第 %1/%2 题").arg(idx_ + 1).arg(n)
+                               : QStringLiteral("共 %1 题").arg(n));
+        const int baseTextW = width() - 50;  // 卡内边距 28 + 描边 2 + 行内边距 20
+        for (const QJsonValue &v : q.value(QStringLiteral("options")).toArray()) {
+            const QJsonObject o = v.toObject();
+            const QString raw = o.value(QStringLiteral("label")).toString();
+            const bool rec = raw.endsWith(QLatin1String(kRecommendedSuffix));
+            const int textW = qMax(60, baseTextW - (rec ? 46 : 0));
+            auto *row = new OptionRow(raw, o.value(QStringLiteral("description")).toString(),
+                                      rec, inlineAnswerable_, textW, this);
+            if (inlineAnswerable_) {
+                const QString qid = q.value(QStringLiteral("id")).toString();
+                connect(row, &QPushButton::clicked, this, [this, qid, raw] {
+                    picked_.insert(qid, raw);
+                    if (idx_ + 1 < questions_.size()) {
+                        ++idx_;
+                        renderQuestion();
+                        if (interact_) { interact_(); }
+                    } else {
+                        submitBatch();
+                    }
+                });
+            }
+            optionsBox_->addWidget(row);
+        }
+        backBtn_->setVisible(inlineAnswerable_ && idx_ > 0);
+        adjustSize();
+    }
+
+    void submitBatch() {
+        if (!answer_) {
+            return;
+        }
+        QJsonArray answers;
+        for (const QJsonValue &v : questions_) {
+            const QJsonObject q = v.toObject();
+            const QString qid = q.value(QStringLiteral("id")).toString();
+            QJsonArray sel;
+            sel.append(picked_.value(qid).toString());
+            QJsonObject a;
+            a.insert(QStringLiteral("id"), qid);
+            a.insert(QStringLiteral("selected"), sel);
+            answers.append(a);
+        }
+        answer_(QString(), answers);
+    }
+
     QLabel *title_ = nullptr;
+    QLabel *progress_ = nullptr;
     QLabel *body_ = nullptr;
-    QVBoxLayout *btnBox_ = nullptr;
+    QVBoxLayout *optionsBox_ = nullptr;
+    QPushButton *backBtn_ = nullptr;
+    QPushButton *chatBtn_ = nullptr;
+    QJsonArray questions_;
+    QJsonObject picked_;
+    int idx_ = 0;
+    bool inlineAnswerable_ = false;
+    std::function<void(QString, QJsonArray)> answer_;
+    std::function<void()> openChat_;
+    std::function<void()> interact_;
 };
 
 VoicePet::VoicePet(ProfileStore *store, VoiceController *voice, QWidget *parent)
@@ -1036,10 +1318,18 @@ void VoicePet::placeRequestCard() {
     int x = this->x() + width() / 2 - requestCard_->width() / 2;
     x = qMax(available.left() + 4,
              qMin(x, available.right() - requestCard_->width() - 4));
-    const int y = dock_ == Dock::Top
-                      ? this->y() + height() + 8
-                      : this->y() - requestCard_->height() - 8;
-    requestCard_->move(x, qMax(available.top() + 4, y));
+    // 优先放桌宠上方；上方放不下（选项卡带描述后比以前高）就翻到下方，
+    // 最后整体夹进屏幕可用区。贴顶停靠时保持原样放下方。
+    const int minY = available.top() + 4;
+    int y;
+    if (dock_ == Dock::Top) {
+        y = this->y() + height() + 8;
+    } else {
+        const int above = this->y() - requestCard_->height() - 8;
+        y = above >= minY ? above : this->y() + height() + 8;
+    }
+    const int maxY = qMax(minY, available.bottom() - requestCard_->height() - 4);
+    requestCard_->move(x, qBound(minY, y, maxY));
 }
 
 bool VoicePet::showRequestCard(const QString &sessionId,
@@ -1072,12 +1362,25 @@ bool VoicePet::showRequestCard(const QString &sessionId,
                 requestTimer_->stop();
             }
             emit requestOpenChat(sid);
+        },
+        [this] {
+            // 行内多题答了一题：续 120s 计时；卡片高度变了，重贴锚位。
+            if (requestTimer_ != nullptr) {
+                requestTimer_->start(120000);
+            }
+            placeRequestCard();
         });
     hideBubble();  // 交互卡和普通气泡不叠着
     placeRequestCard();
     requestCard_->show();
     requestCard_->raise();
     requestTimer_->start(120000);  // 两分钟没人理就收起，别留陈旧卡片
+    // QSS polish 可能微调尺寸，落定后再贴一次锚位。
+    QTimer::singleShot(0, this, [this] {
+        if (requestCard_ != nullptr && requestCard_->isVisible()) {
+            placeRequestCard();
+        }
+    });
     return true;
 }
 

@@ -250,24 +250,98 @@ int main(int argc, char *argv[]) {
         }
         pet.expandCard();
         pet.speak(QString::fromUtf8("你好，我是你的语音桌宠"));
+        // 样例多题请求卡：验两行选项/描述/推荐角标/多题进度/宽度自适应。
+        // AGENTRMC_PET_SHOT_REQUEST=inline（默认，可答题）或 ro（ZCode 只读卡，
+        // 选项行置灰、只留「去聊天页查看」）。
+        const QString shotReq = qEnvironmentVariable("AGENTRMC_PET_SHOT_REQUEST");
+        if (!shotReq.isEmpty()) {
+            QJsonObject req;
+            req.insert(QStringLiteral("kind"), QStringLiteral("question"));
+            req.insert(QStringLiteral("id"), QStringLiteral("shot-req"));
+            req.insert(QStringLiteral("answerable"),
+                       shotReq != QStringLiteral("ro"));
+            QJsonArray qs;
+            {
+                QJsonObject q;
+                q.insert(QStringLiteral("id"), QStringLiteral("q1"));
+                q.insert(QStringLiteral("question"),
+                         QString::fromUtf8("选一个验证重点？"));
+                QJsonArray opts;
+                opts.append(QJsonObject{
+                    {"label", QString::fromUtf8("测请求卡链路 (Recommended)")},
+                    {"description", QString::fromUtf8(
+                        "桌宠侧请求卡正常弹出、可点选，答案回传宿主窗口")}});
+                opts.append(QJsonObject{
+                    {"label", QString::fromUtf8("测选项展示样式")},
+                    {"description", QString::fromUtf8(
+                        "两行选项、描述折行不裁切、推荐角标位置")}});
+                opts.append(QJsonObject{
+                    {"label", QString::fromUtf8("测回传后继续执行")},
+                    {"description", QString::fromUtf8(
+                        "选择结果回到会话并接着往下跑")}});
+                q.insert(QStringLiteral("options"), opts);
+                qs.append(q);
+            }
+            {
+                QJsonObject q;
+                q.insert(QStringLiteral("id"), QStringLiteral("q2"));
+                q.insert(QStringLiteral("question"),
+                         QString::fromUtf8("第二条要不要也出卡？"));
+                QJsonArray opts;
+                opts.append(QJsonObject{
+                    {"label", QString::fromUtf8("出卡")},
+                    {"description", QString::fromUtf8(
+                        "同锚位普通气泡让路，卡片在上气泡在下")}});
+                opts.append(QJsonObject{
+                    {"label", QString::fromUtf8("不出卡")},
+                    {"description", QString::fromUtf8(
+                        "维持普通气泡提醒，卡片只在授权时出现")}});
+                q.insert(QStringLiteral("options"), opts);
+                qs.append(q);
+            }
+            req.insert(QStringLiteral("questions"), qs);
+            pet.showRequestCard(QStringLiteral("shot-session"), req);
+            // 截图场景别让这张顶层卡在真屏上闪一下：收到幕后，grab 一样能画。
+            if (auto *rc = pet.findChild<QWidget *>(
+                    QStringLiteral("petRequestCard"))) {
+                rc->hide();
+            }
+        }
         QTimer::singleShot(450, &pet, [&pet, petShot] {
+            QWidget *card = pet.findChild<QWidget *>(QStringLiteral("petCard"));
+            QWidget *reqCard =
+                pet.findChild<QWidget *>(QStringLiteral("petRequestCard"));
+            QWidget *bubble =
+                pet.findChild<QWidget *>(QStringLiteral("petBubble"));
             // 画布按最长的一块算：卡片 300 + 左边距，别把卡片右边裁掉。
             int cardWidth = 300;
-            QWidget *card = pet.findChild<QWidget *>(QStringLiteral("petCard"));
             if (card != nullptr) {
                 cardWidth = qMax(cardWidth, card->width());
             }
-            QPixmap canvas(cardWidth + 60, 480);
+            if (reqCard != nullptr) {
+                cardWidth = qMax(cardWidth, reqCard->width());
+            }
+            // 纵向从上往下排：桌宠 → 悬停卡 → 请求卡 → 气泡（没有的块跳过）。
+            int y = pet.height() + 18;
+            const int hoverH = card != nullptr ? card->height() : 0;
+            const int reqH = reqCard != nullptr ? reqCard->height() : 0;
+            const int bubH = bubble != nullptr ? bubble->height() : 0;
+            const int canvasH =
+                qMax(480, y + hoverH + 18 + reqH + 18 + bubH + 16 + 8);
+            QPixmap canvas(cardWidth + 60, canvasH);
             canvas.fill(Qt::transparent);
             QPainter painter(&canvas);
             painter.drawPixmap(30, 8, pet.grab());
             if (card != nullptr) {
-                painter.drawPixmap(30, 110, card->grab());
+                painter.drawPixmap(30, y, card->grab());
+                y += hoverH + 18;
             }
-            QWidget *bubble =
-                pet.findChild<QWidget *>(QStringLiteral("petBubble"));
+            if (reqCard != nullptr) {
+                painter.drawPixmap(30, y, reqCard->grab());
+                y += reqH + 18;
+            }
             if (bubble != nullptr) {
-                painter.drawPixmap(30, 340, bubble->grab());
+                painter.drawPixmap(30, y, bubble->grab());
             }
             const bool ok = canvas.save(petShot);
             qInfo().noquote() << "[shot]" << (ok ? "saved" : "failed")

@@ -1570,7 +1570,8 @@ function render(){
   const chatOn=workView&&!!(STATE.chat&&STATE.chat.id);
   $('chat').hidden=!chatOn;
   $('work').hidden=!workView||chatOn;
-  $('foot').hidden=!workView;
+  // 底部提示/批量条只属于待办列表：聊天页有自己的输入行，不再叠一条提示。
+  $('foot').hidden=!workView||chatOn;
   $('events').hidden=activeTab!==1;
   $('system').hidden=activeTab!==2;
   $('keymap').hidden=activeTab!==3;

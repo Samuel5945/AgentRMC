@@ -710,8 +710,12 @@ public:
                     btnBox_->addWidget(b);
                 }
             }
-            // 复杂（多选/多题/选项多）或不可答：给一个去聊天页的入口。
-            auto *chat = makeButton(QStringLiteral("去聊天页作答"), !simple && answerable);
+            // 复杂（多选/多题/选项多）→ 去聊天页作答；不可答（ZCode 只读卡）
+            // → 去聊天页查看（那头也只能看，答案得回宿主窗口给）。
+            auto *chat = makeButton(
+                answerable ? QStringLiteral("去聊天页作答")
+                           : QStringLiteral("去聊天页查看"),
+                !simple && answerable);
             connect(chat, &QPushButton::clicked, this, [onOpenChat] { onOpenChat(); });
             btnBox_->addWidget(chat);
         }

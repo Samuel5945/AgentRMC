@@ -27,6 +27,13 @@
   提醒通道：气泡 + 语音；`progress` 只落工单）。
   桌面「待我处理」页按等处理 / 待验收 / 进行中排序，重启不丢。`UserPromptSubmit`
   会在新对话开始时自动归档同 session 的旧「待验收」。
+- **选方案只读卡（ZCode）**：`PreToolUse(AskUserQuestion)` 气泡照发之外，
+  再推一张只读卡到桌宠（题干 + 选项数，`answerable:false`）——ZCode 的提问
+  答案注入不进阻塞中的工具调用（探针实测），卡上不能点选项作答，给「去聊天页
+  查看」入口；`PostToolUse(AskUserQuestion)`（question-done）负责撤卡。其它
+  宿主不开：WorkBuddy 的 PreToolUse(question) 在答完**之后**才派发，推了就是
+  一张立刻过期的卡。归一化与 gate 在 `lib/decision.js`（不挂 approval-inline
+  开关：只读展示没有代答的安全面）。
 - **决策式远程授权（ZCode，默认关）**：开关文件
   `%APPDATA%LIGAgentRMCNativeapproval-inline` 存在即开。开着时
   `PermissionRequest` hook 不再只是提醒——先照常出声 + 落工单，再推

@@ -87,6 +87,10 @@ Cordis bundle）、OpenSquilla（`plugins/opensquilla-bridge` 外部 WebSocket �
   无关故障喊成模型出错；ZCode 的运行时里查不到这个事件。所以只注册在
   `hooks-qoder/hooks.json`，WorkBuddy 里错误文本仍按 stop 念原文。
 
+- **选方案只读卡（ZCode，2026-11-15）**：question 准点主路照发气泡
+  （带题干）之外推 `/requests` 只读卡（answerable=false），PostToolUse
+  （question-done）撤卡；原生端弹卡条件放宽到「可答 **或** question 类」。
+  ZCode 提问答案注入不进工具调用——卡只展示，作答仍回宿主窗口。
 - **决策式远程授权（ZCode，2026-11-15 落地，默认关）**：approval-inline 开关
   文件存在时，PermissionRequest hook 从 fire-and-forget 变成「提醒 + 推可答卡 +
   限时轮询应答」。拿到桌宠卡片应答 → hook 返回 allow/deny 决策（宿主不弹窗）；

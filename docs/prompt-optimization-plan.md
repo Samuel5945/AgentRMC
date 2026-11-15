@@ -177,6 +177,11 @@ ZCode 的 PermissionRequest hook 是**决策式**的：hook 在授权判定时�
   session 过滤路由实测 200）。注意：bridge 系的「提问」（AskUserQuestion）
   依旧注入不进答案，只有授权可远程答；提问的只读卡是 §7 后续项。
 
+**选方案只读卡（2026-11-15 追加落地）**：ZCode 的 AskUserQuestion 在
+  准点气泡之外推只读卡（题干+选项，answerable=false，PostToolUse 撤卡）——
+  与授权的可答卡相对，这张卡只展示（答案注入不进工具调用），桌宠不抢前台
+  逻辑不变（授权卡 no_raise / 提问卡照旧）。3-4 里「只读卡是低垂果实」
+  就此闭环，覆盖宿主：ZCode。
 ## 5. 提示文案的目标结构（改完后应长什么样）
 
 ```

@@ -44,6 +44,10 @@ const { resolveHost } = require('../lib/host');
 const {
   approvalInlineEnabled,
   approvalInlineGate,
+  normalizeZcodeQuestions,
+  questionCardGate,
+  runQuestionCardFlow,
+  runQuestionDone,
 } = require('../lib/decision');
 const readVersion = require('../lib/version');
 
@@ -486,6 +490,34 @@ function bridgeRequest(method, apiPath, payloadObj) {
   });
 }
 
+// 选方案只读卡：气泡照发 + 推卡（answerable=false），然后撤卡由 question-done 负责。
+async function runQuestionCard(hook, input, announce) {
+  const { runQuestionCardFlow: runFlow } = require('../lib/decision');
+  await runFlow({ request: bridgeRequest }, {
+    agent,
+    exe: raise || 'ZCode.exe',
+    sid: String(hook.session_id || hook.sessionId || '').trim(),
+    rid: toolUseId(hook),
+    project: projectRaw(hook),
+    message: announce.message,
+    speech: announce.speech,
+    eventId: toolUseId(hook),
+    pluginVersion: PLUGIN_VERSION,
+    questions: normalizeZcodeQuestions(input),
+  });
+  process.exit(0);
+}
+
+async function runQuestionDoneHook(hook) {
+  const { runQuestionDone: runDone } = require('../lib/decision');
+  await runDone({ request: bridgeRequest }, {
+    exe: raise || 'ZCode.exe',
+    sid: String(hook.session_id || hook.sessionId || '').trim(),
+    project: projectRaw(hook),
+  });
+  process.exit(0);
+}
+
 async function runApprovalInline(hook, announce) {
   const input = hook.tool_input || hook.toolInput || {};
   const detail = String(
@@ -535,6 +567,16 @@ process.stdin.on('end', () => {
   const tool = hook.tool_name || hook.toolName || '';
   const input = hook.tool_input || hook.toolInput || {};
 
+  // —— 选方案只读卡的撤卡（PostToolUse(AskUserQuestion) → question-done）——
+  // 题已结，撤掉桌宠上那张只读卡；没有别的用途，非 ZCode / 非提问一律静默。
+  if (event === 'question-done') {
+    if (tool === 'AskUserQuestion' && !DRY_RUN &&
+        String(hook.session_id || hook.sessionId || '').trim() &&
+        (raise || 'ZCode.exe').toLowerCase() === 'zcode.exe') {
+      runQuestionDoneHook(hook);
+    }
+    process.exit(0);
+  }
   let message = '';
   // speech 只给语音用：念出来要短、要带宿主名。工具名和文件路径留在气泡里看，
   // 念出来是噪音（「等你确认 Bash 冒号 D 冒号 反斜杠…」没人听得懂）。
@@ -605,6 +647,17 @@ process.stdin.on('end', () => {
     message = stem ? `等你选方案：${stem}` : '等你选方案';
     speech = `${agent} 在等你选方案`;
     rememberAsked(hook);
+    // ZCode 准点主路：气泡照发之外，再推一张只读选方案卡（题干 + 选项，
+    // answerable=false——答案注入不进阻塞中的工具调用）。撤卡走 question-done。
+    if (questionCardGate({
+      event, tool, dryRun: DRY_RUN,
+      sessionId: hook.session_id || hook.sessionId,
+      requestId: toolUseId(hook),
+      exe: raise || 'ZCode.exe',
+    })) {
+      runQuestionCard(hook, input, { message, speech });
+      return;
+    }
   } else if (event === 'permission') {
     const detail = String(input.file_path || input.path || input.command || input.url || '');
     const short = detail.length > 60 ? detail.slice(0, 57) + '…' : detail;

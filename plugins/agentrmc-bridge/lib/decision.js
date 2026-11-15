@@ -111,10 +111,84 @@ async function runApprovalInlineFlow(bridge, p) {
   return { decision: decision.result };
 }
 
+// —— 选方案只读卡（ZCode，2026-11-15）——
+// ZCode 的 AskUserQuestion 答案注入不进阻塞中的工具调用（真机探针结论），
+// 卡是只读的：题干 + 去聊天页查看入口。生命周期：PreToolUse(question) 推卡
+// → PostToolUse(AskUserQuestion)（question-done）撤卡。
+
+// ZCode AskUserQuestion 的 tool_input → DSH 卡片同款 questions 形状。
+// ZCode 用 camelCase（multiSelect），DSH 用 multi_select，归一到后者。
+function normalizeZcodeQuestions(input) {
+  const qs = input && Array.isArray(input.questions) ? input.questions : [];
+  return qs.map((q, i) => ({
+    id: String((q && q.id) || 'q' + (i + 1)),
+    question: String((q && q.question) || ''),
+    header: String((q && q.header) || ''),
+    options: ((q && Array.isArray(q.options)) ? q.options : []).map((o) => ({
+      label: String((o && o.label) || ''),
+      description: String((o && o.description) || ''),
+    })),
+    multi_select: !!(q && (q.multi_select || q.multiSelect)),
+  }));
+}
+
+// gate：question 事件、非 DRY_RUN、有会话与 tool_use_id、宿主是 ZCode。
+// 不挂 approval-inline 开关：只读展示没有代答的安全面。
+// 其它宿主不开——WorkBuddy 的 PreToolUse(question) 在答完之后才派发，
+// 推了就是一张立刻过期的卡；Qoder 家事件时序没验证过。
+function questionCardGate(input) {
+  const i = input || {};
+  return i.event === 'question' &&
+    !i.dryRun &&
+    !!String(i.sessionId || '').trim() &&
+    !!String(i.requestId || '').trim() &&
+    String(i.exe || '').toLowerCase() === 'zcode.exe';
+}
+
+// 选方案卡流程：照常提醒（气泡带题干）+ 推只读卡。返回 { pushed }。
+async function runQuestionCardFlow(bridge, p) {
+  let pushed = false;
+  try {
+    const notifyPayload = {
+      event: 'permission', title: p.agent, message: p.message,
+    };
+    if (p.speech) notifyPayload.speech = p.speech;
+    if (p.sid) notifyPayload.session_id = p.sid;
+    if (p.project) notifyPayload.project = p.project;
+    notifyPayload.raise = p.exe;
+    if (p.eventId) notifyPayload.event_id = p.eventId;
+    if (p.pluginVersion) notifyPayload.plugin_version = p.pluginVersion;
+    await bridge.request('POST', '/notify', notifyPayload);
+    await bridge.request('POST', '/requests', {
+      exe: p.exe, session_id: p.sid, project: p.project,
+      requests: [{
+        kind: 'question', id: p.rid,
+        questions: p.questions || [],
+        answerable: false,
+      }],
+    });
+    pushed = true;
+  } catch { /* 提醒已发，卡推失败就算了 */ }
+  return { pushed };
+}
+
+// 题已结（PostToolUse）：撤掉该会话的只读卡。
+async function runQuestionDone(bridge, p) {
+  try {
+    await bridge.request('POST', '/requests', {
+      exe: p.exe, session_id: p.sid, project: p.project, requests: [],
+    });
+  } catch { /* 撤不掉就算了 */ }
+}
+
 module.exports = {
   approvalInlineEnabled,
   approvalInlineGate,
   runApprovalInlineFlow,
+  normalizeZcodeQuestions,
+  questionCardGate,
+  runQuestionCardFlow,
+  runQuestionDone,
   APPROVAL_POLL_MS,
   APPROVAL_HEARTBEAT_MS,
 };

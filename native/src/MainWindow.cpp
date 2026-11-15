@@ -1075,7 +1075,11 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
                     const QJsonObject r = v.toObject();
                     const QString rid = r.value(QStringLiteral("id")).toString();
                     newIds.insert(rid);
-                    if (r.value(QStringLiteral("answerable")).toBool()) {
+                    // 可答请求弹「允许/拒绝/选项」卡；question 类即使不可答
+                    // （ZCode 只读选方案卡）也弹——展示题干 + 去聊天页查看。
+                    if (r.value(QStringLiteral("answerable")).toBool() ||
+                        r.value(QStringLiteral("kind")).toString() ==
+                            QStringLiteral("question")) {
                         showId = rid;
                         showReq = r;
                     }

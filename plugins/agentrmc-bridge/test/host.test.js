@@ -982,6 +982,45 @@ check('decision gate: 全条件成立才接手，缺一不可', () => {
     { ...ok, exe: '' }), false, '空 exe 不冒险');
 });
 
+check('question 卡 gate: question 事件 + ZCode + 有会话/题 id 才接手', () => {
+  const ok = { event: 'question', dryRun: false,
+    sessionId: 's', requestId: 'tu-1', exe: 'ZCode.exe' };
+  assert.strictEqual(decision.questionCardGate(ok), true);
+  assert.strictEqual(decision.questionCardGate(
+    { ...ok, event: 'permission' }), false, '只接 question');
+  assert.strictEqual(decision.questionCardGate(
+    { ...ok, dryRun: true }), false);
+  assert.strictEqual(decision.questionCardGate(
+    { ...ok, sessionId: '' }), false);
+  assert.strictEqual(decision.questionCardGate(
+    { ...ok, requestId: '' }), false);
+  assert.strictEqual(decision.questionCardGate(
+    { ...ok, exe: 'WorkBuddy.exe' }), false,
+    'WorkBuddy 的 PreToolUse(question) 在答完之后才派发，推了就是死卡');
+  // 不挂 approval-inline 开关：只读展示没有代答的安全面
+  assert.strictEqual(decision.questionCardGate(
+    { ...ok, enabled: false }), true);
+});
+
+check('question 卡归一化: multiSelect 归一到 multi_select，缺省补齐', () => {
+  const qs = decision.normalizeZcodeQuestions({
+    questions: [
+      { question: '出 0.5 还是 0.4.2？', header: '升版',
+        options: [{ label: '0.5', description: '升 minor' }],
+        multiSelect: true },
+      { question: '带 lean 吗？', options: [{ label: '带' }] },
+    ],
+  });
+  assert.strictEqual(qs.length, 2);
+  assert.strictEqual(qs[0].multi_select, true);
+  assert.strictEqual(qs[0].id, 'q1');
+  assert.strictEqual(qs[0].header, '升版');
+  assert.strictEqual(qs[0].options[0].description, '升 minor');
+  assert.strictEqual(qs[1].multi_select, false);
+  assert.strictEqual(qs[1].id, 'q2');
+  assert.deepStrictEqual(decision.normalizeZcodeQuestions({}), []);
+});
+
 check('decision 开关: 标记文件在即开，缺省关', () => {
   const fakeFs = { statSync(p) {
     if (String(p) === '/x/approval-inline') return {};
@@ -1066,6 +1105,43 @@ async function runDecisionFlowChecks() {
       const cleanup = bridge.calls.filter(
         (c) => c.path === '/requests' && c.body.requests.length === 0);
       assert.ok(cleanup.length >= 1, '撤卡尽力而为（失败也尝试了）');
+    }],
+    ['question 卡: notify + 只读推卡（answerable=false），题干入卡', async () => {
+      const bridge = fakeBridge();
+      const { pushed } = await decision.runQuestionCardFlow(bridge, {
+        agent: 'ZCode', exe: 'ZCode.exe', sid: 'qc-1', rid: 'tu-q1',
+        project: 'D:/repo',
+        message: '等你选方案：出 0.5 还是 0.4.2？',
+        speech: 'ZCode 在等你选方案',
+        eventId: 'tu-q1', pluginVersion: '0.5.0',
+        questions: decision.normalizeZcodeQuestions({
+          questions: [{ question: '出 0.5 还是 0.4.2？',
+            options: [{ label: '0.5' }, { label: '0.4.2' }] }],
+        }),
+      });
+      assert.strictEqual(pushed, true);
+      const push = bridge.calls.find(
+        (c) => c.path === '/requests' && c.body.requests.length === 1);
+      assert.ok(push, '必须推卡');
+      const req = push.body.requests[0];
+      assert.strictEqual(req.kind, 'question');
+      assert.strictEqual(req.id, 'tu-q1');
+      assert.strictEqual(req.answerable, false, 'ZCode 提问只读：答案注入不进去');
+      assert.strictEqual(req.questions[0].question, '出 0.5 还是 0.4.2？');
+      assert.strictEqual(req.questions[0].options.length, 2);
+      const notify = bridge.calls.find((c) => c.path === '/notify');
+      assert.ok(notify, '气泡照发');
+      assert.strictEqual(notify.body.no_raise, undefined,
+        '只读卡没有代答，桌宠这头照旧抢前台（答案在宿主窗口）');
+    }],
+    ['question-done: 撤卡推空集', async () => {
+      const bridge = fakeBridge();
+      await decision.runQuestionDone(bridge, {
+        exe: 'ZCode.exe', sid: 'qc-1', project: 'D:/repo',
+      });
+      const cleanup = bridge.calls.filter(
+        (c) => c.path === '/requests' && c.body.requests.length === 0);
+      assert.ok(cleanup.length >= 1, '题已结必须撤卡');
     }],
   ];
   for (const [name, fn] of list) {

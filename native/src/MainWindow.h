@@ -164,7 +164,7 @@ private:
                       const QString &message, const QString &spoken,
                       const QString &raise, const QString &sessionId,
                       bool planChoice, const QString &eventId = QString(),
-                      bool noRaise = false);
+                      bool noRaise = false, int priority = 1);
     // 联动插件版本对账：{"bundled":内置版,"hosts":[每家 name/installed/loaded/
     // enabled/running/state],"bridges":[不走插件包的外部接入]}。loaded 是 hook
     // 报上来的「此刻真在跑的那版」，注册表只能说盘上装成哪版。需要动手的成因

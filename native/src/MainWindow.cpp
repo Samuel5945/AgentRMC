@@ -2799,7 +2799,8 @@ QJsonObject MainWindow::reportWorkItem(const QJsonObject &payload) {
         // （如每 130s 一次）会被吞掉且只刷新时间戳，永远不再出声。
         const QDateTime last = attentionAnnounced_.value(key);
         if (!last.isValid() || last.secsTo(now) > 120) {
-            announceWork(kind, title, message, message, raise, sessionId, false);
+            announceWork(kind, title, message, message, raise, sessionId, false,
+                         QString(), false, 2);
             attentionAnnounced_.insert(key, now);
             // 记一笔「blocked 已喊过」：同一件事的 question hook 可能晚到，
             // 按弹窗身份消费一次，别让下一道新题跟着被吞。
@@ -2807,7 +2808,8 @@ QJsonObject MainWindow::reportWorkItem(const QJsonObject &payload) {
         }
     } else if (kind == QStringLiteral("stop")) {
         // 先念再记账：紧接着到的 hook stop 会看到这笔账，不再念第二遍。
-        announceWork(kind, title, message, message, raise, sessionId, false);
+        announceWork(kind, title, message, message, raise, sessionId, false,
+                     QString(), false, 1);
         readyAnnounced_.insert(key, now);
     }
     return QJsonObject{{QStringLiteral("ok"), true},
@@ -2945,8 +2947,18 @@ void MainWindow::handleNotify(const QString &kind, const QString &title,
     const bool planChoice =
         kind == QStringLiteral("question") ||
         message.startsWith(QString::fromUtf8("等你选方案"));
+    // 语音紧急度（只读最紧急的待办，用户 2026-11-15）：授权/出错=3 >
+    // 选方案/回话=2 > 完成=1。忙碌窗口内同级/更低的只冒气泡不插话。
+    const int urgency =
+        message.startsWith(QStringLiteral("等你确认")) ||
+                message.startsWith(QStringLiteral("模型出错"))
+            ? 3
+            : (message.startsWith(QStringLiteral("等你选方案")) ||
+               message.startsWith(QStringLiteral("等你回话")))
+                  ? 2
+                  : 1;
     announceWork(kind, title, message, spoken, raise, sessionId, planChoice,
-                 eventId, noRaise);
+                 eventId, noRaise, urgency);
 }
 
 // 只负责「喊人」：事件流一行、记宿主、气泡 + 语音 + 要不要抢前台。
@@ -2956,7 +2968,7 @@ void MainWindow::announceWork(const QString &kind, const QString &title,
                               const QString &message, const QString &spoken,
                               const QString &raise, const QString &sessionId,
                               bool planChoice, const QString &eventId,
-                              bool noRaise) {
+                              bool noRaise, int priority) {
     appendEvent(QStringLiteral("status"), QString(), QString(),
                 spoken.isEmpty() || spoken == message
                     ? title + QStringLiteral(" · ") + message
@@ -2982,7 +2994,7 @@ void MainWindow::announceWork(const QString &kind, const QString &title,
         // 活儿干完就把焦点拽走很烦，气泡可点，点了再回去。
         // 是否前台不影响是否朗读：用户可能没看屏幕，语音是主通道。
         if (voicePet_ != nullptr) {
-            voicePet_->speak(spoken, 7000, raise);
+            voicePet_->speak(spoken, 7000, raise, priority);
         }
         return;
     }
@@ -3036,7 +3048,7 @@ void MainWindow::announceWork(const QString &kind, const QString &title,
         // 等确认要把人喊回来：气泡停久一点 + 语音，桌宠收起也照念；
         // 收起又没 TTS 时退回托盘，别让提醒凭空消失。
         if (voicePet_ != nullptr) {
-            voicePet_->speak(spoken, 7000, raise);
+            voicePet_->speak(spoken, 7000, raise, priority);
             if (!voicePet_->isVisible() && !voicePet_->ttsReady() &&
                 tray_ != nullptr) {
                 tray_->showMessage(title, message,

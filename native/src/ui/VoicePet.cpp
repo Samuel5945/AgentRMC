@@ -935,7 +935,7 @@ void VoicePet::presentIfEnabled() {
 }
 
 void VoicePet::speak(const QString &text, int durationMs,
-                     const QString &raiseExe) {
+                     const QString &raiseExe, int priority) {
     if (text.isEmpty()) {
         return;
     }
@@ -943,12 +943,25 @@ void VoicePet::speak(const QString &text, int durationMs,
     if (isVisible()) {
         bubbleOnly(text, durationMs, raiseExe);
     }
-    if (tts_ != nullptr && tts_->ready()) {
-        // 气泡保留原文（路径/标点可看），念出口转成口语（D:\foo.cpp → 「D盘 foo」）。
-        const QString spoken = SpeechText::friendly(text);
-        if (!spoken.isEmpty()) {
-            tts_->speak(spoken);
-        }
+    if (tts_ == nullptr || !tts_->ready()) {
+        return;
+    }
+    // 只读最紧急的待办（用户 2026-11-15）：忙碌窗口内同级/更低的只冒气泡
+    // 不插话；更紧急的 stop 打断当前播报插播。窗口盖住一句 TTS 的时长（~8s）。
+    const QDateTime now = QDateTime::currentDateTimeUtc();
+    const bool busy = speakBusyUntil_.isValid() && now < speakBusyUntil_;
+    if (busy && priority <= speakPriority_) {
+        return;
+    }
+    if (busy) {
+        tts_->stop();
+    }
+    speakBusyUntil_ = now.addSecs(8);
+    speakPriority_ = priority;
+    // 气泡保留原文（路径/标点可看），念出口转成口语（D:\foo.cpp → 「D盘 foo」）。
+    const QString spoken = SpeechText::friendly(text);
+    if (!spoken.isEmpty()) {
+        tts_->speak(spoken);
     }
 }
 
@@ -1124,18 +1137,19 @@ void VoicePet::bubbleOnly(const QString &text, int durationMs,
     if (text.isEmpty() || !isVisible()) {
         return;
     }
-    // 交互卡可见时不出普通气泡：两者锚在桌宠同一位置，晚 show 的气泡会压回
-    // 堆栈顶把卡盖住。卡上就是同一条信息，语音照常念，这里直接让路。
-    if (requestCard_ != nullptr && requestCard_->isVisible()) {
-        return;
-    }
+    // 交互卡可见时气泡翻到另一侧共存（同锚位谁后 show 谁在堆栈顶，硬弹会把
+    // 卡盖住）；多个气泡连弹是替换式，一次只有一个气泡。
+    const bool cardVisible =
+        requestCard_ != nullptr && requestCard_->isVisible();
     ensureBubble();
     bubble_->setText(text);
     // 尾巴方向决定哪侧留预留，setTailDirection 里按文字量好宽高：
-    // 贴上边时气泡冒在球下面（尾朝上），其它情况冒在球上面（尾朝下）。
+    // 贴上边时气泡冒在球下面（尾朝上），其它情况冒在球上面（尾朝下）；
+    // 卡占了那一侧时气泡翻到另一侧，卡与气泡同屏并存。
+    const bool below = (dock_ == Dock::Top) != cardVisible;
     if (auto *pet = static_cast<PetBubble *>(bubble_)) {
-        pet->setTailDirection(dock_ == Dock::Top ? PetBubble::Tail::Up
-                                                 : PetBubble::Tail::Down);
+        pet->setTailDirection(below ? PetBubble::Tail::Up
+                                    : PetBubble::Tail::Down);
     }
     // 有 raise 目标才可点：点了收起气泡并把宿主窗口拉回前台。
     pendingRaise_ = raiseExe;
@@ -1162,9 +1176,9 @@ void VoicePet::bubbleOnly(const QString &text, int durationMs,
         x = qBound(available.left() + 4, x,
                    available.right() - bubble_->width() - 4);
     }
-    // 贴上边时就冒在球下面，其它情况冒在球上面。
-    int y = dock_ == Dock::Top ? this->y() + height() + 8
-                               : this->y() - bubble_->height() - 8;
+    // 与尾巴同侧：贴上边（或卡占了上方）就冒在球下面，其它情况冒在球上面。
+    int y = below ? this->y() + height() + 8
+                  : this->y() - bubble_->height() - 8;
     if (!available.isNull() && y < available.top() + 4) {
         y = available.top() + 4;
     }

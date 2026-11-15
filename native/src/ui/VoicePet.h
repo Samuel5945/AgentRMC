@@ -64,8 +64,11 @@ public:
 
     // 气泡反馈 + TTS 出声（接小米 MiMo TTS，key 用户自填；没 key 只有气泡）。
     // raiseExe 非空时气泡可点击，点了把该进程的窗口拉回前台。
+    // priority：提醒紧急度（授权/出错=3 > 选方案/回话=2 > 完成=1）。忙碌窗口
+    // （8s）内同级/更低只冒气泡不插话——只读最紧急的待办（用户 2026-11-15）；
+    // 更紧急的 stop 打断当前播报插播。
     void speak(const QString &text, int durationMs = 0,
-               const QString &raiseExe = QString());
+               const QString &raiseExe = QString(), int priority = 1);
 
     // Agent 普通进度通知：只冒气泡不出声，别打断在放的东西（等确认走 speak）。
     void notify(const QString &text, const QString &raiseExe = QString());
@@ -204,6 +207,8 @@ private:
     PetSprite *sprite_ = nullptr;  // 主题没精灵时为空帧，画圆球回落
     QString lastText_;  // 最近一次转写，右键菜单「朗读最近一句」用
     QString pendingRaise_;  // 当前气泡点了要拉回的宿主进程名，空 = 气泡不可点
+    QDateTime speakBusyUntil_;  // 语音忙碌窗口：只读最紧急的待办
+    int speakPriority_ = 0;     // 窗口内已播报的紧急度
     bool ttsErrorShown_ = false;  // TTS 失败提示一次就够，不刷屏
 
     bool chatMode_ = false;

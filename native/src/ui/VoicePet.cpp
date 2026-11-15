@@ -844,6 +844,10 @@ VoicePet::VoicePet(ProfileStore *store, VoiceController *voice, QWidget *parent)
     connect(voice_, &VoiceController::stateChanged, this,
             [this](const QString &state, const QString &detail) {
                 recording_ = state == QStringLiteral("recording");
+                if (recording_ && tts_ != nullptr) {
+                    // barge-in：正在念的播报会被麦录进转写，开始录音就掐掉。
+                    tts_->stop();
+                }
                 transcribing_ =
                     !recording_ && detail.contains(QString::fromUtf8("转写"));
                 detail_ = detail;
@@ -939,7 +943,7 @@ void VoicePet::speak(const QString &text, int durationMs,
     if (isVisible()) {
         bubbleOnly(text, durationMs, raiseExe);
     }
-    if (tts_ != nullptr && tts_->ready()) {
+    if (tts_ != nullptr && tts_->ready() && !recording_) {
         // 气泡保留原文（路径/标点可看），念出口转成口语（D:\foo.cpp → 「D盘 foo」）。
         const QString spoken = SpeechText::friendly(text);
         if (!spoken.isEmpty()) {
@@ -957,7 +961,7 @@ void VoicePet::speakAs(const QString &text) {
         bubbleOnly(text, 0);
     }
     emit chatReplied(text);  // 桌宠收起时回复文本落语音面板/事件流
-    if (tts_ != nullptr && tts_->ready()) {
+    if (tts_ != nullptr && tts_->ready() && !recording_) {
         // 对话音色哨兵（@theme 等）归一成空 = 跟随全局已解析的音色，
         // 别把字面量发给服务端。
         const QString chatVoice = voice_->options().ttsChatVoice;

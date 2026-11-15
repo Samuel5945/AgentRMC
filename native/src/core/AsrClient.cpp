@@ -39,7 +39,12 @@ QString AsrClient::sizeHint(const QByteArray &wav) {
 }
 
 void AsrClient::transcribe(const QByteArray &wav) {
-    if (wav.isEmpty() || !ready() || busy_) {
+    if (wav.isEmpty() || !ready()) {
+        return;
+    }
+    if (busy_) {
+        // 静默 return 会让上层的 transcribing_ 永远等不到回调：必须响亮地失败。
+        emit failed(QStringLiteral("上一条还在转写，这句请再说一次"), 0);
         return;
     }
     if (style_ == QStringLiteral("transcriptions")) {

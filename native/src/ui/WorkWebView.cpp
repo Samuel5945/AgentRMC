@@ -890,13 +890,13 @@ QString WorkWebView::htmlFor(const QString &stateJson) const {
  /* 输入框和下拉同一套：半透明底 + 细描边，悬停加深一档、聚焦换主题色。
     原来用 --raised（不透明 #161d2a）+ --line（浅板岩灰），在美术主题的
     半透明卡片上就是一块实心黑砖（2026-11-10 用户反馈「就重在下拉/输入框」）。 */
- .vrow input, #dpText{font-size:var(--f11);color:var(--text);
+ .vrow input{font-size:var(--f11);color:var(--text);
    background:var(--w6);border:1px solid var(--w14);border-radius:8px;
    font-family:inherit}
  .vrow input{flex:1;min-width:0;padding:5px 8px}
- .vrow input::placeholder, #dpText::placeholder{color:var(--muted2)}
- .vrow input:hover, #dpText:hover{background:var(--w8);border-color:var(--w30)}
- .vrow input:focus, #dpText:focus{outline:none;background:var(--w8);
+ .vrow input::placeholder{color:var(--muted2)}
+ .vrow input:hover{background:var(--w8);border-color:var(--w30)}
+ .vrow input:focus{outline:none;background:var(--w8);
    border-color:var(--accent)}
  .btn.toggled{background:var(--a26);border-color:var(--a64);color:var(--accent)}
  #right{flex:1 1 auto;min-width:0;min-height:0;display:flex;
@@ -979,6 +979,9 @@ QString WorkWebView::htmlFor(const QString &stateJson) const {
     <button class="btn primary" id="chatSend">发送</button>
   </div>
   <div class="notice" id="chatNotice" hidden style="margin-top:6px"></div>
+  <button class="btn" id="chatRestart" hidden style="margin-top:6px;width:100%;
+    color:var(--warn);border-color:var(--warn)"
+    title="ZCode 对话区不热刷新：重启宿主后打开会话即可看到派发消息全文。会中断 ZCode 里正在跑的其它轮次">重启 ZCode</button>
 </div>
 <div id="empty" class="empty" hidden>
   <h3>没有需要你处理的事</h3>
@@ -1073,14 +1076,6 @@ QString WorkWebView::htmlFor(const QString &stateJson) const {
 <div class="foot" id="foot" style="flex-wrap:wrap">
   <span class="hint" id="hint"></span>
   <button class="btn primary" id="ackBatch" hidden>✓ 标为已处理</button>
-  <span id="dpWrap" style="display:none;width:100%;gap:8px;align-items:center;
-    margin-top:6px;flex-wrap:wrap">
-    <input id="dpText" placeholder="派回这条会话的指令（Enter 或按钮发送，回执到了转进行中）"
-      style="flex:1 1 240px;min-width:0;padding:6px 10px">
-    <button class="btn" id="dpSend" style="flex:0 0 auto;white-space:nowrap">派回会话</button>
-    <button class="btn" id="dpRestart" style="flex:0 0 auto;white-space:nowrap;display:none"
-      title="ZCode 对话区不热刷新：重启宿主后打开会话即可看到派发消息全文。会中断 ZCode 里正在跑的其它轮次">重启 ZCode</button>
-  </span>
 </div>
 </div>
 </div>
@@ -1271,7 +1266,7 @@ function row(it){
   l1.append(name,stage,wh,time);
   const l2=document.createElement('div');l2.className='l2';l2.textContent=it.message||'';
   el.append(bar,l1,l2);
-  // 单击进聊天页（打开即最新记录）；双击仍是回到 Agent。多选模式下点击改为
+  // 单击进聊天页（打开即最新记录）；回到 Agent 走行内 ↗ 图标。多选模式下点击改为
   // 勾选/取消，进聊天先点「完成」退回单选。
   el.addEventListener('click',()=>{
     if(multiMode){
@@ -1281,11 +1276,6 @@ function row(it){
       return;
     }
     selected=it.id;postObj({cmd:'chatOpen',id:it.id});
-  });
-  el.addEventListener('dblclick',()=>{
-    if(multiMode) return;
-    const dd=STATE.dispatch||{};
-    post((dd.noticeId===it.id && dd.noticeExe==='ZCode.exe')?'raiseZcode':'open',it.id);
   });
   // 行内图标按钮：回到 Agent / 标为已处理（去文字，图标 + tooltip）。
   // stopPropagation：别把这次点击变成进聊天页。
@@ -1308,35 +1298,24 @@ function renderFoot(){
   // 通知只跟当次派发的那张卡走，别把上一条的拒绝原因挂在新选中的卡下面。
   const notice=(d.noticeId && d.noticeId!==selected)?'':(d.notice||'');
   // ZCode 派发通知态：对话区要重启才可见，行内「回到 Agent」改走聚焦不销账
-  // （raiseZcode），Enter/双击同款。
+  // （raiseZcode），Enter 同款。
   const zcodeNotice=!!(selItem && notice && d.noticeExe==='ZCode.exe');
   window.ZC_NOTICE=zcodeNotice;
   $('multi').textContent=multiMode?'完成':'多选';
   if(multiMode){
-    // 多选模式：批量销账，派发输入框藏掉（点待办进聊天后再派发）。
+    // 多选模式：批量销账（派发走聊天页的输入框）。
     $('hint').textContent='勾选待办，一次性标为已处理 · 已选 '+multiSel.size+' 条';
     $('hint').style.color='';
     $('ackBatch').hidden=multiSel.size===0;
     $('ackBatch').textContent='✓ 标为已处理（'+multiSel.size+'）';
-    $('dpWrap').style.display='none';
     return;
   }
   $('ackBatch').hidden=true;
   // 通知顶掉键位提示占头行：状态比键位值钱，别两行都挤在脚部。
   $('hint').textContent=notice||(selItem
     ? '点击待办进聊天 · 行内图标回到/销账 · Delete 标为已处理'
-    : '点击待办进聊天页 · 双击回到 Agent（没开着会先启动）并销账');
+    : '点击待办进聊天页 · 行内图标回到/销账');
   $('hint').style.color=notice?'var(--text-dim)':'';
-  // 定向派发只对有会话身份且宿主已接通道（Qoder 系）的待办开放。
-  const dpOk=!!(selItem && selItem.session_id &&
-    ((STATE.dispatch||{}).supported||[]).includes(selItem.agent_exe));
-  $('dpWrap').style.display=dpOk?'flex':'none';
-  $('dpSend').disabled=!dpOk;
-  // 重启按钮只跟最近一次 ZCode 派发的通知走（失败通知也亮，方便重试）。
-  $('dpRestart').style.display=
-    (dpOk && d.noticeId===selected && d.noticeExe==='ZCode.exe')?'':'none';
-  if(dpOk && d.draftId===selected && d.draftText && !$('dpText').value)
-    $('dpText').value=d.draftText;
 }
 function renderEvents(){
   $('evCount').textContent=EVENTS.length+' 条';
@@ -1817,19 +1796,10 @@ $('evClear').onclick=()=>post('clearLog');
 $('multi').onclick=()=>{multiMode=!multiMode;multiSel.clear();render();};
 $('ackBatch').onclick=()=>{multiSel.forEach(id=>post('ack',id));
   multiSel.clear();render();};
-function sendDispatch(){
-  const t=$('dpText').value.trim();
-  if(!t||!selected) return;
-  postObj({cmd:'dispatch',id:selected,text:t});
-  $('dpText').value='';
-}
-$('dpSend').onclick=sendDispatch;
-$('dpRestart').onclick=()=>{
-  if(confirm('重启 ZCode 桌面？\n会中断它里面正在跑的其它轮次；重启后打开会话即可看到派发消息全文。'))
+$('chatRestart').onclick=()=>{
+  if(confirm('重启 ZCode 桌面？会中断它里面正在跑的其它轮次；重启后打开会话即可看到派发消息全文。'))
     postObj({cmd:'restartZcode'});
 };
-$('dpText').addEventListener('keydown',e=>{
-  if(e.key==='Enter'){e.preventDefault();sendDispatch();}});
 $('workGuide').onclick=()=>{activeTab=5;render();};
 // 系统/映射/应用页的动作按钮：状态机全在 Qt 侧，这里只发命令。
 $('sysRefresh').onclick=()=>postObj({cmd:'sysRefresh'});
@@ -2022,6 +1992,8 @@ function renderChatFrame(){
   const d=STATE.dispatch||{};
   const notice=(d.noticeId===chatOpenedId)?(d.notice||''):'';
   $('chatNotice').hidden=!notice;$('chatNotice').textContent=notice;
+  // 重启按钮跟着 ZCode 派发通知走（对话区不热刷新，重启才能看到全文）。
+  $('chatRestart').hidden=!(notice && d.noticeExe==='ZCode.exe');
   if(d.draftId===chatOpenedId&&d.draftText&&!$('chatText').value)
     $('chatText').value=d.draftText;
   // 兜底：只要用户停在底部，每次状态推送都重新贴底——首帧定位若因布局
@@ -2029,7 +2001,6 @@ function renderChatFrame(){
   if(chatAtBottom){const l=$('chatList');
     if(l.scrollHeight>l.clientHeight)l.scrollTop=l.scrollHeight;}
   renderFoot();
-  $('dpWrap').style.display='none';  // 聊天页有自己的输入框
 }
 // 上翻的旧页由 Qt 单独推来（chatOlder → pushChat），不进整份 state。
 window.__setChatPage=function(p){

@@ -986,8 +986,12 @@ check('question 卡 gate: question 事件 + ZCode + 有会话/题 id 才接手',
   const ok = { event: 'question', dryRun: false,
     sessionId: 's', requestId: 'tu-1', exe: 'ZCode.exe' };
   assert.strictEqual(decision.questionCardGate(ok), true);
+  // ZCode 对 AskUserQuestion 也会派 PermissionRequest（谁先到不定）：
+  // permission 事件 + AskUserQuestion 同样接手推卡，谁先到谁推。
+  assert.strictEqual(decision.questionCardGate({
+    ...ok, event: 'permission', tool: 'AskUserQuestion' }), true);
   assert.strictEqual(decision.questionCardGate(
-    { ...ok, event: 'permission' }), false, '只接 question');
+    { ...ok, event: 'permission', tool: 'Bash' }), false, '普通授权走决策流');
   assert.strictEqual(decision.questionCardGate(
     { ...ok, dryRun: true }), false);
   assert.strictEqual(decision.questionCardGate(

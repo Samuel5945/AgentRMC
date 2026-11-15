@@ -457,6 +457,16 @@ const APPROVAL_INLINE_WAIT_S = (() => {
   return Number.isFinite(n) ? Math.min(80, Math.max(5, n)) : 60;
 })();
 
+// 选方案卡排障日志（临时）：question/question-done 的完整时间线落 SPOOL_DIR，
+// 定位「卡闪一下就没」到底是谁在收卡。排障完移除。
+function questionDebugLog(entry) {
+  try {
+    fs.mkdirSync(SPOOL_DIR, { recursive: true });
+    fs.appendFileSync(path.join(SPOOL_DIR, 'question-debug.log'),
+      JSON.stringify(Object.assign({ t: new Date().toISOString() }, entry)) + '\n');
+  } catch { /* 日志失败不影响主流程 */ }
+}
+
 // 决策流程专用的桥请求：失败 resolve null（不抛），由流程决定退路。
 function bridgeRequest(method, apiPath, payloadObj) {
   if (process.env.AGENTRMC_DEBUG_BRIDGE) {
@@ -493,7 +503,7 @@ function bridgeRequest(method, apiPath, payloadObj) {
 // 选方案只读卡：气泡照发 + 推卡（answerable=false），然后撤卡由 question-done 负责。
 async function runQuestionCard(hook, input, announce) {
   const { runQuestionCardFlow: runFlow } = require('../lib/decision');
-  await runFlow({ request: bridgeRequest }, {
+  const { pushed } = await runFlow({ request: bridgeRequest }, {
     agent,
     exe: raise || 'ZCode.exe',
     sid: String(hook.session_id || hook.sessionId || '').trim(),
@@ -505,6 +515,7 @@ async function runQuestionCard(hook, input, announce) {
     pluginVersion: PLUGIN_VERSION,
     questions: normalizeZcodeQuestions(input),
   });
+  questionDebugLog({ ev: 'question-push-done', pushed });
   process.exit(0);
 }
 
@@ -570,6 +581,9 @@ process.stdin.on('end', () => {
   // —— 选方案只读卡的撤卡（PostToolUse(AskUserQuestion) → question-done）——
   // 题已结，撤掉桌宠上那张只读卡；没有别的用途，非 ZCode / 非提问一律静默。
   if (event === 'question-done') {
+    questionDebugLog({ ev: 'question-done-fired', tool,
+      sid: String(hook.session_id || hook.sessionId || '').slice(0, 12),
+      dry: DRY_RUN, exe: raise || 'ZCode.exe' });
     if (tool === 'AskUserQuestion' && !DRY_RUN &&
         String(hook.session_id || hook.sessionId || '').trim() &&
         (raise || 'ZCode.exe').toLowerCase() === 'zcode.exe') {
@@ -632,6 +646,9 @@ process.stdin.on('end', () => {
       if (one) replyField = one;
     }
   } else if (event === 'question') {
+    questionDebugLog({ ev: 'question-entry', tool, sid: String(
+      hook.session_id || hook.sessionId || '').slice(0, 12),
+      rid: toolUseId(hook).slice(0, 16), exe: raise || 'ZCode.exe' });
     // 「等你选方案」：实测 Qoder 把 AskUserQuestion 当**普通工具**走 PreToolUse
     // （hook.started 只有 source=runtime 的 SDK 记录，PermissionRequest 根本没发），
     // 所以这条挂在 hooks-qoder 的 PreToolUse + matcher:"AskUserQuestion" 上。
@@ -655,12 +672,16 @@ process.stdin.on('end', () => {
     rememberAsked(hook);
     // ZCode 准点主路：气泡照发之外，再推一张只读选方案卡（题干 + 选项，
     // answerable=false——答案注入不进阻塞中的工具调用）。撤卡走 question-done。
-    if (questionCardGate({
+    const qcGate = questionCardGate({
       event, tool, dryRun: DRY_RUN,
       sessionId: hook.session_id || hook.sessionId,
       requestId: toolUseId(hook),
       exe: raise || 'ZCode.exe',
-    })) {
+    });
+    questionDebugLog({ ev: 'question-hook', gate: qcGate, sid: String(
+      hook.session_id || hook.sessionId || '').slice(0, 12),
+      rid: toolUseId(hook).slice(0, 16), exe: raise || 'ZCode.exe' });
+    if (qcGate) {
       runQuestionCard(hook, input, { message, speech });
       return;
     }
@@ -672,9 +693,30 @@ process.stdin.on('end', () => {
       // ZCode 起主路是 PreToolUse(AskUserQuestion)→question（弹窗那一刻就发），
       // PermissionRequest 若也跟一条，后到的按同一弹窗去重吞掉——与 question
       // 分支共用同一套账本，两边谁先到谁喊，另一条静默。
+      // 2026-11-15 实测：两条谁先不定，permission 先到时只有气泡、卡被去重
+      // 吞掉——所以两条都走「推卡收敛」（gate 放行 permission+AskUserQuestion），
+      // 谁先到谁推卡（bubble:false，卡就是通知），后到的静默。
+      const qcGate = questionCardGate({
+        event, tool, dryRun: DRY_RUN,
+        sessionId: hook.session_id || hook.sessionId,
+        requestId: toolUseId(hook),
+        exe: raise || 'ZCode.exe',
+      });
+      questionDebugLog({ ev: 'permission-ask', gate: qcGate, sid: String(
+        hook.session_id || hook.sessionId || '').slice(0, 12),
+        rid: toolUseId(hook).slice(0, 16), exe: raise || 'ZCode.exe' });
+      if (qcGate) {
+        if (questionAlreadyAsked(hook)) process.exit(0);
+        const stem = questionStem(input);
+        message = stem ? `等你选方案：${stem}` : '等你选方案';
+        speech = `${agent} 在等你选方案`;
+        rememberAsked(hook);
+        runQuestionCard(hook, input, { message, speech });
+        return;
+      }
       if (questionAlreadyAsked(hook)) process.exit(0);
-      const stem = questionStem(input);
-      message = stem ? `等你选方案：${stem}` : '等你选方案';
+      const stem2 = questionStem(input);
+      message = stem2 ? `等你选方案：${stem2}` : '等你选方案';
       speech = `${agent} 在等你选方案`;
       rememberAsked(hook);
     } else {

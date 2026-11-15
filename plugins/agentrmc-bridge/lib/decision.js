@@ -140,7 +140,12 @@ function normalizeZcodeQuestions(input) {
 // 推了就是一张立刻过期的卡；Qoder 家事件时序没验证过。
 function questionCardGate(input) {
   const i = input || {};
-  return i.event === 'question' &&
+  // ZCode 对 AskUserQuestion 会派 PreToolUse(question) 和 PermissionRequest 两条
+  // 事件（实测谁先不定）：两条都要能接手推卡，谁先到谁推，后到的被同一
+  // tool_use_id 去重吞掉——否则 permission 先到时只有气泡、卡被去重吞掉。
+  const isQuestionEvent = i.event === 'question' ||
+    (i.event === 'permission' && i.tool === 'AskUserQuestion');
+  return isQuestionEvent &&
     !i.dryRun &&
     !!String(i.sessionId || '').trim() &&
     !!String(i.requestId || '').trim() &&

@@ -81,10 +81,12 @@ public:
     // POST /requests 的处理器：DSH 插件推送某会话当前待答请求（B1 只读展示）
     // {"exe","session_id","project","requests":[{kind,id,toolName?,reason?,questions?}]}。
     void setRequestsHandler(std::function<void(const QJsonObject &)> handler);
-    // GET /request-answer/pending?exe=<映像名> 的应答来源（B2）：插件轮询取走
-    // 手机/桌面下发的应答件，返回 JSON 数组文本（可空数组）。
+    // GET /request-answer/pending?exe=<映像名>&session=<会话> 的应答来源（B2）：
+    // 插件轮询取走手机/桌面下发的应答件，返回 JSON 数组文本（可空数组）。
+    // session 可空：不按会话过滤（DSH 老用法）；bridge 系并发 hook 必带。
     void setAnswerPendingProvider(
-        std::function<QString(const QString &exe)> provider);
+        std::function<QString(const QString &exe, const QString &session)>
+            provider);
     // POST /request-answer/ack 的处理器：{"answer_id":..,"ok":true|false,"error":..}
     // （插件应答结果回执）。返回 false = answer_id 不认识。
     void setAnswerAckHandler(std::function<bool(const QJsonObject &)> handler);
@@ -125,6 +127,7 @@ private:
     std::function<QString(const QString &exe)> dispatchPendingProvider_;
     std::function<bool(const QJsonObject &)> dispatchAckHandler_;
     std::function<void(const QJsonObject &)> requestsHandler_;
-    std::function<QString(const QString &exe)> answerPendingProvider_;
+    std::function<QString(const QString &exe, const QString &session)>
+        answerPendingProvider_;
     std::function<bool(const QJsonObject &)> answerAckHandler_;
 };

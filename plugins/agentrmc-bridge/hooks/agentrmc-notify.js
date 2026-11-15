@@ -41,6 +41,10 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { resolveHost } = require('../lib/host');
+const {
+  approvalInlineEnabled,
+  approvalInlineGate,
+} = require('../lib/decision');
 const readVersion = require('../lib/version');
 
 const PORT = Number(process.env.AGENTRMC_PORT || 45915);
@@ -441,6 +445,80 @@ function describeModelFailure(hook, agentName) {
   };
 }
 
+// —— 决策式远程授权（ZCode 专属；流程与红线在 lib/decision.js）——
+// 开关：<SPOOL_DIR>/approval-inline 标记文件存在即开，默认关。这里只做
+// 真传输（http）与进程收尾：决策 JSON 写 stdout、其余路径一律静默 exit 0。
+const APPROVAL_INLINE_WAIT_S = (() => {
+  const n = Number(process.env.AGENTRMC_APPROVAL_WAIT_SECONDS || 60);
+  return Number.isFinite(n) ? Math.min(80, Math.max(5, n)) : 60;
+})();
+
+// 决策流程专用的桥请求：失败 resolve null（不抛），由流程决定退路。
+function bridgeRequest(method, apiPath, payloadObj) {
+  if (process.env.AGENTRMC_DEBUG_BRIDGE) {
+    console.error('[dbg-bridge]', method, apiPath,
+      payloadObj === null ? '' : 'body');
+  }
+  return new Promise((resolve) => {
+    const body = payloadObj === null ? null : JSON.stringify(payloadObj);
+    const req = http.request(
+      {
+        host: '127.0.0.1', port: PORT, path: apiPath, method, timeout: 1500,
+        headers: body === null ? {} : {
+          'Content-Type': 'application/json',
+          'Content-Length': Buffer.byteLength(body),
+        },
+      },
+      (res) => {
+        let data = '';
+        res.on('data', (c) => { data += c; });
+        res.on('end', () => resolve({ status: res.statusCode, body: data }));
+      },
+    );
+    req.on('timeout', () => req.destroy(new Error('timeout')));
+    req.on('error', (e) => {
+      if (process.env.AGENTRMC_DEBUG_BRIDGE) {
+        console.error('[dbg-bridge-err]', method, apiPath, e.message);
+      }
+      resolve(null);
+    });
+    if (body === null) req.end(); else req.end(body);
+  });
+}
+
+async function runApprovalInline(hook, announce) {
+  const input = hook.tool_input || hook.toolInput || {};
+  const detail = String(
+    input.file_path || input.path || input.command || input.url || '',
+  );
+  const { runApprovalInlineFlow } = require('../lib/decision');
+  const { decision } = await runApprovalInlineFlow(
+    { request: bridgeRequest },
+    {
+      agent,
+      exe: raise || 'ZCode.exe',
+      sid: String(hook.session_id || hook.sessionId || '').trim(),
+      rid: String(
+        hook.requestId || hook.tool_use_id || hook.toolUseId || '',
+      ).trim(),
+      project: projectRaw(hook),
+      toolName: String(hook.tool_name || hook.toolName || ''),
+      reason: detail.length > 60 ? detail.slice(0, 57) + '…' : detail,
+      message: announce.message,
+      speech: announce.speech,
+      eventId: String(hook.tool_use_id || hook.toolUseId || '').trim(),
+      pluginVersion: PLUGIN_VERSION,
+      waitSeconds: APPROVAL_INLINE_WAIT_S,
+    },
+  );
+  if (decision) {
+    process.stdout.write(JSON.stringify({
+      hookSpecificOutput: { hookEventName: 'PermissionRequest', decision },
+    }));
+  }
+  process.exit(0);
+}
+
 let raw = '';
 process.stdin.setEncoding('utf8');
 process.stdin.on('data', (chunk) => {
@@ -567,6 +645,22 @@ process.stdin.on('end', () => {
     message = '';
   } else {
     message = String(hook.message || '有新消息');
+  }
+
+  // —— 决策式远程授权拦截（ZCode 专属；approval-inline 开关文件控制）——
+  // 必须在 payload 组装前接手：流程自己发 notify、推卡、轮询、输出决策，
+  // 走不到下面的统一发送。AskUserQuestion 是提问不是授权（答案注入不进
+  // 阻塞中的工具调用），不接手；DRY_RUN 照旧打印 payload；缺 session 或
+  // requestId（老宿主）没法挂账对号，也退回纯提醒。
+  if (approvalInlineGate({
+    event, tool, dryRun: DRY_RUN,
+    sessionId: hook.session_id || hook.sessionId,
+    requestId: hook.requestId || hook.tool_use_id || hook.toolUseId,
+    enabled: approvalInlineEnabled(SPOOL_DIR),
+    exe: raise || 'ZCode.exe',
+  })) {
+    runApprovalInline(hook, { message, speech });
+    return;
   }
 
   const sessionId = String(

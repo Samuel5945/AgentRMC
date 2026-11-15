@@ -110,7 +110,8 @@ private:
     QString enqueueAnswer(const QString &workItemId, const QString &requestId,
                           const QJsonArray &answers, const QString &outcome);
     // B2：手机/桌面下发的应答件收件箱（会话 id → 待取 answer 数组）与清理。
-    QString takeAnswerPending(const QString &exe);
+    // session 非空只取该会话（bridge 系并发授权 hook 各自轮询，防互踩）。
+    QString takeAnswerPending(const QString &exe, const QString &session);
     void ackAnswer(const QString &answerId, bool ok, const QString &error);
     void dropAnswerPendingForSession(const QString &sessionId);
     QString lanTranscript(const QString &id, int offset = 0, int limit = 50);

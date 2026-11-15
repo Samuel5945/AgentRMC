@@ -97,7 +97,8 @@ void AgentBridge::setRequestsHandler(
 }
 
 void AgentBridge::setAnswerPendingProvider(
-    std::function<QString(const QString &exe)> provider) {
+    std::function<QString(const QString &exe, const QString &session)>
+        provider) {
     answerPendingProvider_ = std::move(provider);
 }
 
@@ -191,8 +192,12 @@ void AgentBridge::onReadable(QTcpSocket *socket) {
     const bool isAnswerPending =
         requestLine.startsWith("GET /request-answer/pending");
     if (isAnswerPending) {
-        // B2：插件 1.2s 轮询取应答件。exe 过滤同 dispatch/pending。
+        // B2：插件 1.2s 轮询取应答件。exe 过滤同 dispatch/pending；session 是
+        // 可选过滤（2026-11-15 加）：bridge 系每个授权 hook 各自起进程轮询，
+        // 并发授权时不带 session 会把别人会话的应答件一起标走（handed 互踩），
+        // 带 session 就只取自己会话的。DSH 老用法不带 session，行为不变。
         QString exe;
+        QString session;
         const int queryAt = requestLine.indexOf('?');
         if (queryAt >= 0) {
             const QByteArray query = requestLine.mid(queryAt + 1);
@@ -202,11 +207,13 @@ void AgentBridge::onReadable(QTcpSocket *socket) {
             for (const QByteArray &pair : pairs.split('&')) {
                 if (pair.startsWith("exe=")) {
                     exe = QUrl::fromPercentEncoding(pair.mid(4));
+                } else if (pair.startsWith("session=")) {
+                    session = QUrl::fromPercentEncoding(pair.mid(8));
                 }
             }
         }
         const QString items = answerPendingProvider_
-                                  ? answerPendingProvider_(exe)
+                                  ? answerPendingProvider_(exe, session)
                                   : QStringLiteral("[]");
         finish(socket, "200 OK", items.toUtf8(), "application/json");
         return;

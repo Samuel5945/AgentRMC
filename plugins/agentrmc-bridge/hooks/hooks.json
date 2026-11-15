@@ -17,7 +17,7 @@
           {
             "type": "command",
             "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/agentrmc-launch.cmd\" permission",
-            "timeout": 3
+            "timeout": 90
           }
         ]
       }

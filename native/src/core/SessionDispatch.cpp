@@ -76,9 +76,14 @@ bool SessionDispatch::supportsPluginChannel(const QString &agentExe) {
     // OpenSquilla 走同款通道：技能目录里的 pet-bridge 轮询取件 → 网关
     // sessions.send 注入（durable admission）→ ack 回执。2026-11-08 探针
     // 全链活体验收：受理 turn_id / SQLite 读回 / 全库零泄漏。
+    // ZCode 走外挂 hook 的决策式 PermissionRequest（2026-11-15 真机探针三路
+    // 全通：allow 不弹窗 / deny 直达工具层 / 超时回落弹窗），hook 进程轮询
+    // 取件；approval-inline 开关文件控制，默认关。
     return agentExe.compare(QStringLiteral("DeepSeek Harness.exe"),
                             Qt::CaseInsensitive) == 0 ||
            agentExe.compare(QStringLiteral("OpenSquilla.exe"),
+                            Qt::CaseInsensitive) == 0 ||
+           agentExe.compare(QStringLiteral("ZCode.exe"),
                             Qt::CaseInsensitive) == 0;
 }
 

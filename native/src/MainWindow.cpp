@@ -1096,7 +1096,9 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
         });
         // B2：插件轮询取应答件 / 应答结果回执。
         bridge->setAnswerPendingProvider(
-            [this](const QString &exe) { return takeAnswerPending(exe); });
+            [this](const QString &exe, const QString &session) {
+                return takeAnswerPending(exe, session);
+            });
         bridge->setAnswerAckHandler([this](const QJsonObject &payload) {
             const QString answerId =
                 payload.value(QStringLiteral("answer_id")).toString();
@@ -3432,8 +3434,9 @@ QString MainWindow::enqueueAnswer(const QString &workItemId, const QString &requ
 }
 
 // B2：插件 1.2s 轮询取走本 exe 的应答件（未取走的超时 60s 作废：插件没在跑，
-// 别攒一肚子旧答案）。下发后标 handed，ack 时核销。
-QString MainWindow::takeAnswerPending(const QString &exe) {
+// 别攒一肚子旧答案）。下发后标 handed，ack 时核销。session 非空时只取该会话
+// 的（bridge 系并发授权 hook 各自轮询，不按会话分会互踩别人家的应答件）。
+QString MainWindow::takeAnswerPending(const QString &exe, const QString &session) {
     const QDateTime now = QDateTime::currentDateTimeUtc();
     QJsonArray out;
     for (auto it = pendingAnswers_.begin(); it != pendingAnswers_.end();) {
@@ -3443,7 +3446,8 @@ QString MainWindow::takeAnswerPending(const QString &exe) {
             continue;
         }
         if (!it->handed && (exe.isEmpty() ||
-                            it->exe.compare(exe, Qt::CaseInsensitive) == 0)) {
+                            it->exe.compare(exe, Qt::CaseInsensitive) == 0) &&
+            (session.isEmpty() || it->sessionId == session)) {
             it->handed = true;
             QJsonObject item{{QStringLiteral("answer_id"), it.key()},
                              {QStringLiteral("session_id"), it->sessionId},

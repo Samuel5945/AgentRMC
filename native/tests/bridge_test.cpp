@@ -29,6 +29,7 @@ QJsonObject lastRequests;
 bool requestsGot = false;
 // B2：/request-answer/pending 与 /request-answer/ack。
 QString answerProviderExe = QStringLiteral("<unset>");
+QString answerProviderSession = QStringLiteral("<unset>");
 QJsonObject lastAnswerAck;
 bool answerAckGot = false;
 // 默认走真端口；本机装着 AgentRMC 时端口被占，测试可以指一个空闲端口跑。
@@ -161,8 +162,9 @@ int main(int argc, char **argv) {
         lastRequests = payload;
         requestsGot = true;
     });
-    bridge.setAnswerPendingProvider([](const QString &exe) {
+    bridge.setAnswerPendingProvider([](const QString &exe, const QString &session) {
         answerProviderExe = exe;
+        answerProviderSession = session;
         return QStringLiteral("[]");
     });
     bridge.setAnswerAckHandler([](const QJsonObject &payload) {
@@ -305,12 +307,13 @@ int main(int argc, char **argv) {
                                                                                              },
                                                                                              [&] {
 request(app,
-    "GET /request-answer/pending?exe=DeepSeek%20Harness.exe HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n",
+    "GET /request-answer/pending?exe=DeepSeek%20Harness.exe&session=sess-9 HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n",
     [&](const QByteArray &resp) {
         expectStatus("HTTP/1.1 200", resp);
         if (!resp.contains("[]") ||
-            answerProviderExe != "DeepSeek Harness.exe") {
-            fail("answer pending provider exe", resp);
+            answerProviderExe != "DeepSeek Harness.exe" ||
+            answerProviderSession != "sess-9") {
+            fail("answer pending provider exe/session", resp);
         }
     },
     [&] {

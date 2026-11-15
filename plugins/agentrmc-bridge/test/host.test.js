@@ -11,6 +11,7 @@ const assert = require('assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const http = require('http');
 const { execFileSync } = require('child_process');
 const { resolveHost, workbuddyVariantFromPath } = require('../lib/host');
 
@@ -915,12 +916,183 @@ check('清单: StopFailure 只注册在 hooks-qoder，命令指向 error', () =>
   }
 });
 
-fs.rmSync(tmp, { recursive: true, force: true });
+// —— 决策式远程授权（lib/decision.js，假桥进程内单测，2026-11-15）——
+// 真机链路（allow 不弹窗 / deny 消息到工具层 / 超时回落弹窗）由探针轮实测背书
+// （rc_probe/zcode-perm-probe/ + 计划文档 §4）；本环境 Bash 拉起的子进程连不上
+// loopback，真 HTTP e2e 跑不了，流程逻辑与 gate 判据在这里用假桥覆盖。
+const decision = require('../lib/decision');
 
-const total = passed + failures.length;
-if (failures.length) {
-  console.log('\n' + failures.length + ' FAILED of ' + total);
-  failures.forEach((f) => console.log('  ' + f));
-  process.exit(1);
+function fakeBridge() {
+  const api = {
+    calls: [],
+    queue: [],   // 每次 GET /request-answer/pending 弹出全部（模拟 handed 语义）
+    failNext: 0, // 前 N 次请求 resolve null（模拟桥断/桌宠关）
+    request(method, path, payloadObj) {
+      if (api.failNext > 0) { api.failNext -= 1; return Promise.resolve(null); }
+      api.calls.push({
+        method,
+        path: path.split('?')[0],
+        query: path.split('?')[1] || '',
+        body: payloadObj,
+      });
+      if (method === 'GET' && path.startsWith('/request-answer/pending')) {
+        const items = api.queue.splice(0);
+        return Promise.resolve({ status: 200, body: JSON.stringify(items) });
+      }
+      return Promise.resolve({ status: 200, body: '{}' });
+    },
+  };
+  return api;
 }
-console.log('\nALL PASS (' + passed + '/' + total + ')');
+
+function decisionParams() {
+  return {
+    agent: 'ZCode', exe: 'ZCode.exe', sid: 'dec-1', rid: 'perm-1',
+    project: 'D:/repo', toolName: 'Bash', reason: 'npm test',
+    message: '等你确认 Bash：npm test', speech: 'ZCode 在等你点确认',
+    eventId: 'tu-1', pluginVersion: '0.4.1',
+    waitSeconds: 1, pollMs: 20, heartbeatMs: 100000,
+  };
+}
+
+function decisionAnswer(id, outcome) {
+  return { answer_id: 'a-' + id, session_id: 'dec-1', kind: 'approval',
+    id, outcome };
+}
+
+check('decision gate: 全条件成立才接手，缺一不可', () => {
+  const ok = { event: 'permission', tool: 'Bash', dryRun: false,
+    sessionId: 's', requestId: 'r', enabled: true, exe: 'ZCode.exe' };
+  assert.strictEqual(decision.approvalInlineGate(ok), true);
+  assert.strictEqual(decision.approvalInlineGate(
+    { ...ok, event: 'stop' }), false, '只接 permission');
+  assert.strictEqual(decision.approvalInlineGate(
+    { ...ok, tool: 'AskUserQuestion' }), false, '提问答案注入不进去');
+  assert.strictEqual(decision.approvalInlineGate(
+    { ...ok, dryRun: true }), false, 'DRY_RUN 照旧打印 payload');
+  assert.strictEqual(decision.approvalInlineGate(
+    { ...ok, sessionId: '' }), false, '缺会话没法挂工单');
+  assert.strictEqual(decision.approvalInlineGate(
+    { ...ok, requestId: '' }), false, '缺请求 id 没法对号');
+  assert.strictEqual(decision.approvalInlineGate(
+    { ...ok, enabled: false }), false, '开关关 = 纯提醒');
+  assert.strictEqual(decision.approvalInlineGate(
+    { ...ok, exe: 'Qoder.exe' }), false, '只开在实测过的宿主上');
+  assert.strictEqual(decision.approvalInlineGate(
+    { ...ok, exe: '' }), false, '空 exe 不冒险');
+});
+
+check('decision 开关: 标记文件在即开，缺省关', () => {
+  const fakeFs = { statSync(p) {
+    if (String(p) === '/x/approval-inline') return {};
+    throw new Error('no');
+  } };
+  assert.strictEqual(decision.approvalInlineEnabled('/x', fakeFs), true);
+  assert.strictEqual(decision.approvalInlineEnabled('/y', fakeFs), false);
+});
+
+async function runDecisionFlowChecks() {
+  const list = [
+    ['decision allow: notify→推卡→轮询→ack→撤卡→allow 决策', async () => {
+      const bridge = fakeBridge();
+      bridge.queue.push(decisionAnswer('perm-1', 'allowed-once'));
+      const { decision: d } = await decision.runApprovalInlineFlow(
+        bridge, decisionParams());
+      assert.deepStrictEqual(d, { behavior: 'allow' });
+      const posts = bridge.calls.filter((c) => c.method === 'POST');
+      const notify = posts.find((c) => c.path === '/notify');
+      assert.ok(notify, '必须先发 /notify 出声');
+      assert.strictEqual(notify.body.event, 'permission');
+      assert.strictEqual(notify.body.session_id, 'dec-1');
+      assert.strictEqual(notify.body.raise, 'ZCode.exe');
+      const push = posts.find(
+        (c) => c.path === '/requests' && c.body.requests.length === 1);
+      assert.ok(push, '必须推可答卡');
+      assert.strictEqual(push.body.requests[0].id, 'perm-1');
+      assert.strictEqual(push.body.requests[0].kind, 'approval');
+      assert.strictEqual(push.body.requests[0].answerable, true);
+      assert.strictEqual(push.body.exe, 'ZCode.exe');
+      const ack = posts.find((c) => c.path === '/request-answer/ack');
+      assert.ok(ack, '必须 ack 应答件');
+      assert.strictEqual(ack.body.answer_id, 'a-perm-1');
+      assert.strictEqual(ack.body.ok, true);
+      const polls = bridge.calls.filter(
+        (c) => c.path === '/request-answer/pending');
+      assert.ok(polls.length >= 1, '必须轮询取件');
+      assert.ok(polls.some((c) => c.query.includes('session=dec-1') &&
+        c.query.includes('exe=ZCode.exe')),
+        '轮询必须带 exe+session 过滤（并发授权互踩防线）');
+      const cleanup = posts.filter(
+        (c) => c.path === '/requests' && c.body.requests.length === 0);
+      assert.ok(cleanup.length >= 1, '答完必须撤卡');
+    }],
+    ['decision reject: deny 决策带「桌宠拒绝」消息', async () => {
+      const bridge = fakeBridge();
+      bridge.queue.push(decisionAnswer('perm-1', 'rejected'));
+      const { decision: d } = await decision.runApprovalInlineFlow(
+        bridge, decisionParams());
+      assert.strictEqual(d.behavior, 'deny');
+      assert.match(d.message, /桌宠/);
+    }],
+    ['decision 别人的应答不吞: id 对不上就等超时，绝不 ack', async () => {
+      const bridge = fakeBridge();
+      bridge.queue.push(decisionAnswer('perm-other', 'allowed-once'));
+      const { decision: d } = await decision.runApprovalInlineFlow(
+        bridge, decisionParams());
+      assert.strictEqual(d, null, '别人的应答不能当自己的');
+      const acks = bridge.calls.filter((c) => c.path === '/request-answer/ack');
+      assert.strictEqual(acks.length, 0, '没对上号绝不 ack');
+    }],
+    ['decision 超时: 无决策放手，撤卡兜底', async () => {
+      const bridge = fakeBridge();
+      const { decision: d } = await decision.runApprovalInlineFlow(
+        bridge, decisionParams());
+      assert.strictEqual(d, null, '超时 = 宿主正常弹窗');
+      const cleanup = bridge.calls.filter(
+        (c) => c.path === '/requests' && c.body.requests.length === 0);
+      assert.ok(cleanup.length >= 1, '超时也要撤卡');
+    }],
+    ['decision 桥断: 立刻放手不耗满窗口，撤卡尽力而为', async () => {
+      const bridge = fakeBridge();
+      bridge.failNext = 3;  // notify、推卡、首 poll 全断
+      const t0 = Date.now();
+      const { decision: d } = await decision.runApprovalInlineFlow(
+        bridge, decisionParams());
+      assert.strictEqual(d, null, '桥断 = 没人能答，宿主弹窗');
+      assert.ok(Date.now() - t0 < 3000,
+        '桥断必须早退（不能傻等满 waitSeconds）');
+      const cleanup = bridge.calls.filter(
+        (c) => c.path === '/requests' && c.body.requests.length === 0);
+      assert.ok(cleanup.length >= 1, '撤卡尽力而为（失败也尝试了）');
+    }],
+  ];
+  for (const [name, fn] of list) {
+    try {
+      await fn();
+      passed += 1;
+      console.log('PASS ' + name);
+    } catch (e) {
+      failures.push(name + ': ' + e.message);
+      console.log('FAIL ' + name + ' :: ' + e.message);
+    }
+  }
+}
+
+(async () => {
+  await runDecisionFlowChecks();
+  fs.rmSync(tmp, { recursive: true, force: true });
+  printSummary();
+})().catch((e) => {
+  failures.push('decision flow tests crashed: ' + (e && e.message));
+  printSummary();
+});
+
+function printSummary() {
+  const total = passed + failures.length;
+  if (failures.length) {
+    console.log('\n' + failures.length + ' FAILED of ' + total);
+    failures.forEach((f) => console.log('  ' + f));
+    process.exit(1);
+  }
+  console.log('\nALL PASS (' + passed + '/' + total + ')');
+}

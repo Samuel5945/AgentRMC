@@ -167,6 +167,16 @@ ZCode 的 PermissionRequest hook 是**决策式**的：hook 在授权判定时�
    提醒至今没生效**，需要在 ZCode 里重装/更新一次插件才能把 11-08 修复和
    本次题干改动带进活跃会话。
 
+**落地记录（2026-11-15，同日实施）**：蓝图已实施——
+  `lib/decision.js`（流程与传输分离，假桥单测覆盖 allow/reject/超时/桥断/别人
+  应答不吞 5 路）+ hook 薄壳（gate 见 `approvalInlineGate`，ZCode 专属）+
+  原生三处（`supportsPluginChannel` 加 ZCode.exe；`takeAnswerPending` 加
+  session 过滤防并发互踩；路由透传 session 参数）。hooks.json PermissionRequest
+  timeout 3→90。开关文件 `%APPDATA%LIGAgentRMCNativeapproval-inline`，
+  默认关。原生测试 Bridge/App/WorkItem 全绿，出包装机验活通过（装机版
+  session 过滤路由实测 200）。注意：bridge 系的「提问」（AskUserQuestion）
+  依旧注入不进答案，只有授权可远程答；提问的只读卡是 §7 后续项。
+
 ## 5. 提示文案的目标结构（改完后应长什么样）
 
 ```

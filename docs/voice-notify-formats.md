@@ -87,6 +87,12 @@ Cordis bundle）、OpenSquilla（`plugins/opensquilla-bridge` 外部 WebSocket �
   无关故障喊成模型出错；ZCode 的运行时里查不到这个事件。所以只注册在
   `hooks-qoder/hooks.json`，WorkBuddy 里错误文本仍按 stop 念原文。
 
+- **决策式远程授权（ZCode，2026-11-15 落地，默认关）**：approval-inline 开关
+  文件存在时，PermissionRequest hook 从 fire-and-forget 变成「提醒 + 推可答卡 +
+  限时轮询应答」。拿到桌宠卡片应答 → hook 返回 allow/deny 决策（宿主不弹窗）；
+  超时 → 静默 exit 0（宿主弹窗）。轮询带 `session` 过滤（并发授权 hook 互踩
+  防线，原生 takeAnswerPending 按会话过滤）；开关文件见 README。真机契约实测见
+  prompt-optimization-plan.md §4。
 - DSH 挂 `session/event`（emit，所有监听器都跑）而不是 `approval/request` /
   `user-questions/request` 瀑布——Web UI 应答者作答后不再调 next()，排后面的监听器
   永远轮不到（实测桌面端点完选方案桌宠一声没响）。

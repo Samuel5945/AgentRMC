@@ -27,6 +27,17 @@
   提醒通道：气泡 + 语音；`progress` 只落工单）。
   桌面「待我处理」页按等处理 / 待验收 / 进行中排序，重启不丢。`UserPromptSubmit`
   会在新对话开始时自动归档同 session 的旧「待验收」。
+- **决策式远程授权（ZCode，默认关）**：开关文件
+  `%APPDATA%LIGAgentRMCNativeapproval-inline` 存在即开。开着时
+  `PermissionRequest` hook 不再只是提醒——先照常出声 + 落工单，再推
+  `/requests` 可答卡（桌宠弹「允许 / 拒绝」卡），然后限时轮询
+  `/request-answer/pending`（60 秒，`AGENTRMC_APPROVAL_WAIT_SECONDS` 可调）：
+  用户在桌宠卡片 / 聊天页点了答案，hook 返回 allow / deny 决策，宿主**不弹窗**
+  直接放行 / 拒绝；超时或桌宠没开就静默放手（exit 0），宿主照常弹窗。
+  流程与红线在 `lib/decision.js`（exit 2 = 硬 deny，绝不允许；stdout 除决策
+  JSON 外不能有字）。安全模型与 DSH approvalInline 一致：本机能碰到桌宠的人
+  都能代答。仅 ZCode 实测开启；hooks.json 的 `timeout` 相应放大到 90 秒，
+  **更新插件后要新开会话才生效**（hooks 配置是会话启动快照）。
 - **离线不丢**：AgentRMC 没开、连接失败或 5xx 时，hook 把 payload 追加到
   `%APPDATA%\LIG\AgentRMCNative\pending-events.jsonl`；原生端启动/每 5 秒补投，
   补投只落工单，不补喊。

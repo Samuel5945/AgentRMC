@@ -31,6 +31,12 @@
   明确不需要本地语音的临时构建。
 - 打包链路依赖：VS 自带 CMake、Qt 6.8.3（`native\.qt\`）、
   NSIS（`C:\Program Files (x86)\NSIS\makensis.exe`）。
+- **build.bat 只编 exe，不更新安装包**（2026-11-13 踩坑）：迭代时跑 build.bat
+  没问题，但**装机前必须重跑 package.bat**——否则装的是 dist 里上一版安装包，
+  NSIS 静默模式不报错，exe 时间戳不变，验证全跑在旧代码上。装机后先看
+  `D:\apps\AgentRMC\AgentRMCNative.exe`（以注册表 InstallDir 为准）时间戳是否
+  是本次构建，再启动验证。安装器 taskkill 偶发杀不净时先手动
+  `Stop-Process -Name AgentRMCNative -Force` 再装。
 - 临时验证用的 exe 不要留在 `native\build\Release`：installer.nsi 只按名字
   排除 `*Test.exe`，其它多余 exe 会被打进安装包。
 - Python 旧版 GUI（agentrc_gui.py）如需打包用 `tools\build_exe.bat`，产物在
@@ -88,6 +94,13 @@
   必须跑 AgentRMCAppTest。
 - Git Bash 里没有 cmake；用 VS 自带的
   `"C:\Program Files\Microsoft Visual Studio\18\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe"`。
+- **DSH 沙箱按「被启动程序的位置」限制子进程**（2026-11-13 实测）：从工作区内
+  启动的 exe 写用户 temp 会「拒绝访问」——测试的 `QTemporaryDir` 建不出目录
+  （一片 `FAIL temp dir`）、NSIS 安装器初始化即退（exit 1，什么都没装）。
+  同一个 exe 拷到工作区外跑就正常；系统位置的 cmd/python 不受限。对策：
+  ① 跑测试前把 `TEMP`/`TMP` 指到工作区内目录（如 `tmp_test`）；
+  ② 静默安装先把 `dist\AgentRMC-Setup.exe` 拷到工作区外（如 `D:\apps`）再 `/S`。
+  这不是代码错，别去改测试或安装脚本。
 
 ## 版本号：Native 与插件同号同步升
 

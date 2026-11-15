@@ -58,3 +58,6 @@ tmp_bg_fix/
 
 # ---------- WebView2 原型：从 nuget 解出的 SDK（头 + loader，不入库）----------
 native/.webview2-sdk/
+
+# 测试临时 TEMP（DSH 沙箱要求测试 temp 指工作区内）
+tmp_test/

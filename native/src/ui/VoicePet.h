@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QJsonArray>
+#include <QJsonObject>
 #include <QPoint>
 #include <QString>
 #include <QWidget>
@@ -75,6 +76,13 @@ public:
     // 收起当前气泡（点击拉回窗口后调用）。
     void hideBubble();
 
+    // 借鉴 OpenSquilla 蛋仔的富气泡：把待答请求（授权/提问）渲染成可交互卡片，
+    // 直接在桌宠上允许/拒绝/选选项，不用切回聊天页。req 为 /requests 推送的单条
+    // （kind/id/toolName/reason/questions/answerable）。answerable=false 时只展示。
+    void showRequestCard(const QString &sessionId, const QJsonObject &req);
+    // 请求已被别处应答/取消：收起对应卡片。
+    void clearRequestCard(const QString &requestId);
+
     // 桌宠状态快照（AgentBridge GET /state 的应答），给 Agent 决策用。
     QString stateJson() const;
 
@@ -92,6 +100,12 @@ signals:
     void chatReplied(const QString &text);
     // 用户点了气泡：把这条提醒对应的宿主窗口拉回前台。
     void bubbleActivated(const QString &raiseExe);
+    // 桌宠交互卡上点了允许/拒绝/选项：主窗落收件箱走插件/桥应答（同聊天页 answer）。
+    void requestAnswered(const QString &sessionId, const QString &requestId,
+                         const QString &kind, const QJsonArray &answers,
+                         const QString &outcome);
+    // 交互卡上点「聊天页」：主窗打开该会话的聊天页（复杂多选/多题去那里答）。
+    void requestOpenChat(const QString &sessionId);
     // 语音派活成功：主窗落一条 working Work Item。
     void workHandedOff(const QString &agentExe, const QString &text);
     void voiceFeedbackError(const QString &error);
@@ -109,11 +123,14 @@ protected:
 
 private:
     class Card;
+    class RequestCard;
 
     enum class Dock { None, Left, Right, Top, Bottom };
 
     void ensureCard();
     void ensureBubble();
+    void ensureRequestCard();
+    void placeRequestCard();
     void collapseCard();
     void collapseSoon();
     void setBackend(int backend);
@@ -177,6 +194,9 @@ private:
     VoiceController *voice_ = nullptr;
     Card *card_ = nullptr;
     QLabel *bubble_ = nullptr;
+    RequestCard *requestCard_ = nullptr;
+    QString requestSession_;   // 当前交互卡归属会话
+    QString requestId_;        // 当前交互卡请求 id（clearRequestCard 比对用）
     TtsClient *tts_ = nullptr;
     LlmClient *llm_ = nullptr;
     std::function<QString()> workSummaryProvider_;
@@ -214,4 +234,5 @@ private:
     QTimer *animTimer_ = nullptr;
     QTimer *collapseTimer_ = nullptr;
     QTimer *bubbleTimer_ = nullptr;
+    QTimer *requestTimer_ = nullptr;  // 交互卡超时自动收起（别留陈旧卡片）
 };

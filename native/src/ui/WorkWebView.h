@@ -35,6 +35,8 @@ public:
     void pushLive(const QJsonObject &live);
     // 换主题/配色模式只推 theme 对象：整份 state 序列化太贵，换色用不着。
     void pushTheme(const QJsonObject &theme);
+    // 聊天页上翻加载的更旧一页：单独推 window.__setChatPage，不重排整份 state。
+    void pushChat(const QJsonObject &page);
     // WebView2 的边界是物理像素：跨屏换 DPI 时主窗拿原生消息催一次重喂。
     void syncBounds();
     bool ready() const { return webviewReady(); }

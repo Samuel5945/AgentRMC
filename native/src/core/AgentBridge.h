@@ -2,6 +2,7 @@
 
 #include <QByteArray>
 #include <QHash>
+#include <QHostAddress>
 #include <QJsonObject>
 #include <QObject>
 #include <QString>
@@ -48,6 +49,9 @@ public:
     // 起监听；失败（端口被占等）返回 false。
     bool start(quint16 port = kPort);
     bool isRunning() const { return server_ != nullptr; }
+    // 实际监听地址：桥必须是回环（无鉴权本机 IPC）。lanweb_test 拿它锁死
+    // 「别顺手改成 Any」——暴露到局域网的是 LanWebServer，不是这个口。
+    QHostAddress serverAddress() const;
     // GET /state 的应答来源（主窗接到 VoicePet::stateJson 上）；缺省回 "{}"。
     void setStateProvider(std::function<QString()> provider);
     // GET /work-items 的应答来源；缺省回空队列。
@@ -74,6 +78,16 @@ public:
     // （插件注入成功 / 守卫拒绝的回执）。返回 false = dispatch_id 不认识。
     void setDispatchAckHandler(
         std::function<bool(const QJsonObject &)> handler);
+    // POST /requests 的处理器：DSH 插件推送某会话当前待答请求（B1 只读展示）
+    // {"exe","session_id","project","requests":[{kind,id,toolName?,reason?,questions?}]}。
+    void setRequestsHandler(std::function<void(const QJsonObject &)> handler);
+    // GET /request-answer/pending?exe=<映像名> 的应答来源（B2）：插件轮询取走
+    // 手机/桌面下发的应答件，返回 JSON 数组文本（可空数组）。
+    void setAnswerPendingProvider(
+        std::function<QString(const QString &exe)> provider);
+    // POST /request-answer/ack 的处理器：{"answer_id":..,"ok":true|false,"error":..}
+    // （插件应答结果回执）。返回 false = answer_id 不认识。
+    void setAnswerAckHandler(std::function<bool(const QJsonObject &)> handler);
 
 signals:
     // kind：/notify 透传 event 字段；/speak 固定为 "speak"。
@@ -110,4 +124,7 @@ private:
     std::function<QString()> healthProvider_;
     std::function<QString(const QString &exe)> dispatchPendingProvider_;
     std::function<bool(const QJsonObject &)> dispatchAckHandler_;
+    std::function<void(const QJsonObject &)> requestsHandler_;
+    std::function<QString(const QString &exe)> answerPendingProvider_;
+    std::function<bool(const QJsonObject &)> answerAckHandler_;
 };

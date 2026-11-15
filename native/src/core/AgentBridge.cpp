@@ -29,6 +29,10 @@ QString defaultFor(const QString &kind) {
 
 AgentBridge::AgentBridge(QObject *parent) : QObject(parent) {}
 
+QHostAddress AgentBridge::serverAddress() const {
+    return server_ != nullptr ? server_->serverAddress() : QHostAddress();
+}
+
 bool AgentBridge::start(quint16 port) {
     if (server_ != nullptr) {
         return true;
@@ -85,6 +89,21 @@ void AgentBridge::setDispatchPendingProvider(
 void AgentBridge::setDispatchAckHandler(
     std::function<bool(const QJsonObject &)> handler) {
     dispatchAckHandler_ = std::move(handler);
+}
+
+void AgentBridge::setRequestsHandler(
+    std::function<void(const QJsonObject &)> handler) {
+    requestsHandler_ = std::move(handler);
+}
+
+void AgentBridge::setAnswerPendingProvider(
+    std::function<QString(const QString &exe)> provider) {
+    answerPendingProvider_ = std::move(provider);
+}
+
+void AgentBridge::setAnswerAckHandler(
+    std::function<bool(const QJsonObject &)> handler) {
+    answerAckHandler_ = std::move(handler);
 }
 
 void AgentBridge::onConnected() {
@@ -169,14 +188,39 @@ void AgentBridge::onReadable(QTcpSocket *socket) {
         finish(socket, "200 OK", items.toUtf8(), "application/json");
         return;
     }
+    const bool isAnswerPending =
+        requestLine.startsWith("GET /request-answer/pending");
+    if (isAnswerPending) {
+        // B2：插件 1.2s 轮询取应答件。exe 过滤同 dispatch/pending。
+        QString exe;
+        const int queryAt = requestLine.indexOf('?');
+        if (queryAt >= 0) {
+            const QByteArray query = requestLine.mid(queryAt + 1);
+            const int spaceAt = query.indexOf(' ');
+            const QByteArray pairs =
+                query.left(spaceAt >= 0 ? spaceAt : query.size());
+            for (const QByteArray &pair : pairs.split('&')) {
+                if (pair.startsWith("exe=")) {
+                    exe = QUrl::fromPercentEncoding(pair.mid(4));
+                }
+            }
+        }
+        const QString items = answerPendingProvider_
+                                  ? answerPendingProvider_(exe)
+                                  : QStringLiteral("[]");
+        finish(socket, "200 OK", items.toUtf8(), "application/json");
+        return;
+    }
     const bool isNotify = requestLine.startsWith("POST /notify ");
     const bool isSpeak = requestLine.startsWith("POST /speak ");
     const bool isAck = requestLine.startsWith("POST /work-items/ack ");
     const bool isUpdate = requestLine.startsWith("POST /work-items/update ");
     const bool isCommand = requestLine.startsWith("POST /command ");
     const bool isDispatchAck = requestLine.startsWith("POST /dispatch/ack ");
+    const bool isRequests = requestLine.startsWith("POST /requests ");
+    const bool isAnswerAck = requestLine.startsWith("POST /request-answer/ack ");
     if (!isNotify && !isSpeak && !isAck && !isUpdate && !isCommand &&
-        !isDispatchAck) {
+        !isDispatchAck && !isRequests && !isAnswerAck) {
         finish(socket, "404 Not Found");
         return;
     }
@@ -211,6 +255,24 @@ void AgentBridge::onReadable(QTcpSocket *socket) {
         const bool handled =
             !dispatchId.isEmpty() && dispatchAckHandler_ &&
             dispatchAckHandler_(obj);
+        finish(socket, handled ? "204 No Content" : "404 Not Found");
+        return;
+    }
+    if (isRequests) {
+        // DSH 插件推送某会话当前待答请求（B1 只读展示）。无 handler 也回 204，
+        // 别让插件以为失败反复重试。
+        if (requestsHandler_) {
+            requestsHandler_(obj);
+        }
+        finish(socket, "204 No Content");
+        return;
+    }
+    if (isAnswerAck) {
+        // B2：插件应答回执。answer_id 不认识（重复/重启丢账）回 404。
+        const QString answerId =
+            obj.value(QStringLiteral("answer_id")).toString().trimmed();
+        const bool handled =
+            !answerId.isEmpty() && answerAckHandler_ && answerAckHandler_(obj);
         finish(socket, handled ? "204 No Content" : "404 Not Found");
         return;
     }

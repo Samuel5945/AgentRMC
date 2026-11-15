@@ -17,6 +17,7 @@
 
 #include "core/AgentBridge.h"
 #include "core/DshSessions.h"
+#include "core/LanWebServer.h"
 #include "core/PluginUpgrade.h"
 #include "core/AgentWindow.h"
 #include "core/HostRuntime.h"
@@ -25,6 +26,7 @@
 #include "core/ModelImport.h"
 #include "core/Presets.h"
 #include "core/SessionDispatch.h"
+#include "core/SessionTranscript.h"
 #include "core/ZcodeDispatch.h"
 #include "core/ThemeManager.h"
 #include "core/Updater.h"
@@ -418,13 +420,13 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
                                        QStringLiteral("progress"),
                                        AgentWindow::displayName(exe), text, exe);
                 }
-                dispatchNotice_ =
-                    QStringLiteral("会话 %1 回执已落账").arg(sid.left(8));
+                // 回执落账＝送达成功。聊天页已能直接看记录，不再弹「回执已落账」
+                // 通知（用户 2026-11-14 反馈冗余）；ZCode 桌面端不热刷新，保留重启提示。
                 if (ZcodeDispatch::supports(exe)) {
-                    // 对话区不热刷新（上游架构使然）：告诉人全文在卡上，
-                    // 回会话前重启一次宿主即可见。
-                    dispatchNotice_ += QStringLiteral(
-                        "；ZCode 对话区要重启后才显示新消息，回复先看卡片");
+                    dispatchNotice_ = QStringLiteral(
+                        "ZCode 对话区要重启后才显示新消息，回复先看卡片");
+                } else {
+                    dispatchNotice_.clear();
                 }
                 dispatchNoticeId_ = itemIdForSession(sid);
                 dispatchNoticeExe_ = exe;
@@ -918,6 +920,42 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
     // 点气泡回跳：提醒不再靠自动抢前台，用户点了才把宿主窗口拉回来。
     connect(voicePet_, &VoicePet::bubbleActivated, this,
             [](const QString &exe) { AgentWindow::raise(exe); });
+    // 桌宠交互卡（借鉴蛋仔）：允许/拒绝/选项 → 落收件箱走插件/桥应答（同聊天页）。
+    connect(voicePet_, &VoicePet::requestAnswered, this,
+            [this](const QString &sessionId, const QString &requestId,
+                   const QString &kind, const QJsonArray &answers,
+                   const QString &outcome) {
+                Q_UNUSED(kind);
+                QString workItemId;
+                for (const WorkItem &it : workItems_->items()) {
+                    if (it.sessionId == sessionId) {
+                        workItemId = it.id;
+                        break;
+                    }
+                }
+                const QString why =
+                    enqueueAnswer(workItemId, requestId, answers, outcome);
+                if (!why.isEmpty()) {
+                    appendEvent(QStringLiteral("error"), QString(), QString(),
+                                QStringLiteral("桌宠应答未提交：%1").arg(why), 0);
+                }
+                refreshWorkItems();
+                if (workWeb_ != nullptr) {
+                    workWeb_->refresh();  // 桌宠答完同步收掉桌面聊天页的卡
+                }
+            });
+    // 交互卡「去聊天页」：打开该会话聊天页（复杂多选/多题去那里答）。
+    connect(voicePet_, &VoicePet::requestOpenChat, this,
+            [this](const QString &sessionId) {
+                for (const WorkItem &it : workItems_->items()) {
+                    if (it.sessionId == sessionId) {
+                        handleWebAction(QJsonObject{
+                            {QStringLiteral("cmd"), QStringLiteral("chatOpen")},
+                            {QStringLiteral("id"), it.id}});
+                        return;
+                    }
+                }
+            });
     connect(voicePet_, &VoicePet::voiceFeedbackError, this,
             [this](const QString &error) {
                 appendEvent(QStringLiteral("error"), QString(), QString(),
@@ -1000,6 +1038,76 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
                 payload.value(QStringLiteral("ok")).toBool(),
                 payload.value(QStringLiteral("error")).toString());
         });
+        // B1：DSH 插件推送会话当前待答请求，存内存账供聊天页展示。
+        // 插件 1.2s 轮询应答件 = 在线心跳：每次推送都刷新该 exe 的在线表
+        // （answerable 据此标，掉线 5s 内自动退回只读）。
+        bridge->setRequestsHandler([this](const QJsonObject &payload) {
+            const QString sid =
+                payload.value(QStringLiteral("session_id")).toString();
+            if (sid.isEmpty()) {
+                return;
+            }
+            const QString exe = payload.value(QStringLiteral("exe")).toString();
+            if (!exe.isEmpty()) {
+                pluginSeenAt_.insert(exe.toLower(), QDateTime::currentDateTimeUtc());
+            }
+            const QJsonArray reqs =
+                payload.value(QStringLiteral("requests")).toArray();
+            const QJsonArray old = pendingRequests_.value(sid);
+            if (reqs.isEmpty()) {
+                pendingRequests_.remove(sid);
+                // 卡片在 DSH 侧已关闭/已答：排队中还没送的应答件一并作废，
+                // 否则会把答案送给已经不存在的请求。
+                dropAnswerPendingForSession(sid);
+            } else {
+                pendingRequests_.insert(sid, reqs);
+            }
+            // 借鉴蛋仔：待答请求驱动桌宠交互卡（新增可答→弹卡，移除→收卡）。
+            if (voicePet_ != nullptr) {
+                QSet<QString> oldIds;
+                for (const QJsonValue &v : old) {
+                    oldIds.insert(v.toObject().value(QStringLiteral("id")).toString());
+                }
+                QSet<QString> newIds;
+                QString showId;
+                QJsonObject showReq;
+                for (const QJsonValue &v : reqs) {
+                    const QJsonObject r = v.toObject();
+                    const QString rid = r.value(QStringLiteral("id")).toString();
+                    newIds.insert(rid);
+                    if (r.value(QStringLiteral("answerable")).toBool()) {
+                        showId = rid;
+                        showReq = r;
+                    }
+                }
+                for (const QString &rid : oldIds) {
+                    if (!newIds.contains(rid)) {
+                        voicePet_->clearRequestCard(rid);
+                    }
+                }
+                if (!showId.isEmpty() && !oldIds.contains(showId)) {
+                    voicePet_->showRequestCard(sid, showReq);
+                }
+            }
+            // 待答清单变化（新增/被别处应答移除）→ 刷新桌面聊天页，收掉残留卡。
+            if (workWeb_ != nullptr) {
+                workWeb_->refresh();
+            }
+        });
+        // B2：插件轮询取应答件 / 应答结果回执。
+        bridge->setAnswerPendingProvider(
+            [this](const QString &exe) { return takeAnswerPending(exe); });
+        bridge->setAnswerAckHandler([this](const QJsonObject &payload) {
+            const QString answerId =
+                payload.value(QStringLiteral("answer_id")).toString();
+            const bool ok = payload.value(QStringLiteral("ok")).toBool();
+            if (answerId.isEmpty() || !pendingAnswers_.contains(answerId)) {
+                return false;
+            }
+            ackAnswer(answerId, ok,
+                      payload.value(QStringLiteral("error")).toString());
+            return true;
+        });
         connect(bridge, &AgentBridge::notify, this,
                 [this](const QString &kind, const QString &title,
                        const QString &message, const QString &raise,
@@ -1016,6 +1124,18 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
                         QString::fromUtf8(
                             "桥接端口 45915 被占用，5 秒后自动重试"),
                         0);
+        }
+        // 手机访问（局域网 Web）：默认关闭；上次开着才恢复监听。设备令牌
+        // 持久化在配置里，重启不用重新配对。截图模式（withTray=false）不起。
+        if (store_->uiBool(QStringLiteral("lan_enabled"), false)) {
+            ensureLanServer();
+            lan_->setDevices(store_->uiArray(QStringLiteral("lan_devices")));
+            if (!lan_->start()) {
+                appendEvent(QStringLiteral("error"), QString(), QString(),
+                            QString::fromUtf8(
+                                "手机访问端口 45916 被占用，可在系统页重试"),
+                            0);
+            }
         }
     }
     // 离线 spool 补投 + 健康行；5 秒一拍，启动时先补一次。
@@ -2455,6 +2575,7 @@ QJsonObject MainWindow::systemState() {
                    .arg(problems.join(QString::fromUtf8("；")))},
         {QStringLiteral("problemsOk"), problems.isEmpty()},
         {QStringLiteral("workers"), workerRows},
+        {QStringLiteral("lan"), lanState()},
     };
 }
 
@@ -3120,8 +3241,400 @@ QString MainWindow::webShellState() {
                      {QStringLiteral("draftId"), dispatchDraftId_},
                      {QStringLiteral("draftText"), dispatchDraftText_},
                      {QStringLiteral("supported"), supportedDispatchExes()}}},
+        {QStringLiteral("chat"), chatState()},
     };
     return QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Compact));
+}
+
+// ---------- 局域网手机遥控（M1）：与外壳同一份数据源，动作同一个入口 ----------
+
+void MainWindow::ensureLanServer() {
+    if (lan_ != nullptr) {
+        return;
+    }
+    lan_ = new LanWebServer(this);
+    lan_->setStateProvider([this] { return lanShellState(); });
+    lan_->setTranscriptProvider([this](const QString &id, int offset, int limit) {
+        return lanTranscript(id, offset, limit);
+    });
+    lan_->setUploadHandler([this](const QString &id, const QString &filename,
+                                  const QByteArray &data) {
+        return lanUpload(id, filename, data);
+    });
+    lan_->setThemeRoot(ThemeManager::themesRoot());
+    // 白名单已在服务端验过；这里与桌面外壳走同一个 handleWebAction，
+    // 做完它内部统一 refresh，桌面外壳自动跟着刷新，双端一致免费。
+    lan_->setActionHandler([this](const QJsonObject &action) {
+        handleWebAction(action);
+        return QJsonObject{{QStringLiteral("ok"), true},
+                           {QStringLiteral("code"), 200}};
+    });
+    connect(lan_, &LanWebServer::devicesChanged, this,
+            [this](const QJsonArray &devices) {
+                store_->setUiArray(QStringLiteral("lan_devices"), devices);
+            });
+}
+
+void MainWindow::setLanEnabled(bool on) {
+    store_->setUiBool(QStringLiteral("lan_enabled"), on);
+    if (on) {
+        ensureLanServer();
+        lan_->setDevices(store_->uiArray(QStringLiteral("lan_devices")));
+        if (lan_->start()) {
+            appendEvent(QStringLiteral("status"), QString(), QString(),
+                        QString::fromUtf8("手机访问已开启（端口 45916）"), 0);
+        } else {
+            appendEvent(QStringLiteral("error"), QString(), QString(),
+                        QString::fromUtf8("手机访问启动失败：端口 45916 被占用"),
+                        0);
+        }
+    } else if (lan_ != nullptr) {
+        lan_->endPairing();
+        lan_->stop();
+        appendEvent(QStringLiteral("status"), QString(), QString(),
+                    QString::fromUtf8("手机访问已关闭"), 0);
+    }
+}
+
+QString MainWindow::lanShellState() {
+    QJsonObject work;
+    if (workItems_ != nullptr) {
+        work = QJsonDocument::fromJson(workItemsJson().toUtf8()).object();
+    }
+    const QJsonObject root{
+        {QStringLiteral("work"), work},
+        {QStringLiteral("health"),
+         QJsonDocument::fromJson(healthJson().toUtf8()).object()},
+        {QStringLiteral("events"), webEvents_},
+        {QStringLiteral("theme"), webThemeJson()},
+        {QStringLiteral("dispatch"),
+         QJsonObject{{QStringLiteral("notice"), dispatchNotice_},
+                     {QStringLiteral("noticeId"), dispatchNoticeId_},
+                     {QStringLiteral("noticeExe"), dispatchNoticeExe_},
+                     {QStringLiteral("draftId"), dispatchDraftId_},
+                     {QStringLiteral("draftText"), dispatchDraftText_},
+                     {QStringLiteral("supported"), supportedDispatchExes()}}},
+        {QStringLiteral("meta"),
+         QJsonObject{
+             {QStringLiteral("version"), appVersion()},
+             {QStringLiteral("listening"),
+              engine_ != nullptr && engine_->isRunning()},
+             {QStringLiteral("devices"),
+              lan_ != nullptr ? lan_->devices().size() : 0}}},
+    };
+    return QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Compact));
+}
+
+QJsonObject MainWindow::lanState() {
+    const bool enabled = store_->uiBool(QStringLiteral("lan_enabled"), false);
+    const bool running = lan_ != nullptr && lan_->isRunning();
+    return QJsonObject{
+        {QStringLiteral("enabled"), enabled},
+        {QStringLiteral("running"), running},
+        {QStringLiteral("port"), static_cast<int>(LanWebServer::kPort)},
+        {QStringLiteral("urls"),
+         running ? QJsonArray::fromStringList(
+                       LanWebServer::lanUrls(lan_->port()))
+                 : QJsonArray()},
+        // 配对码只进桌面外壳（systemState），不进 lanShellState——手机拿不到。
+        {QStringLiteral("pairing"),
+         lan_ != nullptr ? lan_->pairingInfo() : QJsonObject()},
+        {QStringLiteral("devices"),
+         lan_ != nullptr ? lan_->devices() : QJsonArray()},
+    };
+}
+
+// ---------- 聊天页：待办 → 会话记录（只读分页，电脑/手机同一读取器） ----------
+
+// B2/B3：给推送来的待答请求标可答性（answerable）。优先信宿主插件/桥下发的
+// answerable 提示（DSH 提问恒真、授权仅 approvalInline 开启时真；OpenSquilla
+// 审批/澄清恒真——网关是按 id 可随时 resolve 的干净 RPC）；没带提示的老推送
+// 退回「只认提问」。再叠加 15s 心跳在线判据——插件掉线时退回只读，别让用户
+// 点了石沉大海。
+QJsonArray MainWindow::requestsWithAnswerable(const QString &sessionId) const {
+    QJsonArray out;
+    const QJsonArray reqs = pendingRequests_.value(sessionId);
+    bool pluginLive = false;
+    for (auto it = pluginSeenAt_.constBegin(); it != pluginSeenAt_.constEnd(); ++it) {
+        if (it.value().secsTo(QDateTime::currentDateTimeUtc()) <= 15) {
+            pluginLive = true;
+            break;
+        }
+    }
+    for (const QJsonValue &v : reqs) {
+        QJsonObject r = v.toObject();
+        const bool hint = r.contains(QStringLiteral("answerable"))
+                              ? r.value(QStringLiteral("answerable")).toBool()
+                              : r.value(QStringLiteral("kind")).toString() ==
+                                    QStringLiteral("question");
+        r.insert(QStringLiteral("answerable"), pluginLive && hint);
+        out.append(r);
+    }
+    return out;
+}
+
+// B2/B3：聊天页 answer 与桌宠交互卡共用的落收件箱逻辑。kind 从待答清单认，
+// 校验后插 pendingAnswers_ 等插件/桥取件。返回拒绝原因（空=已排队）。
+QString MainWindow::enqueueAnswer(const QString &workItemId, const QString &requestId,
+                                  const QJsonArray &answers, const QString &outcome) {
+    const WorkItem *item = nullptr;
+    for (const WorkItem &it : workItems_->items()) {
+        if (it.id == workItemId) {
+            item = &it;
+            break;
+        }
+    }
+    if (item == nullptr || requestId.isEmpty()) {
+        return QStringLiteral("应答缺字段（待办/requestId）");
+    }
+    if (!SessionDispatch::supportsPluginChannel(item->agentExe)) {
+        return QStringLiteral("该宿主暂不支持内联应答");
+    }
+    QString kind;
+    const QJsonArray reqs = pendingRequests_.value(item->sessionId);
+    for (const QJsonValue &v : reqs) {
+        const QJsonObject r = v.toObject();
+        if (r.value(QStringLiteral("id")).toString() == requestId) {
+            kind = r.value(QStringLiteral("kind")).toString();
+            break;
+        }
+    }
+    if (kind.isEmpty()) {
+        return QStringLiteral("这条请求已不在待答清单（可能刚被别处应答）");
+    }
+    if (kind == QStringLiteral("question") && answers.isEmpty()) {
+        return QStringLiteral("提问应答缺 answers");
+    }
+    if (kind == QStringLiteral("approval") &&
+        outcome != QStringLiteral("allowed-once") &&
+        outcome != QStringLiteral("rejected")) {
+        return QStringLiteral("授权应答 outcome 须为 allowed-once/rejected");
+    }
+    PendingAnswer pa;
+    pa.sessionId = item->sessionId;
+    pa.kind = kind;
+    pa.id = requestId;
+    pa.answers = answers;
+    pa.outcome = outcome;
+    pa.exe = item->agentExe;
+    pa.enqueuedAt = QDateTime::currentDateTimeUtc();
+    pendingAnswers_.insert(QUuid::createUuid().toString(QUuid::WithoutBraces), pa);
+    dispatchNotice_ = kind == QStringLiteral("approval")
+                          ? QStringLiteral("授权应答已排队，等宿主确认…")
+                          : QStringLiteral("应答已排队，等插件送 DSH…");
+    dispatchNoticeId_ = workItemId;
+    dispatchNoticeExe_ = item->agentExe;
+    appendEvent(QStringLiteral("status"), QString(), QString(),
+                QStringLiteral("内联应答已排队：会话 %1 %2 %3")
+                    .arg(item->sessionId.left(8), kind, requestId.left(12)),
+                0);
+    return QString();
+}
+
+// B2：插件 1.2s 轮询取走本 exe 的应答件（未取走的超时 60s 作废：插件没在跑，
+// 别攒一肚子旧答案）。下发后标 handed，ack 时核销。
+QString MainWindow::takeAnswerPending(const QString &exe) {
+    const QDateTime now = QDateTime::currentDateTimeUtc();
+    QJsonArray out;
+    for (auto it = pendingAnswers_.begin(); it != pendingAnswers_.end();) {
+        if (it->enqueuedAt.secsTo(now) > 60) {
+            dropAnswerPendingForSession(it->sessionId);
+            it = pendingAnswers_.erase(it);
+            continue;
+        }
+        if (!it->handed && (exe.isEmpty() ||
+                            it->exe.compare(exe, Qt::CaseInsensitive) == 0)) {
+            it->handed = true;
+            QJsonObject item{{QStringLiteral("answer_id"), it.key()},
+                             {QStringLiteral("session_id"), it->sessionId},
+                             {QStringLiteral("kind"), it->kind},
+                             {QStringLiteral("id"), it->id}};
+            if (it->kind == QStringLiteral("question")) {
+                item.insert(QStringLiteral("answers"), it->answers);
+            } else {
+                item.insert(QStringLiteral("outcome"), it->outcome);
+            }
+            out.append(item);
+        }
+        ++it;
+    }
+    return QString::fromUtf8(QJsonDocument(out).toJson(QJsonDocument::Compact));
+}
+
+// B2：插件应答回执。ok=true：从账上核销 + 推空刷新聊天页（卡片由插件的推送
+// 消失，这里只清自己这侧）；ok=false：保留请求展示并把原因写进事件流。
+void MainWindow::ackAnswer(const QString &answerId, bool ok, const QString &error) {
+    const auto it = pendingAnswers_.constFind(answerId);
+    if (it == pendingAnswers_.constEnd()) {
+        return;
+    }
+    const PendingAnswer pa = it.value();
+    if (ok) {
+        pendingAnswers_.remove(answerId);
+        appendEvent(QStringLiteral("status"), QString(), QString(),
+                    QStringLiteral("内联应答送达：会话 %1 %2")
+                        .arg(pa.sessionId.left(8), pa.kind), 0);
+    } else {
+        // 插件明确拒绝（不可达/无活表/界面没在线）：撤掉这条待发，避免反复
+        // 取件；请求卡留在 pendingRequests_（插件推送为准），聊天页仍可重试。
+        pendingAnswers_.remove(answerId);
+        appendEvent(QStringLiteral("error"), QString(), QString(),
+                    QStringLiteral("内联应答失败：%1").arg(error), 0);
+    }
+    if (workWeb_ != nullptr) {
+        workWeb_->refresh();
+    }
+}
+
+// 会话的插件账没了（推送空列表 = 卡片在 DSH 侧被关闭/已答）：连带清待发件。
+void MainWindow::dropAnswerPendingForSession(const QString &sessionId) {
+    for (auto it = pendingAnswers_.begin(); it != pendingAnswers_.end();) {
+        if (it->sessionId == sessionId) {
+            it = pendingAnswers_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
+QJsonObject MainWindow::chatStateFor(const QString &id, int offset, int limit) {
+    if (workItems_ == nullptr || id.isEmpty()) {
+        return QJsonObject();
+    }
+    const WorkItem *item = nullptr;
+    for (const WorkItem &it : workItems_->items()) {
+        if (it.id == id) {
+            item = &it;
+            break;
+        }
+    }
+    if (item == nullptr) {
+        return QJsonObject();
+    }
+    const SessionTranscript::Result r =
+        SessionTranscript::read(item->agentExe, item->sessionId, limit, offset);
+    return QJsonObject{
+        {QStringLiteral("id"), item->id},
+        {QStringLiteral("title"), item->title},
+        {QStringLiteral("agentExe"), item->agentExe},
+        {QStringLiteral("sessionId"), item->sessionId},
+        {QStringLiteral("stage"), item->stage},
+        {QStringLiteral("supported"), r.supported},
+        {QStringLiteral("error"), r.error},
+        {QStringLiteral("sessionTitle"), r.title},
+        {QStringLiteral("messages"), r.messages},
+        {QStringLiteral("total"), r.total},
+        {QStringLiteral("hasMore"), r.hasMore},
+        {QStringLiteral("offset"), offset},
+        // B1：该会话当前待答请求（DSH 插件推送），聊天页渲染；B2 带可答性。
+        {QStringLiteral("requests"), requestsWithAnswerable(item->sessionId)},
+    };
+}
+
+QJsonObject MainWindow::chatState() {
+    if (chatItemId_.isEmpty()) {
+        return QJsonObject();
+    }
+    const QJsonObject chat = chatStateFor(chatItemId_);
+    if (chat.isEmpty()) {
+        chatItemId_.clear();  // 待办被清掉了，退回列表
+        return QJsonObject();
+    }
+    return chat;
+}
+
+QString MainWindow::lanTranscript(const QString &id, int offset, int limit) {
+    const QJsonObject chat = chatStateFor(id, offset, limit);
+    if (chat.isEmpty()) {
+        return QString();  // 待办不存在 → 服务端回 404
+    }
+    return QString::fromUtf8(QJsonDocument(chat).toJson(QJsonDocument::Compact));
+}
+
+QJsonObject MainWindow::lanUpload(const QString &id, const QString &filename,
+                                  const QByteArray &data) {
+    const auto fail = [](int code, const QString &why) {
+        return QJsonObject{{QStringLiteral("ok"), false},
+                           {QStringLiteral("code"), code},
+                           {QStringLiteral("error"), why}};
+    };
+    if (workItems_ == nullptr || id.isEmpty()) {
+        return fail(404, QStringLiteral("待办不存在"));
+    }
+    const WorkItem *item = nullptr;
+    for (const WorkItem &it : workItems_->items()) {
+        if (it.id == id) {
+            item = &it;
+            break;
+        }
+    }
+    if (item == nullptr) {
+        return fail(404, QStringLiteral("待办不存在"));
+    }
+    if (data.isEmpty()) {
+        return fail(400, QStringLiteral("空文件"));
+    }
+    // 文件名 sanitize：只取 basename，去路径分隔符/控制字符，限长保扩展名。
+    // 服务端不信任客户端文件名，杜绝 ../ 穿越。
+    QString name = filename;
+    name.replace(QLatin1Char('\\'), QLatin1Char('/'));
+    const int slash = name.lastIndexOf(QLatin1Char('/'));
+    if (slash >= 0) {
+        name = name.mid(slash + 1);
+    }
+    name.remove(QRegularExpression(QStringLiteral("[\\x00-\\x1f]")));
+    name = name.trimmed();
+    if (name.isEmpty() || name == QLatin1String(".") || name == QLatin1String("..")) {
+        name = QStringLiteral("file");
+    }
+    if (name.size() > 120) {
+        name = name.right(120);
+    }
+    // 落盘：会话工作目录下 .agentrmc/inbox/<session>/（agent 天然可达）；
+    // 无项目退统一 uploads 目录。时间戳前缀防重名。
+    const QString sessionKey =
+        item->sessionId.isEmpty() ? item->id : item->sessionId;
+    QString dir;
+    if (!item->project.isEmpty()) {
+        dir = item->project + QStringLiteral("/.agentrmc/inbox/") + sessionKey;
+    } else {
+        dir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) +
+              QStringLiteral("/uploads/") + sessionKey;
+    }
+    const QString stamp = QDateTime::currentDateTimeUtc().toString(
+        QStringLiteral("yyyyMMdd-HHmmss-zzz"));
+    const QString path = dir + QLatin1Char('/') + stamp + QLatin1Char('-') + name;
+    if (!QDir().mkpath(dir)) {
+        return fail(400, QStringLiteral("无法创建上传目录"));
+    }
+    // 项目相对落盘时自动写 .agentrmc/.gitignore（忽略全部），防止上传文件被误
+    // 提交进项目仓库（用户 2026-11-14 顾虑仓库污染）；中央 uploads 目录无需。
+    if (!item->project.isEmpty()) {
+        const QString gi = item->project + QStringLiteral("/.agentrmc/.gitignore");
+        if (!QFileInfo::exists(gi)) {
+            QFile g(gi);
+            if (g.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+                g.write("*\n");
+                g.close();
+            }
+        }
+    }
+    QFile f(path);
+    if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        return fail(400, QStringLiteral("无法写入文件"));
+    }
+    if (f.write(data) != data.size()) {
+        f.close();
+        return fail(400, QStringLiteral("写入不完整"));
+    }
+    f.close();
+    const QString abs = QFileInfo(path).absoluteFilePath();
+    appendEvent(QStringLiteral("status"), QString(), QString(),
+                QString::fromUtf8("手机上传文件：%1").arg(name), 0);
+    return QJsonObject{{QStringLiteral("ok"), true},
+                       {QStringLiteral("code"), 200},
+                       {QStringLiteral("path"), abs},
+                       {QStringLiteral("name"), name}};
 }
 
 // 页面上的按钮/双击回到这里：全部转给既有实现，不在页面里另起一套状态机。
@@ -3236,6 +3749,38 @@ void MainWindow::handleWebAction(const QJsonObject &action) {
         upgradePlugins();
     } else if (cmd == QStringLiteral("sysBridge")) {
         showAgentBridgeDialog();
+    } else if (cmd == QStringLiteral("lanToggle")) {
+        // 手机访问开关：桌面专用命令，不在 LAN 白名单里（手机不能自己开自己）。
+        setLanEnabled(action.value(QStringLiteral("on")).toBool());
+    } else if (cmd == QStringLiteral("lanPair")) {
+        ensureLanServer();
+        lan_->beginPairing();
+    } else if (cmd == QStringLiteral("lanPairEnd")) {
+        if (lan_ != nullptr) {
+            lan_->endPairing();
+        }
+    } else if (cmd == QStringLiteral("lanRevoke")) {
+        if (lan_ != nullptr && lan_->revokeDevice(id)) {
+            appendEvent(QStringLiteral("status"), QString(), QString(),
+                        QString::fromUtf8("已吊销一台手机的访问令牌"), 0);
+        }
+    } else if (cmd == QStringLiteral("chatOpen")) {
+        // 点待办进聊天页：打开即最新一页（读取器从末尾切），旧记录上翻再加载。
+        chatItemId_ = id;
+        // 补一拍刷新：首帧定位若因 WebView2 布局晚落定落空，350ms 后再贴底。
+        QTimer::singleShot(350, this, [this] {
+            if (workWeb_ != nullptr) {
+                workWeb_->refresh();
+            }
+        });
+    } else if (cmd == QStringLiteral("chatBack")) {
+        chatItemId_.clear();
+    } else if (cmd == QStringLiteral("chatOlder")) {
+        // 上翻加载更旧的一页：单独推给页面（不进整份 state，避免重排列表）。
+        if (workWeb_ != nullptr) {
+            const int offset = action.value(QStringLiteral("offset")).toInt(0);
+            workWeb_->pushChat(chatStateFor(id, offset, 50));
+        }
     } else if (cmd == QStringLiteral("keyScene")) {
         if (keymapPage_ != nullptr) {
             keymapPage_->webSetPinned(action.value(QStringLiteral("name")).toString());
@@ -3466,6 +4011,19 @@ void MainWindow::handleWebAction(const QJsonObject &action) {
                             QStringLiteral("定向派发未发：%1").arg(reason), 0);
             }
             refreshWorkItems();
+        } else if (cmd == QStringLiteral("answer")) {
+            // B2/B3：聊天页内联应答（提问 answers / 授权 outcome），落收件箱。
+            const QString why = enqueueAnswer(
+                id, action.value(QStringLiteral("requestId")).toString(),
+                action.value(QStringLiteral("answers")).toArray(),
+                action.value(QStringLiteral("outcome")).toString());
+            if (!why.isEmpty()) {
+                dispatchNotice_ = why;
+                dispatchNoticeId_ = id;
+                appendEvent(QStringLiteral("error"), QString(), QString(),
+                            QStringLiteral("内联应答未提交：%1").arg(why), 0);
+            }
+            refreshWorkItems();
         }
     }
     if (workWeb_ != nullptr) {
@@ -3594,9 +4152,17 @@ QWidget *MainWindow::buildSystemPage() {
         "顺便看各家装没装、进程里跑的是哪一版。"));
     connect(connectAgent, &QPushButton::clicked, this,
             &MainWindow::showAgentBridgeDialog);
+    auto *lanBtn = new QPushButton(QString::fromUtf8("手机访问"));
+    lanBtn->setObjectName("ghostSmall");
+    lanBtn->setCursor(Qt::PointingHandCursor);
+    lanBtn->setToolTip(QString::fromUtf8(
+        "局域网手机遥控：开关、配对码、已配对设备。\n"
+        "默认关闭；开启后手机浏览器扫码或输入配对码即可访问。"));
+    connect(lanBtn, &QPushButton::clicked, this, &MainWindow::showLanDialog);
     actions->addWidget(refresh);
     actions->addWidget(connectAgent);
     actions->addWidget(pluginUpgrade_);
+    actions->addWidget(lanBtn);
     actions->addWidget(openDir);
     actions->addStretch(1);
     cl->addLayout(actions);
@@ -3604,6 +4170,133 @@ QWidget *MainWindow::buildSystemPage() {
     lay->addWidget(card);
     refreshSystemPage();
     return page;
+}
+
+// Qt 回退页（WebView2 运行库缺失时）的手机访问入口：开关 + 网址 + 配对码 +
+// 设备吊销。外壳版系统页有同款卡片且带二维码；这里配对码给纯文本手动输入。
+void MainWindow::showLanDialog() {
+    auto *dialog = new QDialog(this);
+    dialog->setWindowTitle(QString::fromUtf8("手机访问"));
+    dialog->setAttribute(Qt::WA_DeleteOnClose);
+    dialog->setMinimumWidth(440);
+    auto *lay = new QVBoxLayout(dialog);
+    lay->setSpacing(8);
+
+    auto *toggle = new QCheckBox(
+        QString::fromUtf8("启用手机访问（局域网 Web，端口 45916）"));
+    lay->addWidget(toggle);
+    auto *hint = new QLabel(QString::fromUtf8(
+        "手机和电脑连同一个 Wi-Fi，用手机浏览器打开下面的网址并输入配对码。\n"
+        "默认关闭；开启后局域网里的设备也要先配对才能访问，可随时吊销。"));
+    hint->setObjectName("muted");
+    hint->setWordWrap(true);
+    lay->addWidget(hint);
+    auto *urls = new QLabel;
+    urls->setObjectName("muted");
+    urls->setWordWrap(true);
+    urls->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    lay->addWidget(urls);
+    auto *pairRow = new QHBoxLayout;
+    auto *pairBtn = new QPushButton;
+    pairBtn->setObjectName("ghostSmall");
+    pairRow->addWidget(pairBtn);
+    auto *codeLabel = new QLabel;
+    codeLabel->setObjectName("muted");
+    codeLabel->setWordWrap(true);
+    codeLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    pairRow->addWidget(codeLabel, 1);
+    lay->addLayout(pairRow);
+    auto *devTitle = new QLabel(QString::fromUtf8("已配对设备"));
+    devTitle->setObjectName("cardTitle");
+    lay->addWidget(devTitle);
+    auto *devBox = new QVBoxLayout;
+    lay->addLayout(devBox);
+    auto *closeBtn = new QPushButton(QString::fromUtf8("关闭"));
+    closeBtn->setObjectName("ghostSmall");
+    connect(closeBtn, &QPushButton::clicked, dialog, &QDialog::close);
+    lay->addWidget(closeBtn);
+
+    auto refresh = std::make_shared<std::function<void()>>();
+    *refresh = [this, toggle, urls, pairBtn, codeLabel, devBox, refresh] {
+        const QJsonObject lan = lanState();
+        const bool enabled = lan.value(QStringLiteral("enabled")).toBool();
+        const bool running = lan.value(QStringLiteral("running")).toBool();
+        const QSignalBlocker block(toggle);
+        toggle->setChecked(enabled);
+        QStringList urlTexts;
+        const QJsonArray urlArray = lan.value(QStringLiteral("urls")).toArray();
+        for (const QJsonValue &value : urlArray) {
+            urlTexts << value.toString();
+        }
+        urls->setText(running
+                          ? urlTexts.join(QLatin1Char('\n'))
+                          : enabled ? QString::fromUtf8(
+                                          "启动失败：端口被占用，关闭后重开试试")
+                                    : QString::fromUtf8("未开启"));
+        const QJsonObject pairing =
+            lan.value(QStringLiteral("pairing")).toObject();
+        const bool active = pairing.value(QStringLiteral("active")).toBool();
+        pairBtn->setText(active ? QString::fromUtf8("收起配对码")
+                                : QString::fromUtf8("显示配对码"));
+        pairBtn->setEnabled(enabled && running);
+        codeLabel->setText(
+            active ? QString::fromUtf8("配对码：%1（10 分钟内有效）")
+                         .arg(pairing.value(QStringLiteral("code")).toString())
+                 : QString());
+        QLayoutItem *item;
+        while ((item = devBox->takeAt(0)) != nullptr) {
+            if (item->widget() != nullptr) {
+                item->widget()->deleteLater();
+            }
+            delete item;
+        }
+        const QJsonArray devices =
+            lan.value(QStringLiteral("devices")).toArray();
+        if (devices.isEmpty()) {
+            auto *none = new QLabel(QString::fromUtf8("还没有配对过的手机"));
+            none->setObjectName("muted");
+            devBox->addWidget(none);
+        }
+        for (const QJsonValue &value : devices) {
+            const QJsonObject device = value.toObject();
+            auto *row = new QWidget;
+            auto *rl = new QHBoxLayout(row);
+            rl->setContentsMargins(0, 0, 0, 0);
+            auto *name = new QLabel(
+                device.value(QStringLiteral("name")).toString());
+            rl->addWidget(name, 1);
+            auto *revoke = new QPushButton(QString::fromUtf8("吊销"));
+            revoke->setObjectName("ghostSmall");
+            const QString id = device.value(QStringLiteral("id")).toString();
+            connect(revoke, &QPushButton::clicked, this,
+                    [this, id, refresh] {
+                        if (lan_ != nullptr) {
+                            lan_->revokeDevice(id);
+                        }
+                        (*refresh)();
+                    });
+            rl->addWidget(revoke);
+            devBox->addWidget(row);
+        }
+    };
+    connect(toggle, &QCheckBox::toggled, this, [this, refresh](bool on) {
+        setLanEnabled(on);
+        (*refresh)();
+    });
+    connect(pairBtn, &QPushButton::clicked, this, [this, refresh] {
+        const bool active =
+            lan_ != nullptr &&
+            lan_->pairingInfo().value(QStringLiteral("active")).toBool();
+        if (active) {
+            lan_->endPairing();
+        } else {
+            ensureLanServer();
+            lan_->beginPairing();
+        }
+        (*refresh)();
+    });
+    (*refresh)();
+    dialog->show();
 }
 
 namespace {

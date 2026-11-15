@@ -2,6 +2,7 @@
 // 覆盖：/notify 全字段与默认文案、raise 透传、/speak 正常与缺参、/state、错路径 404。
 #include <QCoreApplication>
 #include <QHostAddress>
+#include <QJsonArray>
 #include <QJsonObject>
 #include <QTcpSocket>
 #include <QTimer>
@@ -23,6 +24,13 @@ struct Notice {
 
 Notice lastNotice;
 bool ok = true;
+// B1：/requests 路由把插件推送的待答请求原样交给 handler。
+QJsonObject lastRequests;
+bool requestsGot = false;
+// B2：/request-answer/pending 与 /request-answer/ack。
+QString answerProviderExe = QStringLiteral("<unset>");
+QJsonObject lastAnswerAck;
+bool answerAckGot = false;
 // 默认走真端口；本机装着 AgentRMC 时端口被占，测试可以指一个空闲端口跑。
 quint16 testPort = AgentBridge::kPort;
 
@@ -148,6 +156,20 @@ int main(int argc, char **argv) {
     bridge.setStateProvider([] {
         return QString::fromUtf8(R"({"pet_visible":false,"listening":false})");
     });
+    // B1：/requests 处理器（状态在 namespace 作用域）。
+    bridge.setRequestsHandler([](const QJsonObject &payload) {
+        lastRequests = payload;
+        requestsGot = true;
+    });
+    bridge.setAnswerPendingProvider([](const QString &exe) {
+        answerProviderExe = exe;
+        return QStringLiteral("[]");
+    });
+    bridge.setAnswerAckHandler([](const QJsonObject &payload) {
+        lastAnswerAck = payload;
+        answerAckGot = true;
+        return true;
+    });
     QObject::connect(&bridge, &AgentBridge::notify,
                      [](const QString &kind, const QString &title,
                         const QString &message, const QString &raise) {
@@ -270,12 +292,48 @@ int main(int argc, char **argv) {
                                                                                         expectNotice(Notice{true, "speak", "ZCode", "curl 式"}, resp);
                                                                                     },
                                                                                     [&] {
-                                                                                        runCommandTests(app, bridge, [] {
+                                                                                                                                                                                 request(app,
+                                                                                             withLength("POST /requests HTTP/1.1\r\n",
+                                                                                                 R"({"exe":"DeepSeek Harness.exe","session_id":"session-x","requests":[{"kind":"approval","id":"a1","toolName":"Bash"}]})"),
+                                                                                             [&](const QByteArray &resp) {
+                                                                                                 expectStatus("HTTP/1.1 204", resp);
+                                                                                                 if (!requestsGot ||
+                                                                                                     lastRequests.value("session_id").toString() != "session-x" ||
+                                                                                                     lastRequests.value("requests").toArray().size() != 1) {
+                                                                                                     fail("requests handler payload", resp);
+                                                                                                 }
+                                                                                             },
+                                                                                             [&] {
+request(app,
+    "GET /request-answer/pending?exe=DeepSeek%20Harness.exe HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n",
+    [&](const QByteArray &resp) {
+        expectStatus("HTTP/1.1 200", resp);
+        if (!resp.contains("[]") ||
+            answerProviderExe != "DeepSeek Harness.exe") {
+            fail("answer pending provider exe", resp);
+        }
+    },
+    [&] {
+request(app,
+    withLength("POST /request-answer/ack HTTP/1.1\r\n",
+        R"({"answer_id":"ans-1","ok":true})"),
+    [&](const QByteArray &resp) {
+        expectStatus("HTTP/1.1 204", resp);
+        if (!answerAckGot ||
+            lastAnswerAck.value("answer_id").toString() != "ans-1") {
+            fail("answer ack handler payload", resp);
+        }
+    },
+    [&] {
+runCommandTests(app, bridge, [] {
                                                                                             // 正面通过标记：原来只在失败时打印，空输出分不清「全过」和「没跑完」。
                                                                                             std::printf(ok ? "ALL PASS bridge\n" : "FAIL bridge\n");
                                                                                             std::fflush(stdout);
                                                                                             QCoreApplication::exit(ok ? 0 : 1);
                                                                                         });
+                                                                                     });
+                                                                                     });
+                                                                                     });
                                                                                     });
                                                                         });
                                                             });

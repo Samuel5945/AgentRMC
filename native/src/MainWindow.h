@@ -33,6 +33,7 @@ class QTimer;
 class QToolButton;
 class QWidget;
 class AgentBridge;
+class LanWebServer;
 class InputEngine;
 class WorkWebView;
 class AppPage;
@@ -94,6 +95,34 @@ private:
     void openWorkItem(const QString &id);
     // WebView2 外壳：推一份完整状态过去，收回来的动作在这里分发。
     QString webShellState();
+    // 局域网手机遥控（M1）：/m/state 的裁剪版状态（work/health/events/theme/
+    // dispatch/meta），与外壳同一份数据源，不下发系统/按键等重交互页。
+    QString lanShellState();
+    // 聊天页：点待办进会话记录（电脑外壳与手机共用 SessionTranscript 读取器，
+    // 打开即最新一页，旧记录往上翻按页加载）。chatState 给外壳，lanTranscript
+    // 给 /m/transcript?id=&offset=&limit=。
+    QJsonObject chatState();
+    QJsonObject chatStateFor(const QString &id, int offset = 0, int limit = 50);
+    // B2：给推送来的待答请求标可答性（只有 question 能内联应答）。
+    QJsonArray requestsWithAnswerable(const QString &sessionId) const;
+    // B2/B3：把一条应答落收件箱（聊天页 answer 与桌宠交互卡共用）。返回拒绝原因，
+    // 空串=已排队。kind 从待答清单认（question/approval），不信调用方自报。
+    QString enqueueAnswer(const QString &workItemId, const QString &requestId,
+                          const QJsonArray &answers, const QString &outcome);
+    // B2：手机/桌面下发的应答件收件箱（会话 id → 待取 answer 数组）与清理。
+    QString takeAnswerPending(const QString &exe);
+    void ackAnswer(const QString &answerId, bool ok, const QString &error);
+    void dropAnswerPendingForSession(const QString &sessionId);
+    QString lanTranscript(const QString &id, int offset = 0, int limit = 50);
+    // 手机传文件落盘：按待办 id 找到会话工作目录，存进 .agentrmc/inbox/<session>/，
+    // 返回 PC 绝对路径供派发文本引用（agent 按路径读）。
+    QJsonObject lanUpload(const QString &id, const QString &filename,
+                          const QByteArray &data);
+    // 系统页「手机访问」卡片的状态：开关/监听/URL/配对/设备（配对码只给桌面）。
+    QJsonObject lanState();
+    // 懒创建 LAN 服务并接好 provider/持久化；开关与恢复启动都走这里。
+    void ensureLanServer();
+    void setLanEnabled(bool on);
     // 待办队列 JSON（/work-items 与外壳共用）：在存储的原始字段上补会话身份
     // ——DSH 卡从宿主投影缓存读标题（session_title）、空项目回填工作目录。
     // 只补显示，不落盘：标题是宿主异步生成的，落盘会把旧值钉死。
@@ -157,6 +186,9 @@ private:
     void showGuide();
     // 一键接入：复制安装话术 + 各家装没装。新手引导的「联动插件」和系统页都走这里。
     void showAgentBridgeDialog();
+    // 手机访问（Qt 回退页用）：开关 + 网址 + 配对码 + 设备吊销。
+    // WebView2 外壳的系统页有同款卡片（带二维码），这里给纯文本配对码。
+    void showLanDialog();
     // 直接跳到「使用引导 → 接入 AI Agent」那一节（弹窗里的「详细说明」）。
     void openPluginGuide();
     void toggleListening();
@@ -199,6 +231,25 @@ private:
     // ZCode 派发 turn 的回复正文（会话 id → 回复）：stop hook 落卡时若已知
     // 回复，直接用正文替代通用收尾文案。
     QHash<QString, QString> dispatchReplyBySession_;
+    // B1：DSH 插件推送的会话当前待答请求（会话 id → requests 数组），聊天页只读
+    // 展示。内存账，插件变化即推、定时重推；不落盘。
+    QHash<QString, QJsonArray> pendingRequests_;
+    // B2：插件推送心跳（exe 小写 → 最近一次 /requests 推送时刻）。15s 内到过账
+    // 视为插件在线，聊天页的提问卡才给点选应答。
+    QHash<QString, QDateTime> pluginSeenAt_;
+    // B2：手机/桌面下发的应答件（answer_id → {sessionId,kind,id,answers,outcome,exe}）。
+    // 插件 1.2s 轮询取件 → 远程面/Web UI 应答 → ack 落账。内存账，超时未取作废。
+    struct PendingAnswer {
+        QString sessionId;
+        QString kind;       // question / approval
+        QString id;         // callId / approvalId
+        QJsonArray answers; // question 的回答批次
+        QString outcome;    // approval 的结果（暂不启用）
+        QString exe;
+        QDateTime enqueuedAt;
+        bool handed = false;  // 已下发给插件，等 ack
+    };
+    QHash<QString, PendingAnswer> pendingAnswers_;
     // 右半区默认交给 WebView2 渲染（AGENTRMC_WORKWEB=0 或运行库缺失时回退 Qt 页签）。
     WorkWebView *workWeb_ = nullptr;
     // 外壳版事件流：Qt 侧 logList_ 只有合成好的文本，这里多存一份 kind，
@@ -282,6 +333,10 @@ private:
     QSystemTrayIcon *tray_ = nullptr;
     AgentBridge *bridge_ = nullptr;
     bool bridgeRequested_ = false;
+    // 局域网手机遥控口（默认关闭，系统页显式打开）；与桥双端口双信任区。
+    LanWebServer *lan_ = nullptr;
+    // 聊天页当前打开的待办 id（空＝没开）；读取缓存在 SessionTranscript 内部。
+    QString chatItemId_;
     QTimer *healthTimer_ = nullptr;
     QString spoolPath_;
     QDateTime startedAt_;

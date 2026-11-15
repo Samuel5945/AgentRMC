@@ -806,7 +806,25 @@ QString LanWebServer::mobileHtml() const {
    border-radius:8px;background:var(--w6);border:1px solid var(--w14);
    line-height:1.5;word-break:break-word}
  .acts{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
+ .acts.single{margin-top:8px;justify-content:flex-end}
  .acts .btn{flex:1 1 0;min-width:0}
+ .icobtn{min-width:44px;height:40px;padding:0 12px;font-size:16px;
+   border-radius:10px;border:1px solid var(--w18);background:var(--w6);
+   color:var(--text-dim)}
+ .icobtn:active{background:var(--w10)}
+ .hbtn{min-height:30px;padding:4px 10px;font-size:13px;border-radius:8px;
+   border:1px solid var(--w18);background:var(--w6);color:var(--text-dim)}
+ .hbtn.on{background:var(--accent);border-color:var(--accent);color:var(--on-accent)}
+ .card.msel{border-color:var(--accent);background:var(--w10)}
+ .chk{width:24px;height:24px;border-radius:7px;border:2px solid var(--w18);
+   flex:0 0 auto;display:flex;align-items:center;justify-content:center;
+   font-size:14px;color:var(--on-accent)}
+ .chk.on{background:var(--accent);border-color:var(--accent)}
+ #batchBar{position:sticky;bottom:0;display:flex;gap:8px;align-items:center;
+   padding:10px 4px;background:var(--surface);border-top:1px solid var(--w18);
+   margin-top:6px}
+ #batchBar .btn{flex:1 1 auto;min-height:40px}
+ #batchBar .where{flex:0 0 auto}
  .btn{min-height:44px;border:1px solid var(--w18);background:var(--w6);
    color:var(--text-dim);font-size:14px;border-radius:10px;padding:8px 14px}
  .btn:active{background:var(--w10)}
@@ -915,12 +933,18 @@ QString LanWebServer::mobileHtml() const {
   <span class="logo">A</span><span class="brand">AgentRMC</span>
   <span class="dot" id="netDot"></span>
   <span class="spacer"></span>
+  <button class="hbtn" id="multiSw">多选</button>
   <span class="pill" id="listenPill">未监听</span>
  </div>
  <div id="offline" hidden>连接不上电脑，正在重试…</div>
  <div id="pages">
   <div id="pwork" class="page">
    <div id="list" class="scroll"></div>
+   <div id="batchBar" hidden>
+    <span id="batchCount" class="where"></span>
+    <button class="btn primary" id="batchAck">✓ 标为已处理</button>
+    <button class="btn" id="batchCancel">取消</button>
+   </div>
    <div id="empty" class="empty" hidden>
     <h3>没有需要你处理的事</h3>
     <p>Agent 等你确认、或任务做完时，这里会自动出现一条。<br>喊你靠电脑桌宠的语音；这一页开着时自动刷新。</p>
@@ -1108,16 +1132,24 @@ function card(it){
  // 点卡片进聊天页（打开即最新记录）；按钮各自阻止冒泡。
  el.onclick=()=>openChat(it.id);
  if(notice){const n=document.createElement('div');n.className='notice';n.textContent=notice;el.append(n);}
- const acts=document.createElement('div');acts.className='acts';
- const open=document.createElement('button');open.className='btn';
- open.textContent=zcodeNotice?'聚焦 ZCode':'回到 Agent';
- open.title='在电脑上打开对应会话';
+ // 多选模式：勾选块替代操作按钮，点卡片 = 勾选/取消。
+ if(MULTI.on){
+  const chk=document.createElement('div');
+  chk.className='chk'+(MULTI.sel.has(it.id)?' on':'');
+  chk.textContent=MULTI.sel.has(it.id)?'✓':'';
+  el.onclick=(e)=>{e.stopPropagation();
+    if(MULTI.sel.has(it.id)) MULTI.sel.delete(it.id); else MULTI.sel.add(it.id);
+    renderWork();};
+  el.append(chk);
+  return el;
+ }
+ // 单选态只留一个「回到 Agent」小按钮（图标化；ZCode 派发通知态变聚焦）。
+ // 长按 500ms 直接进多选并勾上这一条（头部「多选」开关是另一条路）。
+ const acts=document.createElement('div');acts.className='acts single';
+ const open=document.createElement('button');open.className='icobtn';
+ open.textContent='↗';open.title='在电脑上回到这个 Agent';
  open.onclick=(e)=>{e.stopPropagation();act({cmd:zcodeNotice?'raiseZcode':'open',id:it.id});};
- const ack=document.createElement('button');ack.className='btn primary';
- ack.textContent='标为已处理';
- ack.onclick=(e)=>{e.stopPropagation();act({cmd:'ack',id:it.id});};
- acts.append(open,ack);
- // 派发统一在聊天页的输入框做（点卡片即进聊天）；卡片只留两个均分按钮。
+ acts.append(open);
  // ZCode 通知态的「重启」是配套动作，保留。
  if(zcodeNotice){
   const rs=document.createElement('button');rs.className='btn warn';
@@ -1126,6 +1158,31 @@ function card(it){
   acts.append(rs);
  }
  el.append(acts);
+ // 左滑标记已处理：横向位移过阈值直接销账（销账后下轮刷新自然消失）。
+ // 长按进多选：按住不动 500ms 触发，手指挪动（滑动）即取消计时；
+ // 触发后紧跟的 click（touchend 合成）要吞掉，别顺手进了聊天页。
+ let sx=0,sy=0,lpTimer=null,lpFired=false;
+ const cancelLp=()=>{if(lpTimer){clearTimeout(lpTimer);lpTimer=null;}};
+ el.addEventListener('touchstart',(e)=>{const t=e.touches[0];sx=t.clientX;sy=t.clientY;
+  lpFired=false;
+  lpTimer=setTimeout(()=>{lpFired=true;MULTI.on=true;
+   if(!MULTI.sel.has(it.id)) MULTI.sel.add(it.id);
+   renderWork();},500);},{passive:true});
+ el.addEventListener('touchmove',(e)=>{
+  const t=e.touches[0];const dx=t.clientX-sx;const dy=t.clientY-sy;
+  if(Math.abs(dx)>10||Math.abs(dy)>10) cancelLp();
+  if(Math.abs(dx)>Math.abs(dy)&&dx<0){el.style.transform='translateX('+dx+'px)';
+   el.style.opacity=String(Math.max(.35,1+dx/220));}
+ },{passive:true});
+ el.addEventListener('touchend',(e)=>{
+  cancelLp();
+  const t=e.changedTouches[0];const dx=t.clientX-sx;const dy=t.clientY-sy;
+  el.style.transform='';el.style.opacity='';
+  if(dx<-56&&Math.abs(dx)>Math.abs(dy)*1.2){SWIPE_ACK=it.id;act({cmd:'ack',id:it.id});}
+ },{passive:true});
+ el.addEventListener('click',(e)=>{
+  if(lpFired){e.stopPropagation();e.preventDefault();lpFired=false;}
+ },true);
  return el;
 }
 // ---------- 聊天页：点卡片进入，打开即最新，旧记录上翻按页加载 ----------
@@ -1376,17 +1433,32 @@ $('chatList').addEventListener('scroll',()=>{
   fetchTranscript(chatMsgs.length,'older');
  }
 });
+$('multiSw').onclick=()=>{MULTI.on=!MULTI.on;MULTI.sel.clear();
+ $('multiSw').textContent=MULTI.on?'完成':'多选';
+ $('multiSw').classList.toggle('on',MULTI.on);renderWork();};
+$('batchAck').onclick=()=>{MULTI.sel.forEach(id=>act({cmd:'ack',id}));
+ MULTI.sel.clear();MULTI.on=false;renderWork();};
+$('batchCancel').onclick=()=>{MULTI.on=false;MULTI.sel.clear();renderWork();};
+
 function renderWork(){
  const items=sortedItems();
- const sig=JSON.stringify(items)+'|'+JSON.stringify((STATE||{}).dispatch||{});
+ const sig=JSON.stringify(items)+'|'+JSON.stringify((STATE||{}).dispatch||{})+
+   '|'+(MULTI.on?'m'+MULTI.sel.size:'')+'|'+(SWIPE_ACK||'');
  const ae=document.activeElement;
  // 正在打字时不重排：2.5s 一轮的刷新不能把输入焦点冲掉。
  if(ae&&(ae.tagName==='TEXTAREA'||ae.tagName==='INPUT')) return;
  if(sig===lastSig) return;
  lastSig=sig;
+ const bar=$('batchBar');
+ bar.hidden=!(MULTI.on);
+ if(MULTI.on){
+  $('batchCount').textContent='已选 '+MULTI.sel.size+' 条';
+  $('batchAck').disabled=MULTI.sel.size===0;
+ }
  const list=$('list');const keep=list.scrollTop;
  list.replaceChildren();
  WHERE_HITS={};
+ SWIPE_ACK='';  // 销账那条已经不在 items 里，暂存清掉
  items.forEach(it=>{const k=(it.title||'')+'|'+where(it);
   WHERE_HITS[k]=(WHERE_HITS[k]||0)+1;});
  items.forEach(it=>list.append(card(it)));
@@ -1432,6 +1504,10 @@ function renderStatus(){
  note.textContent='手机页开着时约 2.5 秒刷新一次；锁屏/后台不推送（局域网 http 的浏览器限制），喊你靠电脑桌宠语音。派回会话与电脑端同一条通道：证明不了目标会话就不发，草稿会留在输入框。';
  body.append(note);
 }
+// 多选批量销账 + 左滑销账的暂存：MULTI.sel 存待办 id，SWIPE_ACK 是刚被
+// 左滑销掉的那条（下一轮刷新前先别重排）。
+const MULTI={on:false,sel:new Set()};
+let SWIPE_ACK='';
 function render(){
  const work=(STATE||{}).work||{};
  const att=work.attention_count||0;
@@ -1442,6 +1518,7 @@ function render(){
  const inChat=!!chatId;
  $('tabbar').hidden=inChat;
  $('pchat').hidden=!inChat;
+ $('multiSw').hidden=inChat||tab!==0;  // 多选开关只在待办页有意义
  $('pwork').hidden=inChat||tab!==0;
  $('pevents').hidden=inChat||tab!==1;
  $('pstatus').hidden=inChat||tab!==2;

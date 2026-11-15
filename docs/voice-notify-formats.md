@@ -27,6 +27,23 @@ Cordis bundle）、OpenSquilla（`plugins/opensquilla-bridge` 外部 WebSocket �
   Qoder、Qoder CN、ZCode、WorkBuddy、WorkBuddy AI；OpenSquilla 只认显式声明
   （`AGENTRMC_NOTIFY_HOST` 或 `.opensquilla` 路径）。
 
+### 派发与浮层收敛（2026-11-15 现状）
+
+- **推卡事件不出普通气泡**：凡推了 `/requests` 请求卡的事件（ZCode 授权/选
+  方案、DSH 授权/选方案、OpenSquilla 审批/澄清），notify 带 `"bubble":false`——
+  卡片本身就是那条通知，不弹第二个同锚位浮层。没推卡的（stop/普通授权/不推卡
+  的宿主）照旧出气泡。
+- **ZCode 的 AskUserQuestion 派两条事件**（PreToolUse(question) 与
+  PermissionRequest，谁先不定）：两条都接手推同一张只读卡（同 tool_use_id 去重，
+  谁先到谁推），permission 先到不再出现「只有气泡、卡被去重吞掉」。
+- **授权卡不抢前台**：决策式授权的 notify 带 `"no_raise":true`（人在桌宠上
+  作答）；选方案卡照旧拉起宿主（答案得回宿主窗口给）。
+- **语音只读最紧急**：紧急度 授权/出错=3 > 选方案/回话=2 > 完成=1；忙碌窗口
+  （~8s）内同级/更低只冒气泡不插话，更紧急的 stop 打断插播。
+- **stop 回复随 payload 上行**：bridge/DSH 的 stop 带 `"reply"`（hook 自己
+  512KB 尾部读），原生端不再主线程全文读 transcript（大会话曾把事件循环卡到
+  桌宠卡弹不出来）。
+
 ## 一、自动提醒文案对照（按事件）
 
 | 事件 | agentrmc-bridge 系（Qoder / Qoder CN / ZCode / WorkBuddy 两家） | DeepSeek Harness | OpenSquilla 桥 | ZCode 手工旧脚本 |

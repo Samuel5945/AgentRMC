@@ -615,9 +615,17 @@ QString WorkWebView::htmlFor(const QString &stateJson) const {
  .list{flex:1 1 auto;min-height:0;overflow-y:auto;margin-top:6px;
    scrollbar-width:none}
  .list::-webkit-scrollbar{width:0;height:0}
- .row{position:relative;padding:8px 12px 8px 21px;cursor:default}
+ .row{position:relative;padding:8px 96px 8px 21px;cursor:default}
  .row:hover{background:var(--w6)}
  .row.sel{background:var(--a36)}
+ .row.msel{background:var(--w10);border-radius:8px}
+ .rowacts{position:absolute;right:10px;top:50%;transform:translateY(-50%);
+   display:flex;gap:6px}
+ .icobtn{width:32px;height:32px;border-radius:8px;border:1px solid var(--w18);
+   background:var(--w6);color:var(--text-dim);font-size:15px;line-height:1;
+   padding:0;cursor:pointer}
+ .icobtn:hover{background:var(--a36);color:var(--text)}
+ .icobtn.ack:hover{background:var(--ok);border-color:var(--ok);color:#fff}
  .bar{position:absolute;left:9px;top:12px;width:3px;height:32px;border-radius:2px}
  .l1{display:flex;align-items:baseline;gap:8px;white-space:nowrap;overflow:hidden}
  .name{font-weight:600;font-size:var(--f12);color:var(--text)}
@@ -946,6 +954,7 @@ QString WorkWebView::htmlFor(const QString &stateJson) const {
     <span id="chips"></span>
     <span class="spacer"></span>
     <select id="filter"></select>
+    <button class="ghost" id="multi" title="勾选多条待办，一次性标为已处理">多选</button>
     <button class="ghost" id="clear">清空已完成</button>
   </div>
   <div class="health" id="health"></div>
@@ -1063,8 +1072,7 @@ QString WorkWebView::htmlFor(const QString &stateJson) const {
 </div>
 <div class="foot" id="foot" style="flex-wrap:wrap">
   <span class="hint" id="hint"></span>
-  <button class="btn" id="raise" disabled>回到 Agent</button>
-  <button class="btn primary" id="ack" disabled>标为已处理</button>
+  <button class="btn primary" id="ackBatch" hidden>✓ 标为已处理</button>
   <span id="dpWrap" style="display:none;width:100%;gap:8px;align-items:center;
     margin-top:6px;flex-wrap:wrap">
     <input id="dpText" placeholder="派回这条会话的指令（Enter 或按钮发送，回执到了转进行中）"
@@ -1096,6 +1104,7 @@ let HEADER = {}, LEFT = {};
 const LABEL = {'needs-me':'等你处理','review':'待验收','working':'进行中'};
 const TABS = ['待我处理','事件流','系统','按键映射','应用','使用引导'];
 let activeTab = 0, selected = '', filterExe = '';
+let multiMode = false; const multiSel = new Set();  // 待办多选批量销账
 const $ = id => document.getElementById(id);
 // CSS 变量名 → token 名，和 style.qss 里的 @token@ 同名；缺项保持 :root 的兜底值。
 const TOKENS = {'--bg':'bg','--surface':'card.bg','--surface2':'card.bg2',
@@ -1248,7 +1257,8 @@ function renderHealth(){
 }
 function row(it){
   const el=document.createElement('div');
-  el.className='row'+(it.id===selected?' sel':'');
+  el.className='row'+(it.id===selected?' sel':'')+
+    (multiMode&&multiSel.has(it.id)?' msel':'');
   const bar=document.createElement('div');bar.className='bar';
   bar.style.background=stageColor(it);
   const l1=document.createElement('div');l1.className='l1';
@@ -1261,12 +1271,35 @@ function row(it){
   l1.append(name,stage,wh,time);
   const l2=document.createElement('div');l2.className='l2';l2.textContent=it.message||'';
   el.append(bar,l1,l2);
-  // 单击进聊天页（打开即最新记录）；双击仍是回到 Agent。
-  el.addEventListener('click',()=>{selected=it.id;postObj({cmd:'chatOpen',id:it.id});});
+  // 单击进聊天页（打开即最新记录）；双击仍是回到 Agent。多选模式下点击改为
+  // 勾选/取消，进聊天先点「完成」退回单选。
+  el.addEventListener('click',()=>{
+    if(multiMode){
+      if(multiSel.has(it.id)) multiSel.delete(it.id); else multiSel.add(it.id);
+      el.classList.toggle('msel',multiSel.has(it.id));
+      renderFoot();
+      return;
+    }
+    selected=it.id;postObj({cmd:'chatOpen',id:it.id});
+  });
   el.addEventListener('dblclick',()=>{
+    if(multiMode) return;
     const dd=STATE.dispatch||{};
     post((dd.noticeId===it.id && dd.noticeExe==='ZCode.exe')?'raiseZcode':'open',it.id);
   });
+  // 行内图标按钮：回到 Agent / 标为已处理（去文字，图标 + tooltip）。
+  // stopPropagation：别把这次点击变成进聊天页。
+  const acts=document.createElement('div');acts.className='rowacts';
+  const raiseB=document.createElement('button');raiseB.className='icobtn';
+  raiseB.textContent='↗';raiseB.title='回到 Agent（没开着会先启动宿主）';
+  raiseB.onclick=(e)=>{e.stopPropagation();
+    const dd=STATE.dispatch||{};
+    post((dd.noticeId===it.id && dd.noticeExe==='ZCode.exe')?'raiseZcode':'open',it.id);};
+  const ackB=document.createElement('button');ackB.className='icobtn ack';
+  ackB.textContent='✓';ackB.title='标为已处理';
+  ackB.onclick=(e)=>{e.stopPropagation();post('ack',it.id);};
+  acts.append(raiseB,ackB);
+  el.append(acts);
   return el;
 }
 function renderFoot(){
@@ -1274,18 +1307,26 @@ function renderFoot(){
   const d=STATE.dispatch||{};
   // 通知只跟当次派发的那张卡走，别把上一条的拒绝原因挂在新选中的卡下面。
   const notice=(d.noticeId && d.noticeId!==selected)?'':(d.notice||'');
-  // ZCode 派发通知态：对话区要重启才可见，「回到 Agent」只会把人送进陈旧
-  // 视图还顺手销账——藏掉按钮，Enter/双击改走聚焦不销账（raiseZcode）。
+  // ZCode 派发通知态：对话区要重启才可见，行内「回到 Agent」改走聚焦不销账
+  // （raiseZcode），Enter/双击同款。
   const zcodeNotice=!!(selItem && notice && d.noticeExe==='ZCode.exe');
   window.ZC_NOTICE=zcodeNotice;
+  $('multi').textContent=multiMode?'完成':'多选';
+  if(multiMode){
+    // 多选模式：批量销账，派发输入框藏掉（点待办进聊天后再派发）。
+    $('hint').textContent='勾选待办，一次性标为已处理 · 已选 '+multiSel.size+' 条';
+    $('hint').style.color='';
+    $('ackBatch').hidden=multiSel.size===0;
+    $('ackBatch').textContent='✓ 标为已处理（'+multiSel.size+'）';
+    $('dpWrap').style.display='none';
+    return;
+  }
+  $('ackBatch').hidden=true;
   // 通知顶掉键位提示占头行：状态比键位值钱，别两行都挤在脚部。
   $('hint').textContent=notice||(selItem
-    ? 'Enter 回到 Agent · Delete 标为已处理'
-    : '选中一条待办后可操作 · 双击打开 Agent（没开着会先启动）并销账');
+    ? '点击待办进聊天 · 行内图标回到/销账 · Delete 标为已处理'
+    : '点击待办进聊天页 · 双击回到 Agent（没开着会先启动）并销账');
   $('hint').style.color=notice?'var(--text-dim)':'';
-  $('raise').disabled=!selItem;
-  $('raise').style.display=zcodeNotice?'none':'';
-  $('ack').disabled=!selItem;
   // 定向派发只对有会话身份且宿主已接通道（Qoder 系）的待办开放。
   const dpOk=!!(selItem && selItem.session_id &&
     ((STATE.dispatch||{}).supported||[]).includes(selItem.agent_exe));
@@ -1773,8 +1814,9 @@ $('chatBtn').onclick=()=>postObj({cmd:'chatToggle',on:!((LEFT.vpage||{}).chatMod
 $('ttsBtn').onclick=()=>postObj({cmd:'tts'});
 $('clear').onclick=()=>post('clear');
 $('evClear').onclick=()=>post('clearLog');
-$('raise').onclick=()=>post('open',selected);
-$('ack').onclick=()=>post('ack',selected);
+$('multi').onclick=()=>{multiMode=!multiMode;multiSel.clear();render();};
+$('ackBatch').onclick=()=>{multiSel.forEach(id=>post('ack',id));
+  multiSel.clear();render();};
 function sendDispatch(){
   const t=$('dpText').value.trim();
   if(!t||!selected) return;
@@ -1804,7 +1846,11 @@ document.addEventListener('keydown',e=>{
   if(STATE.chat&&STATE.chat.id) return;  // 聊天页有自己的 Enter 发送
   if(e.target && e.target.tagName==='INPUT') return;
   if(e.key==='Enter'){post(window.ZC_NOTICE?'raiseZcode':'open',selected);}
-  else if(e.key==='Delete'){post('ack',selected);}
+  else if(e.key==='Delete'){
+    if(multiMode){multiSel.forEach(id=>post('ack',id));
+      multiSel.clear();render();}
+    else post('ack',selected);
+  }
 });
 // ---------- 聊天页：打开即最新，旧记录上翻按页加载 ----------
 let CHAT=null,chatMsgs=[],chatIds=new Set(),chatTotal=0,chatHasMore=false,

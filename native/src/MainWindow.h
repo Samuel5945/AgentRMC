@@ -150,7 +150,7 @@ private:
                       const QString &message, const QString &raise,
                       const QString &sessionId, const QString &project,
                       const QString &eventId, const QString &pluginVersion,
-                      const QString &speech, bool replay);
+                      const QString &speech, bool noRaise, bool replay);
     // POST /work-items/update 的处理：宿主 Agent 用 MCP 工具 pet_work_update
     // 主动汇报 progress / blocked / ready。progress 只落工单；blocked / ready
     // 是要人动手的，走和 hook 同一条提醒通道（气泡 + 语音）。
@@ -158,10 +158,12 @@ private:
     // 只喊人、不写工单：事件流一行 + 记宿主 + 气泡/语音/抢前台。
     // planChoice=「等选方案」类提醒；eventId（hook 的 tool_use_id）按弹窗去重，
     // 没有 id 的老宿主才退回按会话 180s 压。blocked 自带节流，传 planChoice=false。
+    // noRaise（决策式授权 hook 的 "no_raise":true）= 出声但不抢前台。
     void announceWork(const QString &kind, const QString &title,
                       const QString &message, const QString &spoken,
                       const QString &raise, const QString &sessionId,
-                      bool planChoice, const QString &eventId = QString());
+                      bool planChoice, const QString &eventId = QString(),
+                      bool noRaise = false);
     // 联动插件版本对账：{"bundled":内置版,"hosts":[每家 name/installed/loaded/
     // enabled/running/state],"bridges":[不走插件包的外部接入]}。loaded 是 hook
     // 报上来的「此刻真在跑的那版」，注册表只能说盘上装成哪版。需要动手的成因

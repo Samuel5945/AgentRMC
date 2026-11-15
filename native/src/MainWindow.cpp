@@ -1116,10 +1116,10 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
                        const QString &sessionId, const QString &project,
                        const QString &eventId,
                        const QString &pluginVersion,
-                       const QString &speech) {
+                       const QString &speech, bool noRaise) {
                     handleNotify(kind, title, message, raise, sessionId,
                                  project, eventId, pluginVersion, speech,
-                                 false);
+                                 noRaise, false);
                 });
         if (!bridge->start()) {
             appendEvent(QStringLiteral("error"), QString(), QString(),
@@ -2700,7 +2700,7 @@ int MainWindow::importSpool() {
                          obj.value(QStringLiteral("event_id")).toString(),
                          obj.value(QStringLiteral("plugin_version")).toString(),
                          obj.value(QStringLiteral("speech")).toString(),
-                         true);
+                         false, true);
             ++imported;
         }
         input.close();
@@ -2804,7 +2804,8 @@ void MainWindow::handleNotify(const QString &kind, const QString &title,
                               const QString &sessionId,
                               const QString &project, const QString &eventId,
                               const QString &pluginVersion,
-                              const QString &speech, bool replay) {
+                              const QString &speech, bool noRaise,
+                              bool replay) {
     lastEventAt_ = QDateTime::currentDateTimeUtc();
     // 念的和显示的不是一句：speech 是插件给的短语音文案（带宿主名、不含工具名和
     // 路径），没带就退回念 message。气泡和工单始终用 message。
@@ -2915,7 +2916,7 @@ void MainWindow::handleNotify(const QString &kind, const QString &title,
         kind == QStringLiteral("question") ||
         message.startsWith(QString::fromUtf8("等你选方案"));
     announceWork(kind, title, message, spoken, raise, sessionId, planChoice,
-                 eventId);
+                 eventId, noRaise);
 }
 
 // 只负责「喊人」：事件流一行、记宿主、气泡 + 语音 + 要不要抢前台。
@@ -2924,7 +2925,8 @@ void MainWindow::handleNotify(const QString &kind, const QString &title,
 void MainWindow::announceWork(const QString &kind, const QString &title,
                               const QString &message, const QString &spoken,
                               const QString &raise, const QString &sessionId,
-                              bool planChoice, const QString &eventId) {
+                              bool planChoice, const QString &eventId,
+                              bool noRaise) {
     appendEvent(QStringLiteral("status"), QString(), QString(),
                 spoken.isEmpty() || spoken == message
                     ? title + QStringLiteral(" · ") + message
@@ -3014,7 +3016,12 @@ void MainWindow::announceWork(const QString &kind, const QString &title,
             tray_->showMessage(title, message,
                                QSystemTrayIcon::Information, 6000);
         }
-        AgentWindow::raise(raise);
+        // noRaise（决策式授权 hook 带 "no_raise":true）：出声提醒保留，
+        // 不抢前台——人正盯着桌宠卡片作答，把宿主拽回来等于把卡片作废。
+        // 超时后宿主自己弹窗、自己抢焦点，不需要这里代劳。
+        if (!noRaise) {
+            AgentWindow::raise(raise);
+        }
         return;
     }
     if (kind == QStringLiteral("speak")) {

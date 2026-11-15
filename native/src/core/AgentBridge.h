@@ -100,11 +100,13 @@ signals:
     //   的读数——注册表只说明盘上装成哪版，宿主不重启还是旧代码。
     // speech：只给语音念的短文案（带宿主名，不含工具名/路径）。空就退回念 message。
     //   气泡和工单仍用 message——「等你确认 Bash：D:\…」看着有用，念出来是噪音。
+    // noRaise：payload 带 "no_raise":true（决策式授权 hook）→ 出声提醒保留，
+    //   但不把宿主窗口拽到前台——人正盯着桌宠卡片作答，拽走等于把卡片作废。
     void notify(const QString &kind, const QString &title,
                 const QString &message, const QString &raise,
                 const QString &sessionId, const QString &project,
                 const QString &eventId, const QString &pluginVersion,
-                const QString &speech);
+                const QString &speech, bool noRaise);
 
 private:
     void onConnected();

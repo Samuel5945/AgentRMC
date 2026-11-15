@@ -367,9 +367,11 @@ void AgentBridge::onReadable(QTcpSocket *socket) {
         obj.value(QStringLiteral("plugin_version")).toString().trimmed();
     // 语音专用短文案，可选；缺省时原生端退回念 message。
     const QString speech = obj.value(QStringLiteral("speech")).toString().trimmed();
+    // 决策式授权 hook 带 "no_raise":true：提醒照常，不抢前台。
+    const bool noRaise = obj.value(QStringLiteral("no_raise")).toBool();
     finish(socket, "204 No Content");
     emit notify(kind, title, message, raise, sessionId, project, eventId,
-                pluginVersion, speech);
+                pluginVersion, speech, noRaise);
 }
 
 void AgentBridge::finish(QTcpSocket *socket, const char *status,

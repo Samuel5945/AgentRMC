@@ -51,8 +51,12 @@ async function runApprovalInlineFlow(bridge, p) {
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const decision = { result: null };
   try {
-    // 1) 照常提醒：出声 + 落工单（session_id 必带，桌宠卡片应答靠它挂工单）
-    const notifyPayload = { event: 'permission', title: p.agent, message: p.message };
+    // 1) 照常提醒：出声 + 落工单（session_id 必带，桌宠卡片应答靠它挂工单）。
+    //    no_raise=true：卡片能代答，别把宿主拽到前台把卡片作废；超时后宿主
+    //    自己弹窗抢焦点，不需要这里代劳。
+    const notifyPayload = {
+      event: 'permission', title: p.agent, message: p.message, no_raise: true,
+    };
     if (p.speech) notifyPayload.speech = p.speech;
     if (p.sid) notifyPayload.session_id = p.sid;
     if (p.project) notifyPayload.project = p.project;

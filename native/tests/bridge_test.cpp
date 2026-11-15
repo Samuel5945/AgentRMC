@@ -20,6 +20,7 @@ struct Notice {
     QString title;
     QString message;
     QString raise;
+    bool noRaise = false;  // 决策式授权 hook 的 "no_raise":true 透传断言用
 };
 
 Notice lastNotice;
@@ -174,12 +175,19 @@ int main(int argc, char **argv) {
     });
     QObject::connect(&bridge, &AgentBridge::notify,
                      [](const QString &kind, const QString &title,
-                        const QString &message, const QString &raise) {
+                        const QString &message, const QString &raise,
+                        const QString &sessionId, const QString &project,
+                        const QString &eventId, const QString &pluginVersion,
+                        const QString &speech, bool noRaise) {
+                         Q_UNUSED(sessionId); Q_UNUSED(project);
+                         Q_UNUSED(eventId); Q_UNUSED(pluginVersion);
+                         Q_UNUSED(speech);
                          lastNotice.got = true;
                          lastNotice.kind = kind;
                          lastNotice.title = title;
                          lastNotice.message = message;
                          lastNotice.raise = raise;
+                         lastNotice.noRaise = noRaise;
                      });
     QTimer::singleShot(15000, &app, [] {
         std::fprintf(stderr, "FAIL: 超时\n");
@@ -223,15 +231,29 @@ int main(int argc, char **argv) {
                 expectNotice(Notice{true, "stop", "Qoder", "任务完成：AgentRMC",
                                     "Qoder CN.exe"},
                              resp);
+                if (lastNotice.noRaise) {
+                    std::fprintf(stderr,
+                                 "FAIL: no_raise missing must stay false\n");
+                    ok = false;
+                }
             },
             [&] {
                 request(app,
                         withLength("POST /notify HTTP/1.1\r\n",
-                                   R"({"event":"permission"})"),
+                                   R"({"event":"permission","no_raise":true})"),
                         [&](const QByteArray &resp) {
+                            // expectNotice 末尾清账（lastNotice = Notice{}），
+                            // noRaise 得先取出来再断言。
+                            const bool noRaiseSeen = lastNotice.noRaise;
                             expectNotice(Notice{true, "permission", "ZCode",
                                                 "等你确认一个操作"},
                                          resp);
+                            if (!noRaiseSeen) {
+                                std::fprintf(
+                                    stderr,
+                                    "FAIL: no_raise did not reach signal\n");
+                                ok = false;
+                            }
                         },
                         [&] {
                             request(app,

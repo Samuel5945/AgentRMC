@@ -1005,6 +1005,8 @@ async function runDecisionFlowChecks() {
       assert.strictEqual(notify.body.event, 'permission');
       assert.strictEqual(notify.body.session_id, 'dec-1');
       assert.strictEqual(notify.body.raise, 'ZCode.exe');
+      assert.strictEqual(notify.body.no_raise, true,
+        '决策流程不抢前台（卡片能代答，拽走宿主等于作废卡片）');
       const push = posts.find(
         (c) => c.path === '/requests' && c.body.requests.length === 1);
       assert.ok(push, '必须推可答卡');

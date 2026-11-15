@@ -220,6 +220,27 @@ function questionHash(hook) {
   return (h >>> 0).toString(36);
 }
 
+// 「等你选方案」带上题干：气泡只有一句泛话时，人得切回宿主窗口才知道要拍什么板；
+// 而 PreToolUse / PermissionRequest 的 tool_input 里就有题干。各宿主给的形状不一
+// （questions 数组 / question 对象 / 裸字符串），提取不到就退回泛化文案。
+// 前缀「等你选方案」保持不动：原生端按它认「选方案」语义（180s 迟到去重也认它）。
+const QUESTION_STEM_CAP = 40;
+function questionStem(input) {
+  let q = input && input.questions;
+  if (!Array.isArray(q) || !q.length) q = input && input.question;
+  const first = Array.isArray(q) ? q[0] : q;
+  let text = '';
+  if (typeof first === 'string') text = first;
+  else if (first && typeof first === 'object') {
+    text = String(first.question || first.prompt || first.title || '');
+  }
+  text = text.replace(/\s+/g, ' ').trim();
+  if (!text) return '';
+  return text.length > QUESTION_STEM_CAP
+    ? text.slice(0, QUESTION_STEM_CAP - 1) + '…'
+    : text;
+}
+
 // 「等你选方案」的三层账本：
 //   tool:<tool_use_id>       有 id 时按弹窗认（最准）
 //   solo:<scope>:<hash>      没 id 时按「会话 + 问题内容」认（不吞同会话下一题）
@@ -502,7 +523,8 @@ process.stdin.on('end', () => {
     // （实测 55f51dbc 会话 7 问只喊了 2 声，中间 5 题静默卡住）。
     if (questionAlreadyAsked(hook)) process.exit(0);
     outEvent = 'permission';
-    message = '等你选方案';
+    const stem = questionStem(input);
+    message = stem ? `等你选方案：${stem}` : '等你选方案';
     speech = `${agent} 在等你选方案`;
     rememberAsked(hook);
   } else if (event === 'permission') {
@@ -514,7 +536,8 @@ process.stdin.on('end', () => {
       // PermissionRequest 若也跟一条，后到的按同一弹窗去重吞掉——与 question
       // 分支共用同一套账本，两边谁先到谁喊，另一条静默。
       if (questionAlreadyAsked(hook)) process.exit(0);
-      message = '等你选方案';
+      const stem = questionStem(input);
+      message = stem ? `等你选方案：${stem}` : '等你选方案';
       speech = `${agent} 在等你选方案`;
       rememberAsked(hook);
     } else {

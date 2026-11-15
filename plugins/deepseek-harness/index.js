@@ -287,6 +287,23 @@ export function apply(ctx, rawConfig) {
       requests: byId ? [...byId.values()] : [],
     }).catch(() => {});  // 原生没开就静默；变化/定时再推
   }
+  // 「等你选方案」带上题干：气泡只有一句泛话时，人得切回窗口才知道要拍什么板。
+  // 题干就在 ask_user_question 的 arguments.questions[0].question 里，截 40 字；
+  // 解析不出（形状变了 / arguments 不是合法 JSON）退回泛化文案。
+  const QUESTION_STEM_CAP = 40;
+  function questionStemOf(data) {
+    let args = data && data.arguments;
+    if (typeof args === 'string') {
+      try { args = JSON.parse(args); } catch { return ''; }
+    }
+    const qs = args && Array.isArray(args.questions) ? args.questions : [];
+    const text = String((qs[0] && (qs[0].question || qs[0].header)) || '')
+      .replace(/\s+/g, ' ').trim();
+    if (!text) return '';
+    return text.length > QUESTION_STEM_CAP
+      ? text.slice(0, QUESTION_STEM_CAP - 1) + '…'
+      : text;
+  }
   function trackRequest(session, type, data) {
     const sid = sessionIdOf(session);
     if (!sid) return;
@@ -575,11 +592,13 @@ export function apply(ctx, rawConfig) {
             (type === 'tool/call' || type === 'tool/ptc-dispatch') &&
             data.name === 'ask_user_question';
           if (!isQuestionCall) return;
+          const stem = questionStemOf(data);
           send({
             event: 'question',
-            // 与原版一致：气泡和语音都只说「等你选方案」。问题原文可能很长，
-            // 塞进来既念不完也看不清——用户看屏幕上的卡片就行。
-            message: '等你选方案',
+            // 气泡带题干（截 40 字）让人不用切窗口就知道要拍什么板；语音仍只带
+            // 宿主名。前缀「等你选方案」保持不动：原生端按它认「选方案」语义
+            // （180s 迟到去重也认它），冒号后的题干不影响判定。
+            message: stem ? '等你选方案：' + stem : '等你选方案',
             speech: config.agentName + ' 在等你选方案',
             sessionId: sessionIdOf(session),
             project: projectFor(session),
@@ -743,8 +762,8 @@ export function apply(ctx, rawConfig) {
       name: 'pet_notify',
       description:
         '在 AgentRMC 桌宠上冒一条气泡提示（不出声）。适合长任务的阶段进度、' +
-        '中途发现的重要信息等非阻塞提醒；等授权、等选方案、等你回话（回复以问句收尾）、' +
-        '一轮结束的提醒由插件自动发，' +
+        '中途发现的重要信息等非阻塞提醒；等授权、等选方案、等你回话、' +
+        '任务完成的提醒由插件自动发，' +
         '不要用这个工具重复发。message 一句话以内，太长的信息用户来不及看。',
       properties: {
         message: { type: 'string', description: '气泡文案，一句话以内' },
@@ -809,6 +828,7 @@ export function apply(ctx, rawConfig) {
         'progress（正在干）、blocked（卡住了，等人）、ready（做完了，等验收）。' +
         'progress 只更新工单不出声；blocked 和 ready 会冒气泡并用语音提醒用户' +
         '（要人动手的事必须喊到），所以别拿它们当进度条刷——阶段真的变了才报。' +
+        '回合以问句收尾等用户回答时不用发 blocked——插件会按回复收尾的问句自动提醒。' +
         '想额外说一句话请用 pet_speak。',
       properties: {
         stage: {

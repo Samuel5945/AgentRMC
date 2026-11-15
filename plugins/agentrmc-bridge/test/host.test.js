@@ -400,6 +400,46 @@ check('question→permission: 选方案提醒按 permission 发出，宿主各�
   assert.strictEqual(cn.payload.raise, 'Qoder CN.exe');
 });
 
+// —— 「等你选方案」带题干：气泡让人不用切窗口就知道要拍什么板。前缀保持
+//    「等你选方案」不动（原生端按它认选方案语义），冒号后接第一道题的题干，
+//    截 40 字；提取不出（没给 tool_input / 形状不认识）退回泛化文案。
+check('question 带题干: 取第一道题，前缀仍以「等你选方案」开头', () => {
+  const r = dryRun(installInto('.qoder'), 'question', JSON.stringify({
+    session_id: 'qs1',
+    tool_name: 'AskUserQuestion',
+    tool_input: {
+      questions: [{ question: '升 minor 出 0.5 还是先修完出 0.4.2？', options: [] }],
+    },
+  }));
+  assert.strictEqual(r.payload.message, '等你选方案：升 minor 出 0.5 还是先修完出 0.4.2？');
+  assert.ok(r.payload.message.startsWith('等你选方案'));
+  assert.strictEqual(r.payload.speech, 'Qoder 在等你选方案');
+});
+
+check('question 带题干: 超长截到 40 字；形状不认识退回泛化文案', () => {
+  const long = dryRun(installInto('.qoder'), 'question', JSON.stringify({
+    session_id: 'qs2',
+    tool_name: 'AskUserQuestion',
+    tool_input: { questions: [{ question: '长'.repeat(50) }] },
+  }));
+  assert.strictEqual(long.payload.message, `等你选方案：${'长'.repeat(39)}…`);
+  const alien = dryRun(installInto('.qoder'), 'question', JSON.stringify({
+    session_id: 'qs3',
+    tool_name: 'AskUserQuestion',
+    tool_input: { nothing_like_a_question: true },
+  }));
+  assert.strictEqual(alien.payload.message, '等你选方案');
+});
+
+check('permission 带题干: AskUserQuestion 走 PermissionRequest 时同样带题干', () => {
+  const r = dryRun(installInto('.qoder'), 'permission', JSON.stringify({
+    session_id: 'qs4',
+    tool_name: 'AskUserQuestion',
+    tool_input: { question: { question: '打包带不带 lean？' } },
+  }));
+  assert.strictEqual(r.payload.message, '等你选方案：打包带不带 lean？');
+});
+
 // —— WorkBuddy 的准点信号：Notification(permission_prompt) 在弹窗出现那一刻派发。
 //    同一件事它的 PreToolUse 要等用户答完才跑（实测 11:24:38 弹出、11:30:19 才 spawn），
 //    所以 prompt 先喊，迟到的 question 必须被 asked-question.json 挡掉。
@@ -579,7 +619,7 @@ check('无 tool_use_id: 同会话两道不同内容的问题都喊，重复同�
     session_id: 'noid-content', tool_name: 'AskUserQuestion',
     tool_input: { questions: [{ question: '用 A 还是 B？' }] },
   }));
-  assert.strictEqual(q1.payload.message, '等你选方案');
+  assert.strictEqual(q1.payload.message, '等你选方案：用 A 还是 B？');
   const q2 = dryRun(s, 'question', JSON.stringify({
     session_id: 'noid-content', tool_name: 'AskUserQuestion',
     tool_input: { questions: [{ question: '要不要顺便改文档？' }] },
@@ -615,7 +655,7 @@ check('一有一无 tool_use_id: 同一道题只喊一声（两个方向）', ()
     session_id: 'asym-1', tool_name: 'AskUserQuestion',
     tool_use_id: 'asym-a', tool_input: input,
   }));
-  assert.strictEqual(withId.payload.message, '等你选方案');
+  assert.strictEqual(withId.payload.message, '等你选方案：部署到测试环境还是生产？');
   assert.strictEqual(dryRun(s, 'permission', JSON.stringify({
     session_id: 'asym-1', tool_name: 'AskUserQuestion', tool_input: input,
   })), null, '带 id 先喊，无 id 回声要吞');
@@ -623,7 +663,7 @@ check('一有一无 tool_use_id: 同一道题只喊一声（两个方向）', ()
   const noIdFirst = dryRun(s, 'permission', JSON.stringify({
     session_id: 'asym-2', tool_name: 'AskUserQuestion', tool_input: input,
   }));
-  assert.strictEqual(noIdFirst.payload.message, '等你选方案');
+  assert.strictEqual(noIdFirst.payload.message, '等你选方案：部署到测试环境还是生产？');
   assert.strictEqual(dryRun(s, 'question', JSON.stringify({
     session_id: 'asym-2', tool_name: 'AskUserQuestion',
     tool_use_id: 'asym-b', tool_input: input,

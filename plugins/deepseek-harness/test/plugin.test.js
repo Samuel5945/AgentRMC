@@ -219,6 +219,23 @@ await check('tool/call ask_user_question: 发 question（等你选方案）', as
   assert.strictEqual(payload.session_id, 'sess-1');
 });
 
+await check('tool/call ask_user_question: 气泡带题干，前缀保持「等你选方案」', async () => {
+  clearSpool();
+  emit('session/event', SESSION, {
+    type: 'tool/call',
+    data: {
+      name: 'ask_user_question', callId: 'call-stem',
+      arguments: JSON.stringify({
+        questions: [{ question: '升 minor 出 0.5 还是先修完出 0.4.2？', options: [] }],
+      }),
+    },
+  });
+  const lines = await waitForSpool(1);
+  assert.strictEqual(lines[0].message, '等你选方案：升 minor 出 0.5 还是先修完出 0.4.2？');
+  assert.ok(lines[0].message.startsWith('等你选方案'),
+    '前缀被改会丢原生端的选方案语义（180s 迟到去重）');
+});
+
 await check('session/event 其它事件静默: 普通过具调用不刷屏', async () => {
   clearSpool();
   emit('session/event', SESSION, { type: 'tool/call', data: { name: 'pwsh', callId: 'c9' } });

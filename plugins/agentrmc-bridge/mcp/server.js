@@ -87,7 +87,7 @@ const TOOLS = [
     name: "pet_notify",
     description:
       "在 AgentRMC 桌宠上冒一条气泡提示（不出声）。适合长任务的阶段进度、" +
-      "中途发现的重要信息等非阻塞提醒；等授权、等选方案、等你回话（回复以问句收尾）、" +
+      "中途发现的重要信息等非阻塞提醒；等授权、等选方案、等你回话、" +
       "任务完成、模型出错的提醒由 hook 自动发，" +
       "不要用这个工具重复发。message 一句话以内，太长的信息用户来不及看。",
     inputSchema: {
@@ -130,6 +130,7 @@ const TOOLS = [
       "progress（正在干）、blocked（卡住了，等人）、ready（做完了，等验收）。" +
       "progress 只更新工单不出声；blocked 和 ready 会冒气泡并用语音提醒用户" +
       "（要人动手的事必须喊到），所以别拿它们当进度条刷——阶段真的变了才报。" +
+      "回合以问句收尾等用户回答时不用发 blocked——hook 会按回复收尾的问句自动提醒。" +
       "想额外说一句话请用 pet_speak。",
     inputSchema: {
       type: "object",

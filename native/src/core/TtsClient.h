@@ -6,6 +6,8 @@
 #include <QString>
 #include <QVector>
 
+#include <memory>
+
 #include "core/AudioOut.h"
 
 class QJsonArray;
@@ -13,9 +15,9 @@ class QNetworkAccessManager;
 class QNetworkReply;
 class QTimer;
 
-// 通用 OpenAI 兼容 TTS 客户端：文本 → base64 wav，winmm 播放。
+// 通用 OpenAI 兼容 TTS 客户端：文本 → 流式 pcm16，winmm 边收边播。
 // 默认对准小米 MiMo（https://api.xiaomimimo.com/v1 + mimo-v2.5-tts），
-// base_url / model / key 全部可配，任何 OpenAI 兼容的 TTS 都能接。
+// base_url / model / key 全部可配；服务端不认 stream 时退回整段 base64 wav。
 // 输出设备可指定（AudioOut 按设备名走 waveOut）；空 = 系统默认（PlaySound）。
 // key 由用户自填（config.json 的 voice.tts.api_key 或环境变量
 // MIMO_API_KEY），不在代码里落任何 key。
@@ -46,6 +48,19 @@ private:
     void play(const QByteArray &wav);
     void onIdleTick();
 
+    // 一次请求的流式上下文：SSE 行缓冲 / 全量 PCM / 是否直接流进声卡。
+    struct StreamCtx {
+        QByteArray sse;
+        QByteArray raw;        // 非 SSE 响应（错误 JSON / 整段 wav）
+        QByteArray pcm;
+        bool sseMode = false;
+        bool ctypeChecked = false;
+        bool toOut = false;    // 首块时设备空闲：边收边播；否则攒完整段再排
+        int generation = 0;
+    };
+    void consumeStream(QNetworkReply *reply,
+                       const std::shared_ptr<StreamCtx> &ctx);
+
     QNetworkAccessManager *http_ = nullptr;
     QNetworkReply *inFlight_ = nullptr;  // stop() 要能掐掉在途请求
     bool enabled_ = true;
@@ -61,6 +76,5 @@ private:
     QString style_;
     QString outputDevice_;
     AudioOut audio_;
-    QByteArray playing_;  // 异步播放期间内存必须活着
     QTimer *idleTimer_ = nullptr;  // 100ms 轮询上一段播没播完，衔接下一句
 };

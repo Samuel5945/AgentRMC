@@ -97,9 +97,6 @@ QStringList AudioOut::deviceNames() {
 
 bool AudioOut::play(const QByteArray &wav, const QString &deviceName,
                     QString *error) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    stop();
-
     WavView view;
     if (!parseWav(wav, &view)) {
         if (error != nullptr) {
@@ -107,7 +104,35 @@ bool AudioOut::play(const QByteArray &wav, const QString &deviceName,
         }
         return false;
     }
-    if (waveOutOpen(&hwo_, UINT(resolveDevice(deviceName)), &view.wfx,
+    if (!beginStream(int(view.wfx.nSamplesPerSec), int(view.wfx.nChannels),
+                     deviceName, error)) {
+        return false;
+    }
+    if (!feed(QByteArray(view.data, int(view.size)))) {
+        stop();
+        if (error != nullptr) {
+            *error = QStringLiteral("音频写入失败");
+        }
+        return false;
+    }
+    finishStream();
+    return true;
+}
+
+bool AudioOut::beginStream(int sampleRate, int channels,
+                           const QString &deviceName, QString *error) {
+    // 先 join 旧线程再拿锁：drain 循环里要锁 mutex_，持锁 join 会死锁。
+    stop();
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    WAVEFORMATEX wfx = {};
+    wfx.wFormatTag = WAVE_FORMAT_PCM;
+    wfx.nChannels = WORD(channels);
+    wfx.nSamplesPerSec = DWORD(sampleRate);
+    wfx.wBitsPerSample = 16;
+    wfx.nBlockAlign = WORD(channels * 2);
+    wfx.nAvgBytesPerSec = DWORD(sampleRate * wfx.nBlockAlign);
+    if (waveOutOpen(&hwo_, UINT(resolveDevice(deviceName)), &wfx,
                     reinterpret_cast<DWORD_PTR>(doneEvent_), 0,
                     CALLBACK_EVENT) != MMSYSERR_NOERROR) {
         hwo_ = nullptr;
@@ -118,45 +143,73 @@ bool AudioOut::play(const QByteArray &wav, const QString &deviceName,
         }
         return false;
     }
-
-    buf_ = wav;  // view.data 指向这块内存，播放期间必须活着
-    ZeroMemory(&hdr_, sizeof(hdr_));
-    hdr_.lpData = const_cast<LPSTR>(view.data);
-    hdr_.dwBufferLength = view.size;
-    if (waveOutPrepareHeader(hwo_, &hdr_, sizeof(hdr_)) != MMSYSERR_NOERROR) {
-        waveOutClose(hwo_);
-        hwo_ = nullptr;
-        return false;
-    }
-
     stop_ = false;
+    finishing_ = false;
+    streaming_ = true;
     ResetEvent(doneEvent_);
-    if (waveOutWrite(hwo_, &hdr_, sizeof(hdr_)) != MMSYSERR_NOERROR) {
-        waveOutUnprepareHeader(hwo_, &hdr_, sizeof(hdr_));
-        waveOutClose(hwo_);
-        hwo_ = nullptr;
-        return false;
-    }
     playing_ = true;
     worker_ = std::thread([this] { drain(); });
     return true;
 }
 
+bool AudioOut::feed(const QByteArray &pcm) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!streaming_ || finishing_ || stop_ || pcm.isEmpty()) {
+        return false;
+    }
+    auto buf = std::make_unique<StreamBuf>();
+    buf->data = pcm;
+    buf->hdr.lpData = buf->data.data();
+    buf->hdr.dwBufferLength = DWORD(buf->data.size());
+    if (waveOutPrepareHeader(hwo_, &buf->hdr, sizeof(buf->hdr)) !=
+        MMSYSERR_NOERROR) {
+        return false;
+    }
+    if (waveOutWrite(hwo_, &buf->hdr, sizeof(buf->hdr)) != MMSYSERR_NOERROR) {
+        waveOutUnprepareHeader(hwo_, &buf->hdr, sizeof(buf->hdr));
+        return false;
+    }
+    bufs_.push_back(std::move(buf));
+    return true;
+}
+
+void AudioOut::finishStream() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!streaming_) {
+        return;
+    }
+    finishing_ = true;
+    SetEvent(doneEvent_);  // 一块都没喂就封口时，drain 靠这个醒来收尾
+}
+
 void AudioOut::drain() {
-    // 等播完（WOM_DONE 会触发事件）；stop 时先 reset 再等 unprepare 成功。
+    // 等播完（WOM_DONE 触发事件）；stop 时先 reset 再回收全部缓冲。
     for (;;) {
         WaitForSingleObject(doneEvent_, 400);
-        const MMRESULT result =
-            waveOutUnprepareHeader(hwo_, &hdr_, sizeof(hdr_));
-        if (result != WAVERR_STILLPLAYING) {
-            break;
+        bool end = false;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (stop_) {
+                waveOutReset(hwo_);
+            }
+            for (auto it = bufs_.begin(); it != bufs_.end();) {
+                if ((*it)->hdr.dwFlags & WHDR_DONE) {
+                    waveOutUnprepareHeader(hwo_, &(*it)->hdr,
+                                           sizeof((*it)->hdr));
+                    it = bufs_.erase(it);
+                } else {
+                    ++it;
+                }
+            }
+            end = stop_ || (finishing_ && bufs_.empty());
         }
-        if (stop_) {
-            waveOutReset(hwo_);
+        if (end) {
+            break;
         }
     }
     waveOutClose(hwo_);
     hwo_ = nullptr;
+    streaming_ = false;
     playing_ = false;
 }
 
@@ -166,6 +219,6 @@ void AudioOut::stop() {
     if (worker_.joinable()) {
         worker_.join();
     }
-    buf_.clear();
+    bufs_.clear();
     stop_ = false;
 }

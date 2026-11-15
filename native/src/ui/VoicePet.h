@@ -68,7 +68,8 @@ public:
     // （8s）内同级/更低只冒气泡不插话——只读最紧急的待办（用户 2026-11-15）；
     // 更紧急的 stop 打断当前播报插播。
     void speak(const QString &text, int durationMs = 0,
-               const QString &raiseExe = QString(), int priority = 1);
+               const QString &raiseExe = QString(), int priority = 1,
+               bool showBubble = true);
 
     // Agent 普通进度通知：只冒气泡不出声，别打断在放的东西（等确认走 speak）。
     void notify(const QString &text, const QString &raiseExe = QString());

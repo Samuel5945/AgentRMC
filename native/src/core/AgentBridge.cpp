@@ -373,9 +373,14 @@ void AgentBridge::onReadable(QTcpSocket *socket) {
     // "reply" 上来，原生端直接用，不再走 lastReply 主线程全文读（大会话会把
     // 事件循环卡住，/requests 推送跟着排队，桌宠卡弹不出来——2026-11-15 实测）。
     const QString reply = obj.value(QStringLiteral("reply")).toString().trimmed();
+    // bubble:false（ZCode 选方案只读卡流程）：不出普通气泡——卡片本身就是
+    // 那条通知（题干在卡上），气泡晚到/同锚位会把卡顶掉，用户实测要求合并。
+    const bool bubble = obj.contains(QStringLiteral("bubble"))
+                            ? obj.value(QStringLiteral("bubble")).toBool()
+                            : true;
     finish(socket, "204 No Content");
     emit notify(kind, title, message, raise, sessionId, project, eventId,
-                pluginVersion, speech, noRaise, reply);
+                pluginVersion, speech, noRaise, reply, bubble);
 }
 
 void AgentBridge::finish(QTcpSocket *socket, const char *status,

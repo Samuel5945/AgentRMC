@@ -935,12 +935,13 @@ void VoicePet::presentIfEnabled() {
 }
 
 void VoicePet::speak(const QString &text, int durationMs,
-                     const QString &raiseExe, int priority) {
+                     const QString &raiseExe, int priority, bool showBubble) {
     if (text.isEmpty()) {
         return;
     }
-    // 气泡只在桌宠可见时出；语音反馈是声音，桌宠收起也照说。
-    if (isVisible()) {
+    // 气泡只在桌宠可见时出；语音反馈是声音，桌宠收起也照说。showBubble=false
+    // （选方案只读卡流程）不出普通气泡：卡片本身就是那条通知。
+    if (isVisible() && showBubble) {
         bubbleOnly(text, durationMs, raiseExe);
     }
     if (tts_ == nullptr || !tts_->ready()) {

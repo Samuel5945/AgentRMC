@@ -145,12 +145,14 @@ function questionCardGate(input) {
     String(i.exe || '').toLowerCase() === 'zcode.exe';
 }
 
-// 选方案卡流程：照常提醒（气泡带题干）+ 推只读卡。返回 { pushed }。
+// 选方案卡流程：语音 + 推只读卡。返回 { pushed }。
+// bubble:false（用户 2026-11-15）：不出「等你选方案」普通气泡——卡片本身就是
+// 那条通知（题干在卡上），气泡同锚位晚到会把卡顶掉（实测卡只闪一下）。
 async function runQuestionCardFlow(bridge, p) {
   let pushed = false;
   try {
     const notifyPayload = {
-      event: 'permission', title: p.agent, message: p.message,
+      event: 'permission', title: p.agent, message: p.message, bubble: false,
     };
     if (p.speech) notifyPayload.speech = p.speech;
     if (p.sid) notifyPayload.session_id = p.sid;

@@ -1130,7 +1130,9 @@ async function runDecisionFlowChecks() {
       assert.strictEqual(req.questions[0].question, '出 0.5 还是 0.4.2？');
       assert.strictEqual(req.questions[0].options.length, 2);
       const notify = bridge.calls.find((c) => c.path === '/notify');
-      assert.ok(notify, '气泡照发');
+      assert.ok(notify, '通知照发（语音+待办）');
+      assert.strictEqual(notify.body.bubble, false,
+        '不出普通气泡：卡片本身就是「等你选方案」通知，同锚位气泡会顶掉卡');
       assert.strictEqual(notify.body.no_raise, undefined,
         '只读卡没有代答，桌宠这头照旧抢前台（答案在宿主窗口）');
     }],

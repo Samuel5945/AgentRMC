@@ -104,11 +104,14 @@ signals:
     //   但不把宿主窗口拽到前台——人正盯着桌宠卡片作答，拽走等于把卡片作废。
     // reply：bridge hook 的 stop 随 payload 带的回复第一句（非空时原生端直接
     //   用作待办卡文案，跳过 lastReply 主线程全文读）。
+    // bubble：payload 带 "bubble":false（ZCode 选方案只读卡流程）→ 不出普通
+    //   气泡，卡片本身就是那条通知；缺省 true。
     void notify(const QString &kind, const QString &title,
                 const QString &message, const QString &raise,
                 const QString &sessionId, const QString &project,
                 const QString &eventId, const QString &pluginVersion,
-                const QString &speech, bool noRaise, const QString &reply);
+                const QString &speech, bool noRaise, const QString &reply,
+                bool bubble);
 
 private:
     void onConnected();

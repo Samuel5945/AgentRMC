@@ -5,6 +5,8 @@
 #include <QJsonArray>
 #include <QRegularExpression>
 
+#include <cmath>
+
 namespace {
 
 int intValue(const QJsonObject &object, const QString &key, int fallback) {
@@ -458,6 +460,43 @@ QByteArray wavFromPcm16(const QByteArray &pcm, int sampleRate, int channels) {
     appendLe32(dataSize);
     wav.append(pcm);
     return wav;
+}
+
+QByteArray trimSilence(const QByteArray &pcm16, int sampleRate) {
+    const int rate = sampleRate > 0 ? sampleRate : 16000;
+    const int frameBytes = rate / 100 * 2;  // 10ms 一帧
+    if (frameBytes <= 0 || pcm16.size() < frameBytes) {
+        return pcm16;
+    }
+    const auto *samples = reinterpret_cast<const qint16 *>(pcm16.constData());
+    const int frameSamples = frameBytes / 2;
+    const int frames = pcm16.size() / frameBytes;
+    // -40dBFS：比「还在说话」的 0.02 低一档，轻辅音靠前后留垫保住。
+    constexpr double kFloor = 0.01;
+    int first = -1;
+    int last = -1;
+    for (int f = 0; f < frames; ++f) {
+        double sum = 0.0;
+        const qint16 *frame = samples + f * frameSamples;
+        for (int i = 0; i < frameSamples; ++i) {
+            const double v = frame[i] / 32768.0;
+            sum += v * v;
+        }
+        if (std::sqrt(sum / frameSamples) >= kFloor) {
+            if (first < 0) {
+                first = f;
+            }
+            last = f;
+        }
+    }
+    if (first < 0) {
+        // 全程没声：原样交给 ASR 报「没听清」，别误报「采样太短」。
+        return pcm16;
+    }
+    const int padBytes = rate / 5 * 2;  // 前后各 200ms
+    const int start = qMax(0, first * frameBytes - padBytes);
+    const int end = qMin(pcm16.size(), (last + 1) * frameBytes + padBytes);
+    return pcm16.mid(start, end - start);
 }
 
 QString cleanAsrText(const QString &text) {

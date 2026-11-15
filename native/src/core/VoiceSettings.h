@@ -106,4 +106,6 @@ bool qwen3Ready(const QString &dir, QString *convFrontend = nullptr,
 
 QByteArray wavFromPcm16(const QByteArray &pcm, int sampleRate,
                         int channels = 1);
+// 裁掉 PCM 头尾静音（10ms 帧 RMS 判定，前后各留 200ms 垫）；全程无声原样返回。
+QByteArray trimSilence(const QByteArray &pcm16, int sampleRate = 16000);
 QString cleanAsrText(const QString &text);

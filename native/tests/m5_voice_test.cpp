@@ -202,6 +202,25 @@ int main() {
     }
 
     {
+        // 静音裁剪：头尾各 500ms 静音 + 100ms 有声 → 前后各留 200ms 垫共 500ms。
+        QByteArray tone(3200, '\0');
+        auto *toneSamples = reinterpret_cast<qint16 *>(tone.data());
+        for (int i = 0; i < 1600; ++i) {
+            toneSamples[i] = 8000;
+        }
+        QByteArray pcm(16000, '\0');
+        pcm.append(tone);
+        pcm.append(QByteArray(16000, '\0'));
+        const QByteArray trimmed = trimSilence(pcm);
+        check(trimmed.size() == 16000, "trim keeps 200ms pads");
+        check(trimmed.indexOf(tone) >= 0, "trim keeps voiced part");
+        check(trimSilence(QByteArray(32000, '\0')).size() == 32000,
+              "all silence untouched");
+        check(trimSilence(tone).size() == tone.size(), "all voiced untouched");
+        check(trimSilence(QByteArray()).isEmpty(), "empty untouched");
+    }
+
+    {
         check(cleanAsrText("<|zh|><|NEUTRAL|>你好，世界<|end|>") ==
                   QString::fromUtf8("你好，世界"),
               "clean sensevoice tags");

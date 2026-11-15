@@ -450,7 +450,7 @@ void VoiceController::finishSession() {
         return;
     }
 
-    const QByteArray pcm = recorder_.stopCapture();
+    const QByteArray pcm = trimSilence(recorder_.stopCapture());
     if (!micAlwaysOn_) {
         // 蓝牙麦克风：说完立刻归还设备，耳机马上回音乐通道。
         recorder_.close();
@@ -589,7 +589,9 @@ void VoiceController::runCloudTranscription(const QByteArray &pcm) {
         setState(State::Idle, QStringLiteral("就绪"));
         return;
     }
-    const QByteArray wav = wavFromPcm16(pcm, options_.sampleRate);
+    // stopCapture 永远给 16k 单声道（to16kMono 写死），WAV 头不能跟可配的
+    // sample_rate 走，否则云端按假采样率解码，识别变速变调。
+    const QByteArray wav = wavFromPcm16(pcm, 16000);
     emit eventReady(QStringLiteral("voice"),
                     QStringLiteral("已上传 %1 KB · 云端转写中…")
                         .arg(AsrClient::sizeHint(wav)));

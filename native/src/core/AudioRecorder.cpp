@@ -144,6 +144,7 @@ void trimFront(QByteArray *data, int keepBytes) {
 
 struct AudioRecorder::Impl {
     HWAVEIN handle = nullptr;
+    HANDLE wakeEvent = nullptr;  // WIM_DATA 信号，替代定时轮询
     WAVEFORMATEX format{};
     WAVEHDR headers[kBufferCount]{};
     BYTE *buffers[kBufferCount]{};
@@ -323,6 +324,15 @@ bool AudioRecorder::open(QString *error) {
     }
     closeDevice();
 
+    // 自动复位事件：每录满一块 signaled 一次；醒来全量扫四块，信号合并不会丢数据。
+    impl_->wakeEvent = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+    if (impl_->wakeEvent == nullptr) {
+        if (error != nullptr) {
+            *error = QStringLiteral("创建录音事件失败");
+        }
+        return false;
+    }
+
     const std::vector<CaptureFormat> formats = {
         {16000, 1}, {44100, 1}, {48000, 1}, {44100, 2}, {48000, 2},
     };
@@ -351,7 +361,9 @@ bool AudioRecorder::open(QString *error) {
             format.nAvgBytesPerSec = DWORD(candidate.rate * format.nBlockAlign);
             HWAVEIN handle = nullptr;
             const MMRESULT result =
-                waveInOpen(&handle, device, &format, 0, 0, CALLBACK_NULL);
+                waveInOpen(&handle, device, &format,
+                           reinterpret_cast<DWORD_PTR>(impl_->wakeEvent), 0,
+                           CALLBACK_EVENT);
             if (result == MMSYSERR_NOERROR) {
                 impl_->handle = handle;
                 impl_->format = format;
@@ -368,6 +380,7 @@ bool AudioRecorder::open(QString *error) {
     }
 
     if (!opened) {
+        closeDevice();
         opened_ = MicChoice{};
         opened_.source = QStringLiteral("none");
         opened_.note = deviceName_.isEmpty()
@@ -452,6 +465,9 @@ void AudioRecorder::close() {
         closeDevice();
         return;
     }
+    if (impl_->wakeEvent != nullptr) {
+        SetEvent(impl_->wakeEvent);  // 叫醒等着的 poll 线程，别等超时
+    }
     if (thread_.joinable()) {
         thread_.join();
     }
@@ -507,6 +523,8 @@ QByteArray AudioRecorder::stopCapture(int *durationMs) {
 
 void AudioRecorder::pollLoop() {
     while (streaming_.load()) {
+        // 事件驱动：录满一块（50ms）才醒；100ms 超时只是兜底，不是轮询节拍。
+        WaitForSingleObject(impl_->wakeEvent, 100);
         for (int i = 0; i < kBufferCount && streaming_.load(); ++i) {
             WAVEHDR &header = impl_->headers[i];
             if ((header.dwFlags & WHDR_DONE) == 0 || impl_->consumed[i]) {
@@ -546,7 +564,6 @@ void AudioRecorder::pollLoop() {
                 impl_->consumed[i] = true;
             }
         }
-        std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
 }
 
@@ -567,5 +584,9 @@ void AudioRecorder::closeDevice() {
         }
         waveInClose(impl_->handle);
         impl_->handle = nullptr;
+    }
+    if (impl_->wakeEvent != nullptr) {
+        CloseHandle(impl_->wakeEvent);
+        impl_->wakeEvent = nullptr;
     }
 }

@@ -1120,6 +1120,16 @@ function sortedItems(){
    if(wa!==wb) return wa-wb;}
   return Date.parse(b.updated_at||0)-Date.parse(a.updated_at||0);});
 }
+// 回复正文开头常带「Agent名：」前缀（stop 提醒拼的），卡片标题已经是它，
+// 剥掉免得一张卡里同一名字出现两遍（用户 2026-11-16）。
+function stripAgentPrefix(msg,title){
+ const t=String(title||'');const s=String(msg||'');
+ if(!t) return s;
+ if(s.startsWith(t+'：')) return s.slice(t.length+1);
+ if(s.startsWith(t+': ')) return s.slice(t.length+2);
+ if(s.startsWith(t+':')) return s.slice(t.length+1);
+ return s;
+}
 function card(it){
  const d=(STATE||{}).dispatch||{};
  const notice=(d.noticeId===it.id)?(d.notice||''):'';
@@ -1135,7 +1145,8 @@ function card(it){
  time.textContent=hhmm(it.updated_at)+waitText(it);
  l1.append(name,stage,time);
  const wh=document.createElement('div');wh.className='where';wh.textContent=whereLabel(it);
- const msg=document.createElement('div');msg.className='msg';msg.textContent=it.message||'';
+ const msg=document.createElement('div');msg.className='msg';
+ msg.textContent=stripAgentPrefix(it.message,it.title);
  el.append(bar,l1,wh,msg);
  // 点卡片进聊天页（打开即最新记录）；按钮各自阻止冒泡。
  el.onclick=()=>openChat(it.id);

@@ -1250,6 +1250,16 @@ function renderHealth(){
     (ok?'桥接正常':'桥接未启动')+' · '+n+' 个 Worker'+
     (last?' · 最近 '+last:'');
 }
+// 回复正文开头常带「Agent名：」前缀（stop 提醒拼的），行首已有 Agent 名，
+// 剥掉免得一行里同一名字出现两遍（用户 2026-11-16，与手机端同款）。
+function stripAgentPrefix(msg,title){
+  const t=String(title||'');const s=String(msg||'');
+  if(!t) return s;
+  if(s.startsWith(t+'：')) return s.slice(t.length+1);
+  if(s.startsWith(t+': ')) return s.slice(t.length+2);
+  if(s.startsWith(t+':')) return s.slice(t.length+1);
+  return s;
+}
 function row(it){
   const el=document.createElement('div');
   el.className='row'+(it.id===selected?' sel':'')+
@@ -1264,7 +1274,8 @@ function row(it){
   const time=document.createElement('span');time.className='time';
   time.textContent=hhmm(it.updated_at)+waitText(it);
   l1.append(name,stage,wh,time);
-  const l2=document.createElement('div');l2.className='l2';l2.textContent=it.message||'';
+  const l2=document.createElement('div');l2.className='l2';
+  l2.textContent=stripAgentPrefix(it.message,it.title);
   el.append(bar,l1,l2);
   // 单击进聊天页（打开即最新记录）；回到 Agent 走行内 ↗ 图标。多选模式下点击改为
   // 勾选/取消，进聊天先点「完成」退回单选。

@@ -1124,6 +1124,11 @@ void VoicePet::bubbleOnly(const QString &text, int durationMs,
     if (text.isEmpty() || !isVisible()) {
         return;
     }
+    // 交互卡可见时不出普通气泡：两者锚在桌宠同一位置，晚 show 的气泡会压回
+    // 堆栈顶把卡盖住。卡上就是同一条信息，语音照常念，这里直接让路。
+    if (requestCard_ != nullptr && requestCard_->isVisible()) {
+        return;
+    }
     ensureBubble();
     bubble_->setText(text);
     // 尾巴方向决定哪侧留预留，setTailDirection 里按文字量好宽高：

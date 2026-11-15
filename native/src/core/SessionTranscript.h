@@ -8,7 +8,8 @@
 // 按页加载——所以读取是「从末尾数 offset 条、取 limit 条」的游标分页。
 // 各宿主会话库位置与记法来自 mission-control-plan 的实测：
 //   WorkBuddy 系 / Qoder 系：~/.workbuddy(-ai)/.qoder(-cn)/projects/<slug>/<id>.jsonl
-//   ZCode：~/.zcode/cli/db/db.sqlite 的 message+part 两表
+//   ZCode：~/.zcode/cli/db/db.sqlite 的 message+part 两表；harness 注入
+//        （synthetic / visibility=model-only 的 user 行）不进聊天页
 //   OpenSquilla：%APPDATA%/@opensquilla/<profile>/opensquilla/state/sessions.db
 //   DSH：~/.dsh/sessions/<slug>/session-<uuid>/session.v4.jsonl.zstd，多帧拼接，
 //        用 vendored libzstd（native/vendor/zstd）跨帧解压；标题取日志 session/title。

@@ -2,7 +2,9 @@
 
 - 日期：2026-11-15
 - 分支：`feat/betterchoice`
-- 状态：第一轮研究完成；快赢项已落地（见 §6），结构性项待立项（见 §7）
+- 状态：第一轮研究完成（快赢落地见 §6）；第二轮完成 ZCode 远程授权真机探针——
+  **决策式 PermissionRequest 三路全通**（§4），bridge 系远程授权从「待验证」变
+  「待立项实施」
 - 范围：所有「喂给 Agent 的提示」（决定 Agent 怎么用桌宠）+ 由提示契约派生的
   用户侧提醒文案（Agent 行为最终变成用户听到的声音）。不含桌宠 UI 本身
   （交互卡见 mission-control-plan.md 的 B1/B2/B3）。
@@ -122,22 +124,48 @@ UserPromptSubmit / PreToolUse 理论上可以往会话里注入提示（比如�
 由 P1/P3 常驻覆盖，注入增量信息约等于零。列在这里是为了把这条路记成
 「考虑过、关掉」。
 
-## 4. 边界研究：bridge 系的远程授权还有一条窄路
+## 4. 边界研究：ZCode 真远程授权——**已实测可行**（2026-11-15 真机探针）
 
-ZCode 的 PermissionRequest hook 在 Claude Code 语义里是**决策式**的：hook 返回
-allow/deny 就替代弹窗。若 ZCode 同款，bridge 可以把 PermissionRequest 从
-fire-and-forget 改成「推 `/requests` 可答卡 → 轮询 `/request-answer/pending`
-（限时，如 60s）→ 答案变 hook 返回值」——**ZCode 就有真远程授权了**。
+ZCode 的 PermissionRequest hook 是**决策式**的：hook 在授权判定时被调用，
+返回决策 JSON 就替代宿主弹窗。探针（`rc_probe/zcode-perm-probe/`，读
+`zcode.cjs` 源码定位契约后真机三连测）全部验证通过：
 
-风险与验证点（立项前必须确认）：
-- hook 超时：hooks.json 里 PermissionRequest 现在 timeout=3（秒），要单独放大；
-  超时/桌宠没开必须立刻放手（exit 0 → 宿主正常弹窗），不能把会话挂死。
-- 轮询期间宿主侧表现：hook 阻塞时 ZCode 是等待还是先弹自己的窗？若先弹窗，
-  远程授权就失去意义，此路不通。
-- 安全模型变化：授权决定从「人在宿主窗口」变成「任何能碰到桌宠/聊天页的人」，
-  与 DSH 内联应答同级，风险一致可接受，但要写进使用说明。
+| 决策路 | hook 输出 | 真机结果 |
+|---|---|---|
+| **allow** | `{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}` | 工具直接执行，**不弹窗** |
+| **deny** | 同上，`decision:{behavior:"deny",message:"…"}` | 工具被拒，message 原文到达 Agent 工具层（两次复现） |
+| **不输出 / exit 0** | 无 stdout | 回落宿主正常弹窗（探针静默直通即此路） |
+| **超时** | hooks.json `timeout:15`，探针睡 25s | 运行时按无决策处理 → 回落弹窗（安全阀成立） |
+| **exit 2** | （未触发，源码证实） | **硬 deny**——决策式 hook 绝不能 exit 2 |
+| **modify** | `decision:{behavior:"allow",updatedInput:…}` | 可改写入参（未实测，源码 `j2o` 明确支持） |
 
-结论：**值得立项单独验证**，不在本轮做。
+- **payload 契约**（实测 capture）：`toolName / toolInput / toolCallId / requestId(perm_*) /
+  riskLevel / reason / mode / permission_mode / sessionId / turnId / traceId /
+  sideEffectScope / cwd / timestamp`（camelCase + snake_case 双写法都在）。
+  riskLevel=high + reason="High risk tools require explicit approval" 是 build 模式
+  下关沙箱 Bash 的实测读数。
+- **yolo 模式不派 PermissionRequest**（全自动放行走不到授权判定）——远程授权只在
+  会话用 build/普通模式时有意义，与 DSH approvalInline 的适用面一致。
+- **allow 还能带 `permissionUpdates`（addRules）**：卡片上可以给「允许且记住」按钮，
+  等价于人在弹窗里选「不再询问」。
+- **stop 事件 payload 直带 `responseText` / `last_assistant_message`**：bridge 的
+  stop 分支可以不再 tail 读 transcript（512KB 截断读法可退役），顺带拿到
+  `toolCallCount`、`permission_mode` 等现成字段。
+
+**落地蓝图（bridge 系真远程授权，待立项实施）**：
+1. PermissionRequest hook 从 fire-and-forget 改为「出声提醒 + 推可答卡到
+   `/requests` + 轮询 `/request-answer/pending`（限时）」一体：现在的 notify
+   hook 与决策 hook 是两个并发条目（探针实测同一 PR 两条都跑），合并成一个
+   hook 免得「桌宠喊了、卡片又答了」两条路打架；等答案期间桌宠已有「等你确认」
+   语音 + 卡片，答案从卡片来 → allow/deny 直接返回，超时/桌宠没开 → 静默退出
+   0（绝不 exit 2），宿主正常弹窗。
+2. timeout 单独放大（秒单位，实测 15s 生效；轮询窗建议 60–120s）。
+3. 会话启动快照 hooks 配置：插件更新后要**新会话**才挂上新 hook（tee 实测：
+   脚本内容实时生效、hooks.json 条目要新会话）——发版说明要写清。
+4. 探针副产品发现：本机 ZCode 插件缓存停在 11-05 内容（版本号同为 0.4.1 但
+   缺 11-08 的 question 主路 + 内容去重加固）——**ZCode 里 AskUserQuestion 弹窗
+   提醒至今没生效**，需要在 ZCode 里重装/更新一次插件才能把 11-08 修复和
+   本次题干改动带进活跃会话。
 
 ## 5. 提示文案的目标结构（改完后应长什么样）
 
@@ -172,12 +200,12 @@ SKILL.md 正文（触发后加载，唯一细节源）
 
 ## 7. 后续候选（按价值排序，未排期）
 
-1. **bridge 系只读待答卡**（3-4）：PreToolUse(question) → POST /requests +
-   原生端「不可答」标记。覆盖 ZCode/Qoder/WorkBuddy/CodeBuddy 四家的
-   「提问在桌宠上可见」，工作量小、无宿主侧风险。
-2. **ZCode 决策式 PermissionRequest → 真远程授权**（§4）：先做一个只读探针
-   hook 验证 ZCode 的返回值语义与阻塞表现，再决定立项。
-3. **CodeBuddy 覆盖实测**（3-6）：一条 DRY_RUN + 真机弹窗即可定论。
+1. **bridge 系真远程授权（ZCode 先行）**（§4 蓝图）：决策式 PermissionRequest
+   已实测三路全通，按蓝图合并 notify+决策 hook、推可答卡、限时轮询。ZCode
+   跑通后再看 Qoder 家有没有同款事件语义（源码还没查）。
+2. **CodeBuddy 覆盖实测**（3-6）：一条 DRY_RUN + 真机弹窗即可定论。
+3. **stop 分支改读 `responseText`**（§4 副产品）：ZCode 的 stop payload 直带最终
+   回复全文，tail 读 transcript 的兜底退为「字段缺失时才用」。
 4. **speech 带题干**：「ZCode 在等你选方案」→「ZCode 在等你选方案：是否出包」。
    TTS 念题干大概率可用，需真机听感定夺（选项文本要净化，复用
    `SpeechText::friendly` 口径）。

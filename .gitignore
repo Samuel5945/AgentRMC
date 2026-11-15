@@ -22,6 +22,7 @@ release/
 rc_probe/*
 !rc_probe/*.py
 !rc_probe/*.mjs
+!rc_probe/zcode-perm-probe
 
 # ---------- 本地数据 ----------
 .workbuddy-ai/

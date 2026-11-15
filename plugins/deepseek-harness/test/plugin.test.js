@@ -196,6 +196,7 @@ await check('approval/asked: 发 permission，带工具名、宿主名、session
   assert.strictEqual(payload.event, 'permission');
   assert.strictEqual(payload.title, 'DeepSeek Harness');
   assert.strictEqual(payload.message, '等你确认 pwsh');
+  assert.strictEqual(payload.bubble, false, '授权气泡收敛进卡');
   assert.strictEqual(payload.speech, 'DeepSeek Harness 在等你点确认');
   assert.strictEqual(payload.raise, 'DeepSeek Harness.exe');
   assert.strictEqual(payload.session_id, 'sess-1');
@@ -214,6 +215,7 @@ await check('tool/call ask_user_question: 发 question（等你选方案）', as
   const payload = lines[0];
   assert.strictEqual(payload.event, 'question');
   assert.strictEqual(payload.message, '等你选方案');
+  assert.strictEqual(payload.bubble, false, '选方案气泡收敛进卡');
   assert.strictEqual(payload.speech, 'DeepSeek Harness 在等你选方案');
   assert.strictEqual(payload.event_id, 'call-2');
   assert.strictEqual(payload.session_id, 'sess-1');

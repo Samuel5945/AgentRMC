@@ -218,6 +218,8 @@ export function apply(ctx, rawConfig) {
     if (entry.sessionId) payload.session_id = String(entry.sessionId);
     if (entry.project) payload.project = String(entry.project);
     if (entry.eventId) payload.event_id = String(entry.eventId);
+    // 推了请求卡的事件带 bubble:false：气泡收敛进卡里，不弹第二个浮层。
+    if (entry.bubble === false) payload.bubble = false;
     if (PLUGIN_VERSION) payload.plugin_version = PLUGIN_VERSION;
     return payload;
   }
@@ -579,6 +581,8 @@ export function apply(ctx, rawConfig) {
               event: 'permission',
               // 气泡带工具名（"等你确认 Bash"看着有用），语音只带宿主名——
               // 「等你确认 Bash 冒号 D 冒号反斜杠…」念出来没人听得懂。
+              // 卡能代答（提问恒可答、授权随 approvalInline）：气泡收敛进卡里。
+              bubble: false,
               message: toolName ? '等你确认 ' + toolName : '等你确认工具授权',
               speech: config.agentName + ' 在等你点确认',
               sessionId: sessionIdOf(session),
@@ -598,6 +602,7 @@ export function apply(ctx, rawConfig) {
             // 气泡带题干（截 40 字）让人不用切窗口就知道要拍什么板；语音仍只带
             // 宿主名。前缀「等你选方案」保持不动：原生端按它认「选方案」语义
             // （180s 迟到去重也认它），冒号后的题干不影响判定。
+            bubble: false,
             message: stem ? '等你选方案：' + stem : '等你选方案',
             speech: config.agentName + ' 在等你选方案',
             sessionId: sessionIdOf(session),

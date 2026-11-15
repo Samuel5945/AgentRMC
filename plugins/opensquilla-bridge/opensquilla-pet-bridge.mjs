@@ -176,8 +176,11 @@ function spool(payload) {
   } catch { /* 落盘也失败就彻底放弃：通知不能挡会话 */ }
 }
 
-function buildPayload(kind, message, sessionKey, eventId = "") {
+function buildPayload(kind, message, sessionKey, eventId = "",
+                    extra = null) {
   const body = { event: kind, title: "OpenSquilla", message };
+  // 推了请求卡的事件（审批/澄清，answerInline 开着）：气泡收敛进卡里。
+  if (extra) Object.assign(body, extra);
   if (CFG.raise) body.raise = CFG.raise;
   // 会话归属：native 端靠它做「同会话旧验收归档」和工单合并。
   if (sessionKey) body.session_id = sessionKey;
@@ -191,11 +194,12 @@ function buildPayload(kind, message, sessionKey, eventId = "") {
   return body;
 }
 
-async function notifyPet(kind, message, sessionKey, eventId = "") {
+async function notifyPet(kind, message, sessionKey, eventId = "",
+                      extra = null) {
   const res = await fetch(`${CFG.bridge}/notify`, {
     method: "POST",
     headers: { "Content-Type": "application/json; charset=utf-8" },
-    body: JSON.stringify(buildPayload(kind, message, sessionKey, eventId)),
+    body: JSON.stringify(buildPayload(kind, message, sessionKey, eventId, extra)),
     signal: AbortSignal.timeout(5000),
   });
   if (res.status !== 204) throw new Error(`bridge returned ${res.status}`);
@@ -432,7 +436,12 @@ async function onFrame(frame) {
   const text = renderTemplate(tpl, sessionKey, reply).slice(0, 200);
   const target = sessionKey === "?" ? "" : sessionKey;
   try {
-    await notifyPet(mapped.kind, text, target, identity);
+    // 推了请求卡的（审批/澄清，answerInline 开）：气泡收敛进卡里，别弹
+    // 第二个浮层把卡顶掉（用户 2026-11-15，ZCode 同款问题）。
+    const merged = (mapped.kind === "permission" || mapped.kind === "question") &&
+                   CFG.answerInline;
+    await notifyPet(mapped.kind, text, target, identity,
+                    merged ? { bubble: false } : null);
     log(`NOTIFY ${mapped.kind} sess=${sessionKey} raise=${CFG.raise || "(none)"} msg=${text.slice(0, 40)}`);
   } catch (e) {
     // AgentRMC 没在跑：落盘等补投，别把提醒丢了（与 hooks/DSH 同一条通路）。

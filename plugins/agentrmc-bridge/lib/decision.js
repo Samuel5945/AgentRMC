@@ -56,6 +56,8 @@ async function runApprovalInlineFlow(bridge, p) {
     //    自己弹窗抢焦点，不需要这里代劳。
     const notifyPayload = {
       event: 'permission', title: p.agent, message: p.message, no_raise: true,
+      // 卡能代答：气泡收敛进卡里，不弹第二个浮层。
+      bubble: false,
     };
     if (p.speech) notifyPayload.speech = p.speech;
     if (p.sid) notifyPayload.session_id = p.sid;

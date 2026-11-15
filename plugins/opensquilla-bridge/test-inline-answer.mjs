@@ -215,7 +215,10 @@ async function main() {
   assert.equal(apReq.namespace, "exec");
   assert.ok(apReq.reason.includes("rm -rf x") && apReq.reason.includes("会删文件"));
   await waitFor(() => notifies.some((n) => n.event === "permission" && n.session_id === SESSION),
-    "permission 通知照旧");
+                "permission 通知照旧");
+  const permNotify = notifies.find((n) => n.event === "permission" &&
+                                         n.session_id === SESSION);
+  assert.equal(permNotify.bubble, false, "审批气泡应收敛进请求卡");
 
   // 2) 交互式 user_input（tool_result + JSON 字符串 result + 归一化 questions）→ 提问卡
   marker = pushes.length;

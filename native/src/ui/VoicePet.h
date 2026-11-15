@@ -79,7 +79,8 @@ public:
     // 借鉴 OpenSquilla 蛋仔的富气泡：把待答请求（授权/提问）渲染成可交互卡片，
     // 直接在桌宠上允许/拒绝/选选项，不用切回聊天页。req 为 /requests 推送的单条
     // （kind/id/toolName/reason/questions/answerable）。answerable=false 时只展示。
-    void showRequestCard(const QString &sessionId, const QJsonObject &req);
+    // 返回是否真的弹了（桌宠收起时不弹，提醒仍走气泡/托盘/语音）。
+    bool showRequestCard(const QString &sessionId, const QJsonObject &req);
     // 请求已被别处应答/取消：收起对应卡片。
     void clearRequestCard(const QString &requestId);
 

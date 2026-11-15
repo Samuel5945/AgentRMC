@@ -102,11 +102,13 @@ signals:
     //   气泡和工单仍用 message——「等你确认 Bash：D:\…」看着有用，念出来是噪音。
     // noRaise：payload 带 "no_raise":true（决策式授权 hook）→ 出声提醒保留，
     //   但不把宿主窗口拽到前台——人正盯着桌宠卡片作答，拽走等于把卡片作废。
+    // reply：bridge hook 的 stop 随 payload 带的回复第一句（非空时原生端直接
+    //   用作待办卡文案，跳过 lastReply 主线程全文读）。
     void notify(const QString &kind, const QString &title,
                 const QString &message, const QString &raise,
                 const QString &sessionId, const QString &project,
                 const QString &eventId, const QString &pluginVersion,
-                const QString &speech, bool noRaise);
+                const QString &speech, bool noRaise, const QString &reply);
 
 private:
     void onConnected();

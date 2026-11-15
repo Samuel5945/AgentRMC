@@ -1090,7 +1090,18 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
                     }
                 }
                 if (!showId.isEmpty() && !oldIds.contains(showId)) {
-                    voicePet_->showRequestCard(sid, showReq);
+                    const bool shown =
+                        voicePet_->showRequestCard(sid, showReq);
+                    appendEvent(QStringLiteral("status"), QString(), QString(),
+                                shown
+                                    ? QStringLiteral("桌宠已弹待答卡：会话 %1 %2")
+                                          .arg(sid.left(8), showReq.value(
+                                                            QStringLiteral("kind"))
+                                                          .toString())
+                                    : QStringLiteral("收到待答请求但桌宠收起，卡未弹"
+                                                     "（会话 %1）")
+                                          .arg(sid.left(8)),
+                                0);
                 }
             }
             // 待答清单变化（新增/被别处应答移除）→ 刷新桌面聊天页，收掉残留卡。
@@ -1120,10 +1131,11 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
                        const QString &sessionId, const QString &project,
                        const QString &eventId,
                        const QString &pluginVersion,
-                       const QString &speech, bool noRaise) {
+                       const QString &speech, bool noRaise,
+                       const QString &reply) {
                     handleNotify(kind, title, message, raise, sessionId,
                                  project, eventId, pluginVersion, speech,
-                                 noRaise, false);
+                                 reply, noRaise, false);
                 });
         if (!bridge->start()) {
             appendEvent(QStringLiteral("error"), QString(), QString(),
@@ -2704,6 +2716,7 @@ int MainWindow::importSpool() {
                          obj.value(QStringLiteral("event_id")).toString(),
                          obj.value(QStringLiteral("plugin_version")).toString(),
                          obj.value(QStringLiteral("speech")).toString(),
+                         obj.value(QStringLiteral("reply")).toString(),
                          false, true);
             ++imported;
         }
@@ -2808,8 +2821,8 @@ void MainWindow::handleNotify(const QString &kind, const QString &title,
                               const QString &sessionId,
                               const QString &project, const QString &eventId,
                               const QString &pluginVersion,
-                              const QString &speech, bool noRaise,
-                              bool replay) {
+                              const QString &speech, const QString &reply,
+                              bool noRaise, bool replay) {
     lastEventAt_ = QDateTime::currentDateTimeUtc();
     // 念的和显示的不是一句：speech 是插件给的短语音文案（带宿主名、不含工具名和
     // 路径），没带就退回念 message。气泡和工单始终用 message。
@@ -2850,21 +2863,34 @@ void MainWindow::handleNotify(const QString &kind, const QString &title,
         if (kind == QStringLiteral("stop") && !sessionId.isEmpty()) {
             // 通用收尾文案（"做完了，等你回来看"）没有信息量：换成该会话最后
             // 一条回复正文，待办卡直接能读结果；要人动手的文案保留原语义。
-            // ZCode 会话（configHome 为空）走派发通道记下的回复。
-            QString reply = SessionDispatch::lastReply(
-                SessionDispatch::configHomeFor(raiseExe), sessionId);
-            if (reply.isEmpty()) {
-                reply = dispatchReplyBySession_.value(sessionId);
-            }
+            // bridge hook 已从 transcript 尾部提取好第一句并随 payload 带
+            // "reply" 上来：直接用，绝不走 lastReply——那是主线程全文逐行读，
+            // 大会话（开发轮次动辄几十 MB）能把事件循环卡住几十秒，期间
+            // /requests 推送排队，桌宠卡弹不出来（2026-11-15 实测）。
             const bool actionable =
                 message.startsWith(QStringLiteral("等你回话")) ||
                 message.startsWith(QStringLiteral("等你选方案")) ||
                 message.startsWith(QStringLiteral("等你确认")) ||
                 message.startsWith(QStringLiteral("模型出错"));
-            if (!reply.isEmpty() && !actionable) {
-                cardMessage = reply;
-                appendEvent(QStringLiteral("status"), QString(), QString(),
-                            QStringLiteral("会话回复：%1").arg(reply), 0);
+            if (!reply.isEmpty()) {
+                if (!actionable) {
+                    cardMessage = reply;
+                    appendEvent(QStringLiteral("status"), QString(), QString(),
+                                QStringLiteral("会话回复：%1").arg(reply), 0);
+                }
+            } else {
+                // 老插件（payload 没带 reply）才走全文读：ZCode 会话
+                // （configHome 为空）走派发通道记下的回复。
+                QString last = SessionDispatch::lastReply(
+                    SessionDispatch::configHomeFor(raiseExe), sessionId);
+                if (last.isEmpty()) {
+                    last = dispatchReplyBySession_.value(sessionId);
+                }
+                if (!last.isEmpty() && !actionable) {
+                    cardMessage = last;
+                    appendEvent(QStringLiteral("status"), QString(), QString(),
+                                QStringLiteral("会话回复：%1").arg(last), 0);
+                }
             }
         }
         workItems_->upsert(QStringLiteral("hook"), raiseExe, sessionId, project,

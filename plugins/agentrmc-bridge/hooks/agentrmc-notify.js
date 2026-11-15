@@ -578,6 +578,8 @@ process.stdin.on('end', () => {
     process.exit(0);
   }
   let message = '';
+  // replyField：stop 时提取好的回复第一句，随 payload 的 "reply" 给原生端。
+  let replyField = '';
   // speech 只给语音用：念出来要短、要带宿主名。工具名和文件路径留在气泡里看，
   // 念出来是噪音（「等你确认 Bash 冒号 D 冒号 反斜杠…」没人听得懂）。
   // 不给 speech 时原生端退回念 message。
@@ -624,6 +626,10 @@ process.stdin.on('end', () => {
     } else {
       const one = trimSentence(said);
       message = one ? `${agent}：${one}` : `${agent} 做完了，等你回来看`;
+      // 回复第一句随 payload 带 "reply" 给原生端：待办卡直接用，省掉它在
+      // 主线程上全文逐行读 transcript（大会话会把事件循环卡几十秒，
+      // /requests 推送跟着排队，桌宠卡弹不出来——2026-11-15 实测）。
+      if (one) replyField = one;
     }
   } else if (event === 'question') {
     // 「等你选方案」：实测 Qoder 把 AskUserQuestion 当**普通工具**走 PreToolUse
@@ -724,6 +730,7 @@ process.stdin.on('end', () => {
 
   const payloadObj = { event: outEvent, title: agent, message };
   if (speech) payloadObj.speech = speech;
+  if (replyField) payloadObj.reply = replyField;
   if (raise) payloadObj.raise = raise;
   if (sessionId) payloadObj.session_id = sessionId;
   if (project) payloadObj.project = project;

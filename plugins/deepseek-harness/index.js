@@ -711,6 +711,9 @@ export function apply(ctx, rawConfig) {
           send({
             event: 'stop',
             message: said ? config.agentName + '：' + said : config.agentName + ' 做完了，等你回来看',
+            // 回复第一句随 "reply" 给原生端：待办卡直接用，省掉它在主线程上
+            // 全文读会话记录（大会话会卡住事件循环，桌宠卡弹不出来）。
+            ...(said ? { reply: said } : {}),
             sessionId: agent.id,
             project: projectOf(agent),
           });

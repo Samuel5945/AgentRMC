@@ -1028,9 +1028,10 @@ void VoicePet::placeRequestCard() {
     requestCard_->move(x, qMax(available.top() + 4, y));
 }
 
-void VoicePet::showRequestCard(const QString &sessionId, const QJsonObject &req) {
+bool VoicePet::showRequestCard(const QString &sessionId,
+                               const QJsonObject &req) {
     if (!petEnabled() || !isVisible()) {
-        return;  // 桌宠收起时不弹卡（提醒仍走气泡/托盘/语音）
+        return false;  // 桌宠收起时不弹卡（提醒仍走气泡/托盘/语音）
     }
     ensureRequestCard();
     requestSession_ = sessionId;
@@ -1063,6 +1064,7 @@ void VoicePet::showRequestCard(const QString &sessionId, const QJsonObject &req)
     requestCard_->show();
     requestCard_->raise();
     requestTimer_->start(120000);  // 两分钟没人理就收起，别留陈旧卡片
+    return true;
 }
 
 void VoicePet::clearRequestCard(const QString &requestId) {

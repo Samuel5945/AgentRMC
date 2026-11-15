@@ -369,9 +369,13 @@ void AgentBridge::onReadable(QTcpSocket *socket) {
     const QString speech = obj.value(QStringLiteral("speech")).toString().trimmed();
     // 决策式授权 hook 带 "no_raise":true：提醒照常，不抢前台。
     const bool noRaise = obj.value(QStringLiteral("no_raise")).toBool();
+    // bridge hook 的 stop 已从 transcript 尾部提取了回复第一句：随 payload 带
+    // "reply" 上来，原生端直接用，不再走 lastReply 主线程全文读（大会话会把
+    // 事件循环卡住，/requests 推送跟着排队，桌宠卡弹不出来——2026-11-15 实测）。
+    const QString reply = obj.value(QStringLiteral("reply")).toString().trimmed();
     finish(socket, "204 No Content");
     emit notify(kind, title, message, raise, sessionId, project, eventId,
-                pluginVersion, speech, noRaise);
+                pluginVersion, speech, noRaise, reply);
 }
 
 void AgentBridge::finish(QTcpSocket *socket, const char *status,

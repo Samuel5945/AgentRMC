@@ -150,7 +150,8 @@ private:
                       const QString &message, const QString &raise,
                       const QString &sessionId, const QString &project,
                       const QString &eventId, const QString &pluginVersion,
-                      const QString &speech, bool noRaise, bool replay);
+                      const QString &speech, const QString &reply,
+                      bool noRaise, bool replay);
     // POST /work-items/update 的处理：宿主 Agent 用 MCP 工具 pet_work_update
     // 主动汇报 progress / blocked / ready。progress 只落工单；blocked / ready
     // 是要人动手的，走和 hook 同一条提醒通道（气泡 + 语音）。

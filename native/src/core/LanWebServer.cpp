@@ -186,6 +186,15 @@ void LanWebServer::setTranscriptProvider(
     transcriptProvider_ = std::move(provider);
 }
 
+void LanWebServer::setSessionListProvider(std::function<QString()> provider) {
+    sessionListProvider_ = std::move(provider);
+}
+
+void LanWebServer::setSessionTranscriptProvider(
+    std::function<QString(const QString &, const QString &, int, int)> provider) {
+    sessionTranscriptProvider_ = std::move(provider);
+}
+
 void LanWebServer::setActionHandler(
     std::function<QJsonObject(const QJsonObject &)> handler) {
     actionHandler_ = std::move(handler);
@@ -254,6 +263,7 @@ bool LanWebServer::isAllowedAction(const QString &cmd) {
     // 白名单制：手机上点了会在 PC 弹 Qt 对话框或改本机配置的命令一律不进。
     // tts 会弹 TtsSettingsDialog，readLast 只是让 PC 念最近转写，可以进。
     return cmd == QStringLiteral("ack") || cmd == QStringLiteral("dispatch") ||
+           cmd == QStringLiteral("dispatchSession") ||
            cmd == QStringLiteral("answer") ||
            cmd == QStringLiteral("open") ||
            cmd == QStringLiteral("raiseZcode") ||
@@ -430,7 +440,8 @@ void LanWebServer::route(QTcpSocket *socket, const QByteArray &method,
     if ((path == "/m/" || path == "/m/index.html") && method == "GET") {
         // 静态页免鉴权：里面没有任何数据，数据全走要令牌的 /m/state。
         finish(socket, "200 OK", mobileHtml().toUtf8(),
-               "text/html; charset=utf-8");
+               "text/html; charset=utf-8", QByteArray(),
+               "no-store, must-revalidate");
         return;
     }
     if (path == "/m/pair" && method == "POST") {
@@ -445,6 +456,55 @@ void LanWebServer::route(QTcpSocket *socket, const QByteArray &method,
         const QString state =
             stateProvider_ ? stateProvider_() : QStringLiteral("{}");
         finish(socket, "200 OK", state.toUtf8(), "application/json");
+        return;
+    }
+    if (path == "/m/sessions" && method == "GET") {
+        if (authDevice(headerLines) < 0) {
+            finish(socket, "401 Unauthorized");
+            return;
+        }
+        const QString list =
+            sessionListProvider_ ? sessionListProvider_() : QStringLiteral("{}");
+        finish(socket, "200 OK", list.toUtf8(), "application/json");
+        return;
+    }
+    if (path == "/m/session" && method == "GET") {
+        if (authDevice(headerLines) < 0) {
+            finish(socket, "401 Unauthorized");
+            return;
+        }
+        QString exe, session;
+        int offset = 0, limit = 50;
+        const QList<QByteArray> pairs = query.split('&');
+        for (const QByteArray &pair : pairs) {
+            const int eq = pair.indexOf('=');
+            if (eq <= 0) {
+                continue;
+            }
+            const QByteArray key = pair.left(eq);
+            const QByteArray value =
+                QByteArray::fromPercentEncoding(pair.mid(eq + 1));
+            if (key == "exe") {
+                exe = QString::fromUtf8(value);
+            } else if (key == "session") {
+                session = QString::fromUtf8(value);
+            } else if (key == "offset") {
+                offset = qMax(0, value.toInt());
+            } else if (key == "limit") {
+                limit = qBound(1, value.toInt(), 100);
+            }
+        }
+        if (exe.isEmpty() || session.isEmpty() || !sessionTranscriptProvider_) {
+            finish(socket, "400 Bad Request");
+            return;
+        }
+        const QString chat =
+            sessionTranscriptProvider_(exe, session, offset, limit);
+        if (chat.isEmpty()) {
+            finish(socket, "404 Not Found");
+            return;
+        }
+        finish(socket, "200 OK", chat.toUtf8(), "application/json");
         return;
     }
     if (path == "/m/transcript" && method == "GET") {
@@ -791,20 +851,51 @@ QString LanWebServer::mobileHtml() const {
  .scroll{flex:1;min-height:0;overflow-y:auto;scrollbar-width:none;
    padding:4px 14px 14px;-webkit-overflow-scrolling:touch}
  .scroll::-webkit-scrollbar{width:0;height:0}
- /* 待办卡 */
- .card{position:relative;margin-bottom:10px;padding:12px 12px 12px 18px;
-   border-radius:14px;border:1px solid var(--w18);
-   background:linear-gradient(180deg,var(--surface),var(--surface2))}
- .bar{position:absolute;left:8px;top:14px;width:4px;height:34px;border-radius:2px}
- .l1{display:flex;align-items:baseline;gap:8px}
+/* 待办卡分两层：.hint 是手势底下露出来的动作提示，.face 才是卡面。
+   pan-y 把纵向滚动留给列表、横向留给手势；多选切换只改 class，不重建卡片。 */
+.card{position:relative;margin-bottom:10px;border-radius:14px;overflow:hidden;
+  background:transparent;touch-action:pan-y;-webkit-user-select:none;user-select:none;
+  -webkit-touch-callout:none;isolation:isolate}
+.face{position:relative;padding:13px 12px 13px 18px;
+  border-radius:14px;border:1px solid var(--w18);
+  background:linear-gradient(180deg,var(--surface),var(--surface2));
+  box-shadow:0 1px 2px var(--w6);
+  transition:transform .24s cubic-bezier(.2,.8,.2,1),opacity .18s ease,
+    border-color .16s,background .16s,padding-left .2s ease,box-shadow .16s;
+  will-change:transform}
+.bar{position:absolute;left:8px;top:14px;width:4px;height:34px;border-radius:2px;
+  transition:opacity .16s ease}
+/* 滑动提示：右滑露左边「启动 Agent」，左滑露右边「标为已处理」。
+   底色用 ::before 上色再压不透明度，换主题不用改这里。 */
+.hint{position:absolute;inset:0;display:flex;align-items:center;gap:5px;
+  font-size:12px;font-weight:600;opacity:0;pointer-events:none;
+  transition:opacity .14s linear}
+.hint::before{content:'';position:absolute;inset:0}
+.hint>*{position:relative}
+.hint .ic{width:24px;height:24px;border-radius:50%;display:flex;
+  align-items:center;justify-content:center;font-size:11px;flex:0 0 24px;
+  box-shadow:0 2px 8px var(--w14);transition:transform .16s ease}
+.hint .label{white-space:nowrap}
+.hint.l{justify-content:flex-start;padding-left:10px;color:var(--accent)}
+.hint.l::before{background:var(--accent);opacity:.14}
+.hint.l .ic{background:var(--accent);color:var(--on-accent)}
+.hint.r{justify-content:flex-end;padding-right:10px;color:var(--danger)}
+.hint.r::before{background:var(--danger);opacity:.14}
+.hint.r .ic{background:var(--danger);color:#fff}
+.hint.armed{font-weight:700}
+.hint.armed .ic{transform:scale(1.12)}
+ .l1{display:flex;align-items:center;gap:7px;min-width:0}
  .name{font-weight:700;font-size:15px;overflow:hidden;text-overflow:ellipsis;
+   white-space:nowrap;flex:1 1 auto;min-width:0}
+ .stage{font-size:11px;flex:0 0 auto;line-height:1.4;padding:2px 7px;
+   border-radius:10px;background:var(--w6);white-space:nowrap}
+ .time{margin-left:auto;font-size:11.5px;color:var(--ghost);flex:0 0 auto;
    white-space:nowrap}
- .stage{font-size:12px;flex:0 0 auto}
- .time{margin-left:auto;font-size:12px;color:var(--ghost);flex:0 0 auto}
- .where{font-size:12px;color:var(--muted2);margin-top:2px;overflow:hidden;
+ .where{font-size:12px;color:var(--muted2);margin-top:3px;overflow:hidden;
    text-overflow:ellipsis;white-space:nowrap}
- .msg{font-size:14px;color:var(--text-soft);margin-top:6px;line-height:1.55;
-   word-break:break-word}
+ .msg{font-size:14px;color:var(--text-soft);margin-top:7px;line-height:1.55;
+   word-break:break-word;display:-webkit-box;-webkit-line-clamp:3;
+   -webkit-box-orient:vertical;overflow:hidden}
  .notice{font-size:13px;color:var(--text-dim);margin-top:8px;padding:8px 10px;
    border-radius:8px;background:var(--w6);border:1px solid var(--w14);
    line-height:1.5;word-break:break-word}
@@ -815,19 +906,79 @@ QString LanWebServer::mobileHtml() const {
    border-radius:10px;border:1px solid var(--w18);background:var(--w6);
    color:var(--text-dim)}
  .icobtn:active{background:var(--w10)}
- .hbtn{min-height:30px;padding:4px 10px;font-size:13px;border-radius:8px;
+ .hbtn{min-height:38px;padding:6px 11px;font-size:13px;border-radius:10px;
    border:1px solid var(--w18);background:var(--w6);color:var(--text-dim)}
  .hbtn.on{background:var(--accent);border-color:var(--accent);color:var(--on-accent)}
- .card.msel{border-color:var(--accent);background:var(--w10)}
- .chk{width:24px;height:24px;border-radius:7px;border:2px solid var(--w18);
-   flex:0 0 auto;display:flex;align-items:center;justify-content:center;
-   font-size:14px;color:var(--on-accent)}
- .chk.on{background:var(--accent);border-color:var(--accent)}
- #batchBar{position:sticky;bottom:0;display:flex;gap:8px;align-items:center;
-   padding:10px 4px;background:var(--surface);border-top:1px solid var(--w18);
-   margin-top:6px}
- #batchBar .btn{flex:1 1 auto;min-height:40px}
- #batchBar .where{flex:0 0 auto}
+ .hbtn:disabled{opacity:.45}
+ /* 多选是低频操作：从顶栏移入手势提示行，保留 44px 命中区但只显示弱化文字。 */
+ #multiSw{flex:0 0 auto;min-height:44px;min-width:42px;padding:0 4px;
+   border:0;background:transparent;color:var(--muted2);font-size:12px;
+   font-weight:600;border-radius:8px}
+ #multiSw.on{color:var(--accent);font-weight:700}
+ #multiSw:active{background:var(--w6)}
+ #multiSw:disabled{opacity:.4}
+ #workHint{flex:0 0 auto;margin:0 8px 2px 14px;font-size:11.5px;line-height:1.5;
+   color:var(--muted2);display:flex;align-items:center;gap:4px;min-height:44px}
+ #workHintText{flex:1 1 auto;min-width:0;display:flex;align-items:center;gap:6px;
+   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+ #workHintText::before{content:'';width:4px;height:4px;border-radius:50%;
+   background:var(--accent);opacity:.7;flex:0 0 4px}
+/* 多选：卡片原位让出勾选圈，选中描边、淡色底和勾选对齐；不再整表重建。 */
+.card.sel .face{border-color:var(--accent);
+  background:linear-gradient(180deg,var(--a26),var(--a26)),
+    linear-gradient(180deg,var(--surface),var(--surface2));
+  box-shadow:0 0 0 1px var(--a36),0 3px 12px var(--w8)}
+.card.sel .msg{color:var(--text)}
+.card.multi .face{padding-left:48px}
+.card.multi .bar{opacity:0}
+.card.multi .zrestart{display:none}
+.chk{position:absolute;left:12px;top:13px;width:24px;height:24px;border-radius:50%;
+  border:2px solid var(--w30);background:var(--surface);display:flex;align-items:center;
+  justify-content:center;color:var(--on-accent);opacity:0;transform:scale(.55);
+  transition:opacity .16s ease,transform .2s cubic-bezier(.2,.9,.3,1.25),
+    background .14s,border-color .14s,box-shadow .14s}
+.card.multi .chk{opacity:1;transform:scale(1)}
+.chk.on{background:var(--accent);border-color:var(--accent);
+  box-shadow:0 2px 7px var(--a36)}
+.chk.on::before{content:'';width:8px;height:4px;border-left:2px solid currentColor;
+  border-bottom:2px solid currentColor;transform:rotate(-45deg) translate(1px,-1px)}
+.chk.pop{animation:chkpop .24s ease}
+@keyframes chkpop{0%{transform:scale(1)}45%{transform:scale(1.18)}100%{transform:scale(1)}}
+/* 销账动效：手势松手时从当前位置滑出；批量操作则先滑出再收高。 */
+.card.gone{overflow:hidden;pointer-events:none;
+  transition:max-height .22s ease .12s,margin-bottom .22s ease .12s}
+/* 批量销账：原位轻移淡出，高度等字快看不见了再收，避免正文被横向切一块。 */
+.card.gone:not(.swiped){transition:max-height .18s ease .18s,
+  margin-bottom .18s ease .18s}
+.card.gone:not(.swiped) .face{animation:ackOut .18s ease-in forwards}
+.card.gone.swiped .face{animation:none}
+@keyframes ackOut{55%{opacity:.5}to{transform:translateX(-16px) scale(.985);
+  opacity:0}}
+#batchBar{flex:0 0 auto;display:flex;gap:7px;align-items:center;
+  padding:9px;margin:0 12px 9px;background:var(--surface);
+  border:1px solid var(--w18);border-radius:15px;
+  box-shadow:0 7px 22px var(--w14);animation:rise .22s cubic-bezier(.22,.61,.36,1)}
+@keyframes rise{from{transform:translateY(12px);opacity:0}to{transform:none;opacity:1}}
+#batchBar .btn{min-height:44px;padding:8px 11px}
+#batchBar .btn.primary{flex:1 1 auto;min-width:0;white-space:nowrap}
+#batchCount{flex:0 0 auto;font-size:12px;font-weight:700;color:var(--accent);
+  background:var(--a26);border-radius:10px;padding:5px 8px;white-space:nowrap}
+#batchAll{flex:0 0 auto;min-height:44px;padding:0 9px;font-size:13px}
+#batchCancel{flex:0 0 auto;padding-left:10px;padding-right:10px}
+/* 底部提示：颜色反转（浅色主题深底白字、深色主题浅底黑字），不用另配一套。 */
+#toast{position:fixed;left:50%;bottom:calc(92px + env(safe-area-inset-bottom));
+  transform:translate(-50%,10px);opacity:0;pointer-events:none;z-index:20;
+  max-width:76vw;text-align:center;line-height:1.45;font-size:13px;font-weight:600;
+  padding:9px 16px;border-radius:20px;background:var(--text);color:var(--bg);
+  transition:opacity .18s ease,transform .18s ease}
+#toast.on{opacity:1;transform:translate(-50%,0)}
+@keyframes bump{0%{transform:scale(1)}45%{transform:scale(1.32)}100%{transform:scale(1)}}
+ #tabCount.bump{animation:bump .3s ease}
+ @media(prefers-reduced-motion:reduce){
+  .face,.chk,.hint,#toast,#batchBar{transition-duration:.01ms !important;
+   animation-duration:.01ms !important}
+  .chk.pop,#tabCount.bump,.dload::before{animation:none !important}
+ }
  .btn{min-height:44px;border:1px solid var(--w18);background:var(--w6);
    color:var(--text-dim);font-size:14px;border-radius:10px;padding:8px 14px}
  .btn:active{background:var(--w10)}
@@ -901,9 +1052,76 @@ QString LanWebServer::mobileHtml() const {
    justify-content:center;gap:8px;padding:40px 24px;text-align:center}
  .empty h3{margin:0;font-size:16px}
  .empty p{margin:0;font-size:13px;color:var(--muted);line-height:1.7}
- /* 事件流 */
- .ev{padding:8px 10px;border-radius:8px;font-size:13px;line-height:1.55;
-   white-space:pre-wrap;word-break:break-word;margin-bottom:2px}
+ /* 派发页：选 Agent → 按项目看会话 → 进聊天记录再派活 */
+ .dispatchhead{flex:0 0 auto;display:flex;align-items:flex-start;gap:10px;
+   padding:2px 14px 7px}
+ .dheadtext{flex:1;min-width:0}
+ .dtitle{margin:0;font-size:17px;line-height:1.35}
+ .dsub{margin:3px 0 0;font-size:11.5px;line-height:1.5;color:var(--muted2)}
+ #sessRefresh{flex:0 0 auto;min-height:44px;padding:0 4px;border:0;
+   background:transparent;color:var(--accent);font-size:12.5px;font-weight:600}
+ #sessRefresh:disabled{opacity:.45}
+ #agentChips{flex:0 0 auto;display:flex;gap:7px;padding:0 14px 9px;
+   overflow-x:auto;scrollbar-width:none}
+ #agentChips::-webkit-scrollbar{display:none}
+ .chip{flex:0 0 auto;display:flex;align-items:center;gap:6px;min-height:40px;
+   padding:0 12px;border-radius:12px;border:1px solid var(--w14);
+   background:var(--w6);color:var(--text-dim);font-size:13px}
+ .chip .st{width:6px;height:6px;border-radius:50%;background:var(--faint)}
+ .chip .st.on{background:var(--ok)}
+ .chip .n{font-size:11px;color:var(--faint)}
+ .chip.on{border-color:var(--a64);background:var(--a26);color:var(--accent);
+   font-weight:600}
+ .chip.on .n{color:var(--accent)}
+ #sessList{padding:0 14px 14px}
+ .projgroup{margin:0}
+ .projhead{display:flex;align-items:center;gap:6px;width:100%;min-height:40px;
+   margin:0;padding:6px 2px;border:0;background:transparent;
+   font-size:11px;font-weight:600;color:var(--muted2);letter-spacing:.02em;
+   text-align:left}
+ .projhead:active{opacity:.7}
+ .projchev{flex:0 0 auto;font-size:14px;line-height:1;color:var(--faint);
+   transform:rotate(90deg);transition:transform .18s ease}
+ .projgroup.closed .projchev{transform:rotate(0deg)}
+ .projlabel{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;
+   white-space:nowrap}
+ .projarch{flex:0 0 auto;font-size:9.5px;font-weight:600;color:var(--warn);
+   background:var(--w6);border:1px solid var(--w14);border-radius:7px;
+   padding:0 5px;line-height:1.5}
+ .projcount{margin-left:auto;flex:0 0 auto;font-size:10px;font-weight:600;
+   color:var(--faint);background:var(--w6);border-radius:8px;padding:1px 6px}
+ .projbody[hidden]{display:none}
+ .sescard{display:flex;align-items:center;gap:8px;margin-bottom:7px;
+   touch-action:manipulation;padding:11px 11px 11px 13px;border-radius:13px;
+   border:1px solid var(--w14);
+   background:linear-gradient(180deg,var(--surface),var(--surface2));
+   box-shadow:0 1px 2px var(--w6);transition:background .14s,border-color .14s}
+ .sescard:active{background:var(--w8);border-color:var(--a36)}
+ .sescard.readonly{opacity:.82}
+ .sesmain{flex:1;min-width:0}
+ .sestop{display:flex;align-items:center;gap:6px;min-width:0}
+ .sestitle{flex:1;min-width:0;font-size:14.5px;font-weight:600;
+   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+ .sesbadge{flex:0 0 auto;font-size:10.5px;padding:1px 6px;border-radius:9px;
+   background:var(--w6);color:var(--muted2)}
+ .sesmeta{display:flex;align-items:center;gap:7px;margin-top:4px;
+   font-size:11.5px;color:var(--muted2);min-width:0}
+ .sesproj{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;
+   white-space:nowrap}
+ .sestime,.sesread{flex:0 0 auto;color:var(--faint)}
+ .sestime{color:var(--muted2)}
+ .sesread{color:var(--warn)}
+ .searrow{flex:0 0 auto;font-size:20px;line-height:1;color:var(--faint)}
+ .dempty{flex:1;display:flex;align-items:center;justify-content:center;
+   flex-direction:column;gap:8px;padding:34px 24px;text-align:center}
+ .dempty h3{margin:0;font-size:15px}
+ .dempty p{margin:0;font-size:12.5px;line-height:1.7;color:var(--muted)}
+ .dload{display:flex;align-items:center;justify-content:center;gap:8px;
+   padding:30px 0;color:var(--muted2);font-size:13px}
+ .dload::before{content:'';width:12px;height:12px;border-radius:50%;
+   border:2px solid var(--w18);border-top-color:var(--accent);
+   animation:spin .8s linear infinite}
+ @keyframes spin{to{transform:rotate(360deg)}}
  /* 状态页 */
  .srow{display:flex;gap:10px;padding:10px 4px;border-bottom:1px solid var(--w8);
    font-size:14px;line-height:1.5}
@@ -936,15 +1154,19 @@ QString LanWebServer::mobileHtml() const {
   <span class="logo">A</span><span class="brand">AgentRMC</span>
   <span class="dot" id="netDot"></span>
   <span class="spacer"></span>
-  <button class="hbtn" id="multiSw">多选</button>
   <span class="pill" id="listenPill">未监听</span>
  </div>
  <div id="offline" hidden>连接不上电脑，正在重试…</div>
  <div id="pages">
   <div id="pwork" class="page">
+   <div id="workHint">
+    <span id="workHintText">左滑标为已处理 · 右滑回 Agent · 长按多选</span>
+    <button id="multiSw" aria-pressed="false">多选</button>
+   </div>
    <div id="list" class="scroll"></div>
    <div id="batchBar" hidden>
-    <span id="batchCount" class="where"></span>
+    <span id="batchCount">已选 0</span>
+    <button class="hbtn" id="batchAll">全选</button>
     <button class="btn primary" id="batchAck">✓ 标为已处理</button>
     <button class="btn" id="batchCancel">取消</button>
    </div>
@@ -953,7 +1175,21 @@ QString LanWebServer::mobileHtml() const {
     <p>Agent 等你确认、或任务做完时，这里会自动出现一条。<br>喊你靠电脑桌宠的语音；这一页开着时自动刷新。</p>
    </div>
   </div>
-  <div id="pevents" class="page" hidden><div id="evList" class="scroll"></div></div>
+  <div id="pdispatch" class="page" hidden>
+   <div class="dispatchhead">
+    <div class="dheadtext">
+     <h2 class="dtitle">选会话派任务</h2>
+     <p class="dsub" id="dispatchCount">先看上下文，再决定派给谁</p>
+    </div>
+    <button id="sessRefresh">刷新</button>
+   </div>
+   <div id="agentChips"></div>
+   <div id="sessList" class="scroll"></div>
+   <div id="sessEmpty" class="dempty" hidden>
+    <h3>还没有可读的会话</h3>
+    <p>电脑上的 Agent 产生过会话后，这里会按项目列出来。<br>只读本地会话库，不会改动 PC 当前会话。</p>
+   </div>
+  </div>
   <div id="pstatus" class="page" hidden><div id="statusBody" class="scroll"></div></div>
   <div id="pchat" class="page" hidden>
    <div class="chathead">
@@ -965,27 +1201,30 @@ QString LanWebServer::mobileHtml() const {
     <button class="newpill" id="chatNew" hidden>有新消息 ↓</button>
    </div>
    <div class="chatfoot">
-    <input id="chatText" type="text" placeholder="派回这条会话…" enterkeyhint="send">
+    <input id="chatText" type="text" placeholder="写一句任务，派到这个会话…" enterkeyhint="send">
     <input id="chatFile" type="file" hidden>
      <button class="btn" id="chatAttach" title="传文件">📎</button>
-     <button class="btn primary" id="chatSend">发送</button>
+     <button class="btn primary" id="chatSend">派发</button>
    </div>
    <div class="notice" id="chatNotice" hidden></div>
   </div>
  </div>
  <div id="tabbar">
   <button class="tab active" data-tab="0">待我处理<span class="count" id="tabCount" hidden></span></button>
-  <button class="tab" data-tab="1">事件流</button>
+  <button class="tab" data-tab="1">派发</button>
   <button class="tab" data-tab="2">状态</button>
  </div>
 </div>
+<div id="toast"></div>
 <script>
-)HTML") + QString::fromUtf8(R"HTML(let STATE=null,tab=0,timer=null,lastSig='',evSeen=0;
+)HTML") + QString::fromUtf8(R"HTML(let STATE=null,tab=0,timer=null,lastSig='';
 let chatId='',chatMsgs=[],chatIds=new Set(),chatTotal=0,chatHasMore=false,chatLoading=false,chatAtBottom=true,chatMeta={};
+let chatKind='work',chatExe='',chatSession='',chatProject='',chatAgentName='',chatCanDispatch=true;
+let CATALOG=null,catalogLoading=false,catalogAt=0,catalogError='',dispatchSig='',selectedExe='';
+const GROUP_STATE=new Map();  // 项目折叠态：跨轮询/切换 Agent/进出聊天保持
 const $=id=>document.getElementById(id);
 const COLOR={'needs-me':'var(--pending)','review':'var(--ok)','working':'var(--info)'};
 const LABEL={'needs-me':'等你处理','review':'待验收','working':'进行中'};
-const EVCOLOR={error:'var(--danger)',voice:'var(--ok)',system:'var(--ok)',status:'var(--muted)'};
 const TOKENS={'--bg':'bg','--surface':'card.bg','--surface2':'card.bg2',
  '--text':'text','--text-soft':'text.soft','--text-dim':'text.dim',
  '--muted':'muted','--muted2':'muted.2','--ghost':'ghost','--faint':'faint',
@@ -1043,7 +1282,9 @@ async function load(){
 function startPoll(){
  if(timer)clearInterval(timer);
  load();
- timer=setInterval(()=>{if(!document.hidden){load();if(chatId)fetchTranscript(0,'append');}},2500);
+ timer=setInterval(()=>{if(!document.hidden){load();
+  if(chatId)fetchTranscript(0,'append');
+  else if(tab===1&&!catalogLoading&&Date.now()-catalogAt>20000)loadSessions();}},2500);
 }
 document.addEventListener('visibilitychange',()=>{
  if(!document.hidden&&STATE){load();if(chatId)fetchTranscript(0,'append');}
@@ -1065,17 +1306,53 @@ async function doPair(code){
 }
 $('pairBtn').onclick=()=>doPair($('pairCode').value);
 $('pairCode').addEventListener('keydown',e=>{if(e.key==='Enter')doPair($('pairCode').value);});
-async function act(obj){
+function buzz(ms){try{if(navigator.vibrate)navigator.vibrate(ms);}catch(e){}}
+let toastTimer=null;
+function toast(msg,ms){
+ const el=$('toast');if(!el)return;
+ el.textContent=msg;el.classList.add('on');
+ if(toastTimer)clearTimeout(toastTimer);
+ toastTimer=setTimeout(()=>el.classList.remove('on'),ms||1700);
+}
+async function postResult(obj){
  try{
   const r=await fetch('/m/action',{method:'POST',
    headers:{'Content-Type':'application/json','X-Requested-With':'fetch'},
    body:JSON.stringify(obj)});
-  if(r.status===401){showPair();return;}
- }catch(e){setNet(false);}
- load();
+  if(r.status===401){showPair();return {ok:false,status:401,data:{}};}
+  let data={};try{data=await r.json();}catch(e){}
+  if(r.status>=500)setNet(false);
+  return {ok:r.ok,status:r.status,data};
+ }catch(e){setNet(false);return {ok:false,status:0,data:{}};}
 }
+async function post(obj){return (await postResult(obj)).ok;}
+async function act(obj){await post(obj);load();}
 function base(p){const t=(p||'').replace(/[\/\\]+$/,'');
  const i=Math.max(t.lastIndexOf('/'),t.lastIndexOf('\\'));return i<0?t:t.slice(i+1);}
+function hasProject(p){
+ const b=base(p);
+ return !!b&&b!=='.'&&b!=='..';
+}
+function projectName(p){return hasProject(p)?base(p):'未分类任务';}
+// 同一 basename 可能是两个不同路径（例如 githubrepos\tuwen-editor 与
+// Desktop\tuwen-editor）：归档状态必须按完整路径分开，不能合组。
+function projectKey(p){
+ return String(p||'').trim().replace(/[\\/]+$/,'').replace(/\//g,'\\').toLowerCase();
+}
+function projectParentName(p){
+ const t=String(p||'').trim().replace(/[\\/]+$/,'');
+ const i=Math.max(t.lastIndexOf('/'),t.lastIndexOf('\\'));
+ return i<0?'':base(t.slice(0,i));
+}
+function agoText(iso){
+ const t=Date.parse(iso||'');if(isNaN(t))return '';
+ const s=Math.max(0,(Date.now()-t)/1000);
+ if(s<60)return '刚刚';
+ if(s<3600)return Math.floor(s/60)+' 分钟前';
+ if(s<86400)return Math.floor(s/3600)+' 小时前';
+ if(s<86400*30)return Math.floor(s/86400)+' 天前';
+ return new Date(t).toLocaleDateString();
+}
 function where(it){if(!it.session_id) return '未关联会话';
  const b=base(it.project);
  if(b!=='.'&&b!=='..'&&b) return b;
@@ -1130,13 +1407,51 @@ function stripAgentPrefix(msg,title){
  if(s.startsWith(t+':')) return s.slice(t.length+1);
  return s;
 }
+// 手势阈值：先锁方向再跟手；过阈值后加阻尼，松手文案明确告诉用户会执行什么。
+const SWIPE_MIN=60,SWIPE_MAX=116;
+let ACTIVE_CARD=null;
+function swipeOffset(dx){
+ const a=Math.abs(dx),v=a<=SWIPE_MIN?a:SWIPE_MIN+(a-SWIPE_MIN)*.34;
+ return Math.sign(dx)*Math.min(SWIPE_MAX,v);
+}
+function shortTitle(it,max){
+ const t=String((it&&it.title)||'');
+ const n=max||8;
+ return t.length>n?t.slice(0,n)+'…':t;
+}
+// 销账动画：卡面滑出去 + 行高收掉，动画跑完列表才真的少一行。
+function collapse(el){
+ if(!el||el.classList.contains('gone'))return;
+ // 先把当前高度钉成 px 并强制一次布局，再挂 .gone 收到 0——否则起始值是 auto，
+ // max-height 不可插值，会直接跳到 0（卡片「啪」一下消失，没有滑出感）。
+ el.style.maxHeight=el.offsetHeight+'px';
+ void el.offsetHeight;
+ el.classList.add('gone');
+ requestAnimationFrame(()=>{el.style.maxHeight='0px';el.style.marginBottom='0px';});
+}
 function card(it){
  const d=(STATE||{}).dispatch||{};
  const notice=(d.noticeId===it.id)?(d.notice||''):'';
  const zcodeNotice=!!(notice&&d.noticeExe==='ZCode.exe');
- const el=document.createElement('div');el.className='card';
+ const selected=MULTI.sel.has(it.id);
+ const el=document.createElement('div');
+ el.className='card'+(MULTI.on?' multi':'')+(selected?' sel':'');
+ el.dataset.id=it.id;el.tabIndex=0;
+ // 手势底层：右滑（卡面往右走）露左边「打开 Agent」，左滑露右边「标为已处理」。
+ const hl=document.createElement('div');hl.className='hint l';
+ const hli=document.createElement('span');hli.className='ic';hli.textContent='▶';
+ const hlt=document.createElement('span');hlt.className='label';hlt.textContent='打开';
+ hl.append(hli,hlt);
+ const hr=document.createElement('div');hr.className='hint r';
+ const hrt=document.createElement('span');hrt.className='label';hrt.textContent='已处理';
+ const hri=document.createElement('span');hri.className='ic';hri.textContent='✓';
+ hr.append(hrt,hri);
+ // 卡面
+ const face=document.createElement('div');face.className='face';
  const bar=document.createElement('div');bar.className='bar';
  bar.style.background=stageColor(it);
+ const chk=document.createElement('div');chk.className='chk'+(selected?' on':'');
+ chk.setAttribute('aria-hidden','true');
  const l1=document.createElement('div');l1.className='l1';
  const name=document.createElement('span');name.className='name';name.textContent=it.title||'';
  const stage=document.createElement('span');stage.className='stage';
@@ -1147,55 +1462,90 @@ function card(it){
  const wh=document.createElement('div');wh.className='where';wh.textContent=whereLabel(it);
  const msg=document.createElement('div');msg.className='msg';
  msg.textContent=stripAgentPrefix(it.message,it.title);
- el.append(bar,l1,wh,msg);
- // 点卡片进聊天页（打开即最新记录）；按钮各自阻止冒泡。
- el.onclick=()=>openChat(it.id);
- if(notice){const n=document.createElement('div');n.className='notice';n.textContent=notice;el.append(n);}
- // 多选模式：勾选块替代操作按钮，点卡片 = 勾选/取消。
- if(MULTI.on){
-  const chk=document.createElement('div');
-  chk.className='chk'+(MULTI.sel.has(it.id)?' on':'');
-  chk.textContent=MULTI.sel.has(it.id)?'✓':'';
-  el.onclick=(e)=>{e.stopPropagation();
-    if(MULTI.sel.has(it.id)) MULTI.sel.delete(it.id); else MULTI.sel.add(it.id);
-    renderWork();};
-  el.append(chk);
-  return el;
- }
- // 手势操作（按钮不再占行）：右滑回到 Agent（ZCode 派发通知态=聚焦），
- // 左滑标为已处理；长按 500ms 进多选并勾上这一条（头部「多选」开关是另一条路）。
- // ZCode 通知态的「重启」是配套动作，保留文字按钮（手势没承载这个动作）。
+ face.append(bar,chk,l1,wh,msg);
+ if(notice){const n=document.createElement('div');n.className='notice';n.textContent=notice;face.append(n);}
+ // ZCode 通知态的「重启」是配套动作，多选时暂时收起，退出多选原位恢复。
  if(zcodeNotice){
-  const rs=document.createElement('button');rs.className='btn warn';
+  const rs=document.createElement('button');rs.className='btn warn zrestart';
   rs.textContent='重启 ZCode';
   rs.onclick=(e)=>{e.stopPropagation();if(confirm('重启 ZCode 桌面？会中断它里面正在跑的其它轮次；重启后打开会话即可看到派发消息全文。'))act({cmd:'restartZcode'});};
-  el.append(rs);
+  face.append(rs);
  }
- let sx=0,sy=0,lpTimer=null,lpFired=false;
+ el.append(hl,hr,face);
+ el.onclick=()=>{if(MULTI.on)toggleSel(it.id);else openChat(it.id);};
+ el.onkeydown=(e)=>{if(e.key!=='Enter'&&e.key!==' ')return;e.preventDefault();
+  if(MULTI.on)toggleSel(it.id);else openChat(it.id);};
+ let sx=0,sy=0,gesture='',lastDx=0,lpTimer=null,lpFired=false,armed=false;
+ let suppressClick=false,suppressTimer=null,settleTimer=null;
  const cancelLp=()=>{if(lpTimer){clearTimeout(lpTimer);lpTimer=null;}};
- el.addEventListener('touchstart',(e)=>{const t=e.touches[0];sx=t.clientX;sy=t.clientY;
-  lpFired=false;
-  lpTimer=setTimeout(()=>{lpFired=true;MULTI.on=true;
-   if(!MULTI.sel.has(it.id)) MULTI.sel.add(it.id);
-   renderWork();},500);},{passive:true});
+ const hideHints=()=>{hl.style.opacity='0';hr.style.opacity='0';};
+ const clearArmed=()=>{armed=false;hl.classList.remove('armed');hr.classList.remove('armed');
+  hlt.textContent='打开';hrt.textContent='已处理';};
+ const swallowClick=()=>{suppressClick=true;if(suppressTimer)clearTimeout(suppressTimer);
+  suppressTimer=setTimeout(()=>{suppressClick=false;},420);};
+ const springBack=()=>{
+  if(settleTimer)clearTimeout(settleTimer);
+  face.style.transition='';face.style.transform='translateX(0px)';face.style.opacity='1';
+  hideHints();clearArmed();
+  settleTimer=setTimeout(()=>{face.style.transform='';face.style.opacity='';},260);
+ };
+ el.addEventListener('touchstart',(e)=>{
+  if(MULTI.on||e.touches.length!==1)return;
+  const t=e.touches[0];sx=t.clientX;sy=t.clientY;gesture='';lastDx=0;
+  ACTIVE_CARD=el;lpFired=false;clearArmed();hideHints();
+  if(settleTimer)clearTimeout(settleTimer);
+  face.style.transition='none';
+  lpTimer=setTimeout(()=>{if(ACTIVE_CARD!==el||gesture)return;
+   lpFired=true;swallowClick();buzz(16);setMulti(true,it.id);},460);
+ },{passive:true});
  el.addEventListener('touchmove',(e)=>{
-  const t=e.touches[0];const dx=t.clientX-sx;const dy=t.clientY-sy;
-  if(Math.abs(dx)>10||Math.abs(dy)>10) cancelLp();
-  if(Math.abs(dx)>Math.abs(dy)&&Math.abs(dx)>8){
-   el.style.transform='translateX('+dx+'px)';
-   el.style.opacity=String(Math.max(.35,1-Math.abs(dx)/320));
-   el.style.borderColor=dx<0?'var(--danger)':(dx>0?'var(--accent)':'');}
- },{passive:true});
+  if(MULTI.on||ACTIVE_CARD!==el)return;
+  const t=e.touches[0],dx=t.clientX-sx,dy=t.clientY-sy;lastDx=dx;
+  if(!gesture&&Math.max(Math.abs(dx),Math.abs(dy))<8)return;
+  if(!gesture){gesture=Math.abs(dx)>Math.abs(dy)?'x':'y';cancelLp();}
+  if(gesture==='y')return;
+  e.preventDefault();
+  const lim=swipeOffset(dx);
+  face.style.transform='translateX('+lim+'px)';
+  const p=Math.min(1,Math.abs(dx)/SWIPE_MIN);
+  hl.style.opacity=dx>0?String(.18+.82*p):'0';
+  hr.style.opacity=dx<0?String(.18+.82*p):'0';
+  const over=Math.abs(dx)>=SWIPE_MIN;
+  if(over&&!armed){armed=true;(dx>0?hl:hr).classList.add('armed');
+   if(dx>0)hlt.textContent='松手';else hrt.textContent='松手';buzz(10);}
+  else if(!over&&armed)clearArmed();
+  else if(over&&armed){
+   hl.classList.toggle('armed',dx>0);hr.classList.toggle('armed',dx<0);
+   hlt.textContent=dx>0?'松手':'打开';
+   hrt.textContent=dx<0?'松手':'已处理';}
+ },{passive:false});
  el.addEventListener('touchend',(e)=>{
-  cancelLp();
-  const t=e.changedTouches[0];const dx=t.clientX-sx;const dy=t.clientY-sy;
-  el.style.transform='';el.style.opacity='';el.style.borderColor='';
-  const horiz=Math.abs(dx)>Math.abs(dy)*1.2;
-  if(dx<-56&&horiz){SWIPE_ACK=it.id;act({cmd:'ack',id:it.id});}
-  else if(dx>56&&horiz){act({cmd:zcodeNotice?'raiseZcode':'open',id:it.id});}
+  if(ACTIVE_CARD!==el)return;
+  cancelLp();ACTIVE_CARD=null;
+  const t=e.changedTouches[0],dx=t.clientX-sx,dy=t.clientY-sy;
+  const wasLong=lpFired;lpFired=false;
+  if(wasLong||MULTI.on){swallowClick();gesture='';return;}
+  if(gesture!=='x'){face.style.transition='';face.style.transform='';clearArmed();hideHints();return;}
+  swallowClick();
+  const commit=Math.abs(dx)>=SWIPE_MIN&&Math.abs(dx)>Math.abs(dy)*1.1;
+  if(commit&&dx<0){setTimeout(()=>{hideHints();clearArmed();},130);ackOne(it,el);}
+  else if(commit){
+   buzz(12);springBack();toast('正在打开 '+shortTitle(it)+'…');
+   act({cmd:zcodeNotice?'raiseZcode':'open',id:it.id});
+  }else springBack();
+  gesture='';lastDx=0;
  },{passive:true});
+ el.addEventListener('touchcancel',()=>{
+  if(ACTIVE_CARD===el)ACTIVE_CARD=null;
+  cancelLp();if(gesture==='x')swallowClick();lpFired=false;gesture='';springBack();
+ },{passive:true});
+ // 新的主动按下会解除上一手势的 click 防误触；手势自己补发的 click 没有新 pointerdown。
+ el.addEventListener('pointerdown',()=>{suppressClick=false;
+  if(suppressTimer)clearTimeout(suppressTimer);},{passive:true});
+ // 滑动/长按后的合成 click 必须吃掉，否则右滑会顺便打开聊天页。
  el.addEventListener('click',(e)=>{
-  if(lpFired){e.stopPropagation();e.preventDefault();lpFired=false;}
+  if(suppressClick){e.stopPropagation();e.preventDefault();suppressClick=false;
+   if(suppressTimer)clearTimeout(suppressTimer);}
  },true);
  return el;
 }
@@ -1215,6 +1565,7 @@ function bubble(m){
 // B1：待答请求只读卡片（授权/提问）。内联应答是 B2/B3，这里先展示。
 function requestCard(req){
  const d=document.createElement('div');d.className='reqcard';
+ d.dataset.reqId=req.id||'';   // 失败回执按 id 找卡（见 applyAnswerFailure）
  const head=document.createElement('div');head.className='reqhead';
  if(req.kind==='approval'){
   head.textContent='🔐 等你授权'+(req.toolName?'：'+req.toolName:'');
@@ -1232,6 +1583,9 @@ function requestCard(req){
     return b;};
    row.append(mk('允许','allowed-once',true),mk('拒绝','rejected',false));
    d.append(row);
+   // 回执行：失败原因写在卡上（原来只飘页顶 notice，滚动后看不见）。
+   const st=document.createElement('div');st.className='reqstate';st.hidden=true;
+   d.append(st);d._reqState=st;
   }
  }else{
   head.textContent='❓ 等你选方案';d.append(head);
@@ -1306,6 +1660,19 @@ function reqState(card,msg){
  const el=card._reqstate||(card.parentElement&&card.parentElement._reqstate);
  if(el){el.hidden=false;el.textContent=msg;}
 }
+// 应答失败回执：把原因写进**对应那张卡**并恢复按钮（能重试）。卡片每次重绘
+// 都重建，所以由 renderChatFrame 每帧调用，按 dataset.reqId 找卡。
+function applyAnswerFailure(){
+ const d=(STATE||{}).dispatch||{};
+ if(!d.noticeRequest||d.noticeId!==chatId)return;
+ const card=[...document.querySelectorAll('.reqcard')]
+  .find(c=>c.dataset.reqId===d.noticeRequest);
+ if(!card)return;
+ if(card._reqState){card._reqState.hidden=false;
+  card._reqState.textContent=d.notice||'提交失败，请重试';
+  card._reqState.style.color='var(--danger)';}
+ card.querySelectorAll('.reqbtn').forEach(b=>{b.disabled=false;});
+}
 function maybeAutoLoad(){
  const list=$('chatList');
  if(chatHasMore&&!chatLoading&&chatId&&
@@ -1345,13 +1712,36 @@ function paintChat(mode,prevH,prevTop){
  maybeAutoLoad();
 }
 function renderChatFrame(){
- $('chatTitle').textContent=chatMeta.sessionTitle||chatMeta.title||'会话';
- $('chatSub').textContent=(chatMeta.agentExe||'')+' · 共 '+chatTotal+' 条';
- const d=(STATE||{}).dispatch||{};
- const notice=(d.noticeId===chatId)?(d.notice||''):'';
- $('chatNotice').hidden=!notice;$('chatNotice').textContent=notice;
- if(d.draftId===chatId&&d.draftText&&!$('chatText').value)
-  $('chatText').value=d.draftText;
+ $('chatBack').textContent=chatKind==='session'?'‹ 派发':'‹ 待办';
+ const title=chatMeta.sessionTitle||chatMeta.title||
+  (chatKind==='session'?'会话 '+String(chatSession||'').slice(0,8):'会话');
+ $('chatTitle').textContent=title;
+ const who=chatKind==='session'?(chatAgentName||chatMeta.agentName||''):
+  (chatMeta.agentExe||'');
+ const bits=[];
+ if(who)bits.push(who);
+ if(chatKind==='session'&&chatProject)bits.push(projectName(chatProject));
+ bits.push('共 '+chatTotal+' 条');
+ $('chatSub').textContent=bits.join(' · ');
+ $('chatText').placeholder=chatCanDispatch
+  ?(chatKind==='session'?'写一句任务，派到这个会话…':'派回这条会话…')
+  :'这个 Agent 暂不支持手机派发，记录只读';
+ $('chatText').disabled=!chatCanDispatch;
+ $('chatSend').disabled=!chatCanDispatch;
+ $('chatAttach').disabled=!chatCanDispatch;
+ if(!chatCanDispatch){
+  $('chatNotice').hidden=false;
+  $('chatNotice').textContent='只读：该 Agent 的手机派发通道未开通；记录仍可查看。';
+ }
+ if(chatKind!=='session'){
+  const d=(STATE||{}).dispatch||{};
+  const notice=(d.noticeId===chatId)?(d.notice||''):'';
+  $('chatNotice').hidden=!notice;$('chatNotice').textContent=notice;
+  if(d.draftId===chatId&&d.draftText&&!$('chatText').value)
+   $('chatText').value=d.draftText;
+ }
+ // 失败原因也落到那张卡上（页顶 notice 在长记录里容易被滚出视野）。
+ applyAnswerFailure();
 }
 function mergeChatPage(p,mode){
  chatTotal=p.total||0;
@@ -1372,9 +1762,12 @@ function mergeChatPage(p,mode){
 }
 async function fetchTranscript(offset,mode){
  if(!chatId)return;
+ const url=chatKind==='session'
+  ?'/m/session?exe='+encodeURIComponent(chatExe)+'&session='
+    +encodeURIComponent(chatSession)+'&offset='+offset+'&limit=50'
+  :'/m/transcript?id='+encodeURIComponent(chatId)+'&offset='+offset+'&limit=50';
  try{
-  const r=await fetch('/m/transcript?id='+encodeURIComponent(chatId)
-   +'&offset='+offset+'&limit=50',{cache:'no-store'});
+  const r=await fetch(url,{cache:'no-store'});
   if(r.status===401){showPair();return;}
   if(r.status===404){closeChat();return;}
   if(!r.ok)return;
@@ -1396,20 +1789,50 @@ async function fetchTranscript(offset,mode){
   }
  }catch(e){/* 网络抖一下，下一轮再试 */}
 }
-function openChat(id){
- chatId=id;chatMsgs=[];chatIds=new Set();chatLoading=false;chatMeta={};
- $('chatText').value='';
- render();
- fetchTranscript(0,'init');
+function startChat(kind,id,meta){
+ chatKind=kind;chatId=id;chatMsgs=[];chatIds=new Set();chatLoading=false;chatMeta={};
+ chatExe=meta&&meta.exe||'';chatSession=meta&&meta.session||'';
+ chatProject=meta&&meta.project||'';chatAgentName=meta&&meta.agentName||'';
+ chatCanDispatch=meta&&meta.canDispatch!==false;
+ $('chatText').value='';$('chatNotice').hidden=true;$('chatNotice').textContent='';
+ render();fetchTranscript(0,'init');
 }
-function closeChat(){chatId='';chatMsgs=[];chatIds=new Set();render();}
-function sendChat(){
+function openChat(id){startChat('work',id,{});}
+function openSession(agent,row){
+ tab=1;
+ startChat('session',row.id,{exe:agent.exe,session:row.id,project:row.project,
+  agentName:agent.name,canDispatch:row.can_dispatch!==false});
+}
+function closeChat(){
+ chatId='';chatMsgs=[];chatIds=new Set();
+ chatKind='work';chatExe='';chatSession='';chatProject='';chatAgentName='';
+ chatCanDispatch=true;
+ render();
+}
+async function sendChat(){
  const t=$('chatText').value.trim();
- if(!t||!chatId)return;
+ if(!t||!chatId||!chatCanDispatch)return;
  $('chatText').blur();
- act({cmd:'dispatch',id:chatId,text:t});
+ const btn=$('chatSend'),old=btn.textContent;
+ btn.disabled=true;btn.textContent='派发中…';
+ const res=chatKind==='session'
+  ?await postResult({cmd:'dispatchSession',agent:chatExe,session:chatSession,
+     project:chatProject,text:t})
+  :await postResult({cmd:'dispatch',id:chatId,text:t});
+ btn.disabled=false;btn.textContent=old;
+ if(!res.ok){
+  const note=$('chatNotice');note.hidden=false;
+  const why=(res.data&&res.data.error)||('HTTP '+res.status);
+  note.textContent='没发出去：'+why+'（草稿已保留）';
+  return;
+ }
  $('chatText').value='';
- fetchTranscript(0,'append');
+ const note=$('chatNotice');note.hidden=false;
+ note.textContent=chatKind==='session'
+  ?'已派发。送达回执到了会进「待我处理」；这里继续看会话记录。'
+  :'已派回这条会话，等回执…';
+ toast('已派发');
+ load();fetchTranscript(0,'append');
 }
 $('chatBack').onclick=closeChat;
 $('chatSend').onclick=sendChat;
@@ -1447,50 +1870,308 @@ $('chatList').addEventListener('scroll',()=>{
   fetchTranscript(chatMsgs.length,'older');
  }
 });
-$('multiSw').onclick=()=>{MULTI.on=!MULTI.on;MULTI.sel.clear();
- $('multiSw').textContent=MULTI.on?'完成':'多选';
- $('multiSw').classList.toggle('on',MULTI.on);renderWork();};
-$('batchAck').onclick=()=>{MULTI.sel.forEach(id=>act({cmd:'ack',id}));
- MULTI.sel.clear();MULTI.on=false;renderWork();};
-$('batchCancel').onclick=()=>{MULTI.on=false;MULTI.sel.clear();renderWork();};
+// 多选的所有视觉状态都原位同步：轮询/勾选不再 replaceChildren，滚动与按压不断。
+function syncMultiUi(){
+ const shown=sortedItems().filter(i=>!ACKED.has(i.id));
+ const on=MULTI.on,count=MULTI.sel.size;
+ $('multiSw').textContent=on?'完成':'多选';
+ $('multiSw').classList.toggle('on',on);
+ $('multiSw').setAttribute('aria-pressed',String(on));
+ $('multiSw').disabled=!on&&shown.length===0;
+ $('workHintText').textContent=on?'轻点卡片选择，再点一次取消':'左滑标为已处理 · 右滑回 Agent · 长按多选';
+ $('workHint').hidden=shown.length===0;
+ $('batchBar').hidden=!on;
+ $('batchCount').textContent='已选 '+count+' 条';
+ $('batchAck').disabled=!on||count===0;
+ $('batchAll').disabled=shown.length===0;
+ $('batchAll').textContent=(count>0&&count===shown.length)?'全不选':'全选';
+ document.querySelectorAll('#list .card').forEach(c=>{
+  const sel=MULTI.sel.has(c.dataset.id);
+  c.classList.toggle('multi',on);c.classList.toggle('sel',on&&sel);
+  c.setAttribute('role',on?'checkbox':'button');
+  c.setAttribute('aria-checked',String(on&&sel));
+  const title=c.querySelector('.name');
+  c.setAttribute('aria-label',(title?title.textContent:'待办')+(on?(sel?'，已选':'，未选'):'，打开会话'));
+  const chk=c.querySelector('.chk');if(chk)chk.classList.toggle('on',on&&sel);
+ });
+}
+function setMulti(on,selectedId){
+ MULTI.on=on;
+ if(!on)MULTI.sel.clear();
+ if(selectedId)MULTI.sel.add(selectedId);
+ syncMultiUi();
+}
+$('multiSw').onclick=()=>{buzz(MULTI.on?6:12);setMulti(!MULTI.on);};
+function toggleSel(id){
+ if(MULTI.sel.has(id))MULTI.sel.delete(id);else MULTI.sel.add(id);
+ buzz(6);syncMultiUi();
+ const chk=document.querySelector('#list .card[data-id="'+CSS.escape(id)+'"] .chk');
+ if(chk){chk.classList.remove('pop');void chk.offsetWidth;chk.classList.add('pop');}
+}
+// 左滑松手：从手指离开的位置继续滑出，不先跳回卡中；随后再收掉行高。
+function ackOne(it,el){
+ if(ACKED.has(it.id))return;
+ ACKED.set(it.id,Date.now());buzz(8);
+ const face=el&&el.querySelector('.face');
+ if(face){el.classList.add('swiped');
+  face.style.transition='transform .18s cubic-bezier(.4,0,1,1),opacity .18s ease';
+  requestAnimationFrame(()=>{face.style.transform='translateX(-108%)';face.style.opacity='0';});}
+ collapse(el);toast('已标记「'+shortTitle(it,12)+'」');
+ setTimeout(()=>{act({cmd:'ack',id:it.id});},340);
+}
+$('batchAll').onclick=()=>{
+ const items=sortedItems().filter(i=>!ACKED.has(i.id));
+ if(MULTI.sel.size&&MULTI.sel.size===items.length)MULTI.sel.clear();
+ else items.forEach(i=>MULTI.sel.add(i.id));
+ buzz(6);syncMultiUi();
+};
+$('batchAck').onclick=()=>{
+ const ids=[...MULTI.sel];
+ if(!ids.length)return;
+ const nodes=[...document.querySelectorAll('#list .card')];
+ $('batchAck').disabled=true;$('batchAck').textContent='标记中…';
+ // 逐条错开 45ms 收走，批量也有节奏；动画跑完再一次性发请求。
+ ids.forEach((id,i)=>setTimeout(()=>{
+  ACKED.set(id,Date.now());
+  collapse(nodes.find(c=>c.dataset.id===id));
+ },i*45));
+ setTimeout(async()=>{
+  let failed=0;
+  for(const id of ids){if(!await post({cmd:'ack',id}))failed++;}
+  setMulti(false);
+  $('batchAck').disabled=false;$('batchAck').textContent='✓ 标为已处理';
+  toast(failed?'已提交 '+(ids.length-failed)+' 条，'+failed+' 条待重试':'已标记 '+ids.length+' 条为已处理');
+  load();
+ },ids.length*45+380);
+};
+$('batchCancel').onclick=()=>setMulti(false);
 
 function renderWork(){
+ // 手指还按着卡片时不做结构更新；下一轮轮询会再带上这份 state。
+ if(ACTIVE_CARD)return;
  const items=sortedItems();
- const sig=JSON.stringify(items)+'|'+JSON.stringify((STATE||{}).dispatch||{})+
-   '|'+(MULTI.on?'m'+MULTI.sel.size:'')+'|'+(SWIPE_ACK||'');
+ // 已点销账但还没被 state 带走的条目先藏起来；请求失败（state 里还在）
+ // 超过 5 秒就放回来，别让一次失败把卡片永久吞掉。
+ const now=Date.now();
+ const present=new Set(items.map(i=>i.id));
+ ACKED.forEach((ts,id)=>{if(!present.has(id)||now-ts>5000)ACKED.delete(id);});
+ const shown=items.filter(i=>!ACKED.has(i.id));
+ const visible=new Set(shown.map(i=>i.id));
+ MULTI.sel.forEach(id=>{if(!visible.has(id))MULTI.sel.delete(id);});
+ // 多选和勾选不进入结构签名，它们由 syncMultiUi 原位处理。
+ const sig=JSON.stringify(shown)+'|'+JSON.stringify((STATE||{}).dispatch||{})+
+   '|'+[...ACKED.keys()].join(',');
  const ae=document.activeElement;
  // 正在打字时不重排：2.5s 一轮的刷新不能把输入焦点冲掉。
- if(ae&&(ae.tagName==='TEXTAREA'||ae.tagName==='INPUT')) return;
- if(sig===lastSig) return;
+ if(ae&&(ae.tagName==='TEXTAREA'||ae.tagName==='INPUT'))return;
+ if(sig===lastSig){syncMultiUi();return;}
  lastSig=sig;
- const bar=$('batchBar');
- bar.hidden=!(MULTI.on);
- if(MULTI.on){
-  $('batchCount').textContent='已选 '+MULTI.sel.size+' 条';
-  $('batchAck').disabled=MULTI.sel.size===0;
- }
- const list=$('list');const keep=list.scrollTop;
- list.replaceChildren();
- WHERE_HITS={};
- SWIPE_ACK='';  // 销账那条已经不在 items 里，暂存清掉
- items.forEach(it=>{const k=(it.title||'')+'|'+where(it);
+ const list=$('list'),keep=list.scrollTop;
+ list.replaceChildren();WHERE_HITS={};
+ shown.forEach(it=>{const k=(it.title||'')+'|'+where(it);
   WHERE_HITS[k]=(WHERE_HITS[k]||0)+1;});
- items.forEach(it=>list.append(card(it)));
+ shown.forEach(it=>list.append(card(it)));
  list.scrollTop=keep;
- $('empty').hidden=items.length>0;
- list.hidden=items.length===0;
+ $('empty').hidden=shown.length>0;list.hidden=shown.length===0;
+ syncMultiUi();
 }
-function renderEvents(){
- const events=(STATE||{}).events||[];
- const list=$('evList');const keep=list.scrollTop;
- const grew=events.length>evSeen;
- list.replaceChildren();
- events.forEach(ev=>{
-  const d=document.createElement('div');d.className='ev';
-  d.style.color=EVCOLOR[ev.kind]||'var(--text-dim)';
-  d.textContent=ev.text||'';list.append(d);});
- list.scrollTop=grew?list.scrollHeight:keep;
- evSeen=events.length;
+// ---------- 派发页：Agent 筛选 + 项目分组会话 + 点进聊天记录 ----------
+async function loadSessions(force){
+ if(catalogLoading)return;
+ if(!force&&CATALOG&&Date.now()-catalogAt<15000){
+  if(tab===1&&!chatId)renderDispatch();return;
+ }
+ catalogLoading=true;catalogError='';catalogAt=Date.now();
+ if(tab===1&&!chatId)renderDispatch();
+ try{
+  const r=await fetch('/m/sessions',{cache:'no-store',
+   signal:AbortSignal.timeout(12000)});
+  if(r.status===401){showPair();return;}
+  if(!r.ok)throw new Error('HTTP '+r.status);
+  CATALOG=await r.json();
+  catalogAt=Date.now();dispatchSig='';
+  const agents=CATALOG.agents||[];
+  if(!agents.some(a=>a.exe===selectedExe))selectedExe=agents.length?agents[0].exe:'';
+ }catch(e){
+  catalogError='读不到会话目录：确认电脑上的 Agent 还开着，或点「刷新」重试。';
+  toast(catalogError,2600);
+ }finally{
+  catalogLoading=false;
+  if(tab===1&&!chatId)renderDispatch();
+ }
+}
+function agentChip(agent){
+ const b=document.createElement('button');
+ b.className='chip'+(agent.exe===selectedExe?' on':'');
+ b.setAttribute('aria-pressed',String(agent.exe===selectedExe));
+ const st=document.createElement('span');st.className='st'+(agent.alive?' on':'');
+ const name=document.createElement('span');name.textContent=agent.name||agent.exe;
+ const n=document.createElement('span');n.className='n';
+ n.textContent=String((agent.sessions||[]).length);
+ b.append(st,name,n);
+ b.onclick=()=>{
+  if(selectedExe===agent.exe)return;
+  selectedExe=agent.exe;dispatchSig='';
+  $('sessList').scrollTop=0;renderDispatch();
+ };
+ return b;
+}
+function sessionCard(agent,row){
+ const el=document.createElement('div');el.className='sescard';
+ if(row.can_dispatch===false)el.classList.add('readonly');
+ el.tabIndex=0;el.setAttribute('role','button');
+ el.setAttribute('aria-label',(row.title||'会话')+'，'+projectName(row.project)+
+  '，'+agoText(row.updated_at));
+ const main=document.createElement('div');main.className='sesmain';
+ const top=document.createElement('div');top.className='sestop';
+ const title=document.createElement('span');title.className='sestitle';
+ title.textContent=row.title||('会话 '+String(row.id||'').slice(0,8));
+ top.append(title);
+ if(row.stage){
+  const badge=document.createElement('span');badge.className='sesbadge';
+  badge.textContent=LABEL[row.stage]||'待办';top.append(badge);
+ }
+ const meta=document.createElement('div');meta.className='sesmeta';
+ const time=document.createElement('span');time.className='sestime';
+ time.textContent='最近更新 · '+agoText(row.updated_at);
+ meta.append(time);
+ if(row.can_dispatch===false){
+  const ro=document.createElement('span');ro.className='sesread';ro.textContent='只读';
+  meta.append(ro);
+ }
+ main.append(top,meta);
+ const arrow=document.createElement('span');arrow.className='searrow';arrow.textContent='›';
+ el.append(main,arrow);
+ const open=()=>{buzz(5);openSession(agent,row);};
+ el.onclick=open;
+ el.onkeydown=(e)=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();open();}};
+ return el;
+}
+function projectGroup(agent,label,rows,fullProject,archived,defaultOpen,stateKeyOverride){
+ const groupKey=fullProject?projectKey(fullProject):'__ungrouped';
+ const stateKey=stateKeyOverride||(agent.exe+'|'+groupKey);
+ const group=document.createElement('div');group.className='projgroup';
+ group.dataset.group=groupKey;
+ if(archived)group.classList.add('archived');
+ const head=document.createElement('button');head.className='projhead';
+ const chev=document.createElement('span');chev.className='projchev';chev.textContent='›';
+ const name=document.createElement('span');name.className='projlabel';name.textContent=label;
+ head.append(chev,name);
+ if(archived){
+  const arc=document.createElement('span');arc.className='projarch';arc.textContent='已归档';
+  head.append(arc);
+ }
+ const count=document.createElement('span');count.className='projcount';
+ count.textContent=rows.length+' 个';
+ head.append(count);
+ head.title=fullProject||'没有项目路径的会话';
+ const body=document.createElement('div');body.className='projbody';
+ rows.forEach(row=>body.append(sessionCard(agent,row)));
+ const stored=GROUP_STATE.get(stateKey);
+ const open=stored===undefined?!!defaultOpen:stored;
+ group.classList.toggle('closed',!open);
+ body.hidden=!open;
+ head.setAttribute('aria-expanded',String(open));
+ head.setAttribute('aria-label',label+(archived?'，已归档':'')+'，'+rows.length+' 个会话，'+(open?'已展开':'已收起'));
+ head.onclick=()=>{
+  const opening=body.hidden;
+  body.hidden=!opening;
+  group.classList.toggle('closed',!opening);
+  head.setAttribute('aria-expanded',String(opening));
+  head.setAttribute('aria-label',label+(archived?'，已归档':'')+'，'+rows.length+' 个会话，'+(opening?'已展开':'已收起'));
+  GROUP_STATE.set(stateKey,opening);
+ };
+ group.append(head,body);
+ return group;
+}
+function renderDispatch(){
+ if(!CATALOG){
+  $('agentChips').replaceChildren();
+  $('sessEmpty').hidden=true;
+  $('sessList').hidden=false;
+  const list=$('sessList');list.replaceChildren();
+  if(catalogLoading){
+   const d=document.createElement('div');d.className='dload';d.textContent='正在读取会话目录…';
+   list.append(d);
+  }else{
+   const box=document.createElement('div');box.className='dempty';
+   const h=document.createElement('h3');h.textContent='会话目录还没加载';
+   const p=document.createElement('p');p.textContent=catalogError||'点右上角「刷新」读取最近会话。';
+   box.append(h,p);list.append(box);
+  }
+  $('dispatchCount').textContent='先看上下文，再决定派给谁';
+  return;
+ }
+ const agents=CATALOG.agents||[];
+ if(!agents.length){
+  $('agentChips').replaceChildren();
+  $('sessList').hidden=true;$('sessEmpty').hidden=false;
+  $('dispatchCount').textContent='没有找到最近的 Agent 会话';
+  return;
+ }
+ if(!agents.some(a=>a.exe===selectedExe))selectedExe=agents[0].exe;
+ const sig=selectedExe+'|'+JSON.stringify(CATALOG);
+ if(sig===dispatchSig)return;
+ dispatchSig=sig;
+ const chips=$('agentChips');chips.replaceChildren();
+ agents.forEach(a=>chips.append(agentChip(a)));
+ const agent=agents.find(a=>a.exe===selectedExe)||agents[0];
+ const rows=agent.sessions||[];
+ const list=$('sessList');const keep=list.scrollTop;
+ list.replaceChildren();list.hidden=false;$('sessEmpty').hidden=true;
+ if(!rows.length){
+  $('dispatchCount').textContent=agent.name+' · 暂无会话';
+  list.hidden=true;$('sessEmpty').hidden=false;return;
+ }
+const groups=new Map();
+const unclassified=[];
+rows.forEach(row=>{
+ // 没有项目，或项目是宿主自动生成的临时工作区（WorkBuddy 的日期目录等）：
+ // 都是「单任务」，统一进未分类任务，不按目录名/日期各开一组。
+ if(!hasProject(row.project)||row.generated){unclassified.push(row);return;}
+ const key=projectKey(row.project);
+ if(!groups.has(key))groups.set(key,{path:row.project,items:[]});
+ groups.get(key).items.push(row);
+});
+ const allGroups=[...groups.values()];
+ const nameHits=new Map();
+ allGroups.forEach(g=>{
+  const n=base(g.path).toLowerCase();
+  nameHits.set(n,(nameHits.get(n)||0)+1);
+ });
+const active=[],archived=[];
+allGroups.forEach(g=>{
+ let label=base(g.path);
+ if(nameHits.get(label.toLowerCase())>1){
+  const parent=projectParentName(g.path);
+  if(parent)label+=' · '+parent;
+ }
+ // 同一项目按每行自己的归档状态拆两组：活跃组只放未归档的会话，已归档的
+ // （老路径、宿主归档）单独进「已归档」区，两边不混在一组里。
+ const key=projectKey(g.path);
+ const live=g.items.filter(r=>!r.archived);
+ const dead=g.items.filter(r=>!!r.archived);
+ if(live.length)active.push({key,label,items:live,fullProject:g.path});
+ if(dead.length)archived.push({key,label,items:dead,fullProject:g.path});
+});
+const uncLive=unclassified.filter(r=>!r.archived);
+const uncDead=unclassified.filter(r=>!!r.archived);
+$('dispatchCount').textContent=agent.name+' · '+active.length+' 个项目'
+ +(unclassified.length?' · '+unclassified.length+' 个未分类任务':'')
+ +(archived.length?' · '+archived.length+' 个已归档':'')+' · '+rows.length+' 个会话';
+// 默认只展开最近的一个活跃项目，其余收起；项目再多也不会铺成一条长墙。
+active.forEach((g,i)=>list.append(
+ projectGroup(agent,g.label,g.items,g.fullProject,false,i===0)));
+// 单任务会话统一收进一个「未分类任务」组，默认折叠。
+if(uncLive.length)list.append(
+ projectGroup(agent,'未分类任务',uncLive,'',false,false,agent.exe+'|__unclassified'));
+ // 归档项目固定排最后，并默认收起；仍可展开看历史会话。
+archived.forEach(g=>list.append(
+ projectGroup(agent,g.label,g.items,g.fullProject,true,false)));
+// 没有项目的已归档单任务也进已归档区，带「已归档」徽标。
+if(uncDead.length)list.append(projectGroup(agent,'未分类任务',uncDead,'',true,false,
+ agent.exe+'|__unclassified-archived'));
+ list.scrollTop=keep;
 }
 function renderStatus(){
  const s=STATE||{},h=s.health||{},meta=s.meta||{};
@@ -1518,14 +2199,19 @@ function renderStatus(){
  note.textContent='手机页开着时约 2.5 秒刷新一次；锁屏/后台不推送（局域网 http 的浏览器限制），喊你靠电脑桌宠语音。派回会话与电脑端同一条通道：证明不了目标会话就不发，草稿会留在输入框。';
  body.append(note);
 }
-// 多选批量销账 + 左滑销账的暂存：MULTI.sel 存待办 id，SWIPE_ACK 是刚被
-// 左滑销掉的那条（下一轮刷新前先别重排）。
+// 多选批量销账 + 左滑销账的暂存：MULTI.sel 存待办 id，ACKED 是刚点过销账、
+// 等 state 追认的那些（下一轮刷新前先别让它们回来）。
 const MULTI={on:false,sel:new Set()};
-let SWIPE_ACK='';
+// 已点「标为已处理」的 id → 时间戳。乐观更新：先把卡片收走，等下一轮 state 追认；
+// 追认不到（请求失败）5 秒后放回来。
+const ACKED=new Map();
 function render(){
  const work=(STATE||{}).work||{};
  const att=work.attention_count||0;
- $('tabCount').hidden=!att;$('tabCount').textContent=String(att);
+ // 计数变了弹一下，扫一眼就知道又压了一条。
+ const cnt=$('tabCount');const prev=cnt.textContent;
+ cnt.hidden=!att;cnt.textContent=String(att);
+ if(att&&prev!==String(att)){cnt.classList.remove('bump');void cnt.offsetWidth;cnt.classList.add('bump');}
  const meta=(STATE||{}).meta||{};
  $('listenPill').textContent=meta.listening?'监听中':'未监听';
  $('listenPill').className='pill'+(meta.listening?' on':'');
@@ -1534,19 +2220,32 @@ function render(){
  $('pchat').hidden=!inChat;
  $('multiSw').hidden=inChat||tab!==0;  // 多选开关只在待办页有意义
  $('pwork').hidden=inChat||tab!==0;
- $('pevents').hidden=inChat||tab!==1;
+ $('pdispatch').hidden=inChat||tab!==1;
  $('pstatus').hidden=inChat||tab!==2;
  document.querySelectorAll('#tabbar .tab').forEach((b,i)=>b.classList.toggle('active',i===tab));
  if(inChat){renderChatFrame();return;}
- if(tab===0)renderWork();else if(tab===1)renderEvents();else renderStatus();
+ if(tab===0)renderWork();
+ else if(tab===1){
+  renderDispatch();
+  if(!CATALOG&&!catalogLoading&&Date.now()-catalogAt>5000)loadSessions();
+ }else renderStatus();
 }
 function adopt(s){
- STATE=s;lastSig='';
+ // 相同 state 不再清空结构签名：2.5s 轮询不该把整列卡片重建一遍。
+ STATE=s;
  applyTheme(s.theme||{});
  render();
 }
+$('sessRefresh').onclick=()=>{
+ $('sessRefresh').disabled=true;
+ loadSessions(true).finally(()=>{$('sessRefresh').disabled=false;});
+};
 document.querySelectorAll('#tabbar .tab').forEach(b=>{
- b.onclick=()=>{tab=+b.dataset.tab;render();};
+ b.onclick=()=>{
+  tab=+b.dataset.tab;
+  if(tab===1&&(!CATALOG||Date.now()-catalogAt>15000))loadSessions();
+  render();
+ };
 });
 (function(){
  $('pairName').value=autoName();

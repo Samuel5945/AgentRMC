@@ -741,6 +741,13 @@ public:
         optionsBox_ = new QVBoxLayout();
         optionsBox_->setSpacing(6);
         lay->addLayout(optionsBox_);
+        // 应答回执行：提交失败时把原因写在卡上（用户 2026-11-16 反馈「点了没
+        // 反应」——失败只进事件流，卡片这头毫无反馈）。平时隐藏不占高度。
+        state_ = new QLabel(this);
+        state_->setWordWrap(true);
+        setLineFont(state_, 11, QFont::Normal);
+        state_->hide();
+        lay->addWidget(state_);
         auto *footer = new QHBoxLayout();
         footer->setSpacing(6);
         backBtn_ = makeButton(QStringLiteral("上一步"), false);
@@ -780,9 +787,43 @@ public:
             tm.color(QStringLiteral("muted")).name()));
         progress_->setStyleSheet(QStringLiteral("color:%1;").arg(
             tm.color(QStringLiteral("muted")).name()));
+        state_->setStyleSheet(QStringLiteral("color:%1;").arg(
+            tm.color(QStringLiteral("danger")).name()));
+    }
+
+    // 应答回执（用户 2026-11-16）：提交中/失败都要在卡上看得见。
+    // 失败时把按钮恢复可用——失败不该把卡锁死，用户得能重试或改走聊天页。
+    void setAnswerState(const QString &text, bool failed) {
+        state_->setText(text);
+        state_->setVisible(!text.isEmpty());
+        if (failed) {
+            for (QPushButton *b : optionButtons_) {
+                if (b != nullptr) {
+                    b->setEnabled(true);
+                }
+            }
+        }
+        pinTextHeights();
+        fitHeight();
+        adjustSize();
+    }
+
+    // 提交中：按钮禁用并改文案，防连点（原来只在聊天页做过，桌宠卡没有）。
+    void markSubmitting(const QString &text) {
+        for (QPushButton *b : optionButtons_) {
+            if (b != nullptr) {
+                b->setEnabled(false);
+            }
+        }
+        state_->setText(text);
+        state_->setVisible(!text.isEmpty());
+        pinTextHeights();
+        fitHeight();
+        adjustSize();
     }
 
     void clearOptions() {
+        optionButtons_.clear();  // 控件随布局一起删，这里只清指针表
         while (QLayoutItem *it = optionsBox_->takeAt(0)) {
             if (QWidget *w = it->widget()) {
                 // deleteLater() 是延迟到事件循环才真删：同一轮里重配一次，上一排
@@ -867,6 +908,9 @@ public:
         picked_ = QJsonObject();
         idx_ = 0;
         inlineAnswerable_ = false;
+        state_->clear();          // 上一单的失败回执不能跟到这一单
+        state_->hide();
+        stateH_ = 0;
         const QString kind = req.value(QStringLiteral("kind")).toString();
         const bool answerable = req.value(QStringLiteral("answerable")).toBool();
         if (kind == QStringLiteral("approval")) {
@@ -884,12 +928,17 @@ public:
                 row->setSpacing(8);
                 auto *allow = makeButton(QStringLiteral("允许"), true);
                 auto *reject = makeButton(QStringLiteral("拒绝"), false);
+                // 点了先标「提交中」：失败回执到达前按钮已禁用，杜绝连点重复入队。
                 connect(allow, &QPushButton::clicked, this, [this] {
+                    markSubmitting(QStringLiteral("正在提交…"));
                     if (answer_) { answer_(QStringLiteral("allowed-once"), QJsonArray()); }
                 });
                 connect(reject, &QPushButton::clicked, this, [this] {
+                    markSubmitting(QStringLiteral("正在提交…"));
                     if (answer_) { answer_(QStringLiteral("rejected"), QJsonArray()); }
                 });
+                optionButtons_.append(allow);
+                optionButtons_.append(reject);
                 row->addWidget(allow);
                 row->addWidget(reject);
                 optionsBox_->addLayout(row);
@@ -956,6 +1005,15 @@ private:
             QRect(0, 0, textW, 100000), Qt::TextWordWrap,
             title_->text().isEmpty() ? QStringLiteral(" ") : title_->text()).height());
         title_->setFixedHeight(titleH_);
+        // 回执行（失败原因）：空则钉 0，别让隐藏控件留下空洞。
+        if (state_->text().isEmpty()) {
+            stateH_ = 0;
+            state_->setFixedHeight(0);
+        } else {
+            stateH_ = qMax(1, QFontMetrics(state_->font()).boundingRect(
+                QRect(0, 0, textW, 100000), Qt::TextWordWrap, state_->text()).height());
+            state_->setFixedHeight(stateH_);
+        }
         if (body_->text().isEmpty()) {
             body_->setFixedHeight(0);
             bodyH_ = 0;
@@ -987,6 +1045,9 @@ private:
         }
         if (items > 1) {
             h += optionsBox_->spacing() * (items - 1);
+        }
+        if (stateH_ > 0) {
+            h += 6 + stateH_;               // spacing + 应答回执行
         }
         h += 6 + 26;                        // spacing + 页脚行（按钮 minHeight 26）
         setFixedHeight(h);
@@ -1128,15 +1189,19 @@ private:
     QLabel *title_ = nullptr;
     QLabel *progress_ = nullptr;
     QLabel *body_ = nullptr;
+    QLabel *state_ = nullptr;   // 应答回执（提交中/失败原因）
     QVBoxLayout *optionsBox_ = nullptr;
     QPushButton *backBtn_ = nullptr;
     QPushButton *chatBtn_ = nullptr;
+    // 选项按钮（授权那排允许/拒绝）：提交中禁用、失败恢复可用，都要逐个改。
+    QList<QPushButton *> optionButtons_;
     QJsonArray questions_;
     QJsonObject picked_;
     int idx_ = 0;
     bool inlineAnswerable_ = false;
     int titleH_ = 18;
     int bodyH_ = 0;
+    int stateH_ = 0;
     QString baseTitle_;   // 无角标的标题（setQueueHint 从这里拼）
     std::function<void(QString, QJsonArray)> answer_;
     std::function<void()> openChat_;
@@ -1464,8 +1529,11 @@ bool VoicePet::showRequestCard(const QString &sessionId,
     const QString sid = sessionId;
     requestCard_->configure(
         req,
+        // 提交后**先不收卡**：等主窗把结果送回来再决定（成功收卡顶下一张、失败
+        // 就在这张卡上写原因）。以前这里立刻 finishCurrentRequest()，卡先消失、
+        // requestId_ 清空，失败回执回来时已经找不到卡——用户看到的正是「点了一
+        // 下卡就没了，什么也没发生」（2026-11-16 用户实测）。
         [this, sid, rid, kind](QString outcome, QJsonArray answers) {
-            finishCurrentRequest();
             emit requestAnswered(sid, rid, kind, answers, outcome);
         },
         [this, sid] {
@@ -1582,6 +1650,49 @@ void VoicePet::applyQueueHint() {
     }
     requestCard_->setQueueHint(int(requestQueue_.size()));
     placeRequestCard();
+}
+
+// 应答失败回执（用户 2026-11-16）：提交失败原来只写事件流，卡片这头毫无反应，
+// 看着就是「点了没反应」。现在把原因直接写在卡上，并恢复按钮可用（能重试）。
+void VoicePet::reportAnswerFailure(const QString &requestId,
+                                   const QString &reason) {
+    if (requestCard_ == nullptr || !requestCard_->isVisible() ||
+        requestId.isEmpty() || requestId_ != requestId) {
+        return;  // 卡已经换人了：别把上一单的错写到现在这张上
+    }
+    requestCard_->setAnswerState(
+        reason.isEmpty() ? QStringLiteral("提交失败，请重试") : reason, true);
+    // 失败不是终局：卡留在原位等用户重试，超时计时重新起算（别刚写完原因就
+    // 被 120s 的旧计时收掉）。
+    if (requestTimer_ != nullptr) {
+        requestTimer_->start(120000);
+    }
+    placeRequestCard();
+}
+
+// 应答已受理（已排进原生端收件箱）：**先不关卡**，标「等宿主确认」。
+// 结果要等插件 1.2s 后的 ack：ok → acceptAnswer 收卡；ok:false / 超时 →
+// reportAnswerFailure 在原卡写原因。这样「点了没反应」永远不会再出现——
+// 卡要么被确认收走，要么带着原因留在原地。
+void VoicePet::markAnswerPending(const QString &requestId) {
+    if (requestCard_ == nullptr || !requestCard_->isVisible() ||
+        requestId.isEmpty() || requestId_ != requestId) {
+        return;
+    }
+    requestCard_->setAnswerState(QStringLiteral("已提交，等宿主确认…"), false);
+    // 等回执的时间不计入 120s 陈旧计时：重新起算，别刚提交就被收掉。
+    if (requestTimer_ != nullptr) {
+        requestTimer_->start(120000);
+    }
+    placeRequestCard();
+}
+
+// 插件确认送达：这时才收卡、顶下一张。
+void VoicePet::acceptAnswer(const QString &requestId) {
+    if (requestId.isEmpty() || requestId_ != requestId) {
+        return;  // 卡已经换人了
+    }
+    finishCurrentRequest();
 }
 
 void VoicePet::clearRequestCard(const QString &requestId) {

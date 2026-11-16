@@ -110,12 +110,27 @@ private:
     // 空串=已排队。kind 从待答清单认（question/approval），不信调用方自报。
     QString enqueueAnswer(const QString &workItemId, const QString &requestId,
                           const QJsonArray &answers, const QString &outcome);
+    // 重启对账：工单落盘、待答请求账只在内存，重启后磁盘上的「等你处理」卡还在
+    // 但它对应的请求已经没账可查（点了只会得到「已不在待答清单」）。判据是
+    // **插件已在线 + 该会话在账里没有待答**：插件只推有待答的会话，所以「没被
+    // 推送」本身就等于「没有待答」，据此归档重启前遗留的注意力卡。
+    void reconcileLegacyAttention();
     // B2：手机/桌面下发的应答件收件箱（会话 id → 待取 answer 数组）与清理。
     // session 非空只取该会话（bridge 系并发授权 hook 各自轮询，防互踩）。
     QString takeAnswerPending(const QString &exe, const QString &session);
     void ackAnswer(const QString &answerId, bool ok, const QString &error);
     void dropAnswerPendingForSession(const QString &sessionId);
     QString lanTranscript(const QString &id, int offset = 0, int limit = 50);
+    // 手机「派发」页：按 Agent 枚举最近会话（项目/标题/更新时间 + 对应活卡），
+    // 以及按 agent+session 直读聊天记录（不要求该会话有活卡）。
+    QString lanSessionsJson();
+    QString lanSessionTranscript(const QString &agentExe,
+                                 const QString &sessionId, int offset = 0,
+                                 int limit = 50);
+    // 任意会话派发（不依赖待办 id）：走同一 SessionDispatch 通道，
+    // 返回拒绝原因；空串＝已受理。
+    QString dispatchToSession(const QString &agentExe, const QString &sessionId,
+                              const QString &project, const QString &text);
     // 手机传文件落盘：按待办 id 找到会话工作目录，存进 .agentrmc/inbox/<session>/，
     // 返回 PC 绝对路径供派发文本引用（agent 按路径读）。
     QJsonObject lanUpload(const QString &id, const QString &filename,
@@ -231,6 +246,9 @@ private:
     SessionDispatch *dispatch_ = nullptr;
     QString dispatchNotice_;
     QString dispatchNoticeId_;
+    // 应答失败回执归属的请求 id：聊天页据此把原因写在**对应那张卡**上，而不是
+    // 只在页顶飘一条 notice（长记录里滚到中间根本看不见，用户 2026-11-16 反馈）。
+    QString dispatchNoticeRequest_;
     // 通知归属的宿主 exe：外壳据此决定要不要亮「重启 ZCode」按钮。
     QString dispatchNoticeExe_;
     QString dispatchDraftId_;
@@ -242,6 +260,12 @@ private:
     // B1：DSH 插件推送的会话当前待答请求（会话 id → requests 数组），聊天页只读
     // 展示。内存账，插件变化即推、定时重推；不落盘。
     QHash<QString, QJsonArray> pendingRequests_;
+    // 启动时从磁盘读到的「等你处理」工单 id：这批卡是上一个进程留下的，请求账
+    // 早没了。等确认插件在线后按它归档，本次运行新建的卡不进这个集合。
+    QSet<QString> legacyAttentionIds_;
+    // 插件活性起点（exe 小写 → 首次来轮询应答件的时刻）：/request-answer/pending
+    // 每 1.2s 一拍，与「有没有待答请求」无关，是唯一可靠的在线读数。
+    QHash<QString, QDateTime> pluginAliveSince_;
     // B2：插件推送心跳（exe 小写 → 最近一次 /requests 推送时刻）。15s 内到过账
     // 视为插件在线，聊天页的提问卡才给点选应答。
     QHash<QString, QDateTime> pluginSeenAt_;

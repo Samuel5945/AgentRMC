@@ -1,8 +1,8 @@
 #include "MainWindow.h"
 
 #include "ui/AppPage.h"
-#include "ui/CursorOverlay.h"
 #include "ui/AgentBridgeDialog.h"
+#include "ui/CursorOverlay.h"
 #include "ui/GuideDialog.h"
 #include "ui/KeymapPage.h"
 #include "ui/RemotePanel.h"
@@ -28,6 +28,7 @@
 #include "core/ModelImport.h"
 #include "core/Presets.h"
 #include "core/SessionDispatch.h"
+#include "core/SessionCleaner.h"
 #include "core/SessionTranscript.h"
 #include "core/ZcodeDispatch.h"
 #include "core/ThemeManager.h"
@@ -61,6 +62,7 @@
 #include <QDesktopServices>
 #include <QGuiApplication>
 #include <QJsonArray>
+#include <QMessageBox>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QListWidget>
@@ -394,6 +396,10 @@ QLabel *makeChip(const QString &label, const char *token) {
     return chip;
 }
 
+// 重启对账的预热期：插件应答件轮询每 1.2s 一拍，等它连上满这么久，才算「账已经
+// 建好了」——启动瞬间就把遗留卡判死，会把插件还没来得及重推的活请求一起清掉。
+constexpr qint64 kPluginWarmupMs = 5000;
+
 }  // namespace
 
 MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
@@ -413,6 +419,14 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
     QDir().mkpath(workDir);
     workItems_ = std::make_unique<WorkItemStore>(workDir + "/work-items.json");
     workItems_->load();
+    // 记下「上一个进程留下的注意力卡」：请求账只在内存，重启后这些卡已经无从
+    // 应答（点了只会得到「已不在待答清单」）。等插件重推整批时按它归档，别把
+    // 死卡一直挂在「等你处理」里。必须在 load() 之后、任何新工单产生之前取。
+    for (const WorkItem &legacy : workItems_->items()) {
+        if (!legacy.done && (legacy.stage == QStringLiteral("needs-me"))) {
+            legacyAttentionIds_.insert(legacy.id);
+        }
+    }
     dispatch_ = new SessionDispatch(this);
     connect(dispatch_, &SessionDispatch::receipt, this,
             [this](const QString &dispatchId, const QString &exe,
@@ -944,6 +958,13 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
                 if (!why.isEmpty()) {
                     appendEvent(QStringLiteral("error"), QString(), QString(),
                                 QStringLiteral("桌宠应答未提交：%1").arg(why), 0);
+                    // 光进事件流用户看不见（他正盯着卡）：把原因写回卡上。
+                    if (voicePet_ != nullptr) {
+                        voicePet_->reportAnswerFailure(requestId, why);
+                    }
+                } else if (voicePet_ != nullptr) {
+                    // 已排进收件箱：卡先留着标「等宿主确认」，等插件 ack 再收。
+                    voicePet_->markAnswerPending(requestId);
                 }
                 refreshWorkItems();
                 if (workWeb_ != nullptr) {
@@ -1129,6 +1150,16 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
         // B2：插件轮询取应答件 / 应答结果回执。
         bridge->setAnswerPendingProvider(
             [this](const QString &exe, const QString &session) {
+                // 应答件轮询每 1.2s 一拍，与「有没有待答请求」无关：这是判断
+                // 插件在不在线最可靠的读数（重启对账靠它，见
+                // reconcileLegacyAttention）。
+                if (!exe.isEmpty()) {
+                    const QString key = exe.toLower();
+                    if (!pluginAliveSince_.contains(key)) {
+                        pluginAliveSince_.insert(
+                            key, QDateTime::currentDateTimeUtc());
+                    }
+                }
                 return takeAnswerPending(exe, session);
             });
         bridge->setAnswerAckHandler([this](const QJsonObject &payload) {
@@ -2666,6 +2697,10 @@ void MainWindow::watchdogTick() {
     }
     importSpool();
     trackPluginTransitions();
+    // 重启对账：插件在线且过了预热期后，把上一个进程遗留的死待答卡归档。
+    // 放这里而不是 /requests 推送里——插件只推还有待答的会话，死卡对应的会话
+    // 根本不会再被推一次（见 reconcileLegacyAttention 的注释）。
+    reconcileLegacyAttention();
     refreshHealth();
     HostRuntime::refreshHint();
     if (workWeb_ != nullptr) {
@@ -3306,6 +3341,7 @@ QString MainWindow::webShellState() {
          QJsonObject{{QStringLiteral("notice"), dispatchNotice_},
                      {QStringLiteral("noticeId"), dispatchNoticeId_},
                      {QStringLiteral("noticeExe"), dispatchNoticeExe_},
+                     {QStringLiteral("noticeRequest"), dispatchNoticeRequest_},
                      {QStringLiteral("draftId"), dispatchDraftId_},
                      {QStringLiteral("draftText"), dispatchDraftText_},
                      {QStringLiteral("supported"), supportedDispatchExes()}}},
@@ -3325,6 +3361,11 @@ void MainWindow::ensureLanServer() {
     lan_->setTranscriptProvider([this](const QString &id, int offset, int limit) {
         return lanTranscript(id, offset, limit);
     });
+    lan_->setSessionListProvider([this] { return lanSessionsJson(); });
+    lan_->setSessionTranscriptProvider(
+        [this](const QString &exe, const QString &session, int offset, int limit) {
+            return lanSessionTranscript(exe, session, offset, limit);
+        });
     lan_->setUploadHandler([this](const QString &id, const QString &filename,
                                   const QByteArray &data) {
         return lanUpload(id, filename, data);
@@ -3333,6 +3374,22 @@ void MainWindow::ensureLanServer() {
     // 白名单已在服务端验过；这里与桌面外壳走同一个 handleWebAction，
     // 做完它内部统一 refresh，桌面外壳自动跟着刷新，双端一致免费。
     lan_->setActionHandler([this](const QJsonObject &action) {
+        // 任意会话派发：不像待办派发那样有 work id，成功/拒绝要立刻回给手机。
+        if (action.value(QStringLiteral("cmd")).toString() ==
+            QStringLiteral("dispatchSession")) {
+            const QString why = dispatchToSession(
+                action.value(QStringLiteral("agent")).toString(),
+                action.value(QStringLiteral("session")).toString(),
+                action.value(QStringLiteral("project")).toString(),
+                action.value(QStringLiteral("text")).toString());
+            if (!why.isEmpty()) {
+                return QJsonObject{{QStringLiteral("ok"), false},
+                                   {QStringLiteral("code"), 409},
+                                   {QStringLiteral("error"), why}};
+            }
+            return QJsonObject{{QStringLiteral("ok"), true},
+                               {QStringLiteral("code"), 200}};
+        }
         handleWebAction(action);
         return QJsonObject{{QStringLiteral("ok"), true},
                            {QStringLiteral("code"), 200}};
@@ -3373,12 +3430,13 @@ QString MainWindow::lanShellState() {
         {QStringLiteral("work"), work},
         {QStringLiteral("health"),
          QJsonDocument::fromJson(healthJson().toUtf8()).object()},
-        {QStringLiteral("events"), webEvents_},
+        // 手机页不再展示事件流：目录/聊天/派发都用独立路由，轮询体里别带它。
         {QStringLiteral("theme"), webThemeJson()},
         {QStringLiteral("dispatch"),
          QJsonObject{{QStringLiteral("notice"), dispatchNotice_},
                      {QStringLiteral("noticeId"), dispatchNoticeId_},
                      {QStringLiteral("noticeExe"), dispatchNoticeExe_},
+                     {QStringLiteral("noticeRequest"), dispatchNoticeRequest_},
                      {QStringLiteral("draftId"), dispatchDraftId_},
                      {QStringLiteral("draftText"), dispatchDraftText_},
                      {QStringLiteral("supported"), supportedDispatchExes()}}},
@@ -3455,7 +3513,7 @@ QString MainWindow::enqueueAnswer(const QString &workItemId, const QString &requ
     if (item == nullptr || requestId.isEmpty()) {
         return QStringLiteral("应答缺字段（待办/requestId）");
     }
-    if (!SessionDispatch::supportsPluginChannel(item->agentExe)) {
+    if (!SessionDispatch::supportsInlineAnswer(item->agentExe)) {
         return QStringLiteral("该宿主暂不支持内联应答");
     }
     QString kind;
@@ -3499,6 +3557,64 @@ QString MainWindow::enqueueAnswer(const QString &workItemId, const QString &requ
     return QString();
 }
 
+// 重启对账（2026-11-16 用户实测「重启后旧卡变死卡」）：工单落盘、待答请求账
+// 只在内存，所以上一个进程留下的「等你处理」卡重启后仍然挂着，可它对应的授权/
+// 提问早就不在插件账上了——点允许只会得到「这条请求已不在待答清单」。
+//
+// 为什么不能靠 /requests 推送触发对账：插件（以及 bridge 系 hook）**只推还有
+// 待答请求的会话**，死卡对应的会话重启后根本不会再被推一次，等推送等于永远等
+// 不到。所以判据改成两条，都成立才归档：
+//   ① 该宿主插件已在线（/request-answer/pending 每 1.2s 来一拍，与有无待答无关，
+//      是唯一可靠的在线读数；等满 kPluginWarmupMs 才动手，避开启动瞬间的账未建期）；
+//   ② 这个会话当前在待答账里没有请求（插件推过空集，或压根没推过——后者同样
+//      意味着没有待答）。
+// 只动 legacyAttentionIds_：本次运行新建的卡不进这个集合，永远不会被误杀。
+void MainWindow::reconcileLegacyAttention() {
+    if (workItems_ == nullptr || legacyAttentionIds_.isEmpty()) {
+        return;
+    }
+    const QDateTime now = QDateTime::currentDateTimeUtc();
+    QSet<QString> liveExes;  // 已在线且过了预热期的宿主（小写）
+    for (auto it = pluginAliveSince_.constBegin();
+         it != pluginAliveSince_.constEnd(); ++it) {
+        if (it.value().msecsTo(now) >= kPluginWarmupMs) {
+            liveExes.insert(it.key());
+        }
+    }
+    if (liveExes.isEmpty()) {
+        return;  // 插件还没证明自己在跑：账可能还没建好，别急着杀
+    }
+    QVector<QString> stale;
+    for (const WorkItem &item : workItems_->items()) {
+        if (item.done || item.stage != QStringLiteral("needs-me")) {
+            continue;
+        }
+        if (!legacyAttentionIds_.contains(item.id)) {
+            continue;  // 本次运行新建的卡：不碰
+        }
+        if (!liveExes.contains(item.agentExe.toLower())) {
+            continue;  // 这个宿主的插件没在线：它的账不可信，留着卡
+        }
+        if (pendingRequests_.contains(item.sessionId)) {
+            continue;  // 该会话仍有待答请求：卡是活的
+        }
+        stale.append(item.id);
+    }
+    if (stale.isEmpty()) {
+        return;
+    }
+    for (const QString &id : stale) {
+        workItems_->ack(id);
+        legacyAttentionIds_.remove(id);
+    }
+    appendEvent(QStringLiteral("status"), QString(), QString(),
+                QStringLiteral("重启后对账：%1 张旧待答卡对应的请求已不存在，"
+                               "已归档（重启前遗留，点了也不会生效）")
+                    .arg(stale.size()),
+                0);
+    refreshWorkItems();
+}
+
 // B2：插件 1.2s 轮询取走本 exe 的应答件（未取走的超时 60s 作废：插件没在跑，
 // 别攒一肚子旧答案）。下发后标 handed，ack 时核销。session 非空时只取该会话
 // 的（bridge 系并发授权 hook 各自轮询，不按会话分会互踩别人家的应答件）。
@@ -3507,8 +3623,24 @@ QString MainWindow::takeAnswerPending(const QString &exe, const QString &session
     QJsonArray out;
     for (auto it = pendingAnswers_.begin(); it != pendingAnswers_.end();) {
         if (it->enqueuedAt.secsTo(now) > 60) {
-            dropAnswerPendingForSession(it->sessionId);
+            // 60s 没人取件 = 插件/桥根本没在跑：这条答案作废，但**必须告诉用户**
+            // ——否则又是「点了没反应」（2026-11-16 实测这类静默失败最误导）。
+            const QString deadId = it->id;
+            const QString deadSid = it->sessionId;
+            dropAnswerPendingForSession(deadSid);
             it = pendingAnswers_.erase(it);
+            appendEvent(QStringLiteral("error"), QString(), QString(),
+                        QStringLiteral("应答超时作废：宿主插件 60 秒内没来取件"
+                                       "（插件没在运行？）"),
+                        0);
+            if (voicePet_ != nullptr) {
+                voicePet_->reportAnswerFailure(
+                    deadId, QStringLiteral("宿主插件没来取件，答案没送到——"
+                                           "检查 DSH 里插件是否在运行"));
+            }
+            if (dispatchNoticeRequest_ == deadId) {
+                dispatchNotice_ = QStringLiteral("应答超时作废：插件没来取件");
+            }
             continue;
         }
         if (!it->handed && (exe.isEmpty() ||
@@ -3544,12 +3676,30 @@ void MainWindow::ackAnswer(const QString &answerId, bool ok, const QString &erro
         appendEvent(QStringLiteral("status"), QString(), QString(),
                     QStringLiteral("内联应答送达：会话 %1 %2")
                         .arg(pa.sessionId.left(8), pa.kind), 0);
+        // 插件确认送达：现在才收卡、顶下一张。
+        if (voicePet_ != nullptr) {
+            voicePet_->acceptAnswer(pa.id);
+        }
+        if (dispatchNoticeRequest_ == pa.id) {
+            dispatchNotice_.clear();
+            dispatchNoticeRequest_.clear();
+        }
     } else {
-        // 插件明确拒绝（不可达/无活表/界面没在线）：撤掉这条待发，避免反复
-        // 取件；请求卡留在 pendingRequests_（插件推送为准），聊天页仍可重试。
+        // 插件明确拒绝（不可达/无活表/界面没在线/请求已不在等待）：撤掉这条待发，
+        // 避免反复取件；请求卡留在 pendingRequests_（插件推送为准），聊天页仍可
+        // 重试。拒绝原因也要回到卡上——这条路径才是「点了允许却没生效」最常见
+        // 的现场（旧插件没 prepend 抢不到瀑布时回的就是「已不在等待」）。
         pendingAnswers_.remove(answerId);
         appendEvent(QStringLiteral("error"), QString(), QString(),
                     QStringLiteral("内联应答失败：%1").arg(error), 0);
+        if (voicePet_ != nullptr) {
+            voicePet_->reportAnswerFailure(pa.id, error);
+        }
+        dispatchNotice_ = error.isEmpty()
+                              ? QStringLiteral("应答未生效，请重试")
+                              : error;
+        dispatchNoticeId_ = itemIdForSession(pa.sessionId);
+        dispatchNoticeRequest_ = pa.id;
     }
     if (workWeb_ != nullptr) {
         workWeb_->refresh();
@@ -3619,6 +3769,172 @@ QString MainWindow::lanTranscript(const QString &id, int offset, int limit) {
         return QString();  // 待办不存在 → 服务端回 404
     }
     return QString::fromUtf8(QJsonDocument(chat).toJson(QJsonDocument::Compact));
+}
+
+// 手机「派发」：最近会话目录。这里只读宿主索引，不改变 PC 当前会话；
+// 每个 Agent 最多 12 条，页面按项目分组，点进去再走 lanSessionTranscript。
+QString MainWindow::lanSessionsJson() {
+    const QJsonArray supportedArray = supportedDispatchExes();
+    QStringList supported;
+    for (const QJsonValue &v : supportedArray) {
+        supported.append(v.toString());
+    }
+    QVector<QPair<QDateTime, QJsonObject>> orderedAgents;
+    for (const QString &exe : AgentWindow::knownExes()) {
+        // 不再只取最近 12 条：那个上限会整组吞掉较老的项目。200 条覆盖
+        // 本机所有常规宿主会话；目录页只按选中 Agent 渲染，不会一次铺满。
+        const QVector<SessionTranscript::SessionInfo> sessions =
+            SessionTranscript::listSessions(exe, 200);
+        if (sessions.isEmpty()) {
+            continue;
+        }
+        QDateTime latest;
+        QJsonArray rows;
+        for (const SessionTranscript::SessionInfo &info : sessions) {
+            QJsonObject row{
+                {QStringLiteral("id"), info.id},
+                {QStringLiteral("title"), info.title},
+                {QStringLiteral("project"), info.project},
+                {QStringLiteral("updated_at"), info.updatedAt},
+                {QStringLiteral("archived"), info.archived},
+                // 宿主自动生成的临时工作区（WorkBuddy 日期目录等）：单任务没有
+                // 真项目，目录页不能拿目录名当项目名分组。
+                {QStringLiteral("generated"),
+                 SessionTranscript::generatedWorkspace(info.project)},
+            };
+            const WorkItem *active = nullptr;
+            if (workItems_ != nullptr) {
+                for (const WorkItem &item : workItems_->items()) {
+                    if (!item.done && item.sessionId == info.id) {
+                        active = &item;  // 同会话只留一张活卡，后写覆盖即可
+                    }
+                }
+            }
+            if (active != nullptr) {
+                row.insert(QStringLiteral("work_id"), active->id);
+                row.insert(QStringLiteral("stage"), active->stage);
+            }
+            // 手机页只对确有派发通道的宿主开放输入；活卡状态继续显示，
+            // 不把「这个会话有卡」误当成「这个宿主能接收手机派发」。
+            row.insert(QStringLiteral("can_dispatch"),
+                       supported.contains(exe) && !info.archived);
+            row.insert(QStringLiteral("can_delete"),
+                       info.archived && SessionCleaner::supportsHost(exe));
+            rows.append(row);
+            const QDateTime updated =
+                QDateTime::fromString(info.updatedAt, Qt::ISODateWithMs);
+            if (updated.isValid() &&
+                (!latest.isValid() || updated > latest)) {
+                latest = updated;
+            }
+        }
+        const QJsonObject agent{
+            {QStringLiteral("exe"), exe},
+            {QStringLiteral("name"), AgentWindow::displayName(exe)},
+            {QStringLiteral("alive"), AgentWindow::processAlive(exe)},
+            {QStringLiteral("window"), AgentWindow::alive(exe)},
+            {QStringLiteral("can_dispatch"), supported.contains(exe)},
+            {QStringLiteral("count"), rows.size()},
+            {QStringLiteral("sessions"), rows},
+        };
+        orderedAgents.append({latest, agent});
+    }
+    std::sort(orderedAgents.begin(), orderedAgents.end(),
+              [](const QPair<QDateTime, QJsonObject> &a,
+                 const QPair<QDateTime, QJsonObject> &b) {
+                  return a.first > b.first;
+              });
+    QJsonArray agents;
+    for (const auto &entry : orderedAgents) {
+        agents.append(entry.second);
+    }
+    const QJsonObject root{
+        {QStringLiteral("agents"), agents},
+        {QStringLiteral("generated_at"),
+         QDateTime::currentDateTimeUtc().toString(Qt::ISODate)},
+    };
+    return QString::fromUtf8(
+        QJsonDocument(root).toJson(QJsonDocument::Compact));
+}
+
+QString MainWindow::lanSessionTranscript(const QString &agentExe,
+                                         const QString &sessionId, int offset,
+                                         int limit) {
+    if (agentExe.isEmpty() || sessionId.isEmpty()) {
+        return QString();
+    }
+    const SessionTranscript::Result r =
+        SessionTranscript::read(agentExe, sessionId, limit, offset);
+    QJsonArray reqs = requestsWithAnswerable(sessionId);
+    // 任意会话没有稳定的待办 id，应答入口先保持只读；要代答请走待办卡。
+    for (int i = 0; i < reqs.size(); ++i) {
+        QJsonObject req = reqs.at(i).toObject();
+        req.insert(QStringLiteral("answerable"), false);
+        reqs.replace(i, req);
+    }
+    const QJsonObject chat{
+        {QStringLiteral("agentExe"), agentExe},
+        {QStringLiteral("agentName"), AgentWindow::displayName(agentExe)},
+        {QStringLiteral("sessionId"), sessionId},
+        {QStringLiteral("title"), r.title},
+        {QStringLiteral("sessionTitle"), r.title},
+        {QStringLiteral("supported"), r.supported},
+        {QStringLiteral("error"), r.error},
+        {QStringLiteral("messages"), r.messages},
+        {QStringLiteral("total"), r.total},
+        {QStringLiteral("hasMore"), r.hasMore},
+        {QStringLiteral("offset"), offset},
+        {QStringLiteral("requests"), reqs},
+    };
+    return QString::fromUtf8(QJsonDocument(chat).toJson(QJsonDocument::Compact));
+}
+
+QString MainWindow::dispatchToSession(const QString &agentExe,
+                                      const QString &sessionId,
+                                      const QString &project,
+                                      const QString &text) {
+    if (dispatch_ == nullptr) {
+        return QStringLiteral("派发通道还没就绪");
+    }
+    if (sessionId.trimmed().isEmpty() || text.trimmed().isEmpty()) {
+        return QStringLiteral("会话或派发文案为空");
+    }
+    // 不信任页面传来的 exe：只允许与桌面端同一份派发能力清单。
+    const QJsonArray supported = supportedDispatchExes();
+    if (!supported.contains(QJsonValue(agentExe))) {
+        return QStringLiteral("这个 Agent 暂不支持手机派发");
+    }
+    QString reason;
+    QString dispatchId;
+    const QString cleaned = text.trimmed();
+    if (!dispatch_->dispatch(agentExe, sessionId, project, cleaned, &reason,
+                             &dispatchId)) {
+        dispatchNotice_ = reason;
+        dispatchNoticeId_ = itemIdForSession(sessionId);
+        dispatchNoticeExe_ = agentExe;
+        appendEvent(QStringLiteral("error"), QString(), QString(),
+                    QStringLiteral("手机派发未发：%1").arg(reason), 0);
+        refreshWorkItems();
+        if (workWeb_ != nullptr) {
+            workWeb_->refresh();
+        }
+        return reason;
+    }
+    dispatchSessionById_.insert(dispatchId, sessionId);
+    dispatchReplyBySession_.remove(sessionId);
+    dispatchNotice_ =
+        QStringLiteral("已派往会话 %1，等回执…").arg(sessionId.left(8));
+    dispatchNoticeId_ = itemIdForSession(sessionId);
+    dispatchNoticeExe_ = agentExe;
+    appendEvent(QStringLiteral("status"), QString(), QString(),
+                QStringLiteral("手机派发：%1 → 会话 %2")
+                    .arg(cleaned.left(40), sessionId.left(8)),
+                0);
+    refreshWorkItems();
+    if (workWeb_ != nullptr) {
+        workWeb_->refresh();
+    }
+    return QString();
 }
 
 QJsonObject MainWindow::lanUpload(const QString &id, const QString &filename,
@@ -3796,6 +4112,104 @@ QJsonObject MainWindow::leftShellState() {
 void MainWindow::handleWebAction(const QJsonObject &action) {
     const QString cmd = action.value(QStringLiteral("cmd")).toString();
     const QString id = action.value(QStringLiteral("id")).toString();
+    // 电脑外壳「派发」页的数据通道：目录和任意会话记录都按需推脚本，
+    // 不进 5 秒整窗 state。LAN 的 /m/sessions 走 LanWebServer 独立 provider。
+    if (cmd == QStringLiteral("sessionsLoad")) {
+        if (workWeb_ != nullptr) {
+            workWeb_->pushSessions(
+                QJsonDocument::fromJson(lanSessionsJson().toUtf8()).object());
+        }
+        return;
+    }
+    if (cmd == QStringLiteral("sessionOpen") ||
+        cmd == QStringLiteral("sessionOlder")) {
+        const QString exe = action.value(QStringLiteral("exe")).toString();
+        const QString session =
+            action.value(QStringLiteral("session")).toString();
+        const int offset = action.value(QStringLiteral("offset")).toInt(0);
+        if (workWeb_ != nullptr) {
+            workWeb_->pushSessionChat(QJsonDocument::fromJson(
+                lanSessionTranscript(exe, session, offset, 50).toUtf8())
+                                          .object());
+        }
+        return;
+    }
+    if (cmd == QStringLiteral("dispatchSession")) {
+        const QString why = dispatchToSession(
+            action.value(QStringLiteral("exe")).toString(),
+            action.value(QStringLiteral("session")).toString(),
+            action.value(QStringLiteral("project")).toString(),
+            action.value(QStringLiteral("text")).toString());
+        if (workWeb_ != nullptr) {
+            workWeb_->pushSessionResult(
+                QJsonObject{{QStringLiteral("ok"), why.isEmpty()},
+                            {QStringLiteral("error"), why}});
+        }
+        return;
+    }
+    if (cmd == QStringLiteral("sessionDelete")) {
+        const QJsonArray items = action.value(QStringLiteral("items")).toArray();
+        if (items.isEmpty()) {
+            if (workWeb_ != nullptr) {
+                workWeb_->pushDeleteResult(
+                    QJsonObject{{QStringLiteral("ok"), false},
+                                {QStringLiteral("deleted"), 0},
+                                {QStringLiteral("error"),
+                                 QStringLiteral("没有选择会话")}});
+            }
+            return;
+        }
+        QStringList lines;
+        for (int i = 0; i < items.size() && i < 40; ++i) {
+            const QJsonObject item = items.at(i).toObject();
+            lines.append(QStringLiteral("%1 · %2 · %3")
+                             .arg(item.value(QStringLiteral("title")).toString(),
+                                  item.value(QStringLiteral("exe")).toString(),
+                                  item.value(QStringLiteral("project")).toString()));
+        }
+        if (items.size() > 40) {
+            lines.append(QStringLiteral("…另有 %1 条").arg(items.size() - 40));
+        }
+        raise();
+        activateWindow();
+        QMessageBox box(this);
+        box.setIcon(QMessageBox::Warning);
+        box.setWindowTitle(QStringLiteral("删除已归档会话"));
+        box.setText(QStringLiteral("将同步删除 %1 条已归档会话。").arg(items.size()));
+        box.setInformativeText(QStringLiteral(
+            "删除前会先完整备份到 AgentRMC 数据目录的 session-trash。"
+            "宿主中的原会话会被移除，备份仅用于人工找回。"));
+        box.setDetailedText(lines.join(QLatin1Char('\n')));
+        QPushButton *erase = box.addButton(QStringLiteral("删除并备份"),
+                                           QMessageBox::DestructiveRole);
+        QPushButton *cancel = box.addButton(QStringLiteral("取消"),
+                                            QMessageBox::RejectRole);
+        box.setDefaultButton(cancel);
+        box.exec();
+        if (box.clickedButton() != erase) {
+            if (workWeb_ != nullptr) {
+                workWeb_->pushDeleteResult(
+                    QJsonObject{{QStringLiteral("ok"), false},
+                                {QStringLiteral("canceled"), true},
+                                {QStringLiteral("deleted"), 0},
+                                {QStringLiteral("error"),
+                                 QStringLiteral("已取消")}});
+            }
+            return;
+        }
+        QString error;
+        QJsonObject result = SessionCleaner::removeArchived(items, &error);
+        if (!error.isEmpty() && !result.contains(QStringLiteral("error"))) {
+            result.insert(QStringLiteral("error"), error);
+        }
+        if (workWeb_ != nullptr) {
+            workWeb_->pushDeleteResult(result);
+            // 目录立刻重推一份，删除成功/部分失败都能反映真实剩余项。
+            workWeb_->pushSessions(
+                QJsonDocument::fromJson(lanSessionsJson().toUtf8()).object());
+        }
+        return;
+    }
     if (cmd == QStringLiteral("open")) {
         openWorkItem(id);
         return;
@@ -4083,15 +4497,22 @@ void MainWindow::handleWebAction(const QJsonObject &action) {
             refreshWorkItems();
         } else if (cmd == QStringLiteral("answer")) {
             // B2/B3：聊天页内联应答（提问 answers / 授权 outcome），落收件箱。
+            const QString answerReqId =
+                action.value(QStringLiteral("requestId")).toString();
             const QString why = enqueueAnswer(
-                id, action.value(QStringLiteral("requestId")).toString(),
+                id, answerReqId,
                 action.value(QStringLiteral("answers")).toArray(),
                 action.value(QStringLiteral("outcome")).toString());
             if (!why.isEmpty()) {
                 dispatchNotice_ = why;
                 dispatchNoticeId_ = id;
+                // 归属到具体请求：聊天页把原因写在**那张卡**上（用户 2026-11-16
+                // 反馈「点了没反应」——页顶 notice 在长记录里滚出去就看不见了）。
+                dispatchNoticeRequest_ = answerReqId;
                 appendEvent(QStringLiteral("error"), QString(), QString(),
                             QStringLiteral("内联应答未提交：%1").arg(why), 0);
+            } else {
+                dispatchNoticeRequest_.clear();
             }
             refreshWorkItems();
         }
@@ -5461,7 +5882,8 @@ QJsonObject MainWindow::onCursorAction(const QJsonObject &payload) {
                     {QStringLiteral("backend"), QStringLiteral("async")},
                     {QStringLiteral("verified"), false},
                     {QStringLiteral("note"),
-                     QStringLiteral("点击已投递，结果看 /cursor/state 的 last_click")}};
+                     QStringLiteral("点击已投递，结果看 /cursor/state 的 clicks"
+                                    " 与目标自身反馈")}};
     return out;
 }
 QJsonObject MainWindow::onBridgeCommand(const QJsonObject &body) {

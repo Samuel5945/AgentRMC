@@ -451,6 +451,59 @@ int main(int argc, char *argv[]) {
               !late.updateLiveMessage("nobody", "x"));
     }
 
+    {
+        // 2026-11-16 用户实测「重启后旧卡变死卡」：工单落盘、待答请求账只在内存，
+        // 重启后磁盘上的「等你处理」卡还在但请求已无账可查。原生端的对账判据是
+        // 「插件已在线 + 该会话在待答账里没有请求」→ 归档；这里用 WorkItemStore
+        // 的落盘/重载把那个场景搭出来，验「重载后仍是 needs-me（死卡）」以及
+        // 「对账按 id 归档后不再计入注意力」，把判据依赖的数据形状钉住。
+        const QString legacyPath = dir.path() + "/legacy.json";
+        QString deadId;
+        QString liveId;
+        {
+            WorkItemStore legacy(legacyPath);
+            // 两张重启前留下的卡：一张的请求已经没了（dead），一张仍在等答。
+            const WorkItem dead = legacy.upsert(
+                "hook", "DeepSeek Harness.exe", "s-dead", "D:/repo",
+                "permission", "DeepSeek Harness", "等你确认 pwd",
+                "DeepSeek Harness.exe", "req-dead");
+            const WorkItem live = legacy.upsert(
+                "hook", "DeepSeek Harness.exe", "s-live", "D:/repo",
+                "permission", "DeepSeek Harness", "等你确认 pwd",
+                "DeepSeek Harness.exe", "req-live");
+            deadId = dead.id;
+            liveId = live.id;
+        }
+        WorkItemStore reloaded(legacyPath);
+        const bool loaded = reloaded.load();
+        check("restart keeps the needs-me cards on disk (they are the dead cards)",
+              loaded && reloaded.attentionCount() == 2);
+        // dedupeKey 末段就是请求 id：对账靠它把「这张卡对应的请求还在不在」
+        // 对上号，这里钉住这个形状（改了拼法对账会静默失效）。
+        QString deadKey;
+        for (const WorkItem &item : reloaded.items()) {
+            if (item.id == deadId) {
+                deadKey = item.dedupeKey;
+            }
+        }
+        check("dedupe key ends with the request id so reconciliation can match",
+              deadKey.endsWith(QStringLiteral(":req-dead")));
+        // 对账只归档「请求已不在账上」的那张，仍在等答的那张必须留着。
+        const bool acked = reloaded.ack(deadId);
+        check("reconciliation archives only the request-less legacy card",
+              acked && reloaded.attentionCount() == 1 &&
+                  reloaded.items().size() == 2);
+        bool liveStillOpen = false;
+        for (const WorkItem &item : reloaded.items()) {
+            if (item.id == liveId) {
+                liveStillOpen =
+                    !item.done && item.stage == QStringLiteral("needs-me");
+            }
+        }
+        check("a legacy card whose request is still pending is kept",
+              liveStillOpen);
+    }
+
     std::printf(failures == 0 ? "\nALL PASS\n" : "\n%d FAILED\n", failures);
     return failures == 0 ? 0 : 1;
 }

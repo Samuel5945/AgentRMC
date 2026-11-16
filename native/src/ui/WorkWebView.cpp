@@ -491,6 +491,54 @@ void WorkWebView::pushChat(const QJsonObject &page) {
                                nullptr);
 }
 
+void WorkWebView::pushSessions(const QJsonObject &catalog) {
+    if (!documentReady_ || d_->webview == nullptr) {
+        return;
+    }
+    const QString json = QString::fromUtf8(
+        QJsonDocument(catalog).toJson(QJsonDocument::Compact));
+    const QString script = QStringLiteral("window.__setSessions(")
+                           + jsEscape(json) + QStringLiteral(");");
+    d_->webview->ExecuteScript(reinterpret_cast<LPCWSTR>(script.utf16()),
+                               nullptr);
+}
+
+void WorkWebView::pushSessionChat(const QJsonObject &page) {
+    if (!documentReady_ || d_->webview == nullptr) {
+        return;
+    }
+    const QString json = QString::fromUtf8(
+        QJsonDocument(page).toJson(QJsonDocument::Compact));
+    const QString script = QStringLiteral("window.__setSessionChat(")
+                           + jsEscape(json) + QStringLiteral(");");
+    d_->webview->ExecuteScript(reinterpret_cast<LPCWSTR>(script.utf16()),
+                               nullptr);
+}
+
+void WorkWebView::pushSessionResult(const QJsonObject &result) {
+    if (!documentReady_ || d_->webview == nullptr) {
+        return;
+    }
+    const QString json = QString::fromUtf8(
+        QJsonDocument(result).toJson(QJsonDocument::Compact));
+    const QString script = QStringLiteral("window.__setDispatchResult(")
+                           + jsEscape(json) + QStringLiteral(");");
+    d_->webview->ExecuteScript(reinterpret_cast<LPCWSTR>(script.utf16()),
+                               nullptr);
+}
+
+void WorkWebView::pushDeleteResult(const QJsonObject &result) {
+    if (!documentReady_ || d_->webview == nullptr) {
+        return;
+    }
+    const QString json = QString::fromUtf8(
+        QJsonDocument(result).toJson(QJsonDocument::Compact));
+    const QString script = QStringLiteral("window.__setDeleteResult(")
+                           + jsEscape(json) + QStringLiteral(");");
+    d_->webview->ExecuteScript(reinterpret_cast<LPCWSTR>(script.utf16()),
+                               nullptr);
+}
+
 // 首帧只能整页给（NavigateToString 没有「换个 body」的写法）；文档一旦好了，
 // 后面一律 ExecuteScript 只喂数据。整页重载会把选中态、滚动位置、hover 全冲掉
 // （实测：标为已处理之后列表回到顶部、按钮变灰），事件一密还会闪。
@@ -736,8 +784,80 @@ QString WorkWebView::htmlFor(const QString &stateJson) const {
  .btn.primary:disabled{background:var(--w8);border-color:transparent}
  .placeholder{flex:1 1 auto;padding:40px;text-align:center;color:var(--muted);
    font-size:var(--f12)}
- /* 聊天页：点待办进入，打开即最新记录；旧记录上翻按页加载。
-    滚动条隐藏（全局约定），上下渐隐暗示可滚；新消息 pill 不打断读历史。 */
+/* 派发页：Agent 胶囊 + 项目分组 + 会话行；组可折叠，归档/未分类任务单列。 */
+.dsphead{flex:0 0 auto;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.dsp-summary{font-size:var(--f11);color:var(--muted)}
+.dspchips{flex:0 0 auto;display:flex;align-items:center;gap:6px;flex-wrap:wrap;
+  margin-top:7px}
+.dspagent{display:flex;align-items:center;gap:6px;min-height:28px;padding:0 10px;
+  border:1px solid var(--w14);border-radius:8px;background:var(--w6);
+  color:var(--text-dim);font-size:var(--f11);cursor:default}
+.dspagent:hover{background:var(--w10)}
+.dspagent.on{border-color:var(--a64);background:var(--a26);color:var(--accent);
+  font-weight:600}
+.dspagent .st{width:6px;height:6px;border-radius:50%;background:var(--faint);
+  flex:0 0 6px}
+.dspagent .st.on{background:var(--ok)}
+.dspagent .n{font-size:var(--f10);color:var(--faint)}
+.dspagent.on .n{color:var(--accent)}
+#dspList{margin-top:4px}
+.dspgroup{margin:0}
+.dspghead{display:flex;align-items:center;gap:6px;width:100%;min-height:32px;
+  margin:0;padding:5px 5px;border:0;border-radius:6px;background:transparent;
+  color:var(--muted2);font-size:var(--f11);font-weight:600;text-align:left;
+  cursor:default}
+.dspghead:hover{background:var(--w6)}
+.dspgchev{font-size:13px;line-height:1;color:var(--faint);
+  transform:rotate(90deg);transition:transform .16s ease;flex:0 0 auto}
+.dspgroup.closed .dspgchev{transform:rotate(0deg)}
+.dspgname{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap}
+.dspgarch{flex:0 0 auto;font-size:9.5px;font-weight:600;color:var(--warn);
+  border:1px solid var(--w14);border-radius:6px;padding:0 5px;line-height:1.5}
+.dspgcount{margin-left:auto;flex:0 0 auto;font-size:var(--f10);
+  color:var(--faint);background:var(--w6);border-radius:7px;padding:1px 6px}
+.dspbody[hidden]{display:none}
+.dspsess{display:flex;align-items:center;gap:10px;padding:7px 9px;
+  border-radius:8px;border-bottom:1px solid var(--w8);cursor:default}
+.dspsess:hover{background:var(--w6)}
+.dspsess.readonly{opacity:.82}
+.dspsess .t{flex:1;min-width:0}
+.dspsess .title{font-size:var(--f12);font-weight:600;color:var(--text);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dspsess .sub{display:flex;align-items:center;gap:8px;margin-top:2px;
+  font-size:var(--f10);color:var(--muted2);min-width:0}
+.dspsess .sub .u{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dspsess .rt{flex:0 0 auto;color:var(--faint)}
+.dspsess .ro{flex:0 0 auto;color:var(--warn)}
+.dspsess .st{flex:0 0 auto;font-size:var(--f10);padding:1px 6px;border-radius:7px;
+  background:var(--w6)}
+.dspsess .arr{flex:0 0 auto;font-size:16px;color:var(--faint)}
+.dspempty{padding:34px 18px;text-align:center;color:var(--muted);
+  font-size:var(--f11);line-height:1.7}
+.dspempty b{display:block;color:var(--text);font-size:var(--f12);margin-bottom:5px}
+.dspnotice{flex:0 0 auto;margin-top:6px;padding:6px 9px;border-radius:8px;
+  font-size:var(--f10);line-height:1.55;color:var(--text-dim);
+  background:var(--w6);border:1px solid var(--w14);word-break:break-all}
+.dspnotice.bad{color:var(--warn);border-color:var(--w30)}
+.dspsess.clean{cursor:default}
+.dspsess.clean:hover{background:var(--a26)}
+.dspsess.clean.sel{background:var(--a26);border-color:var(--a64)}
+.dspcheck{width:16px;height:16px;border-radius:5px;border:1.5px solid var(--w30);
+  background:var(--w6);flex:0 0 16px;display:flex;align-items:center;
+  justify-content:center;color:var(--on-accent);font-size:10px;font-weight:700}
+.dspcheck.on{background:var(--accent);border-color:var(--accent)}
+.dspcheck.on::before{content:'✓'}
+.dspdel{flex:0 0 auto;border:1px solid var(--w14);border-radius:6px;
+  background:transparent;color:var(--faint);font-size:var(--f10);padding:2px 7px;
+  cursor:default}
+.dspdel:hover{color:var(--danger);border-color:var(--w30);background:var(--w6)}
+.dspdel:disabled{opacity:.45}
+.dspbatch{flex:0 0 auto;display:flex;align-items:center;gap:8px;padding:8px 2px 12px;
+  border-top:1px solid var(--w14);margin-top:4px}
+.dspbatch #dspBatchCount{font-size:var(--f11);font-weight:600;color:var(--accent)}
+.dspbatch .btn.primary{background:var(--danger);border-color:var(--danger)}
+/* 聊天页：点待办进入，打开即最新记录；旧记录上翻按页加载。
+   滚动条隐藏（全局约定），上下渐隐暗示可滚；新消息 pill 不打断读历史。 */
  .chathead{flex:0 0 auto;display:flex;align-items:center;gap:8px}
  .chathead .name{font-weight:700;font-size:var(--f13);overflow:hidden;
    text-overflow:ellipsis;white-space:nowrap}
@@ -960,6 +1080,49 @@ QString WorkWebView::htmlFor(const QString &stateJson) const {
   <div class="health" id="health"></div>
   <div class="list" id="list"></div>
 </div>
+<div id="dispatch" class="page" hidden>
+  <div class="dsphead">
+    <span class="total">派发会话</span>
+    <span class="dsp-summary" id="dspSummary"></span>
+    <span class="spacer"></span>
+    <button class="ghost" id="dspClean" hidden title="只处理已归档会话；删除前会备份并要求二次确认">清理归档</button>
+    <button class="ghost" id="dspRefresh" title="重新读取各 Agent 的最近会话">刷新会话</button>
+  </div>
+  <div class="dspchips" id="dspAgents"></div>
+  <div class="dspnotice" id="dspNotice" hidden></div>
+  <div class="list" id="dspList"></div>
+  <div class="dspempty" id="dspEmpty" hidden>
+    <b>还没有可读的会话</b>
+    Agent 产生过会话后，这里会按项目列出来。目录只读，不改动宿主当前会话。
+  </div>
+  <div class="dspbatch" id="dspBatch" hidden>
+    <span id="dspBatchCount">已选 0 条</span>
+    <button class="ghost" id="dspCheckAll">全选</button>
+    <span class="spacer"></span>
+    <button class="btn primary" id="dspDelete">删除所选</button>
+    <button class="ghost" id="dspBatchCancel">取消</button>
+  </div>
+</div>
+<div id="dchat" class="page" hidden>
+  <div class="chathead">
+    <button class="btn" id="dchatBack" title="回到派发列表">‹ 派发</button>
+    <span class="name" id="dchatTitle"></span>
+    <span class="stage" id="dchatStage"></span>
+    <span class="spacer"></span>
+    <button class="ghost" id="dchatRefresh" title="重新读取这个会话的最新记录">刷新</button>
+    <span class="time" id="dchatMeta"></span>
+  </div>
+  <div class="chatwrap">
+    <div class="chatfade top"></div>
+    <div class="chatlist" id="dchatList"></div>
+    <div class="chatfade bottom"></div>
+  </div>
+  <div class="chatfoot">
+    <input id="dchatText" placeholder="写一句任务，派到这个会话（Enter 发送）">
+    <button class="btn primary" id="dchatSend">派发</button>
+  </div>
+  <div class="notice" id="dchatNotice" hidden style="margin-top:6px"></div>
+</div>
 <div id="chat" class="page" hidden>
   <div class="chathead">
     <button class="btn" id="chatBack" title="回到待办列表">‹ 待办</button>
@@ -1097,9 +1260,16 @@ let evSeen = 0;
 let SYSTEM = {}, KEYMAP = {}, APPS = {}, GUIDE = {};
 let HEADER = {}, LEFT = {};
 const LABEL = {'needs-me':'等你处理','review':'待验收','working':'进行中'};
-const TABS = ['待我处理','事件流','系统','按键映射','应用','使用引导'];
+const TABS = ['待我处理','派发','事件流','系统','按键映射','应用','使用引导'];
 let activeTab = 0, selected = '', filterExe = '';
 let multiMode = false; const multiSel = new Set();  // 待办多选批量销账
+let DSP=null,DSP_LOADING=false,DSP_AT=0,DSP_SELECTED='',DSP_SIG='',DSP_TIMER=null;
+let DSP_NEW=false,DSP_CLEAN=false,DSP_DELETING=false,DSP_NOTICE_TIMER=null;
+const DSP_GROUP_STATE=new Map();
+const DSP_DEL_SEL=new Set();
+let DSCHAT=null,dchatOpen=false,dchatMsgs=[],dchatIds=new Set(),dchatTotal=0,
+    dchatHasMore=false,dchatLoading=false,dchatKey='',DCHAT_PENDING='',
+    DCHAT_REFRESHING=false;
 const $ = id => document.getElementById(id);
 // CSS 变量名 → token 名，和 style.qss 里的 @token@ 同名；缺项保持 :root 的兜底值。
 const TOKENS = {'--bg':'bg','--surface':'card.bg','--surface2':'card.bg2',
@@ -1573,27 +1743,461 @@ function renderGuide(){
   body.append(links);
   body.scrollTop=keep;
 }
+// ---------- 派发页：Agent / 项目 / 会话 → 聊天记录 → 派发 ----------
+function dspAgo(iso){
+  const t=Date.parse(iso||'');if(isNaN(t))return '';
+  const s=Math.max(0,(Date.now()-t)/1000);
+  if(s<60)return '刚刚';
+  if(s<3600)return Math.floor(s/60)+' 分钟前';
+  if(s<86400)return Math.floor(s/3600)+' 小时前';
+  if(s<86400*30)return Math.floor(s/86400)+' 天前';
+  return new Date(t).toLocaleDateString();
+}
+function dspHasProject(p){
+  const b=base(p);return !!b&&b!=='.'&&b!=='..';
+}
+function dspProjectName(p){return dspHasProject(p)?base(p):'未分类任务';}
+// 分组必须按完整路径，不能只按最后一级目录：同名 tuwen-editor 可能同时存在
+// 活跃仓库和桌面旧目录，按 basename 合并会把活跃项目误标成已归档。
+function projectKey(p){
+  return String(p||'').trim().replace(/[\\/]+$/,'').replace(/\//g,'\\').toLowerCase();
+}
+function projectParentName(p){
+  const t=String(p||'').trim().replace(/[\\/]+$/,'');
+  const i=Math.max(t.lastIndexOf('/'),t.lastIndexOf('\\'));
+  return i<0?'':base(t.slice(0,i));
+}
+function requestSessions(force){
+  if(DSP_LOADING)return;
+  if(!force&&DSP&&Date.now()-DSP_AT<30000)return;
+  DSP_LOADING=true;
+  const btn=$('dspRefresh');if(btn)btn.disabled=true;
+  postObj({cmd:'sessionsLoad'});
+  if(DSP_TIMER)clearTimeout(DSP_TIMER);
+  DSP_TIMER=setTimeout(()=>{
+    if(!DSP_LOADING)return;
+    DSP_LOADING=false;
+    const b=$('dspRefresh');if(b)b.disabled=false;
+    if(activeTab===1&&!dchatOpen)render();
+  },12000);
+}
+window.__setSessions=function(c){
+  const wasEmpty=!DSP;
+  DSP=c||{};DSP_LOADING=false;DSP_AT=Date.now();
+  if(wasEmpty)DSP_NEW=true;
+  if(DSP_TIMER){clearTimeout(DSP_TIMER);DSP_TIMER=null;}
+  const btn=$('dspRefresh');if(btn)btn.disabled=false;
+  const agents=DSP.agents||[];
+  if(!agents.some(a=>a.exe===DSP_SELECTED))DSP_SELECTED=agents.length?agents[0].exe:'';
+  DSP_SIG='';
+  if(activeTab===1&&!dchatOpen)render();
+};
+function dspAgentChip(agent){
+  const b=document.createElement('button');b.className='dspagent';
+  b.classList.toggle('on',agent.exe===DSP_SELECTED);
+  b.setAttribute('aria-pressed',String(agent.exe===DSP_SELECTED));
+  const st=document.createElement('span');st.className='st'+(agent.alive?' on':'');
+  const name=document.createElement('span');name.textContent=agent.name||agent.exe;
+  const n=document.createElement('span');n.className='n';
+  n.textContent=String((agent.sessions||[]).length);
+  b.append(st,name,n);
+  b.onclick=()=>{
+    if(DSP_SELECTED===agent.exe)return;
+    DSP_SELECTED=agent.exe;DSP_SIG='';
+    if(DSP_CLEAN)DSP_DEL_SEL.clear();
+    $('dspList').scrollTop=0;render();
+  };
+  return b;
+}
+function dspSession(agent,row,archived){
+  const el=document.createElement('div');el.className='dspsess';
+  if(row.can_dispatch===false)el.classList.add('readonly');
+  if(DSP_CLEAN)el.classList.add('clean');
+  const key=agent.exe+'|'+row.id;
+  if(DSP_CLEAN&&DSP_DEL_SEL.has(key))el.classList.add('sel');
+  el.tabIndex=0;el.setAttribute('role','button');
+  el.setAttribute('aria-label',(row.title||'会话')+'，'+
+    (dspHasProject(row.project)&&!row.generated?dspProjectName(row.project):'未分类任务')+
+    '，'+dspAgo(row.updated_at));
+  let chk=null;
+  if(DSP_CLEAN){
+    if(row.can_delete===false){
+      const ro=document.createElement('span');ro.className='ro';ro.textContent='不可删';
+      el.append(ro);
+    }else{
+      chk=document.createElement('span');
+      chk.className='dspcheck'+(DSP_DEL_SEL.has(key)?' on':'');
+      chk.setAttribute('aria-hidden','true');
+      el.append(chk);
+    }
+  }
+  const t=document.createElement('div');t.className='t';
+  const title=document.createElement('div');title.className='title';
+  title.textContent=row.title||('会话 '+String(row.id||'').slice(0,8));
+  const sub=document.createElement('div');sub.className='sub';
+  const upd=document.createElement('span');upd.className='u';
+  upd.textContent='最近更新 · '+dspAgo(row.updated_at);
+  sub.append(upd);
+  if(row.can_dispatch===false){
+    const ro=document.createElement('span');ro.className='ro';ro.textContent='只读';
+    sub.append(ro);
+  }
+  t.append(title,sub);
+  el.append(t);
+  if(row.stage){
+    const st=document.createElement('span');st.className='st';
+    st.style.color=COLOR[row.stage]||'var(--muted)';
+    st.textContent=LABEL[row.stage]||'';
+    el.append(st);
+  }
+  if(archived&&!DSP_CLEAN){
+    const del=document.createElement('button');del.className='dspdel';
+    del.textContent=row.can_delete===false?'不可删':'删除';
+    del.disabled=row.can_delete===false||DSP_DELETING;
+    del.title=row.can_delete===false
+      ?'该宿主没有安全的会话物理删除接口，请在宿主内处理'
+      :'删除这条归档会话（会先备份并二次确认）';
+    del.onclick=e=>{e.stopPropagation();
+      if(row.can_delete!==false)deleteRows([{agent,row}]);};
+    el.append(del);
+  }else if(!DSP_CLEAN){
+    const arr=document.createElement('span');arr.className='arr';arr.textContent='›';
+    el.append(arr);
+  }
+  const toggle=()=>{
+    if(DSP_DELETING||row.can_delete===false)return;
+    if(DSP_DEL_SEL.has(key))DSP_DEL_SEL.delete(key);else DSP_DEL_SEL.add(key);
+    el.classList.toggle('sel',DSP_DEL_SEL.has(key));
+    if(chk)chk.classList.toggle('on',DSP_DEL_SEL.has(key));
+    updateDspBatch();
+  };
+  const open=()=>{if(DSP_CLEAN)toggle();else openDSession(agent,row);};
+  el.onclick=open;
+  el.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();open();}};
+  return el;
+}
+// stateKeyOverride：同名的两个组（活跃的「未分类任务」和它的已归档组）不能
+// 共用折叠状态，各给一个 key。
+function dspGroup(agent,label,rows,fullProject,archived,defaultOpen,stateKeyOverride){
+  const groupKey=fullProject?projectKey(fullProject):'__ungrouped';
+  const stateKey=stateKeyOverride||(agent.exe+'|'+groupKey);
+  const group=document.createElement('div');group.className='dspgroup';
+  if(archived)group.classList.add('archived');
+  const head=document.createElement('button');head.className='dspghead';
+  const chev=document.createElement('span');chev.className='dspgchev';chev.textContent='›';
+  const name=document.createElement('span');name.className='dspgname';name.textContent=label;
+  head.append(chev,name);
+  if(archived){
+    const a=document.createElement('span');a.className='dspgarch';a.textContent='已归档';
+    head.append(a);
+  }
+  const count=document.createElement('span');count.className='dspgcount';
+  count.textContent=rows.length+' 个';
+  head.append(count);
+  head.title=fullProject||'没有项目的单任务会话（含宿主自动生成的临时工作区）';
+  const body=document.createElement('div');body.className='dspbody';
+  rows.forEach(row=>body.append(dspSession(agent,row,archived)));
+  const stored=DSP_GROUP_STATE.get(stateKey);
+  const open=(DSP_CLEAN&&archived)?true
+    :(stored===undefined?!!defaultOpen:stored);
+  group.classList.toggle('closed',!open);
+  body.hidden=!open;
+  head.setAttribute('aria-expanded',String(open));
+  head.onclick=()=>{
+    const opening=body.hidden;
+    body.hidden=!opening;
+    group.classList.toggle('closed',!opening);
+    head.setAttribute('aria-expanded',String(opening));
+    DSP_GROUP_STATE.set(stateKey,opening);
+  };
+  group.append(head,body);
+  return group;
+}
+function dspArchivedRows(agent){
+  return (agent&&agent.sessions||[]).filter(r=>r.archived&&r.can_delete!==false);
+}
+function dspCurrentAgent(){
+  const agents=DSP&&DSP.agents||[];
+  return agents.find(a=>a.exe===DSP_SELECTED)||agents[0]||null;
+}
+function updateDspBatch(){
+  const agent=dspCurrentAgent();
+  const rows=dspArchivedRows(agent);
+  $('dspBatch').hidden=!DSP_CLEAN;
+  $('dspBatchCount').textContent='已选 '+DSP_DEL_SEL.size+' 条';
+  $('dspClean').disabled=DSP_DELETING;
+  $('dspRefresh').disabled=DSP_DELETING;
+  $('dspDelete').disabled=DSP_DELETING||!DSP_DEL_SEL.size;
+  $('dspDelete').textContent=DSP_DELETING?'删除中…':'删除所选';
+  $('dspCheckAll').disabled=DSP_DELETING||!rows.length;
+  $('dspCheckAll').textContent=(rows.length&&DSP_DEL_SEL.size===rows.length)?'全不选':'全选';
+}
+function showDspNotice(text,bad){
+  const el=$('dspNotice');if(!el)return;
+  el.hidden=false;el.textContent=text;el.classList.toggle('bad',!!bad);
+  if(DSP_NOTICE_TIMER)clearTimeout(DSP_NOTICE_TIMER);
+  DSP_NOTICE_TIMER=setTimeout(()=>{el.hidden=true;el.textContent='';},6500);
+}
+function deleteRows(pairs){
+  if(DSP_DELETING||!pairs.length)return;
+  DSP_DELETING=true;
+  updateDspBatch();
+  const items=pairs.map(({agent,row})=>({exe:agent.exe,session:row.id,
+    project:row.project||'',title:row.title||''}));
+  showDspNotice('等待确认：将删除 '+items.length+' 条归档会话并备份…');
+  postObj({cmd:'sessionDelete',items});
+}
+window.__setDeleteResult=function(r){
+  DSP_DELETING=false;updateDspBatch();
+  if(!r)return;
+  if(r.canceled){showDspNotice('已取消，没有删除任何会话。');return;}
+  const failed=(r.failed||[]).length;
+  if((r.deleted||0)>0){
+    DSP_CLEAN=false;DSP_DEL_SEL.clear();DSP_SIG='';
+    showDspNotice('已删除 '+(r.deleted||0)+' 条归档会话'
+      +(failed?'，'+failed+' 条失败':'')
+      +(r.backup?('；备份：'+r.backup):''),failed>0);
+    render();
+    requestSessions(true);
+  }else{
+    showDspNotice('没有删除成功：'+((r.error||'未知原因'))
+      +(r.backup?('；备份：'+r.backup):''),true);
+  }
+};
+function renderDispatch(){
+  const list=$('dspList'),chips=$('dspAgents');
+  if(!DSP){
+    chips.replaceChildren();
+    $('dspEmpty').hidden=true;list.hidden=false;
+    list.replaceChildren();
+    const d=document.createElement('div');d.className='dspempty';
+    d.textContent=DSP_LOADING?'正在读取会话目录…':'会话目录还没加载';
+    list.append(d);
+    $('dspSummary').textContent=DSP_LOADING?'读取中…':'';
+    if(!DSP_LOADING)requestSessions();
+    return;
+  }
+  const agents=DSP.agents||[];
+  if(!agents.length){
+    chips.replaceChildren();list.replaceChildren();list.hidden=true;
+    $('dspEmpty').hidden=false;$('dspSummary').textContent='';
+    $('dspClean').hidden=true;$('dspBatch').hidden=true;
+    return;
+  }
+  if(!agents.some(a=>a.exe===DSP_SELECTED))DSP_SELECTED=agents[0].exe;
+  const sig=DSP_SELECTED+'|'+(DSP_CLEAN?'clean':'')+'|'+JSON.stringify(DSP);
+  if(sig===DSP_SIG){updateDspBatch();return;}
+  DSP_SIG=sig;
+  chips.replaceChildren();
+  agents.forEach(a=>chips.append(dspAgentChip(a)));
+  const agent=agents.find(a=>a.exe===DSP_SELECTED)||agents[0];
+  const rows=agent.sessions||[];
+  const groups=new Map(),unclassified=[];
+  rows.forEach(row=>{
+    // 没有项目，或项目是宿主自动生成的临时工作区（WorkBuddy 的日期目录等）：
+    // 都是「单任务」，统一进未分类任务，不按目录名/日期各开一组。
+    if(!dspHasProject(row.project)||row.generated){unclassified.push(row);return;}
+    const key=projectKey(row.project);
+    if(!groups.has(key))groups.set(key,{path:row.project,items:[]});
+    groups.get(key).items.push(row);
+  });
+  const allGroups=[...groups.values()];
+  const nameHits=new Map();
+  allGroups.forEach(g=>{
+    const n=base(g.path).toLowerCase();
+    nameHits.set(n,(nameHits.get(n)||0)+1);
+  });
+  const active=[],archived=[];
+  allGroups.forEach(g=>{
+    let label=base(g.path);
+    if(nameHits.get(label.toLowerCase())>1){
+      const parent=projectParentName(g.path);
+      if(parent)label+=' · '+parent;
+    }
+    // 同一项目按每行自己的归档状态拆两组：活跃组只放未归档的会话，已归档的
+    // （老路径、宿主归档）单独进「已归档」区，两边绝不混在一组里。
+    const key=projectKey(g.path);
+    const live=g.items.filter(r=>!r.archived);
+    const dead=g.items.filter(r=>!!r.archived);
+    if(live.length)active.push({key,label,items:live,fullProject:g.path});
+    if(dead.length)archived.push({key,label,items:dead,fullProject:g.path});
+  });
+  // 未分类任务同样按归档拆：活跃单任务留在上面，已归档单任务进已归档区。
+  const uncLive=unclassified.filter(r=>!r.archived);
+  const uncDead=unclassified.filter(r=>!!r.archived);
+  const deletable=dspArchivedRows(agent);
+  // 选择里已经不在当前归档集（别的 Agent/已被删）的项清掉。
+  if(DSP_CLEAN){
+    const valid=new Set(deletable.map(r=>agent.exe+'|'+r.id));
+    DSP_DEL_SEL.forEach(k=>{if(!valid.has(k))DSP_DEL_SEL.delete(k);});
+  }
+  $('dspClean').hidden=!DSP_CLEAN&&!deletable.length;
+  $('dspClean').textContent=DSP_CLEAN?'退出清理':'清理归档';
+  $('dspRefresh').hidden=DSP_CLEAN;
+  $('dspBatch').hidden=!DSP_CLEAN;
+  $('dspSummary').textContent=DSP_CLEAN
+    ?(agent.name+' · 选择要删除的归档会话 · '+deletable.length+' 条可删')
+    :(agent.name+' · '+active.length+' 个项目'
+      +(unclassified.length?' · '+unclassified.length+' 个未分类任务':'')
+      +(archived.length?' · '+archived.length+' 个已归档':'')
+      +' · '+rows.length+' 个会话');
+  const keep=list.scrollTop;list.replaceChildren();list.hidden=false;
+  $('dspEmpty').hidden=true;
+  const shown = DSP_CLEAN ? archived.filter(g=>g.items.some(r=>r.can_delete!==false)) : null;
+  const uncShown = DSP_CLEAN ? uncDead.filter(r=>r.can_delete!==false) : uncDead;
+  if((DSP_CLEAN&&!shown.length&&!uncShown.length)||(!DSP_CLEAN&&!rows.length)){
+    list.hidden=true;$('dspEmpty').hidden=false;
+    $('dspEmpty').querySelector('b').textContent=DSP_CLEAN
+      ?'没有可删除的归档会话':'还没有可读的会话';
+  }else{
+    if(!DSP_CLEAN){
+      active.forEach((g,i)=>list.append(
+        dspGroup(agent,g.label,g.items,g.fullProject,false,i===0)));
+      // 单任务会话统一收进一个「未分类任务」组，默认折叠。
+      if(uncLive.length)list.append(dspGroup(agent,'未分类任务',uncLive,'',false,false,
+        agent.exe+'|__unclassified'));
+    }
+    const ar= DSP_CLEAN ? shown : archived;
+    ar.forEach(g=>list.append(
+      dspGroup(agent,g.label,g.items,g.fullProject,true,DSP_CLEAN)));
+    // 没有项目的已归档单任务也进已归档区，带「已归档」徽标——不能跟活跃的
+    // 未分类任务混在一组里（用户 2026-11-16 定）。
+    if(uncShown.length)list.append(dspGroup(agent,'未分类任务',uncShown,'',true,DSP_CLEAN,
+      agent.exe+'|__unclassified-archived'));
+    list.scrollTop=DSP_NEW?0:keep;
+    DSP_NEW=false;
+  }
+  updateDspBatch();
+  if(!DSP_CLEAN&&Date.now()-DSP_AT>30000&&!DSP_LOADING)requestSessions();
+}
+function openDSession(agent,row){
+  DSCHAT={agent,row,meta:{},canDispatch:row.can_dispatch!==false};
+  dchatOpen=true;dchatKey=agent.exe+'|'+row.id;
+  dchatMsgs=[];dchatIds=new Set();dchatTotal=0;dchatHasMore=false;dchatLoading=true;
+  DCHAT_PENDING='';DCHAT_REFRESHING=false;
+  $('dchatText').value='';$('dchatNotice').hidden=true;$('dchatNotice').textContent='';
+  render();
+  postObj({cmd:'sessionOpen',exe:agent.exe,session:row.id,offset:0,limit:50});
+}
+function renderDchatHeader(){
+  if(!DSCHAT)return;
+  const row=DSCHAT.row,agent=DSCHAT.agent,m=DSCHAT.meta||{};
+  $('dchatTitle').textContent=m.sessionTitle||m.title||row.title||'会话';
+  $('dchatStage').textContent=LABEL[row.stage]||'';
+  $('dchatStage').style.color=COLOR[row.stage]||'';
+  $('dchatMeta').textContent=(agent.name||agent.exe||'')
+    // 宿主自动生成的临时工作区（日期目录）不当项目名露出来，按单任务处理。
+    +(dspHasProject(row.project)&&!row.generated?' · '+dspProjectName(row.project):'')
+    +' · 共 '+dchatTotal+' 条';
+  $('dchatText').placeholder=DSCHAT.canDispatch
+    ?'写一句任务，派到这个会话（Enter 发送）'
+    :'这个 Agent 暂不支持手机/桌面派发，记录只读';
+  $('dchatText').disabled=!DSCHAT.canDispatch;
+  $('dchatSend').disabled=!DSCHAT.canDispatch;
+  if(!DSCHAT.canDispatch){
+    $('dchatNotice').hidden=false;
+    $('dchatNotice').textContent='只读：该 Agent 的派发通道未开通；记录仍可查看。';
+  }
+}
+function paintDchat(mode,prevH,prevTop){
+  const list=$('dchatList');list.replaceChildren();
+  const m=DSCHAT&&DSCHAT.meta||{};
+  if(!dchatMsgs.length){
+    const e=document.createElement('div');e.className='chatempty';
+    e.textContent=(m.supported===false)
+      ?(m.error||'暂不支持聊天记录查看'):'这条会话还没有对话记录';
+    list.append(e);
+  }else{
+    dchatMsgs.forEach(msg=>list.append(bubble(msg)));
+  }
+  if(mode==='init'){
+    list.scrollTop=list.scrollHeight;
+    requestAnimationFrame(()=>{list.scrollTop=list.scrollHeight;
+      requestAnimationFrame(()=>{list.scrollTop=list.scrollHeight;});});
+  }else if(mode==='older'){
+    list.scrollTop=prevTop+(list.scrollHeight-prevH);
+  }
+  renderDchatHeader();
+}
+window.__setSessionChat=function(p){
+  if(!dchatOpen||!DSCHAT||!p||!p.sessionId||p.sessionId!==DSCHAT.row.id)return;
+  DSCHAT.meta=p;
+  dchatTotal=p.total||0;
+  const msgs=p.messages||[];
+  const list=$('dchatList');
+  const prevH=list.scrollHeight,prevTop=list.scrollTop;
+  if((p.offset||0)>0){
+    const fresh=msgs.filter(m=>!dchatIds.has(msgKey(m)));
+    fresh.forEach(m=>dchatIds.add(msgKey(m)));
+    dchatMsgs=fresh.concat(dchatMsgs);
+    paintDchat('older',prevH,prevTop);
+  }else{
+    dchatMsgs=msgs.slice();dchatIds=new Set(dchatMsgs.map(msgKey));
+    paintDchat('init');
+  }
+  dchatLoading=false;
+  dchatHasMore=dchatMsgs.length<dchatTotal;
+  if(DCHAT_REFRESHING){
+    DCHAT_REFRESHING=false;
+    $('dchatNotice').hidden=true;$('dchatNotice').textContent='';
+  }
+  renderDchatHeader();
+};
+function sendDchat(){
+  if(!dchatOpen||!DSCHAT||!DSCHAT.canDispatch)return;
+  const t=$('dchatText').value.trim();if(!t)return;
+  DCHAT_PENDING=t;
+  $('dchatSend').disabled=true;$('dchatSend').textContent='派发中…';
+  const n=$('dchatNotice');n.hidden=false;n.textContent='正在派发，等回执…';
+  postObj({cmd:'dispatchSession',exe:DSCHAT.agent.exe,session:DSCHAT.row.id,
+    project:DSCHAT.row.project||'',text:t});
+}
+window.__setDispatchResult=function(r){
+  if(!dchatOpen||!DSCHAT)return;
+  $('dchatSend').disabled=!DSCHAT.canDispatch;$('dchatSend').textContent='派发';
+  const n=$('dchatNotice');n.hidden=false;
+  if(r&&r.ok){
+    if($('dchatText').value===DCHAT_PENDING)$('dchatText').value='';
+    n.textContent='已派发。送达回执到了会进「待我处理」；这里继续看会话记录。';
+  }else{
+    n.textContent='没发出去：'+((r&&r.error)||'未知原因')+'（草稿已保留）';
+  }
+  DCHAT_PENDING='';
+};
+function closeDSession(){
+  dchatOpen=false;DSCHAT=null;dchatMsgs=[];dchatIds=new Set();dchatKey='';
+  $('dchatSend').disabled=false;$('dchatSend').textContent='派发';
+  render();
+}
 function render(){
   renderTop();
   renderLeft();
   renderTabs();
   const workView=activeTab===0;
+  const dispatchView=activeTab===1;
   const chatOn=workView&&!!(STATE.chat&&STATE.chat.id);
+  const dchatOn=dispatchView&&dchatOpen;
   $('chat').hidden=!chatOn;
   $('work').hidden=!workView||chatOn;
+  $('dispatch').hidden=!dispatchView||dchatOn;
+  $('dchat').hidden=!dchatOn;
   // 底部提示/批量条只属于待办列表：聊天页有自己的输入行，不再叠一条提示。
   $('foot').hidden=!workView||chatOn;
-  $('events').hidden=activeTab!==1;
-  $('system').hidden=activeTab!==2;
-  $('keymap').hidden=activeTab!==3;
-  $('apps').hidden=activeTab!==4;
-  $('guide').hidden=activeTab!==5;
+  $('events').hidden=activeTab!==2;
+  $('system').hidden=activeTab!==3;
+  $('keymap').hidden=activeTab!==4;
+  $('apps').hidden=activeTab!==5;
+  $('guide').hidden=activeTab!==6;
   $('empty').hidden=true;
-  if(activeTab===1){renderEvents();return;}
-  if(activeTab===2){renderSystem();return;}
-  if(activeTab===3){renderKeymap();return;}
-  if(activeTab===4){renderApps();return;}
-  if(activeTab===5){renderGuide();return;}
+  if(dispatchView){
+    if(dchatOn){renderDchatHeader();return;}
+    renderDispatch();return;
+  }
+  if(activeTab===2){renderEvents();return;}
+  if(activeTab===3){renderSystem();return;}
+  if(activeTab===4){renderKeymap();return;}
+  if(activeTab===5){renderApps();return;}
+  if(activeTab===6){renderGuide();return;}
   if(!workView){
     return;
   }
@@ -1812,7 +2416,7 @@ $('chatRestart').onclick=()=>{
   if(confirm('重启 ZCode 桌面？会中断它里面正在跑的其它轮次；重启后打开会话即可看到派发消息全文。'))
     postObj({cmd:'restartZcode'});
 };
-$('workGuide').onclick=()=>{activeTab=5;render();};
+$('workGuide').onclick=()=>{activeTab=6;render();};
 // 系统/映射/应用页的动作按钮：状态机全在 Qt 侧，这里只发命令。
 $('sysRefresh').onclick=()=>postObj({cmd:'sysRefresh'});
 $('sysBridge').onclick=()=>postObj({cmd:'sysBridge'});
@@ -1822,6 +2426,55 @@ $('kmProfiles').onclick=()=>postObj({cmd:'keyProfiles'});
 $('kmReload').onclick=()=>postObj({cmd:'keyReload'});
 $('apAdd').onclick=()=>postObj({cmd:'appAdd'});
 $('apRescan').onclick=()=>postObj({cmd:'appRescan'});
+$('dspRefresh').onclick=()=>requestSessions(true);
+$('dspClean').onclick=()=>{
+  if(DSP_DELETING)return;
+  DSP_CLEAN=!DSP_CLEAN;
+  DSP_DEL_SEL.clear();
+  DSP_SIG='';
+  $('dspList').scrollTop=0;
+  $('dspNotice').hidden=true;
+  render();
+};
+$('dspBatchCancel').onclick=()=>{
+  if(DSP_DELETING)return;
+  DSP_CLEAN=false;DSP_DEL_SEL.clear();DSP_SIG='';render();
+};
+$('dspCheckAll').onclick=()=>{
+  if(DSP_DELETING)return;
+  const rows=dspArchivedRows(dspCurrentAgent());
+  if(rows.length&&DSP_DEL_SEL.size===rows.length)DSP_DEL_SEL.clear();
+  else rows.forEach(r=>DSP_DEL_SEL.add(DSP_SELECTED+'|'+r.id));
+  DSP_SIG='';render();
+};
+$('dspDelete').onclick=()=>{
+  if(DSP_DELETING)return;
+  const agent=dspCurrentAgent();if(!agent)return;
+  const pairs=dspArchivedRows(agent)
+    .filter(r=>DSP_DEL_SEL.has(agent.exe+'|'+r.id))
+    .map(row=>({agent,row}));
+  if(pairs.length)deleteRows(pairs);
+};
+$('dchatBack').onclick=closeDSession;
+$('dchatRefresh').onclick=()=>{
+  if(!DSCHAT)return;
+  DCHAT_REFRESHING=true;
+  const n=$('dchatNotice');n.hidden=false;n.textContent='正在刷新记录…';
+  postObj({cmd:'sessionOpen',exe:DSCHAT.agent.exe,session:DSCHAT.row.id,
+    offset:0,limit:50});
+};
+$('dchatSend').onclick=sendDchat;
+$('dchatText').addEventListener('keydown',e=>{
+  if(e.key==='Enter'){e.preventDefault();sendDchat();}
+});
+$('dchatList').addEventListener('scroll',()=>{
+  const list=$('dchatList');
+  if(list.scrollTop<80&&dchatHasMore&&!dchatLoading&&DSCHAT){
+    dchatLoading=true;
+    postObj({cmd:'sessionOlder',exe:DSCHAT.agent.exe,
+      session:DSCHAT.row.id,offset:dchatMsgs.length,limit:50});
+  }
+});
 document.addEventListener('keydown',e=>{
   // 快捷键只属于待办页：Qt 侧事件流是 NoSelection/NoFocus，别的页也不接。
   if(activeTab!==0 || !selected) return;
@@ -1854,6 +2507,7 @@ function bubble(m){
 // B1：待答请求只读卡片（授权/提问）。内联应答是 B2/B3，这里先展示。
 function requestCard(req){
   const d=document.createElement('div');d.className='reqcard';
+  d.dataset.reqId=req.id||'';   // 失败回执按 id 找卡（见 applyAnswerFailure）
   const head=document.createElement('div');head.className='reqhead';
   if(req.kind==='approval'){
     head.textContent='🔐 等你授权'+(req.toolName?'：'+req.toolName:'');
@@ -1871,6 +2525,10 @@ function requestCard(req){
         return b;};
       row.append(mk('允许','allowed-once',true),mk('拒绝','rejected',false));
       d.append(row);
+      // 回执行：提交失败时把原因写在卡上（原来只在页顶飘 notice，长记录里
+      // 滚出去就看不见，用户 2026-11-16 反馈「点了没反应」）。
+      const st=document.createElement('div');st.className='reqstate';st.hidden=true;
+      d.append(st);d._reqState=st;
     }
   }else if(!req.answerable){
     head.textContent='❓ 等你选方案';d.append(head);
@@ -1935,8 +2593,20 @@ function requestCard(req){
   d.append(hint);
   return d;
 }
-function maybeAutoLoad(){
-  const list=$('chatList');
+// 应答失败回执：把原因写进**对应那张卡**，并恢复按钮可用（能重试）。
+// 卡片每次重绘都会重建，所以由 renderChatFrame 在每帧调用，按 id 找卡。
+function applyAnswerFailure(){
+  const d=STATE.dispatch||{};
+  if(!d.noticeRequest||d.noticeId!==chatOpenedId) return;
+  const card=[...document.querySelectorAll('.reqcard')]
+    .find(c=>c.dataset.reqId===d.noticeRequest);
+  if(!card) return;
+  const st=card._reqState;
+  if(st){st.hidden=false;st.textContent=d.notice||'提交失败，请重试';
+    st.style.color='var(--danger)';}
+  card.querySelectorAll('.reqbtn').forEach(b=>{b.disabled=false;});
+}
+function maybeAutoLoad(){  const list=$('chatList');
   if(chatHasMore&&!chatLoading&&chatOpenedId&&
      list.scrollHeight<=list.clientHeight+80){
     chatLoading=true;
@@ -2004,6 +2674,8 @@ function renderChatFrame(){
   const d=STATE.dispatch||{};
   const notice=(d.noticeId===chatOpenedId)?(d.notice||''):'';
   $('chatNotice').hidden=!notice;$('chatNotice').textContent=notice;
+  // 失败原因也落到那张卡上（页顶 notice 在长记录里容易被滚出视野）。
+  applyAnswerFailure();
   // 重启按钮跟着 ZCode 派发通知走（对话区不热刷新，重启才能看到全文）。
   $('chatRestart').hidden=!(notice && d.noticeExe==='ZCode.exe');
   if(d.draftId===chatOpenedId&&d.draftText&&!$('chatText').value)

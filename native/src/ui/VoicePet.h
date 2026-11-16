@@ -92,6 +92,17 @@ public:
     // 其余永远轮不到。现在按到达顺序排队：队首上卡，答完 / 收卡 / 超时立刻顶下一
     // 张，卡头标「还有 N 张待答」。同 id 重复推（插件每 10s 重推整批）只更新内容。
     void queueRequestCard(const QString &sessionId, const QJsonObject &req);
+    // 应答回执：提交失败的原因写回交互卡（用户 2026-11-16「点了没反应」——
+    // 失败原来只进事件流，卡片这头毫无反馈）。failed=true 时按钮恢复可用，
+    // 让用户能重试或改走聊天页。
+    void reportAnswerFailure(const QString &requestId, const QString &reason);
+    // 应答已受理：**先不关卡**，只在卡上标「已提交，等宿主确认…」。真正的结果
+    // 要等插件 1.2s 后回执：ack ok 才收卡（acceptAnswer），ok:false 或 60s 超时
+    // 走 reportAnswerFailure。以前入队成功就收卡，回执回来时卡已没了——用户看到
+    // 的仍是「点了一下什么都没发生」（2026-11-16 实测）。
+    void markAnswerPending(const QString &requestId);
+    // 插件确认送达：这时才收卡、顶下一张。
+    void acceptAnswer(const QString &requestId);
 
     // 桌宠状态快照（AgentBridge GET /state 的应答），给 Agent 决策用。
     QString stateJson() const;

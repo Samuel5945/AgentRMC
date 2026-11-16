@@ -279,6 +279,13 @@ export function apply(ctx, rawConfig) {
     }
   }
 
+  // B3 授权内联答的 waiter 表。声明放在 trackRequest 之前：后者（会话事件
+  // 监听）要用它把 approval/asked 的 UUID 关联到瀑布按 callId 挂的 waiter 上。
+  // `${sid}|${callId}` -> { finish }
+  const approvalWaiters = new Map();
+  // `${sid}|${approvalUuid}` -> waiter entry（两个 id 不同源，见下方注释）
+  const approvalAlias = new Map();
+
   function projectOf(agent) {
     return projectFor(agent && agent.session);
   }
@@ -338,9 +345,19 @@ export function apply(ctx, rawConfig) {
         toolName: String(data.toolName || ''), reason: String(data.reason || ''),
         answerable: !!config.approvalInline });
       changed = true;
+      // 把瀑布挂的 waiter（按 callId）关联到这个 approval UUID：RMC 应答带的是
+      // UUID，瀑布只给 callId，两个 id 不同源（2026-11-16 真机实测）。
+      const askCallId = data.callId || data.subCallId;
+      if (askCallId) {
+        const entry = approvalWaiters.get(sid + '|' + askCallId);
+        if (entry) approvalAlias.set(sid + '|' + data.id, entry);
+      }
     } else if (type === 'approval/decided' && data.id) {
       if (byId && byId.delete(data.id)) changed = true;
+      const decided = approvalAlias.get(sid + '|' + data.id);
+      if (decided) approvalAlias.delete(sid + '|' + data.id);
       approvalWaiters.delete(sid + '|' + data.id);
+      if (data.callId) approvalWaiters.delete(sid + '|' + data.callId);
     } else if ((type === 'tool/call' || type === 'tool/ptc-dispatch') &&
                data.name === 'ask_user_question') {
       const callId = data.callId || data.subCallId;
@@ -562,20 +579,29 @@ export function apply(ctx, rawConfig) {
   // 转发器后面就永远轮不到，卡片照样弹（那是 approval/asked 会话事件推的），
   // 点「允许」却因为插件没 hold 而找不到 waiter → 看着就是「点了没反应」。
   // 现在与提问同构：prepend + 活性门 + 兜底超时。
-  const approvalWaiters = new Map(); // `${sid}|${approvalId}` -> { finish }
+  //
+  // 另一个更硬的坑（同日真机实测）：瀑布 request 的字段只有
+  // agent/toolName/callId/reason/displayReason/signal，**根本没有 id**；而
+  // approval/asked 事件与 RMC 应答用的是另一个 approval UUID。以前直接读
+  // request.id 拿到空串 → 一路 return next() 放行 → waiter 永远建不起来。
+  // 现在按 callId 挂 waiter，再用 approval/asked 的 callId 把 UUID 关联过来。
   if (config.approvalInline && typeof ctx.on === 'function') {
     ctx.on('approval/request', (request, next) => {
       const sid = request && request.agent && request.agent.id;
-      const id = request && request.id;
+      const callId = request && request.callId;
+      const id = (request && request.id) || callId;
       if (!sid || !id) return next();
       if (!nativeAlive()) return next();  // 桌宠不在线：让给 GUI 转发器（同步判断）
       return new Promise((resolve) => {
         let settled = false;
         let timer;
         const key = sid + '|' + id;
-        const entry = { finish: null };
+        const entry = { finish: null, callId: callId || '', sid };
         const release = () => {
           if (approvalWaiters.get(key) === entry) approvalWaiters.delete(key);
+          for (const [ak, av] of approvalAlias) {
+            if (av === entry) approvalAlias.delete(ak);
+          }
           clearTimeout(timer);
           if (request.signal) request.signal.removeEventListener('abort', onAbort);
         };
@@ -600,8 +626,21 @@ export function apply(ctx, rawConfig) {
   async function answerApproval(sessionId, approvalId, outcome) {
     if (!config.approvalInline) {
       return { ok: false, error: '授权内联答未开启（approvalInline=false），请回电脑应答' };
+    }    // 三种取法，覆盖两个 id 空间：
+    //   ① 直接命中 callId（approval/asked 的 callId 与瀑布 request.callId 同源）
+    //   ② 命中 approval/asked 的 UUID 别名（trackRequest 关联过）
+    //   ③ 同会话只有一个在等的授权 → 就是它（兜底，避免关联失败就永久失联）
+    let waiter = approvalWaiters.get(sessionId + '|' + approvalId);
+    if (!waiter) {
+      waiter = approvalAlias.get(sessionId + '|' + approvalId);
     }
-    const waiter = approvalWaiters.get(sessionId + '|' + approvalId);
+    if (!waiter) {
+      const sameSession = [];
+      for (const entry of approvalWaiters.values()) {
+        if (entry.sid === sessionId) sameSession.push(entry);
+      }
+      if (sameSession.length === 1) waiter = sameSession[0];
+    }
     if (!waiter) {
       return {
         ok: false,

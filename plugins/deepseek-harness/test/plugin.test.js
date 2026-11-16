@@ -870,6 +870,54 @@ await check('B3: approvalInline 开启 → 独占应答者 hold，RMC 允许 →
   }
 });
 
+await check('B3: 瀑布只给 callId（无 id）→ 按 callId 挂 waiter，UUID 应答也能命中', async () => {
+  // 2026-11-16 真机实测的真实形状：approval/request 的 request 只有
+  // agent/toolName/callId/reason/displayReason/signal，**没有 id**；而
+  // approval/asked 与 RMC 应答用的是另一个 approval UUID。老代码读 request.id
+  // 得到空串就 return next()，waiter 永远建不起来 → 点允许只会得到「不在等待」。
+  // 这个用例钉住：callId 挂 waiter + UUID 经 approval/asked 关联 + 应答命中。
+  const sid = 'session-real111-2222-4333-8444-666666666666';
+  const callId = 'call_00_realshape';
+  const approvalUuid = 'dcc85259-1c5a-439d-99a8-eb10c110e857';
+  const gate = { open: false };
+  const { server, seen } = makeAnswerServer([
+    { answer_id: 'a-real', session_id: sid, kind: 'approval', id: approvalUuid,
+      outcome: 'allowed-once' },
+  ], { gate });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const stub = makeCtx();
+    const keep = setInterval(() => {}, 300);
+    try {
+      apply(stub.ctx, { port: server.address().port, registerSkill: false,
+        registerTools: false, approvalInline: true });
+      await waitNativeAlive(seen);
+      const handler = (stub.listeners.get('approval/request') || [])[0];
+      assert.ok(handler, 'approvalInline 开启应注册 approval/request');
+      let nextCalled = false;
+      // 关键：只给 callId，没有 id —— 真实形状。
+      const outcomePromise = handler(
+        { agent: { id: sid }, callId, toolName: 'pwsh', reason: 'rm' },
+        () => { nextCalled = true; return Promise.resolve('unavailable'); });
+      // approval/asked 报 UUID + 同一个 callId：插件据此把两者关联起来。
+      emitOn(stub, 'session/event', { id: sid }, {
+        type: 'approval/asked',
+        data: { id: approvalUuid, callId, toolName: 'pwsh', reason: 'rm' } });
+      gate.open = true;   // 放行答案：RMC 这时才「点了允许」
+      assert.ok(await waitUntil(() => seen.acks.length >= 1), 'ack 未到');
+      assert.strictEqual(seen.acks[0].ok, true,
+        'UUID 应答应命中 callId waiter：' + JSON.stringify(seen.acks[0]));
+      assert.strictEqual(await outcomePromise, 'allowed-once');
+      assert.strictEqual(nextCalled, false, '独占应答者不应 next() 放行');
+    } finally {
+      clearInterval(keep);
+      for (const dispose of stub.effects) dispose();
+    }
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
 await check('B3: 必须 prepend 注册（否则授权卡点了没反应）', async () => {
   const stub = makeCtx();
   apply(stub.ctx, { port: 1, registerSkill: false, registerTools: false, approvalInline: true });

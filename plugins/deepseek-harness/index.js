@@ -58,10 +58,20 @@ const DEFAULTS = {
   // 独占应答者——授权改由 RMC 聊天页允许/拒绝，桌面 Web UI 的授权卡不再弹。
   // 默认关保持安全只读（进程内无按 id 应答口，硬抢瀑布会卡住授权）。
   approvalInline: false,
-  // 提问内联答·独占模式（opt-in，默认关）：开启后插件成为 user-questions/request
-  // 瀑布的独占应答者，提问改由 RMC 聊天页/桌宠卡作答，桌面 Web UI 提问卡不再弹
-  // （也就没有「旁路答完 GUI 卡残留」的问题）。默认关走 steer 旁路（GUI 卡可能残留）。
+  // 提问内联答·独占模式（opt-in，默认关）：开启后插件用 **prepend** 抢在桌面 GUI
+  // 的转发器之前 hold 住 user-questions/request 瀑布，提问改由 RMC 聊天页/桌宠卡
+  // 作答，答案**当轮**回给工具调用（真同步），桌面 Web UI 提问卡不再弹。
+  // 默认关：不做应答者，答案只能走 steer 旁路（那条路对 legacy 提问救不了——
+  // 工具调用正卡在瀑布上，steer 的用户消息要等下一步边界才被认领）。
+  // 两道安全门见 questionHoldTimeoutMs 与 nativeAlive()。
   questionInline: false,
+  // hold 提问的兜底时长：到点还没等到 RMC 的答案就 next() 放行给桌面 GUI 的
+  // 转发器（这时 GUI 提问卡才弹），绝不把工具调用挂死。RMC 之后再答会落到
+  // steer 旁路（变成一条普通用户消息，不会重复扣卡）。
+  questionHoldTimeoutMs: 180000,
+  // hold 授权的兜底时长：同理——到点放行给桌面 GUI（授权卡这时才弹），
+  // 绝不把工具调用挂死。
+  approvalHoldTimeoutMs: 180000,
   // 只打印将要发送的 payload，不真发（排查用；与 AGENTRMC_DRY_RUN=1 等价）。
   dryRun: false,
 };
@@ -123,6 +133,14 @@ function normalizeConfig(raw) {
     dispatch: asBool(input.dispatch, DEFAULTS.dispatch),
     approvalInline: asBool(input.approvalInline, DEFAULTS.approvalInline),
     questionInline: asBool(input.questionInline, DEFAULTS.questionInline),
+    questionHoldTimeoutMs: asDuration(
+      input.questionHoldTimeoutMs,
+      DEFAULTS.questionHoldTimeoutMs,
+    ),
+    approvalHoldTimeoutMs: asDuration(
+      input.approvalHoldTimeoutMs,
+      DEFAULTS.approvalHoldTimeoutMs,
+    ),
     dryRun,
   };
 }
@@ -362,88 +380,118 @@ export function apply(ctx, rawConfig) {
   // agent/disposed 清账（无事件可挂）。
   const sessionsById = new Map();
 
-  // B2：内联应答。桌面 profile 的 tool-ask-user 默认 legacy 模式——前台提问没有
-  // timed wait；插件再注册应答者就是跟 Web UI 抢 waterfall（注册顺序碰运气），不做。
+  // B2：内联应答。
+  //
+  // 谁在 user-questions/request 瀑布链上靠前，谁就能独占这道提问：桌面 GUI 的
+  // 转发器（dsh-api-remotes 把这条瀑布转发给浏览器）是普通 ctx.on，一旦轮到它
+  // 就把请求塞进远程队列、**不再 next()**（GUI 提问卡因此弹出，答案在浏览器里给）。
+  // 插件要抢在它前面，靠的是 `{ prepend: true }`——cordis register() 里
+  // `options.prepend ? unshift : push`，与注册先后无关（2026-11-16 读包核实：
+  // cordis/lib/types/events.js 的 register、dsh-scope 的 scopeTarget——未打
+  // scope 标签的监听器一定放行，所以 questionInline 抢不到不是 scope 问题，是顺序）。
+  //
   // 直答路（2026-11-14 读包核实官方 answer 的落点）：一条
   // source.kind="user-question-reply" 的用户消息 steer 进 agent——Web UI 卡片
   // 经投影监听同一事件收卡，agent 认领 reply 当作 ask_user_question 的答复。
-  // 绕过 uq.answer 的 continued 状态门（legacy 提问没有 continued 态），自己 steer
-  // 同形消息；重复答案先查 inbox（官方 REPLY_QUEUED 同款判据）。
-  // 若 profile 配了 timed（有前台 wait），优先 completion.resolve 即时回给等待中
-  // 的轮次——两条路都通。
-  function findWait(sessionId, callId) {
-    // ctx.userQuestions：宿主 compose 期把服务实例挂到 ctx 上；兼容多种拿法。
-    const uq = ctx.userQuestions ||
+  // 官方 uq.answer() 只认 continued 态（timed 提问超时后才有），legacy 提问的
+  // fold 不跟踪 → 自己 steer 同形消息；重复答案先查 inbox（官方 REPLY_QUEUED 同款判据）。
+  //
+  // 旧版这里还有一条「① 有 timed wait 就 wait.completion.resolve(batch)」——
+  // 2026-11-16 读包核实那是**无效**的：TimedQuestionWait.completion 只是 wait
+  // 自己的结束信号（close() 里 resolve，`done` 给 NO_PROVIDER 分支 await），
+  // 答案通道只有 ask() 派发的 waterfall。留着它会把答案吞掉还回 ok:true
+  // （原生端显示已答、会话其实还在等），所以整条删掉，改走下面的官方 answer。
+  //
+  /** ctx.userQuestions：宿主 compose 期把服务实例挂到 ctx 上；兼容多种拿法。 */
+  function userQuestionsOf() {
+    return ctx.userQuestions ||
       (ctx.get ? ctx.get('userQuestions') : undefined) ||
       (ctx.services ? ctx.services.userQuestions : undefined);
-    if (!uq || !uq.waits || typeof uq.waits.get !== 'function') return null;
-    const agents = ctx.get ? ctx.get('agents') : undefined;
-    const agent = agents && agents.get ? agents.get(sessionId) : undefined;
-    if (agent) {
-      const direct = uq.waits.get(agent);
-      if (direct && typeof direct.get === 'function' && direct.get(callId)) {
-        return direct.get(callId);
-      }
-    }
-    // 活表实例与 wait 键可能不同一（跨 compose），兜底扫全表。
-    for (const calls of uq.waits.values()) {
-      if (calls && typeof calls.get === 'function') {
-        const w = calls.get(callId);
-        if (w) return w;
-      }
-    }
-    return null;
   }
-  function deliverToWait(wait, batch) {
-    // completion.resolve 是 askTimed 等待的 promise 本体：答案原路返回、卡片同步消失。
-    if (wait && wait.completion && typeof wait.completion.resolve === 'function') {
-      wait.completion.resolve(batch);
-      return true;
-    }
-    return false;
-  }
+  // —— 原生端活性：决定要不要 hold 提问 ——
+  // 提问一旦 hold 住，只有 RMC 能答（GUI 卡被我们挡在后面），所以「桌宠在不在」
+  // 必须先确认，否则提问会永久挂住。活性信号只取**轮询成功**记账（应答轮询 1.2s
+  // 一发、派发轮询 1.5s 一发），不做现场探测：hold 的注册必须是同步的，一旦在
+  // 瀑布里等一次网络往返，原生端抢在那几毫秒里送回来的答案就会因为「还没有
+  // waiter」被当成旁路答案丢掉。桌宠不在线时轮询不会成功，缓存自然过期 → 不 hold。
+  const NATIVE_ALIVE_MS = 15000;
+  let nativeAliveAt = 0;
+  function markNativeAlive() { nativeAliveAt = Date.now(); }
+  function nativeAlive() { return Date.now() - nativeAliveAt < NATIVE_ALIVE_MS; }
   // 提问·独占模式（questionInline）：插件 hold 住 user-questions/request 瀑布，
-  // 桌面 Web UI 拿不到请求→提问卡不弹→无「旁路答完 GUI 卡残留」。按会话攒 waiter
-  // （legacy 提问的 waterfall request 不带 callId，一会话通常仅一道活跃题）。
-  const questionWaiters = new Map(); // sid -> {resolve}
+  // 桌面 GUI 拿不到请求→提问卡不弹→RMC 的答案当轮回给工具调用（真同步、无残留）。
+  // 按会话攒 waiter（legacy 提问的 waterfall request 不带 callId，只能用问题 id
+  // 配）。同一会话可能同时 hold 多道题（桌宠现在是待答队列，多张卡都能答），
+  // 所以这里是**列表**：答复批里 answers[].id 就是提问的 question id，用它配对，
+  // 配不上才退回「只有一条就用它」的老行为。
+  const questionWaiters = new Map(); // sid -> [{ finish, ids:Set }]
+  function pickQuestionWaiter(sessionId, answers) {
+    const list = questionWaiters.get(sessionId);
+    if (!list || !list.length) return null;
+    const ids = (answers || []).map((answer) => answer && answer.id).filter(Boolean);
+    if (ids.length) {
+      const exact = list.find((entry) => ids.every((id) => entry.ids.has(id)));
+      if (exact) return exact;
+    }
+    return list.length === 1 ? list[0] : null;
+  }
   if (config.questionInline && typeof ctx.on === 'function') {
     ctx.on('user-questions/request', (request, next) => {
       const sid = request && request.agent && request.agent.id;
       if (!sid) return next();
+      if (!nativeAlive()) return next();  // 桌宠不在线：让给 GUI 转发器（同步判断）
       return new Promise((resolve) => {
-        const done = (batch) => {
-          questionWaiters.delete(sid);
+        let settled = false;
+        let timer;
+        const entry = {
+          finish: null,
+          ids: new Set((request.questions || []).map((q) => q && q.id).filter(Boolean)),
+        };
+        const release = () => {
+          // 只删自己的那条：同一会话多题并存时别把别人的 waiter 误删。
+          const list = questionWaiters.get(sid);
+          if (list) {
+            const at = list.indexOf(entry);
+            if (at >= 0) list.splice(at, 1);
+            if (!list.length) questionWaiters.delete(sid);
+          }
+          clearTimeout(timer);
           if (request.signal) request.signal.removeEventListener('abort', onAbort);
-          resolve(batch);
         };
-        const onAbort = () => {
-          questionWaiters.delete(sid);
-          resolve(next());  // 取消时放行给下游（Web UI  likewise 已 abort）
+        // 三种收场都只走一次：RMC 答案 / 取消 / 兜底超时（后两者 next() 放行给 GUI）。
+        const finish = (value) => {
+          if (settled) return;
+          settled = true;
+          release();
+          resolve(value);
         };
-        questionWaiters.set(sid, { resolve: done });
+        entry.finish = finish;
+        const onAbort = () => finish(next());
+        timer = setTimeout(() => finish(next()), config.questionHoldTimeoutMs);
+        const list = questionWaiters.get(sid) || [];
+        list.push(entry);
+        questionWaiters.set(sid, list);
         if (request.signal) {
           if (request.signal.aborted) return onAbort();
           request.signal.addEventListener('abort', onAbort, { once: true });
         }
       });
-    });
+    }, { prepend: true });
   }
   async function answerQuestion(sessionId, callId, answers) {
     const batch = { answers: answers || [] };
-    // ⓪ 独占模式：直接 resolve 插件 hold 住的瀑布（Web UI 卡不弹，无残留）。
+    // ⓪ 独占模式：直接 resolve 插件 hold 住的瀑布——答案当轮回给工具调用，
+    // GUI 提问卡根本没弹（无「旁路答完 GUI 卡残留」）。同会话多道题并存时按
+    // 问题 id 配对，别把 A 的答案塞给 B。
     if (config.questionInline) {
-      const w = questionWaiters.get(sessionId);
+      const w = pickQuestionWaiter(sessionId, batch.answers);
       if (w) {
-        w.resolve(batch);
+        w.finish(batch);
         return { ok: true };
       }
-      // 没 hold 住（注册时序等）→ 落回下面旁路。
+      // 没 hold 住（活性门没过 / 已超时放行 / 注册时序）→ 落回下面旁路。
     }
-    // ① 有 timed wait 就先 resolve。
-    try {
-      if (deliverToWait(findWait(sessionId, callId), batch)) return { ok: true };
-    } catch (e) { /* wait 路不通就走 steer 路 */ }
-    // ② 主路：steer user-question-reply（与官方 answer 同形同落点）。
+    // ① 主路：steer user-question-reply（与官方 answer 同形同落点）。
     try {
       const agents = ctx.get('agents');
       const agent = agents && agents.get(sessionId);
@@ -453,6 +501,25 @@ export function apply(ctx, rawConfig) {
       if (typeof agent.steer !== 'function' || !agent.inbox) {
         return { ok: false, error: 'Agent 接口不认识（DSH 版本变了？），未应答' };
       }
+      // ①-a timed 提问超时后处于 continued 态：官方 answer 是正路（它自己 steer
+      // 一条同形消息并记账 REPLY_QUEUED）。legacy 提问 fold 不跟踪 → 返回 false，
+      // 落到 ①-b 手搓的同一形态。
+      const uq = userQuestionsOf();
+      if (uq && typeof uq.answer === 'function') {
+        try {
+          if (uq.answer(agent, callId, batch)) return { ok: true };
+        } catch (e) {
+          const code = e && e.code;
+          if (code === 'REPLY_QUEUED') {
+            return { ok: false, error: '这条回答已经在路上了（别重复提交）' };
+          }
+          if (code === 'BAD_ANSWER') {
+            return { ok: false, error: '答案条目和提问对不上：' + ((e && e.message) || e) };
+          }
+          // 其它（版本不符等）→ 落回 ①-b。
+        }
+      }
+      // ①-b 手搓直答：重复答案先查 inbox（官方 REPLY_QUEUED 同款判据）。
       const queued = (m) => m && m.source && m.source.kind === 'user-question-reply' &&
         m.source.callId === callId;
       const inTurn = agent.inbox.nextTurn && agent.inbox.nextTurn.some(queued);
@@ -468,7 +535,6 @@ export function apply(ctx, rawConfig) {
       };
       // 带上问题原文（照 Web UI 的 reply 内容形）；拿不到也照送，答案里有 id。
       try {
-        const uq = ctx.userQuestions;
         const continued = uq && typeof uq.continued === 'function'
           ? uq.continued(agent) : undefined;
         const entry = Array.isArray(continued)
@@ -487,31 +553,49 @@ export function apply(ctx, rawConfig) {
     }
   }
   // B3 授权内联答（opt-in 独占）：进程内 Cordis approval 服务只有 request()、
-  // 无按 id 应答口；Web UI 自己是 approval/request 瀑布的应答者。开启
-  // approvalInline 后插件注册为**独占**应答者：hold 住请求等 RMC 聊天页的
-  // 允许/拒绝（pull 模型成立——我们是应答者，答案何时到都能 resolve），桌面
-  // Web UI 授权卡不再弹。默认关＝不注册，保持安全只读。
-  const approvalWaiters = new Map(); // `${sid}|${approvalId}` -> {resolve}
+  // 无按 id 应答口；桌面 GUI 自己是 approval/request 瀑布的转发者/应答者。开启
+  // approvalInline 后插件用 **prepend** 抢在转发器前面 hold 住请求，等 RMC
+  // 聊天页的允许/拒绝（pull 模型成立——我们是应答者，答案何时到都能 resolve），
+  // 桌面 GUI 授权卡不再弹。默认关＝不注册，保持安全只读。
+  //
+  // 2026-11-16：这里原来也是普通 ctx.on，跟 questionInline 同一个病——排在 GUI
+  // 转发器后面就永远轮不到，卡片照样弹（那是 approval/asked 会话事件推的），
+  // 点「允许」却因为插件没 hold 而找不到 waiter → 看着就是「点了没反应」。
+  // 现在与提问同构：prepend + 活性门 + 兜底超时。
+  const approvalWaiters = new Map(); // `${sid}|${approvalId}` -> { finish }
   if (config.approvalInline && typeof ctx.on === 'function') {
     ctx.on('approval/request', (request, next) => {
       const sid = request && request.agent && request.agent.id;
       const id = request && request.id;
       if (!sid || !id) return next();
+      if (!nativeAlive()) return next();  // 桌宠不在线：让给 GUI 转发器（同步判断）
       return new Promise((resolve) => {
+        let settled = false;
+        let timer;
         const key = sid + '|' + id;
-        const done = (outcome) => {
-          approvalWaiters.delete(key);
+        const entry = { finish: null };
+        const release = () => {
+          if (approvalWaiters.get(key) === entry) approvalWaiters.delete(key);
+          clearTimeout(timer);
           if (request.signal) request.signal.removeEventListener('abort', onAbort);
-          resolve(outcome);
         };
-        const onAbort = () => done('cancelled');
-        approvalWaiters.set(key, { resolve: done });
+        // 三种收场都只走一次：RMC 裁决 / 取消 / 兜底超时（超时 next() 放行给 GUI）。
+        const finish = (value) => {
+          if (settled) return;
+          settled = true;
+          release();
+          resolve(value);
+        };
+        entry.finish = finish;
+        const onAbort = () => finish('cancelled');
+        timer = setTimeout(() => finish(next()), config.approvalHoldTimeoutMs);
+        approvalWaiters.set(key, entry);
         if (request.signal) {
           if (request.signal.aborted) return onAbort();
           request.signal.addEventListener('abort', onAbort, { once: true });
         }
       });
-    });
+    }, { prepend: true });
   }
   async function answerApproval(sessionId, approvalId, outcome) {
     if (!config.approvalInline) {
@@ -519,9 +603,12 @@ export function apply(ctx, rawConfig) {
     }
     const waiter = approvalWaiters.get(sessionId + '|' + approvalId);
     if (!waiter) {
-      return { ok: false, error: '这条授权已不在等待（可能已应答/取消），未生效' };
+      return {
+        ok: false,
+        error: '这条授权已不在等待（已应答 / 超时放行到桌面 GUI / 桌宠当时不在线），未生效',
+      };
     }
-    waiter.resolve(outcome === 'allowed-once' ? 'allowed-once' : 'rejected');
+    waiter.finish(outcome === 'allowed-once' ? 'allowed-once' : 'rejected');
     return { ok: true };
   }
   async function handleAnswerMessage(item) {
@@ -945,6 +1032,7 @@ export function apply(ctx, rawConfig) {
           '/dispatch/pending?exe=' + encodeURIComponent(config.raiseExe || ''),
         );
         if (res.status !== 200) return; // 旧原生端没有这条路由：安静跳过
+        markNativeAlive(); // 有响应就算桌宠在线（questionInline 活性门的缓存）
         let items;
         try {
           items = JSON.parse(res.body || '[]');
@@ -1031,6 +1119,7 @@ export function apply(ctx, rawConfig) {
           '/request-answer/pending?exe=' + encodeURIComponent(config.raiseExe || ''),
         );
         if (res.status !== 200) return; // 旧原生端：安静跳过
+        markNativeAlive(); // 应答口在 → 提问可以放心 hold 给 RMC 答
         let items;
         try { items = JSON.parse(res.body || '[]'); } catch { return; }
         if (!Array.isArray(items) || items.length === 0) return;

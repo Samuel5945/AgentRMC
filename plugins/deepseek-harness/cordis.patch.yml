@@ -14,7 +14,18 @@
         raiseExe: DeepSeek Harness.exe
         # B3 授权内联答（用户 2026-11-14 22:09 明确开启）：插件成为 approval/request
         # 独占应答者，授权改由 RMC 聊天页允许/拒绝，桌面 Web UI 授权卡不再弹。
+        # 2026-11-16 修：这个应答者原来没 prepend，排在 GUI 转发器后面 → 插件从没
+        # 真 hold 住，卡片照样弹、点「允许」却找不到 waiter（看着就是「点了没反应」）。
+        # 现在与提问同构：prepend（抢链首）+ 活性门（桌宠不在线让给 GUI）+
+        # approvalHoldTimeoutMs 兜底（到点放行给 GUI，不挂死工具调用）。
         approvalInline: true
-        # 提问独占（实测不生效：插件 ctx.on 挂 global scope，进不了 agent scoped
-        # 瀑布，被 Web UI 抢先；保留代码默认关）。桌面残留卡改靠原生刷新聊天页解决。
-        questionInline: false
+        approvalHoldTimeoutMs: 180000
+        # 提问独占（2026-11-16 开启）：插件用 { prepend: true } 抢在桌面 GUI 的瀑布
+        # 转发器前面 hold 住 user-questions/request，桌宠/聊天页选完 → 答案**当轮**
+        # 回给 ask_user_question（不再是「排队到下一轮的用户消息」）。旧注释说的
+        # 「挂 global scope 进不了 agent scoped 瀑布」是误诊：未打 scope 标签的
+        # 监听器一定放行，抢不到只是注册顺序（GUI 转发器先轮到且不再 next()）。
+        # 两道安全门：桌宠不在线时不 hold（让 GUI 弹卡）；questionHoldTimeoutMs
+        # 到点放行给 GUI，绝不把工具调用挂死。
+        questionInline: true
+        questionHoldTimeoutMs: 180000

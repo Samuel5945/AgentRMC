@@ -98,13 +98,15 @@ delete process.env.AGENTRMC_DRY_RUN;
 /** 假 Cordis 上下文：只实现插件真的用到的那几个方法。 */
 function makeCtx() {
   const listeners = new Map();
+  const regs = [];   // {event, listener, options}：options 用来断言 prepend
   const tools = [];
   const skills = [];
   const effects = [];
   const ctx = {
-    on(event, listener) {
+    on(event, listener, options) {
       if (!listeners.has(event)) listeners.set(event, []);
       listeners.get(event).push(listener);
+      regs.push({ event, listener, options });
       return () => {};
     },
     effect(execute) {
@@ -139,7 +141,7 @@ function makeCtx() {
       },
     },
   };
-  return { ctx, listeners, tools, skills, effects };
+  return { ctx, listeners, tools, skills, effects, regs };
 }
 
 const harness = makeCtx();
@@ -633,9 +635,12 @@ await check('派发通道: 会话不在活表 / agents 不可达 → ack ok:fals
 });
 
 /** 假原生端（B2）：/request-answer/pending 一次性吐完 items，ack 记账；
- *  /requests 推送也记账（验证插件在应答后重推空集）。响应必须 Connection: close。 */
-function makeAnswerServer(pendingItems) {
-  const seen = { pushes: [], acks: [] };
+ *  /requests 推送也记账（验证插件在应答后重推空集）。响应必须 Connection: close。
+ *  options.gate = {open:false} 时取件先吐空数组——用来把「答案到达」压在
+ *  「插件已经 hold 住瀑布」之后（否则第一拍轮询会把答案抢在 hold 之前消费掉）。 */
+function makeAnswerServer(pendingItems, options = {}) {
+  const seen = { pushes: [], acks: [], pendingUrls: [] };
+  const gate = options.gate;
   const queue = pendingItems.slice();
   const server = http.createServer((req, res) => {
     let body = '';
@@ -643,8 +648,9 @@ function makeAnswerServer(pendingItems) {
     req.on('end', () => {
       res.setHeader('Connection', 'close');
       if (req.url.startsWith('/request-answer/pending')) {
+        seen.pendingUrls.push(req.url);
         res.setHeader('Content-Type', 'application/json');
-        res.end(JSON.stringify(queue.splice(0)));
+        res.end(JSON.stringify(gate && !gate.open ? [] : queue.splice(0)));
         return;
       }
       if (req.url.startsWith('/request-answer/ack')) {
@@ -672,9 +678,19 @@ function emitOn(stub, event, ...args) {
   for (const listener of stub.listeners.get(event) || []) listener(...args);
 }
 
+/** 等原生端被记成活：应答轮询是「请求 → 记账 → 下一拍」，看到第 2 个取件请求
+ *  就证明第 1 个响应已被插件处理（questionInline 的活性门这时才放行 hold）。 */
+async function waitNativeAlive(seen) {
+  assert.ok(await waitUntil(() => seen.pendingUrls.length >= 2, 6000),
+    '等待轮询把原生端记成活（questionInline 活性门）');
+}
 
-// —— B2 内联应答：取件 → wait.resolve（或 steer 直答）→ ack ok → 重推空集 ——
-await check('B2: 手机答案经取件 → timed wait.resolve → ack ok → 推空集', async () => {
+
+// —— B2 内联应答：取件 → 独占 hold 的瀑布 resolve（或官方 answer/steer）→ ack ok → 重推空集 ——
+// 注：旧版这里断言的是 `wait.completion.resolve(batch)`。2026-11-16 读包核实那条路
+// 是无效的（completion 只是 wait 自己的结束信号），已删；continued 态改走官方
+// `ctx.userQuestions.answer()`，所以 now 断言 answer() 被调用、wait 不被碰。
+await check('B2: timed 提问（continued）走官方 answer()，不再碰 wait.completion', async () => {
   const sid = 'session-bbbb1111-2222-4333-8444-555555555555';
   const callId = 'call_b2test';
   const { server, seen } = makeAnswerServer([
@@ -684,11 +700,21 @@ await check('B2: 手机答案经取件 → timed wait.resolve → ack ok → 推
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   try {
     const wait = { completion: { resolve: (v) => { wait.resolved = v; } } };
-    const agents = { get: (id) => (id === sid ? { id, session: {} } : undefined) };
+    const calls = [];
+    const agent = {
+      id: sid,
+      session: {},
+      inbox: { nextTurn: [], nextStep: [] },
+      steer: () => { throw new Error('answer() 认下了就不该再手搓 steer'); },
+    };
+    const agents = { get: (id) => (id === sid ? agent : undefined) };
     const stub = makeCtx();
     const innerGet = stub.ctx.get;
     stub.ctx.get = (service) => (service === 'agents' ? agents : innerGet(service));
-    stub.ctx.userQuestions = { waits: new Map([[agents.get(sid), new Map([[callId, wait]])]]) };
+    stub.ctx.userQuestions = {
+      waits: new Map([[agent, new Map([[callId, wait]])]]),
+      answer: (a, cid, batch) => { calls.push({ a, cid, batch }); return true; },
+    };
     const keep = setInterval(() => {}, 300);
     try {
       apply(stub.ctx, { port: server.address().port, registerSkill: false, registerTools: false });
@@ -700,8 +726,11 @@ await check('B2: 手机答案经取件 → timed wait.resolve → ack ok → 推
       assert.ok(await waitUntil(() => seen.acks.length >= 1), 'ack 未到');
       assert.strictEqual(seen.acks[0].answer_id, 'a-1');
       assert.strictEqual(seen.acks[0].ok, true, JSON.stringify(seen.acks[0]));
-      assert.deepStrictEqual(wait.resolved,
-        { answers: [{ id: 'q1', selected: ['甲'] }] });
+      assert.strictEqual(calls.length, 1, '应走官方 answer()');
+      assert.strictEqual(calls[0].cid, callId);
+      assert.deepStrictEqual(calls[0].batch, { answers: [{ id: 'q1', selected: ['甲'] }] });
+      assert.strictEqual(wait.resolved, undefined,
+        'wait.completion 不是答案通道，任何情况下都不该被 resolve');
       assert.ok(await waitUntil(() => seen.pushes.some(p => p.session_id === sid && p.requests.length === 0)),
         '应答成功后要重推空集让卡片消失');
     } finally {
@@ -800,10 +829,11 @@ await check('B2: 重复答案被挡 → ack ok:false 带原因', async () => {
 await check('B3: approvalInline 开启 → 独占应答者 hold，RMC 允许 → resolve allowed-once', async () => {
   const sid = 'session-ffff1111-2222-4333-8444-555555555555';
   const approvalId = 'ap-b3';
+  const gate = { open: false };
   const { server, seen } = makeAnswerServer([
     { answer_id: 'a-b3', session_id: sid, kind: 'approval', id: approvalId,
       outcome: 'allowed-once' },
-  ]);
+  ], { gate });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   try {
     const stub = makeCtx();
@@ -811,6 +841,8 @@ await check('B3: approvalInline 开启 → 独占应答者 hold，RMC 允许 →
     try {
       apply(stub.ctx, { port: server.address().port, registerSkill: false,
         registerTools: false, approvalInline: true });
+      // 先让轮询把桌宠记成活（活性门）；答案由 gate 压住，免得抢在 hold 之前被取走。
+      await waitNativeAlive(seen);
       // 模拟宿主发起授权瀑布：插件应答者 hold 住（不 next）。
       const handler = (stub.listeners.get('approval/request') || [])[0];
       assert.ok(handler, 'approvalInline 开启应注册 approval/request 应答者');
@@ -818,6 +850,7 @@ await check('B3: approvalInline 开启 → 独占应答者 hold，RMC 允许 →
       const outcomePromise = handler(
         { agent: { id: sid }, id: approvalId },
         () => { nextCalled = true; return Promise.resolve('unavailable'); });
+      gate.open = true;   // 放行答案：RMC 这时才「点了允许」
       // 推一条 approval/asked 进账（answerable 应为 true）。
       emitOn(stub, 'session/event', { id: sid }, {
         type: 'approval/asked', data: { id: approvalId, toolName: 'pwsh', reason: 'rm' } });
@@ -828,6 +861,58 @@ await check('B3: approvalInline 开启 → 独占应答者 hold，RMC 允许 →
       assert.strictEqual(seen.acks[0].ok, true, JSON.stringify(seen.acks[0]));
       assert.strictEqual(await outcomePromise, 'allowed-once');
       assert.strictEqual(nextCalled, false, '独占应答者不应 next() 放行');
+    } finally {
+      clearInterval(keep);
+      for (const dispose of stub.effects) dispose();
+    }
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+await check('B3: 必须 prepend 注册（否则授权卡点了没反应）', async () => {
+  const stub = makeCtx();
+  apply(stub.ctx, { port: 1, registerSkill: false, registerTools: false, approvalInline: true });
+  const reg = stub.regs.find((r) => r.event === 'approval/request');
+  assert.ok(reg, 'approvalInline 开启应注册 approval/request');
+  // 卡片是 approval/asked 会话事件推的，跟瀑布无关；不 prepend 就抢不到瀑布，
+  // 于是「卡片能弹、点了找不到 waiter」——2026-11-16 真机就是这个问题。
+  assert.strictEqual(reg.options && reg.options.prepend, true,
+    '授权应答者必须 { prepend: true }，实际 ' + JSON.stringify(reg.options));
+  for (const dispose of stub.effects) dispose();
+});
+
+await check('B3: 桌宠不在线 → 不 hold，next() 放行给 GUI', async () => {
+  const stub = makeCtx();
+  apply(stub.ctx, { port: 1, registerSkill: false, registerTools: false, approvalInline: true });
+  const handler = (stub.listeners.get('approval/request') || [])[0];
+  let nextCalled = false;
+  const value = await handler(
+    { agent: { id: 'sess-offline' }, id: 'ap-offline' },
+    () => { nextCalled = true; return Promise.resolve('unavailable'); });
+  assert.strictEqual(nextCalled, true, '桌宠没开时绝不能 hold：授权会永久挂住');
+  assert.strictEqual(value, 'unavailable');
+  for (const dispose of stub.effects) dispose();
+});
+
+await check('B3: 兜底超时到点 → next() 放行给 GUI，不挂死工具调用', async () => {
+  const { server, seen } = makeAnswerServer([]);
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const stub = makeCtx();
+    const keep = setInterval(() => {}, 300);
+    try {
+      apply(stub.ctx, { port: server.address().port, registerSkill: false,
+        registerTools: false, approvalInline: true, approvalHoldTimeoutMs: 80 });
+      await waitNativeAlive(seen);
+      const handler = (stub.listeners.get('approval/request') || [])[0];
+      let nextCalled = false;
+      const p = handler(
+        { agent: { id: 'sess-ap-timeout' }, id: 'ap-timeout' },
+        () => { nextCalled = true; return Promise.resolve('unavailable'); });
+      assert.strictEqual(nextCalled, false, 'hold 期间不该放行');
+      assert.strictEqual(await p, 'unavailable');
+      assert.strictEqual(nextCalled, true);
     } finally {
       clearInterval(keep);
       for (const dispose of stub.effects) dispose();
@@ -848,10 +933,11 @@ await check('B3: approvalInline 默认关 → 不注册应答者，answerApprova
 await check('B2独占: questionInline 开启 → hold user-questions/request，RMC 答案 resolve', async () => {
   const sid = 'session-abcd1111-2222-4333-8444-555555555555';
   const callId = 'call-q-excl';
+  const gate = { open: false };
   const { server, seen } = makeAnswerServer([
     { answer_id: 'a-qx', session_id: sid, kind: 'question', id: callId,
       answers: [{ id: 'q1', selected: ['甲'] }] },
-  ]);
+  ], { gate });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   try {
     const stub = makeCtx();
@@ -859,17 +945,146 @@ await check('B2独占: questionInline 开启 → hold user-questions/request，R
     try {
       apply(stub.ctx, { port: server.address().port, registerSkill: false,
         registerTools: false, questionInline: true });
+      // 先让轮询把桌宠记成活（活性门）；答案由 gate 压住，免得抢在 hold 之前被取走。
+      await waitNativeAlive(seen);
       const handler = (stub.listeners.get('user-questions/request') || [])[0];
       assert.ok(handler, 'questionInline 开启应注册 user-questions/request 应答者');
       let nextCalled = false;
       const outcomePromise = handler(
         { agent: { id: sid }, questions: [{ id: 'q1' }] },
         () => { nextCalled = true; return Promise.resolve({ answers: [] }); });
+      gate.open = true;   // 放行答案：RMC 这时才「点了选择」
       assert.ok(await waitUntil(() => seen.acks.length >= 1), 'ack 未到');
       assert.strictEqual(seen.acks[0].ok, true, JSON.stringify(seen.acks[0]));
       const resolved = await outcomePromise;
       assert.deepStrictEqual(resolved, { answers: [{ id: 'q1', selected: ['甲'] }] });
       assert.strictEqual(nextCalled, false, '独占应答者不应 next() 放行（Web UI 卡不弹）');
+    } finally {
+      clearInterval(keep);
+      for (const dispose of stub.effects) dispose();
+    }
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+await check('B2独占: 必须 prepend 注册（否则抢不到 GUI 的瀑布转发器）', async () => {
+  const stub = makeCtx();
+  apply(stub.ctx, { port: 1, registerSkill: false, registerTools: false, questionInline: true });
+  const reg = stub.regs.find((r) => r.event === 'user-questions/request');
+  assert.ok(reg, 'questionInline 开启应注册 user-questions/request');
+  // cordis register(): options.prepend ? unshift : push —— 桌面 GUI 的转发器是普通
+  // ctx.on 且轮到它就不再 next()，不 prepend 就永远轮不到我们。
+  assert.strictEqual(reg.options && reg.options.prepend, true,
+    '提问应答者必须 { prepend: true }，实际 ' + JSON.stringify(reg.options));
+  for (const dispose of stub.effects) dispose();
+});
+
+await check('B2独占: 默认关 → 不注册提问应答者（保持只做提醒的原行为）', async () => {
+  const stub = makeCtx();
+  apply(stub.ctx, { port: 1, registerSkill: false, registerTools: false });
+  assert.strictEqual((stub.listeners.get('user-questions/request') || []).length, 0,
+    '默认关不该注册 user-questions/request 应答者');
+  for (const dispose of stub.effects) dispose();
+});
+
+await check('B2独占: 桌宠不在线 → 不 hold，next() 放行给 GUI', async () => {
+  const stub = makeCtx();
+  apply(stub.ctx, { port: 1, registerSkill: false, registerTools: false, questionInline: true });
+  const handler = (stub.listeners.get('user-questions/request') || [])[0];
+  let nextCalled = false;
+  const value = await handler(
+    { agent: { id: 'sess-offline' }, questions: [{ id: 'q1' }] },
+    () => { nextCalled = true; return Promise.resolve({ answers: [] }); });
+  assert.strictEqual(nextCalled, true, '桌宠没开时绝不能 hold：提问会永久挂住');
+  assert.deepStrictEqual(value, { answers: [] });
+  for (const dispose of stub.effects) dispose();
+});
+
+await check('B2独占: hold 期间被取消 → next() 放行，不重复 next', async () => {
+  const { server, seen } = makeAnswerServer([]);
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const stub = makeCtx();
+    try {
+      apply(stub.ctx, { port: server.address().port, registerSkill: false,
+        registerTools: false, questionInline: true, questionHoldTimeoutMs: 1000 });
+      await waitNativeAlive(seen);
+      const handler = (stub.listeners.get('user-questions/request') || [])[0];
+      const controller = new AbortController();
+      let nextCalls = 0;
+      const p = handler(
+        { agent: { id: 'sess-abort' }, questions: [{ id: 'q1' }], signal: controller.signal },
+        () => { nextCalls += 1; return Promise.resolve('deferred'); });
+      controller.abort();
+      assert.strictEqual(await p, 'deferred');
+      await new Promise((resolve) => setTimeout(resolve, 60));
+      assert.strictEqual(nextCalls, 1, 'next() 只能被调一次（cordis 再调会抛）');
+      for (const dispose of stub.effects) dispose();
+    } finally { /* 无 keep 计时器：hold 已在 abort 时收场 */ }
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+await check('B2独占: 兜底超时到点 → next() 放行给 GUI，不挂死工具调用', async () => {
+  const { server, seen } = makeAnswerServer([]);
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const stub = makeCtx();
+    const keep = setInterval(() => {}, 300);
+    try {
+      apply(stub.ctx, { port: server.address().port, registerSkill: false,
+        registerTools: false, questionInline: true, questionHoldTimeoutMs: 80 });
+      await waitNativeAlive(seen);
+      const handler = (stub.listeners.get('user-questions/request') || [])[0];
+      let nextCalled = false;
+      const p = handler(
+        { agent: { id: 'sess-timeout' }, questions: [{ id: 'q1' }] },
+        () => { nextCalled = true; return Promise.resolve('deferred-to-gui'); });
+      assert.strictEqual(nextCalled, false, 'hold 期间不该放行');
+      assert.strictEqual(await p, 'deferred-to-gui');
+      assert.strictEqual(nextCalled, true);
+      assert.deepStrictEqual(seen.acks, [], '没人应答就不该有 ack');
+    } finally {
+      clearInterval(keep);
+      for (const dispose of stub.effects) dispose();
+    }
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+await check('B2独占: 同会话两题并存 → 按问题 id 配对，不串答案', async () => {
+  const sid = 'session-pair1111-2222-4333-8444-555555555555';
+  const gate = { open: false };
+  const { server, seen } = makeAnswerServer([
+    { answer_id: 'a-pair', session_id: sid, kind: 'question', id: 'call-first',
+      answers: [{ id: 'qA', selected: ['甲'] }] },
+  ], { gate });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const stub = makeCtx();
+    const keep = setInterval(() => {}, 300);
+    try {
+      // hold 超时调小：第二道题在本用例里靠超时收场，别让测试等 180s；但要
+      // 大于一轮取件（1.2s），否则第二道会先超时，配对的断言就没意义了。
+      apply(stub.ctx, { port: server.address().port, registerSkill: false,
+        registerTools: false, questionInline: true, questionHoldTimeoutMs: 2500 });
+      await waitNativeAlive(seen);
+      const handler = (stub.listeners.get('user-questions/request') || [])[0];
+      let nextCalls = 0;
+      const answerNext = () => { nextCalls += 1; return Promise.resolve('deferred'); };
+      const first = handler({ agent: { id: sid }, questions: [{ id: 'qA' }] }, answerNext);
+      const second = handler({ agent: { id: sid }, questions: [{ id: 'qB' }] }, answerNext);
+      gate.open = true;   // 只放行针对 qA 的那条答案
+      assert.ok(await waitUntil(() => seen.acks.length >= 1), 'ack 未到');
+      assert.strictEqual(seen.acks[0].ok, true, JSON.stringify(seen.acks[0]));
+      assert.deepStrictEqual(await first, { answers: [{ id: 'qA', selected: ['甲'] }] },
+        '答案必须落在 qA 那一道（列表按问题 id 配对）');
+      assert.strictEqual(nextCalls, 0, '另一道不许被串答、也不许放行');
+      assert.strictEqual(await second, 'deferred', '第二道到点该自己放行给 GUI');
+      assert.strictEqual(nextCalls, 1);
     } finally {
       clearInterval(keep);
       for (const dispose of stub.effects) dispose();

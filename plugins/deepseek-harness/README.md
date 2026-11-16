@@ -108,6 +108,10 @@ pnpm add "link:D:\githubrepos\Agentrmc\plugins\deepseek-harness"
 | `registerTools` | `true` | 注册四个 `pet_*` 工具 |
 | `registerSkill` | `true` | 注册 `agentrmc-pet` skill |
 | `dispatch` | `true` | 定向派发通道：轮询原生端取件 → `agent.followup()` 注入 → ack 回执 |
+| `approvalInline` | `false` | 授权独占应答：prepend 抢在 GUI 转发器前 hold，RMC 聊天页允许/拒绝，桌面 GUI 授权卡不再弹 |
+| `approvalHoldTimeoutMs` | `180000` | hold 授权的兜底时长；到点 `next()` 放行给桌面 GUI |
+| `questionInline` | `false` | 提问独占应答：抢在 GUI 转发器前 hold，RMC 选完**当轮**回给工具调用（见下节） |
+| `questionHoldTimeoutMs` | `180000` | hold 提问的兜底时长；到点 `next()` 放行给桌面 GUI，绝不挂死工具调用 |
 | `dryRun` | `false` | 只打印将要发送的 payload，不真发（也可用 `AGENTRMC_DRY_RUN=1`） |
 
 本包**没有导出 `Config`**，所以插件管理页不会给这几个字段生成表单（配置状态显示为
@@ -142,10 +146,49 @@ CLI：原生端把派发排进队列（`GET /dispatch/pending?exe=…` 取件）
 - 这条通道只在会话里多一轮普通对话，气泡/语音提醒由既有的 turn-start / stop
   自动提醒照常完成，不需要插件额外做什么。
 
+## 当轮应答（questionInline / approvalInline，2026-11-16）
+
+**授权和提问是同一个病、同一副药**（`approval/request` 与 `user-questions/request`
+都是转发给桌面 GUI 的瀑布，转发器都是普通 `ctx.on` 且轮到就不再 `next()`）：
+
+- 提问默认（`questionInline: false`）时，RMC 选的答案只能走 steer 旁路：一条
+  `source.kind='user-question-reply'` 的用户消息。对 **legacy 模式**的
+  `ask_user_question`（桌面 profile 的默认）这条路救不了——工具调用正卡在
+  `user-questions/request` 瀑布上等答案，而 inbox 里的用户消息要等下一步边界才被
+  认领，于是答案只能「排队」成下一轮的一条消息。
+- 授权即使 `approvalInline: true`，只要应答者排在转发器后面就永远轮不到：卡片
+  照样弹（那是 `approval/asked` 会话事件推的，跟瀑布无关），点「允许」却因为
+  插件没 hold 而找不到 waiter —— 真机表现就是**「点了没反应」**（2026-11-16 踩到）。
+
+所以两处都用 `{ prepend: true }` 注册监听器（cordis `register()` 里 `prepend` 走
+`unshift`，与注册先后无关），抢在转发器前面 hold 住请求；RMC 的决定一到就 resolve
+瀑布 —— 答案/裁决**当轮**回给工具调用，桌面 GUI 的卡不弹也没有残留。踩坑记：这里
+本来**不是** scope 问题（`dsh-scope` 的 `scopeTarget` 对未打 scope 标签的监听器
+一律放行），只是顺序问题。
+
+三道安全门（否则「独占」＝挂死）：
+
+- **活性门**：hold 住之后只有 RMC 能答，所以先确认桌宠在线——只认轮询成功记账
+  （`/request-answer/pending` 每 1.2s、`/dispatch/pending` 每 1.5s，缓存 15s）。
+  **不在瀑布里做探测**：hold 的注册必须同步，一旦在瀑布里等一次网络往返，原生端
+  抢在那几毫秒送回来的答案就会因为「还没有 waiter」被当成旁路答案丢掉。桌宠不在线
+  时轮询不会成功、缓存自然过期 → 直接 `next()`，让 GUI 照常弹卡。
+- **兜底超时**：`questionHoldTimeoutMs` / `approvalHoldTimeoutMs`（默认 180s）到点
+  `next()` 放行给 GUI。提问放行之后 RMC 再答会落到 steer 旁路（变成一条普通用户
+  消息，不会重复扣卡）；授权放行之后 RMC 再点会回 ack `ok:false` 说明已不在等待。
+- **取消**：请求被取消（`request.signal` abort）时原样收场，不多次 `next()`。
+
+删掉的旧路：`wait.completion.resolve(batch)`（2026-11-16 读包核实**无效**）——
+`TimedQuestionWait.completion` 只是 wait 自己的结束信号（`close()` 里 resolve），
+不是答案通道；留着它会把答案吞掉还回 `ok:true`（原生端显示已答、会话其实还在
+等）。timed 提问超时后处于 `continued` 态时改走官方 `ctx.userQuestions.answer()`。
+
 ## 行为细节
 
 - **不阻塞会话**：`approval/request` 与 `user-questions/request` 是 waterfall，
-  监听器发完通知立刻 `next()`；`agent/turn-stopping` 是 serial，同样不等网络。
+  默认监听器发完通知立刻 `next()`；开了 `approvalInline` / `questionInline` 才会
+  hold（那时插件就是唯一应答者，靠活性门 + 兜底超时保证不挂死）；
+  `agent/turn-stopping` 是 serial，同样不等网络。
 - **离线不丢**：连不上 / 5xx / 超时 → 追加进 `pending-events.jsonl`，原生端启动与
   每 5 秒补投（补投只落工单，不补喊）。
 - **日志节流**：桌宠没开时每条事件都会失败，失败日志 60 秒只报一次；
@@ -173,13 +216,18 @@ CLI：原生端把派发排进队列（`GET /dispatch/pending?exe=…` 取件）
   在等你选方案」并把 DSH 窗口拉回前台，工单落成 `question / needs-me`。
 - 原生端 `/workers` 里出现 `DeepSeek Harness.exe`（`alive: true`、工单归到这一行），
   说明 `AgentWindow::knownExes()` 已经把它算进编制内。
-- 19 个单元/集成用例全过（假 ctx 跑真插件；工具那条用真的假桥接验 body 字段）。
+- 43 个单元/集成用例全过（假 ctx 跑真插件；工具那条用真的假桥接验 body 字段；
+  含 authorization/question 两条独占路的 prepend 注册、活性门、取消、兜底超时）。
+- **提问当轮应答（questionInline）已真机验完（2026-11-16）**：桌宠开着时在
+  桌宠/聊天页选方案 → `ask_user_question` **当轮**拿到 tool result（不再是下一条
+  `answer_to_pending_question` 用户消息），桌面 GUI 不再弹提问卡。
 
 未验证 / 已知边界：
 
-- **等授权通道**：本机这个会话的审批策略是 `never`（审批提示被禁用），没法真实触发
-  `approval/asked`；代码路径与「选方案」同一条（都走 `session/event`），但要在
-  `ask` 策略下的会话里再复核一次。
+- **授权当轮应答（approvalInline）真机待复核**：2026-11-16 真机触发到了一次
+  `approval/asked`（沙箱升级授权），表现是「卡片能弹、点允许没反应」——根因就是
+  应答者没 prepend（抢不到瀑布、hold 不到请求）；已修 + 单测，但要等下一次真实
+  授权再复核一遍（本机这个会话的审批策略平时是 `never`，不常弹）。
 - Web 端（浏览器打开 `http://127.0.0.1:3136`）没有自己的窗口，`raise` 静默无效，
   气泡 / 语音照常。
 - 插件页里的标题、说明、图标只验证了资源导出与安装无告警，**渲染外观未目视确认**。
@@ -192,6 +240,15 @@ node plugins\deepseek-harness\test\plugin.test.js
 
 测试把 `AGENTRMC_PORT` 指到 `1`（必然连不上），于是每条通知都走「落盘等补投」这条
 真实路径，断言读的就是真要发出去的内容——不 mock HTTP，也不会真的去喊你桌面上的桌宠。
+
+改完 Host 插件**不用重启 DSH**：`plugin_manager` 对这个 bundle 做一次
+`set_bundle(enabled:false)` → `set_bundle(enabled:true)` 就会原地重放（技能目录
+消失/回来就是重放成功的读数）。**但有个坑**（2026-11-16 实测）：连改插件源码会各自
+起一个 HMR 事务，事务没落定时再调 `set_bundle`/`set_plugin` 会直接失败
+（`HMR transactions cannot be nested`，`application: failed`）——这时唯一的干净
+办法是**重启 DSH**（顺便保证新代码一定加载）。真机复核 `questionInline` /
+`approvalInline` 时还要记住**桌宠必须开着**：活性门不过会直接放行给 GUI，看到的
+现象跟没改一样。
 
 ## 版本
 

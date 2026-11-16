@@ -85,8 +85,13 @@ public:
     // （kind/id/toolName/reason/questions/answerable）。answerable=false 时只展示。
     // 返回是否真的弹了（桌宠收起时不弹，提醒仍走气泡/托盘/语音）。
     bool showRequestCard(const QString &sessionId, const QJsonObject &req);
-    // 请求已被别处应答/取消：收起对应卡片。
+    // 请求已被别处应答/取消：从待答队列里移除；正在显示的那条则顶上下一张。
     void clearRequestCard(const QString &requestId);
+    // 待答请求排队（2026-11-16 用户实测「多张选择卡只显示一张」）：桌宠只有一张
+    // 交互卡，多条待答（同会话多题 / 授权+提问并存 / 跨会话）以前只显示最后一条，
+    // 其余永远轮不到。现在按到达顺序排队：队首上卡，答完 / 收卡 / 超时立刻顶下一
+    // 张，卡头标「还有 N 张待答」。同 id 重复推（插件每 10s 重推整批）只更新内容。
+    void queueRequestCard(const QString &sessionId, const QJsonObject &req);
 
     // 桌宠状态快照（AgentBridge GET /state 的应答），给 Agent 决策用。
     QString stateJson() const;
@@ -202,6 +207,19 @@ private:
     RequestCard *requestCard_ = nullptr;
     QString requestSession_;   // 当前交互卡归属会话
     QString requestId_;        // 当前交互卡请求 id（clearRequestCard 比对用）
+    QJsonObject shownReq_;     // 当前卡对应的请求原文（同 id 重推时判内容变没变）
+    // 待答队列：队首 = 当前卡。答完 / 收卡 / 超时统一走 finishCurrentRequest()
+    // 出队并顶下一张；桌宠收起时 showRequestCard 返回 false，条目留在队列里等
+    // 下一拍推送（插件每 10s 重推整批，会再把它顶上卡）。
+    struct QueuedRequest {
+        QString sessionId;
+        QJsonObject req;
+    };
+    QList<QueuedRequest> requestQueue_;
+    void finishCurrentRequest();               // 当前卡收场：出队 + 顶下一张
+    void advanceRequestQueue();                // 队首上卡
+    void dropQueuedRequest(const QString &requestId);
+    void applyQueueHint();                     // 把「还有 N 张」刷到卡头
     TtsClient *tts_ = nullptr;
     LlmClient *llm_ = nullptr;
     std::function<QString()> workSummaryProvider_;

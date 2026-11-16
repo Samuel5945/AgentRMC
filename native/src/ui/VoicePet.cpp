@@ -784,8 +784,23 @@ public:
 
     void clearOptions() {
         while (QLayoutItem *it = optionsBox_->takeAt(0)) {
-            if (QWidget *w = it->widget()) { w->deleteLater(); }
-            delete it;
+            if (QWidget *w = it->widget()) {
+                // deleteLater() 是延迟到事件循环才真删：同一轮里重配一次，上一排
+                // 控件还在画（用户看到的「允许/拒绝多一排」）——先 hide 立刻隐身。
+                w->hide();
+                w->deleteLater();
+            } else if (QLayout *sub = it->layout()) {
+                // 嵌套行（授权那排允许/拒绝）：这种 item 的 widget() 是 null，
+                // 按钮 parent 又是卡片本身——只删布局壳不会带走按钮，得逐个收拾。
+                while (QLayoutItem *child = sub->takeAt(0)) {
+                    if (QWidget *w = child->widget()) {
+                        w->hide();
+                        w->deleteLater();
+                    }
+                    delete child;
+                }
+            }
+            delete it;  // 嵌套布局随这个 item 一起删（QBoxLayoutItem 拥有它）
         }
     }
 
@@ -861,6 +876,7 @@ public:
                             (req.value(QStringLiteral("toolName")).toString().isEmpty()
                                  ? QString()
                                  : QStringLiteral("：") + req.value(QStringLiteral("toolName")).toString()));
+            baseTitle_ = title_->text();
             body_->setText(req.value(QStringLiteral("reason")).toString());
             body_->setVisible(!body_->text().isEmpty());
             if (answerable) {
@@ -885,6 +901,7 @@ public:
             return;
         }
         title_->setText(QStringLiteral("❓ 等你选方案"));
+        baseTitle_ = title_->text();
         body_->clear();  // 别让上一单的题干残留进 fitWidth 的测宽
         questions_ = req.value(QStringLiteral("questions")).toArray();
         // 行内作答门槛：所有题都是单选且选项 1..4（all-or-nothing——提交时批
@@ -1093,6 +1110,21 @@ private:
         answer_(QString(), answers);
     }
 
+public:
+    // 待答队列角标：标题后标「还有 N 张待答」（remaining=0 时不标）。队列变化时
+    // 由 VoicePet 调；改完自己重排尺寸，调用方再贴一次锚位。
+    void setQueueHint(int remaining) {
+        title_->setText(remaining > 0
+                            ? baseTitle_ +
+                                  QStringLiteral("（还有 %1 张待答）").arg(remaining)
+                            : baseTitle_);
+        fitWidth();
+        pinTextHeights();
+        fitHeight();
+        adjustSize();
+    }
+
+private:
     QLabel *title_ = nullptr;
     QLabel *progress_ = nullptr;
     QLabel *body_ = nullptr;
@@ -1105,6 +1137,7 @@ private:
     bool inlineAnswerable_ = false;
     int titleH_ = 18;
     int bodyH_ = 0;
+    QString baseTitle_;   // 无角标的标题（setQueueHint 从这里拼）
     std::function<void(QString, QJsonArray)> answer_;
     std::function<void()> openChat_;
     std::function<void()> interact_;
@@ -1386,10 +1419,10 @@ void VoicePet::ensureRequestCard() {
     if (requestTimer_ == nullptr) {
         requestTimer_ = new QTimer(this);
         requestTimer_->setSingleShot(true);
+        // 超时不是「答完了」，只是把这条从卡位上挪走（请求本身还在 DSH 那边等），
+        // 紧接着顶上下一张——否则多张待答时，后面的永远见不到。
         connect(requestTimer_, &QTimer::timeout, this, [this] {
-            if (requestCard_ != nullptr) {
-                requestCard_->hide();
-            }
+            finishCurrentRequest();
         });
     }
 }
@@ -1432,21 +1465,11 @@ bool VoicePet::showRequestCard(const QString &sessionId,
     requestCard_->configure(
         req,
         [this, sid, rid, kind](QString outcome, QJsonArray answers) {
-            if (requestCard_ != nullptr) {
-                requestCard_->hide();
-            }
-            if (requestTimer_ != nullptr) {
-                requestTimer_->stop();
-            }
+            finishCurrentRequest();
             emit requestAnswered(sid, rid, kind, answers, outcome);
         },
         [this, sid] {
-            if (requestCard_ != nullptr) {
-                requestCard_->hide();
-            }
-            if (requestTimer_ != nullptr) {
-                requestTimer_->stop();
-            }
+            finishCurrentRequest();
             emit requestOpenChat(sid);
         },
         [this] {
@@ -1469,17 +1492,105 @@ bool VoicePet::showRequestCard(const QString &sessionId,
             placeRequestCard();
         }
     });
+    shownReq_ = req;
     return true;
+}
+
+// 待答请求入队（2026-11-16，方案 A）：桌宠只有一张交互卡，多条待答以前只显示
+// 最后一条、其余永远轮不到。现在 requestQueue_ 只存**等待中**的条目（当前显示的
+// 那条不在队列里），队首上卡；同 id 重复推（插件每 10s 重推整批）只更新内容，
+// 不重复排队；正显示的那条内容变了（题干/选项/可答性）就地重配一次。
+void VoicePet::queueRequestCard(const QString &sessionId, const QJsonObject &req) {
+    const QString id = req.value(QStringLiteral("id")).toString();
+    if (id.isEmpty()) {
+        return;
+    }
+    if (requestId_ == id) {
+        if (req == shownReq_) {   // 插件每 10s 重推整批：内容没变就别重配（防幽灵行）
+            applyQueueHint();
+            return;
+        }
+        showRequestCard(sessionId, req);
+        applyQueueHint();
+        return;
+    }
+    for (QueuedRequest &queued : requestQueue_) {
+        if (queued.req.value(QStringLiteral("id")).toString() != id) {
+            continue;
+        }
+        queued.req = req;
+        queued.sessionId = sessionId;
+        applyQueueHint();
+        return;
+    }
+    requestQueue_.append(QueuedRequest{sessionId, req});
+    if (requestCard_ == nullptr || !requestCard_->isVisible() ||
+        requestId_.isEmpty()) {
+        advanceRequestQueue();
+    } else {
+        applyQueueHint();
+    }
+}
+
+// 队首上卡。桌宠收起时 showRequestCard 返回 false——条目留在队首，等下一拍推送
+// （插件每 10s 重推整批）再顶上来，不用额外挂 showEvent。
+void VoicePet::advanceRequestQueue() {
+    if (requestCard_ != nullptr && requestCard_->isVisible() &&
+        !requestId_.isEmpty()) {
+        return;  // 已经有卡在显示
+    }
+    while (!requestQueue_.isEmpty()) {
+        const QueuedRequest head = requestQueue_.first();
+        if (!showRequestCard(head.sessionId, head.req)) {
+            applyQueueHint();
+            return;
+        }
+        requestQueue_.removeFirst();
+        applyQueueHint();
+        return;
+    }
+    applyQueueHint();
+}
+
+// 当前卡收场（答完 / 去聊天页 / 超时 / 被别处应答）：收卡 → 顶上下一张。
+void VoicePet::finishCurrentRequest() {
+    if (requestCard_ != nullptr) {
+        requestCard_->hide();
+    }
+    if (requestTimer_ != nullptr) {
+        requestTimer_->stop();
+    }
+    requestId_.clear();
+    advanceRequestQueue();
+}
+
+void VoicePet::dropQueuedRequest(const QString &requestId) {
+    for (auto it = requestQueue_.begin(); it != requestQueue_.end();) {
+        if (it->req.value(QStringLiteral("id")).toString() == requestId) {
+            it = requestQueue_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
+// 「还有 N 张待答」角标：只在真的有排队时才标（N=0 恢复原标题）。角标会改标题
+// 宽度，改完重贴一次锚位，免得卡片跑偏或宽度没跟上。
+void VoicePet::applyQueueHint() {
+    if (requestCard_ == nullptr || !requestCard_->isVisible()) {
+        return;
+    }
+    requestCard_->setQueueHint(int(requestQueue_.size()));
+    placeRequestCard();
 }
 
 void VoicePet::clearRequestCard(const QString &requestId) {
     if (requestCard_ != nullptr && requestId_ == requestId) {
-        requestCard_->hide();
-        if (requestTimer_ != nullptr) {
-            requestTimer_->stop();
-        }
-        requestId_.clear();
+        finishCurrentRequest();  // 正在显示的那条被别处答掉：收卡并顶上下一张
+        return;
     }
+    dropQueuedRequest(requestId);
+    applyQueueHint();
 }
 
 bool VoicePet::ttsReady() const {

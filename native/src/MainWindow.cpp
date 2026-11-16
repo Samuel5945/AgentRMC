@@ -1078,44 +1078,45 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
             } else {
                 pendingRequests_.insert(sid, reqs);
             }
-            // 借鉴蛋仔：待答请求驱动桌宠交互卡（新增可答→弹卡，移除→收卡）。
+            // 借鉴蛋仔：待答请求驱动桌宠交互卡（新增→入队上卡，移除→收卡）。
+            // 2026-11-16 方案 A：桌宠只有一张交互卡，改成**整批转发**给 VoicePet
+            // 的待答队列（队首上卡 + 卡头「还有 N 张待答」），不再只挑最后一条；
+            // 以前那样多条待答时，其余几条永远轮不到（用户实测「只显示一张」）。
             if (voicePet_ != nullptr) {
                 QSet<QString> oldIds;
                 for (const QJsonValue &v : old) {
                     oldIds.insert(v.toObject().value(QStringLiteral("id")).toString());
                 }
                 QSet<QString> newIds;
-                QString showId;
-                QJsonObject showReq;
                 for (const QJsonValue &v : reqs) {
-                    const QJsonObject r = v.toObject();
-                    const QString rid = r.value(QStringLiteral("id")).toString();
-                    newIds.insert(rid);
-                    // 可答请求弹「允许/拒绝/选项」卡；question 类即使不可答
-                    // （ZCode 只读选方案卡）也弹——展示题干 + 去聊天页查看。
-                    if (r.value(QStringLiteral("answerable")).toBool() ||
-                        r.value(QStringLiteral("kind")).toString() ==
-                            QStringLiteral("question")) {
-                        showId = rid;
-                        showReq = r;
-                    }
+                    newIds.insert(v.toObject().value(QStringLiteral("id")).toString());
                 }
+                // 已经不在这批里的：收卡（正在显示的那条会让队列顶下一张）。
                 for (const QString &rid : oldIds) {
                     if (!newIds.contains(rid)) {
                         voicePet_->clearRequestCard(rid);
                     }
                 }
-                if (!showId.isEmpty() && !oldIds.contains(showId)) {
-                    const bool shown =
-                        voicePet_->showRequestCard(sid, showReq);
+                // 可答请求排队；question 类即使不可答（ZCode 只读选方案卡）也排
+                // ——展示题干 + 去聊天页查看。同 id 重推只更新内容，不重复排队。
+                int queued = 0;
+                for (const QJsonValue &v : reqs) {
+                    const QJsonObject r = v.toObject();
+                    if (r.value(QStringLiteral("answerable")).toBool() ||
+                        r.value(QStringLiteral("kind")).toString() ==
+                            QStringLiteral("question")) {
+                        voicePet_->queueRequestCard(sid, r);
+                        ++queued;
+                    }
+                }
+                // 只在待答集合真的变了时记一笔：插件每 10s 重推整批，别刷事件流。
+                if (newIds != oldIds) {
                     appendEvent(QStringLiteral("status"), QString(), QString(),
-                                shown
-                                    ? QStringLiteral("桌宠已弹待答卡：会话 %1 %2")
-                                          .arg(sid.left(8), showReq.value(
-                                                            QStringLiteral("kind"))
-                                                          .toString())
-                                    : QStringLiteral("收到待答请求但桌宠收起，卡未弹"
-                                                     "（会话 %1）")
+                                queued > 0
+                                    ? QStringLiteral("桌宠待答队列：会话 %1 共 %2 张")
+                                          .arg(sid.left(8))
+                                          .arg(queued)
+                                    : QStringLiteral("会话 %1 待答清空")
                                           .arg(sid.left(8)),
                                 0);
                 }

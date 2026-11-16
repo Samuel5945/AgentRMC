@@ -1096,6 +1096,12 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
                 // 卡片在 DSH 侧已关闭/已答：排队中还没送的应答件一并作废，
                 // 否则会把答案送给已经不存在的请求。
                 dropAnswerPendingForSession(sid);
+                // 该会话已经没有待答了：挂在聊天页/手机底部的那条「已排队，等宿主
+                // 确认…」也该撤（应答可能已被别处处理，ack 永远等不到）。
+                if (dispatchNoticeId_ == itemIdForSession(sid)) {
+                    dispatchNotice_.clear();
+                    dispatchNoticeRequest_.clear();
+                }
             } else {
                 pendingRequests_.insert(sid, reqs);
             }
@@ -3550,6 +3556,11 @@ QString MainWindow::enqueueAnswer(const QString &workItemId, const QString &requ
                           : QStringLiteral("应答已排队，等插件送 DSH…");
     dispatchNoticeId_ = workItemId;
     dispatchNoticeExe_ = item->agentExe;
+    // 归属请求 id 必须在这里设：这是**唯一**设置提示文案的地方，而应答入口有三条
+    // （桌宠卡 / 桌面聊天页 / 手机页）。以前只有后两条在 handleWebAction 里设它，
+    // 从桌宠卡应答时字段还是旧值 → ackAnswer 的清除条件对不上 → 手机底部那条
+    // 「授权应答已排队，等宿主确认…」永远挂着（2026-11-16 用户实测）。
+    dispatchNoticeRequest_ = requestId;
     appendEvent(QStringLiteral("status"), QString(), QString(),
                 QStringLiteral("内联应答已排队：会话 %1 %2 %3")
                     .arg(item->sessionId.left(8), kind, requestId.left(12)),
@@ -3680,7 +3691,13 @@ void MainWindow::ackAnswer(const QString &answerId, bool ok, const QString &erro
         if (voicePet_ != nullptr) {
             voicePet_->acceptAnswer(pa.id);
         }
-        if (dispatchNoticeRequest_ == pa.id) {
+        // 提示文案按「归属请求」清；同时兜一层：这条请求已经不在这条会话的待答账里
+        // 了（插件重推过空集/被别处答掉），那条提示同样该撤——否则一旦归属字段
+        // 因任何原因对不上，手机底部就会永久挂着一条过期提示。
+        const bool noticeGone =
+            dispatchNoticeRequest_ == pa.id ||
+            pendingRequests_.value(pa.sessionId).isEmpty();
+        if (noticeGone) {
             dispatchNotice_.clear();
             dispatchNoticeRequest_.clear();
         }

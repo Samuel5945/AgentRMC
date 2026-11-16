@@ -108,6 +108,42 @@ call "C:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\v
    「语音启动」开关（`ui.voice_launch`，默认开）用来在口述时把这条行为整体关掉。
 7. **收尾**：BLE 电量、跨屏 DPI、托盘菜单、windeployqt 打包、体积回归。
 
+## Agent 专用虚拟指针（`/cursor/*`）
+
+机器上所有 Agent 共用一根**它们自己的**指针：彩色箭头 + 准心环 + 署名标签，画在
+逐屏的穿透置顶覆盖层上（`ui/CursorOverlay`）。设计上只有一条底线：**从移动到点击
+全程不碰系统光标**——没有 `SetCursorPos`、没有 `SendInput`，用户的手和 Agent 可以
+同时用鼠标。点击落点优先走 UI Automation 语义调用（`Invoke` / `DoDefaultAction`），
+退化时向目标窗口投递 `WM_*BUTTON*`（`core/AgentCursor`；选目标窗时按 z 序跳过
+`WS_EX_TRANSPARENT`——否则全屏覆盖层会把自己的点击全吃掉）。
+
+走的是本机桥 `127.0.0.1:45915`（与 `/notify` 同一个口，纯回环）：
+
+| 端点 | 作用 |
+|---|---|
+| `GET /cursor/state` | 指针状态：`visible` / `agent` / `x` / `y` / `color` / `clicks` |
+| `POST /cursor/move` | `{"x","y","duration_ms","agent","hold_ms"}` 挪指针，不点 |
+| `POST /cursor/click` | 上面全部 + `{"button":"left\|right\|middle\|double","backend":"auto\|uia\|post"}` |
+| `POST /cursor/hide` / `show` | 收起（`fade_ms`）/ 唤出 |
+
+坐标一律**物理像素**（与截图、`GetCursorPos` 同一套数）。逐屏 DPI 换算在覆盖层内部
+做：按设备名把 `EnumDisplayMonitors` 的物理矩形和 Qt 的逻辑矩形对齐，多屏混合缩放
+不会画错屏。`hold_ms` 缺省 8000——没人再动就自己淡出，不会永远杵在屏幕上。
+
+返回 `{"ok","moved","clicked","backend","verified","target"}`。`backend=uia` 才算真的
+语义调用成功（`verified=true`）；`backend=post` 只保证「消息递到了目标窗口」，目标
+程序认不认（Chromium 系、DirectInput 游戏、管理员窗口）不归我们保证，所以
+`verified` 一律 `false`。**点不到就报 `ok:false` + 409，绝不偷偷改用真光标。**
+
+给 Agent 用的命令行入口 `native\tools\agent-cursor.ps1`（`%USERPROFILE%\.agents\skills\agent-cursor\`
+里有一份，供其它工具链直接引用），任何能起 shell 的 Agent 都能调：
+
+```powershell
+pwsh -File native\tools\agent-cursor.ps1 click 1200 640 -Agent DSH
+pwsh -File native\tools\agent-cursor.ps1 move  1200 640 -Agent DSH
+pwsh -File native\tools\agent-cursor.ps1 state -Json
+```
+
 ## 数据与兼容性
 
 - 原生版读写 exe 同目录的 `config.json` / `profiles.json`；`build.bat` 首次构建时
@@ -166,6 +202,7 @@ native\build\Release\AgentRMCVoiceTest.exe
 native\build\Release\AgentRMCAudioTest.exe 2 rc_probe\mic_test.wav
 native\build\Release\AgentRMCAsrTest.exe native\models\sensevoice\test_wavs\zh.wav native\models\sensevoice sensevoice
 native\build\Release\AgentRMCBridgeTest.exe
+native\build\Release\AgentRMCCursorTest.exe
 ```
 
 覆盖：预设写回、`.bak`、同键原生去重、extends 继承、custom 动作；KeyRouter 的
@@ -174,6 +211,10 @@ native\build\Release\AgentRMCBridgeTest.exe
 钩子吞键判定；语音后端解析、WAV 头、SenseVoice/Qwen3 模型发现；真实麦克风采集
 （含 1 秒预热、400ms 预录、松手等最后一块）；以及 SenseVoice 端到端转写
 （第二次为热态延迟）。`AgentRMCAsrTest` 只在启用 sherpa 时生成。
+
+`AgentRMCCursorTest` 覆盖 Agent 专用虚拟指针：请求解析、**跳过全屏穿透覆盖层**
+（不然指针自己会把点击吃掉）、消息真的送到目标窗口，以及全程 `GetCursorPos` 一动
+不动——这是「不跟用户抢鼠标」唯一的硬证明。跑它时会短暂弹出 200×200 的探针窗。
 
 `AgentRMCBridgeTest` 覆盖 AgentBridge（本机 Agent 交互口，127.0.0.1:45915）：
 `/notify` 全字段转发与默认文案、`/speak` 正常与缺参 400、`/state` 状态应答、

@@ -39,6 +39,8 @@ qt_add_executable(AgentRMCNative
     src/MainWindow.h
     src/core/AgentBridge.cpp
     src/core/AgentBridge.h
+    src/core/AgentCursor.cpp
+    src/core/AgentCursor.h
     src/core/LanWebServer.cpp
     src/core/LanWebServer.h
     src/core/ChatText.cpp
@@ -148,6 +150,8 @@ qt_add_executable(AgentRMCNative
     src/ui/VoiceSettingsDialog.h
     src/ui/VoicePet.cpp
     src/ui/VoicePet.h
+    src/ui/CursorOverlay.cpp
+    src/ui/CursorOverlay.h
     src/ui/PetSprite.cpp
     src/ui/PetSprite.h
     src/ui/VoiceWindow.cpp
@@ -168,7 +172,7 @@ target_include_directories(AgentRMCNative PRIVATE
 # powrprof = 睡眠/休眠，wbemuuid + oleaut32 = 笔记本背光的 WMI 回退。
 set(AGENTRMC_SYSTEM_LIBS powrprof wbemuuid oleaut32)
 target_link_libraries(AgentRMCNative PRIVATE Qt6::Widgets Qt6::Network Qt6::Sql winmm
-    shell32 ole32 UIAutomationCore.lib zstd_decompress ${AGENTRMC_SYSTEM_LIBS})
+    shell32 ole32 user32 UIAutomationCore.lib zstd_decompress ${AGENTRMC_SYSTEM_LIBS})
 target_compile_options(AgentRMCNative PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
 target_compile_definitions(AgentRMCNative PRIVATE AGENTRMC_VERSION="${PROJECT_VERSION}")
 
@@ -330,6 +334,18 @@ add_executable(AgentRMCBridgeTest
 target_include_directories(AgentRMCBridgeTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(AgentRMCBridgeTest PRIVATE Qt6::Core Qt6::Network)
 target_compile_options(AgentRMCBridgeTest PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
+
+# Agent 专用虚拟指针：请求解析 + 「不动系统光标」的点击。真机造一扇窗口，验
+# 消息真的送到它手上、且全屏穿透层被跳过——这是这个功能的全部立身之本。
+add_executable(AgentRMCCursorTest
+    tests/cursor_test.cpp
+    src/core/AgentCursor.cpp
+    src/core/AgentCursor.h
+)
+target_include_directories(AgentRMCCursorTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(AgentRMCCursorTest PRIVATE Qt6::Core user32 ole32
+    UIAutomationCore.lib)
+target_compile_options(AgentRMCCursorTest PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
 
 # 局域网手机遥控口（移动端 M1）：配对/鉴权/白名单/越界/吊销/防爆破，
 # 外加「桥必须回环」的锁死断言。全走临时端口，不碰真实 45915/45916。

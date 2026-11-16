@@ -45,6 +45,7 @@ class Toast;
 class DispatchPicker;
 class VoiceController;
 class VoicePet;
+class CursorOverlay;
 class VoiceWindow;
 class WaveformButton;
 
@@ -217,6 +218,8 @@ private:
     void onVoiceTranscribed(const QString &text, int costMs);
     // POST /command：宿主 Agent 调系统控制，与语音走同一套闸门。
     QJsonObject onBridgeCommand(const QJsonObject &body);
+    // Agent 专用虚拟指针的 HTTP 动作：move / click / hide / show。
+    QJsonObject onCursorAction(const QJsonObject &payload);
     QJsonArray supportedDispatchExes() const;
     QString itemIdForSession(const QString &sessionId) const;
     void setVoiceStatus(const QString &detail, const QString &color,
@@ -354,6 +357,8 @@ private:
     QWidget *voiceCard_ = nullptr;
     DispatchPicker *cardPicker_ = nullptr;
     VoicePet *voicePet_ = nullptr;
+    // Agent 专用虚拟指针：所有接入本桥的 Agent 共用一根，动作不动系统光标。
+    CursorOverlay *cursor_ = nullptr;
     QLabel *dropHint_ = nullptr;
     QAction *showAction_ = nullptr;
     QAction *listenAction_ = nullptr;

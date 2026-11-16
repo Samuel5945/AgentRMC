@@ -107,6 +107,15 @@ void AgentBridge::setAnswerAckHandler(
     answerAckHandler_ = std::move(handler);
 }
 
+void AgentBridge::setCursorStateProvider(std::function<QString()> provider) {
+    cursorStateProvider_ = std::move(provider);
+}
+
+void AgentBridge::setCursorHandler(
+    std::function<QJsonObject(const QJsonObject &)> handler) {
+    cursorHandler_ = std::move(handler);
+}
+
 void AgentBridge::onConnected() {
     while (server_->hasPendingConnections()) {
         auto *socket = server_->nextPendingConnection();
@@ -168,6 +177,12 @@ void AgentBridge::onReadable(QTcpSocket *socket) {
         finish(socket, "200 OK", health.toUtf8(), "application/json");
         return;
     }
+    if (requestLine.startsWith("GET /cursor/state ")) {
+        const QString state =
+            cursorStateProvider_ ? cursorStateProvider_() : QStringLiteral("{}");
+        finish(socket, "200 OK", state.toUtf8(), "application/json");
+        return;
+    }
     if (requestLine.startsWith("GET /dispatch/pending")) {
         // DSH 插件轮询取件。exe 是查询参数（映像名带空格，%20 编码）。
         QString exe;
@@ -226,8 +241,9 @@ void AgentBridge::onReadable(QTcpSocket *socket) {
     const bool isDispatchAck = requestLine.startsWith("POST /dispatch/ack ");
     const bool isRequests = requestLine.startsWith("POST /requests ");
     const bool isAnswerAck = requestLine.startsWith("POST /request-answer/ack ");
+    const bool isCursor = requestLine.startsWith("POST /cursor/");
     if (!isNotify && !isSpeak && !isAck && !isUpdate && !isCommand &&
-        !isDispatchAck && !isRequests && !isAnswerAck) {
+        !isDispatchAck && !isRequests && !isAnswerAck && !isCursor) {
         finish(socket, "404 Not Found");
         return;
     }
@@ -305,6 +321,36 @@ void AgentBridge::onReadable(QTcpSocket *socket) {
         finish(socket,
                result.value(QStringLiteral("ok")).toBool() ? "200 OK"
                                                            : "400 Bad Request",
+               QJsonDocument(result).toJson(QJsonDocument::Compact),
+               "application/json");
+        return;
+    }
+    if (isCursor) {
+        // /cursor/{move,click,hide,show}：动作在 URL 上，参数在 body 里。指针会真
+        // 投递点击，所以失败必须原样报出去——静默 200 会让 Agent 以为点到了。
+        const QByteArray tail =
+            requestLine.mid(QByteArray("POST /cursor/").size());
+        int spaceAt = tail.indexOf(' ');
+        if (spaceAt < 0) {
+            spaceAt = tail.size();
+        }
+        QJsonObject payload = obj;
+        payload.insert(
+            QStringLiteral("action"),
+            QString::fromLatin1(tail.left(spaceAt)).trimmed().toLower());
+        const QJsonObject result =
+            cursorHandler_
+                ? cursorHandler_(payload)
+                : QJsonObject{{QStringLiteral("ok"), false},
+                              {QStringLiteral("code"), 503},
+                              {QStringLiteral("error"),
+                               QStringLiteral("bridge has no cursor handler")}};
+        const int code = result.value(QStringLiteral("code")).toInt(400);
+        const char *status = code == 200   ? "200 OK"
+                             : code == 409 ? "409 Conflict"
+                             : code == 503 ? "503 Service Unavailable"
+                                           : "400 Bad Request";
+        finish(socket, status,
                QJsonDocument(result).toJson(QJsonDocument::Compact),
                "application/json");
         return;

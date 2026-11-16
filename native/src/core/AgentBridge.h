@@ -38,6 +38,16 @@ class QTcpSocket;
 //   GET  /dispatch/pending?exe=<映像名> → DSH 定向派发取件：待注入清单 JSON 数组
 //   POST /dispatch/ack {"dispatch_id":..,"ok":true|false,"error":".."}
 //                 → 插件注入回执：ok=投递成立（durable inbox），false=守卫拒绝
+//   GET  /cursor/state → Agent 专用虚拟指针的状态（visible/agent/x/y/...）。
+//   POST /cursor/move  {"x":..,"y":..,"duration_ms":..,"agent":"DSH","hold_ms":..}
+//                 → 把指针挪过去（只画，不动系统光标）。
+//   POST /cursor/click {"x":..,"y":..,"button":"left|right|middle|double",
+//                  "backend":"auto|uia|post","duration_ms":..,"agent":..}
+//                 → 挪过去并点击：UIA 语义调用优先，退化为向目标窗口投递
+//                   WM_*BUTTON* 消息。全程不动系统光标（用户的手和 Agent 同时
+//                   能用的前提）。返回 {"ok","clicked","backend","verified",
+//                   "target"}；点不成就 ok:false/409，绝不偷偷改用真光标。
+//   POST /cursor/hide {"fade_ms":..} / POST /cursor/show {} → 收起 / 唤出指针。
 // 纯回环、只此一用；端口被占就放弃监听，不影响主功能。
 class AgentBridge final : public QObject {
     Q_OBJECT
@@ -90,6 +100,11 @@ public:
     // POST /request-answer/ack 的处理器：{"answer_id":..,"ok":true|false,"error":..}
     // （插件应答结果回执）。返回 false = answer_id 不认识。
     void setAnswerAckHandler(std::function<bool(const QJsonObject &)> handler);
+    // GET /cursor/state 的应答来源（Agent 指针的可见性/位置/署名）。
+    void setCursorStateProvider(std::function<QString()> provider);
+    // POST /cursor/{move,click,hide,show} 的处理器：返回 {"ok":bool,"code":200|400|409}，
+    // code 直接当 HTTP 状态用（点不到目标 = 409，参数不合法 = 400）。
+    void setCursorHandler(std::function<QJsonObject(const QJsonObject &)> handler);
 
 signals:
     // kind：/notify 透传 event 字段；/speak 固定为 "speak"。
@@ -137,4 +152,6 @@ private:
     std::function<QString(const QString &exe, const QString &session)>
         answerPendingProvider_;
     std::function<bool(const QJsonObject &)> answerAckHandler_;
+    std::function<QString()> cursorStateProvider_;
+    std::function<QJsonObject(const QJsonObject &)> cursorHandler_;
 };

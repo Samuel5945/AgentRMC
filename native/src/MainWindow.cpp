@@ -1,6 +1,7 @@
 #include "MainWindow.h"
 
 #include "ui/AppPage.h"
+#include "ui/CursorOverlay.h"
 #include "ui/AgentBridgeDialog.h"
 #include "ui/GuideDialog.h"
 #include "ui/KeymapPage.h"
@@ -16,6 +17,7 @@
 #include "ui/WaveformButton.h"
 
 #include "core/AgentBridge.h"
+#include "core/AgentCursor.h"
 #include "core/DshSessions.h"
 #include "core/LanWebServer.h"
 #include "core/PluginUpgrade.h"
@@ -65,6 +67,7 @@
 #include <QSignalBlocker>
 #include <QTime>
 #include <QTimer>
+#include <QThread>
 #include <QFont>
 #include <QFrame>
 #include <QHBoxLayout>
@@ -847,6 +850,9 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
     toast_ = new Toast(this);
     // 语音桌宠：主窗/语音面板关掉之后留在屏幕上的小球，跟着监听状态变色。
     voicePet_ = new VoicePet(store_.get(), voice_);
+    // Agent 专用虚拟指针：逐屏一块穿透覆盖层，只画（指针/署名/涟漪），一根也不
+    // 碰系统光标。桥的 /cursor/* 全打在它上面。
+    cursor_ = new CursorOverlay(this);
     // 对话里问「任务状态」时直接给模型真实待办，别让它编造工具调用。
     voicePet_->setWorkSummaryProvider([this] {
         if (workItems_ == nullptr) {
@@ -1019,6 +1025,16 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
             [this](const QJsonObject &payload) { return reportWorkItem(payload); });
         bridge->setCommandHandler(
             [this](const QJsonObject &payload) { return onBridgeCommand(payload); });
+        // Agent 专用虚拟指针：所有接入本桥的 Agent 共用一根自绘指针，从移动到
+        // 点击全程不动系统光标（实现见 core/AgentCursor / ui/CursorOverlay）。
+        bridge->setCursorStateProvider([this] {
+            return QString::fromUtf8(
+                QJsonDocument(cursor_ != nullptr ? cursor_->stateJson()
+                                                 : QJsonObject{})
+                    .toJson(QJsonDocument::Compact));
+        });
+        bridge->setCursorHandler(
+            [this](const QJsonObject &payload) { return onCursorAction(payload); });
         // DSH 定向派发通道：插件轮询取件 + 注入 ack（回执 = ack ok，followup
         // 同步落 durable inbox，与 WorkBuddy 的 jsonl user 行同级证明）。
         bridge->setDispatchPendingProvider([this](const QString &exe) {
@@ -5348,6 +5364,105 @@ void MainWindow::onVoiceTranscribed(const QString &text, int costMs) {
     refreshVoiceUi();
 }
 
+QJsonObject MainWindow::onCursorAction(const QJsonObject &payload) {
+    const QString action = payload.value(QStringLiteral("action")).toString();
+    if (cursor_ == nullptr) {
+        return QJsonObject{{QStringLiteral("ok"), false},
+                           {QStringLiteral("code"), 503},
+                           {QStringLiteral("error"),
+                            QStringLiteral("指针服务没起（截图/无托盘模式）")}};
+    }
+    if (action == QStringLiteral("hide")) {
+        const int fade = payload.value(QStringLiteral("fade_ms")).toInt(260);
+        cursor_->hide(fade);
+        return QJsonObject{{QStringLiteral("ok"), true},
+                           {QStringLiteral("code"), 200}};
+    }
+    if (action == QStringLiteral("show")) {
+        cursor_->show();
+        return QJsonObject{{QStringLiteral("ok"), true},
+                           {QStringLiteral("code"), 200}};
+    }
+    if (action != QStringLiteral("move") && action != QStringLiteral("click")) {
+        return QJsonObject{
+            {QStringLiteral("ok"), false},
+            {QStringLiteral("code"), 400},
+            {QStringLiteral("error"),
+             QStringLiteral("不认识的动作：%1（只认 move/click/hide/show）")
+                 .arg(action)}};
+    }
+    const bool wantsClick = action == QStringLiteral("click");
+    const AgentCursor::Request request = wantsClick
+                                             ? AgentCursor::parseClick(payload)
+                                             : AgentCursor::parseMove(payload);
+    if (!request.ok) {
+        return QJsonObject{{QStringLiteral("ok"), false},
+                           {QStringLiteral("code"), 400},
+                           {QStringLiteral("error"), request.error}};
+    }
+    // hold_ms 缺省 8s：没人再动手就自己淡出，别让一根指针永远杵在屏幕上。
+    const int holdMs = payload.contains(QStringLiteral("hold_ms"))
+                           ? qBound(0, payload.value(QStringLiteral("hold_ms")).toInt(),
+                                    600000)
+                           : 8000;
+    cursor_->moveTo(request.pos, request.durationMs, request.agent, holdMs);
+
+    if (!wantsClick || !request.click) {
+        return QJsonObject{{QStringLiteral("ok"), true},
+                           {QStringLiteral("code"), 200},
+                           {QStringLiteral("moved"), true},
+                           {QStringLiteral("x"), request.pos.x()},
+                           {QStringLiteral("y"), request.pos.y()},
+                           {QStringLiteral("clicked"), false}};
+    }
+    // 点击不能在这个线程里同步做。UIA 的 Invoke 是「调进目标进程」的语义动作，
+    // 目标若正好在等我们（实测：探针窗在自己的消息泵里等 HTTP 回包），双方互等
+    // 就把桥线程卡死到超时——点击其实已经生效，调用方却只看到连接断了。
+    //
+    // 所以：先把指针挪到位、立刻回包；点击扔到一个一次性线程里做。不能用
+    // QTimer::singleShot(0)：它会在本次事件处理返回前就排到队首，抢在 socket
+    // 写出之前跑，超时照旧。也不能只加延迟——UIA 对某些目标能阻塞好几秒。
+    cursor_->pulse(request.button);
+    AgentCursor::Request deferred = request;
+    QThread *worker = QThread::create([this, deferred] {
+        const AgentCursor::ClickResult clicked =
+            AgentCursor::performClick(deferred);
+        // 回主线程改 UI 状态：reportClick/appendEvent/hide 都动 Qt 对象。
+        QMetaObject::invokeMethod(
+            this,
+            [this, clicked] {
+                if (cursor_ != nullptr) {
+                    cursor_->reportClick(clicked.ok, clicked.backend,
+                                         clicked.verified, clicked.target,
+                                         clicked.ok ? QString() : clicked.error);
+                    // 点完就收：桌面立刻恢复干净，不用等 8 秒闲置超时。
+                    // 用 400ms 淡出而不是瞬间消失——涟漪要看得见，否则用户
+                    // 分不清「点了」和「没点」。
+                    cursor_->hide(400);
+                }
+                if (!clicked.ok) {
+                    appendEvent(QStringLiteral("error"), QString(), QString(),
+                                QString::fromUtf8("Agent 指针点击未生效（%1）：%2")
+                                    .arg(clicked.target, clicked.error),
+                                0);
+                }
+            },
+            Qt::QueuedConnection);
+    });
+    connect(worker, &QThread::finished, worker, &QObject::deleteLater);
+    worker->start();
+    QJsonObject out{{QStringLiteral("ok"), true},
+                    {QStringLiteral("code"), 200},
+                    {QStringLiteral("moved"), true},
+                    {QStringLiteral("x"), request.pos.x()},
+                    {QStringLiteral("y"), request.pos.y()},
+                    {QStringLiteral("clicked"), true},
+                    {QStringLiteral("backend"), QStringLiteral("async")},
+                    {QStringLiteral("verified"), false},
+                    {QStringLiteral("note"),
+                     QStringLiteral("点击已投递，结果看 /cursor/state 的 last_click")}};
+    return out;
+}
 QJsonObject MainWindow::onBridgeCommand(const QJsonObject &body) {
     const QString action = body.value(QStringLiteral("action")).toString().trimmed();
     const SystemCommand command = SystemCommandText::parse(action);

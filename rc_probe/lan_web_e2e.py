@@ -20,6 +20,7 @@ import socket
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 ctypes.windll.shcore.SetProcessDpiAwareness(2)
@@ -211,14 +212,28 @@ if find_by_name_substr("收起二维码"):
     time.sleep(0.6)
 check(activate("显示配对二维码"), "show pairing qr")
 time.sleep(0.8)
-code_text = text_of("配对码 ")
+code_text = text_of("配对词") or text_of("配对码")
+# 当前配对码是 6 个中文双字词（6×11 bit）；老包/词表损坏时才退 32 位 hex。
 m = re.search(r"[0-9a-f]{32}", code_text)
-check(m is not None, "pairing code readable", code_text[:60])
-if not m:
+if m:
+    code = m.group(0)
+else:
+    # 只从「配对词」后面取 6 个双字词；不要把标签「配对」本身算进去。
+    words = re.search(r"配对词[：:\s]+((?:[\u4e00-\u9fff]{2}\s*){6})", code_text)
+    code = " ".join(re.findall(r"[\u4e00-\u9fff]{2}", words.group(1))) if words else ""
+check(bool(code), "pairing code readable", code_text[:80])
+if not code:
     sys.exit(1)
-code = m.group(0)
 url_text = text_of("手机浏览器打开")
 urls = re.findall(r"http://[0-9.]+:\d+/m/", url_text)
+if not urls:
+    # WebView 把「手机浏览器打开：」和网址拆成两个可访问节点：再按 URL 自身找。
+    for probe in ("http://", "192.168", "172.", "10."):
+        alt = text_of(probe, tries=2)
+        urls = re.findall(r"http://[0-9.]+:\d+/m/", alt)
+        if urls:
+            url_text = alt
+            break
 check(bool(urls), "lan url readable", url_text[:80])
 if not urls:
     sys.exit(1)
@@ -262,6 +277,37 @@ st, _, _ = http("POST", base + "/m/action", {"cmd": "sysUpgrade"},
 check(st == 403, "non-whitelisted action 403", str(st))
 st, _, _ = http("POST", base + "/m/action", {"cmd": "ack", "id": "x"}, auth)
 check(st == 403, "action without csrf header 403", str(st))
+# M1.6：派发页的真实会话目录与任意会话记录（只读，不发派发动作）。
+st, _, body = http("GET", base + "/m/sessions", headers=auth)
+catalog = {}
+try:
+    catalog = json.loads(body)
+except Exception:
+    pass
+agents = catalog.get("agents") if isinstance(catalog, dict) else None
+agents = agents if isinstance(agents, list) else []
+check(st == 200 and any(a.get("sessions") for a in agents),
+      "session catalog with recent sessions", f"http={st} agents={len(agents)}")
+pick = None
+for a in agents:
+    for s in a.get("sessions") or []:
+        if s.get("id"):
+            pick = (a.get("exe", ""), s.get("id"))
+            break
+    if pick:
+        break
+if pick:
+    q = urllib.parse.urlencode({"exe": pick[0], "session": pick[1], "offset": 0, "limit": 5})
+    st, _, body = http("GET", base + "/m/session?" + q, headers=auth)
+    try:
+        chat = json.loads(body)
+    except Exception:
+        chat = {}
+    check(st == 200 and isinstance(chat.get("messages"), list),
+          "arbitrary session transcript", f"http={st}")
+else:
+    check(False, "session catalog has a readable session")
+
 st, _, _ = http("GET", base + "/m/theme/..%2F..%2Fconfig.json", headers=auth)
 check(st == 404, "theme traversal 404", str(st))
 st, _, _ = http("GET", f"http://{host}:45915/state")

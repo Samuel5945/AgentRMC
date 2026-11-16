@@ -148,6 +148,23 @@ int main(int argc, char **argv) {
         }
         return QString();  // 未知待办 → 404
     });
+    lan.setSessionListProvider([] {
+        return QStringLiteral(
+            R"({"agents":[{"exe":"WorkBuddy.exe","name":"WorkBuddy","alive":true,"window":true,"can_dispatch":true,"count":1,"sessions":[{"id":"sess-1","title":"会话目录测试","project":"D:\\repo","updated_at":"2026-11-16T03:00:00.000Z","can_dispatch":true}]}]})");
+    });
+    QString lastSessionExe, lastSessionId;
+    int lastSessionOffset = -1;
+    lan.setSessionTranscriptProvider(
+        [&](const QString &exe, const QString &session, int offset, int limit) {
+            lastSessionExe = exe;
+            lastSessionId = session;
+            lastSessionOffset = offset;
+            if (session == QStringLiteral("sess-1")) {
+                return QStringLiteral(
+                    R"({"sessionId":"sess-1","agentExe":"WorkBuddy.exe","supported":true,"messages":[],"total":0})");
+            }
+            return QString();  // 未知会话 → 404
+        });
     QString upId, upName;
     QByteArray upData;
     lan.setUploadHandler([&](const QString &id, const QString &filename,
@@ -206,7 +223,30 @@ int main(int argc, char **argv) {
     seq.add(ask(get("/m/"), [](const QByteArray &resp) {
         check(resp.startsWith("HTTP/1.1 200"), "GET /m/ 200", resp);
         check(resp.contains("text/html"), "GET /m/ html", resp);
+        check(resp.contains("Cache-Control: no-store"), "GET /m/ no stale cache",
+              resp);
         check(resp.contains("配对"), "GET /m/ has pair screen", resp);
+        // 待办卡的骨架：手势提示层、勾选圈、批量条、底部提示。改版式时别把这几块弄丢。
+        check(resp.contains("hint l"), "GET /m/ swipe hint", resp);
+        check(resp.contains("chk.className"), "GET /m/ multi checkbox", resp);
+        check(resp.contains("id=\"batchAll\""), "GET /m/ batch select-all", resp);
+        check(resp.contains("id=\"toast\""), "GET /m/ toast", resp);
+        check(resp.contains("id=\"workHint\""), "GET /m/ gesture guide", resp);
+        check(resp.contains("id=\"workHintText\""), "GET /m/ gesture guide text", resp);
+        check(resp.contains("id=\"pdispatch\""), "GET /m/ dispatch page", resp);
+        check(resp.contains("选会话派任务"), "GET /m/ dispatch heading", resp);
+        check(resp.contains("function projectGroup"), "GET /m/ group collapse",
+              resp);
+        // 没有项目的单任务统一收进「未分类任务」，不再按日期/目录名分组。
+        check(resp.contains("未分类任务"), "GET /m/ unclassified section", resp);
+        check(!resp.contains(">事件流</button>"), "GET /m/ events tab removed",
+              resp);
+        // 多选是低频操作，只放在手势提示行右侧；别再回到顶栏跟连接状态抢层级。
+        check(resp.contains("<button id=\"multiSw\" aria-pressed=\"false\">多选</button>"),
+              "GET /m/ subtle multi toggle", resp);
+        check(resp.contains("function syncMultiUi()"), "GET /m/ in-place multi render", resp);
+        check(resp.contains("touchcancel"), "GET /m/ touch cancel recovery", resp);
+        check(resp.contains("prefers-reduced-motion"), "GET /m/ reduced motion", resp);
     }));
     // 2. /m 重定向到 /m/。
     seq.add(ask(get("/m"), [](const QByteArray &resp) {
@@ -456,7 +496,22 @@ int main(int argc, char **argv) {
                 },
                 next);
     });
-    // 17. 聊天页记录路由：无令牌 401；有令牌 200 且分页参数透传；未知待办 404。
+    // 17. 任意会话派发在 LAN 白名单内：手机派发页不依赖待办 id。
+    seq.add([&](std::function<void()> next) {
+        request(app, port,
+                post("/m/action",
+                     R"({"cmd":"dispatchSession","agent":"WorkBuddy.exe","session":"sess-1","text":"跑一下测试"})",
+                     csrf() + cookieHeader(token)),
+                [&](const QByteArray &resp) {
+                    check(resp.startsWith("HTTP/1.1 200"),
+                          "dispatchSession 200", resp);
+                    check(lastCmd == QStringLiteral("dispatchSession"),
+                          "dispatchSession handler");
+                    check(actionCalls == 2, "dispatchSession call count");
+                },
+                next);
+    });
+    // 18. 聊天页记录路由：无令牌 401；有令牌 200 且分页参数透传；未知待办 404。
     seq.add([&](std::function<void()> next) {
         request(app, port, get("/m/transcript?id=item-1"),
                 [](const QByteArray &resp) {
@@ -486,7 +541,58 @@ int main(int argc, char **argv) {
                 },
                 next);
     });
-    // 18. 主题素材：正常图 200；越界（../ 与编码变体）404；非图 404；无令牌 401。
+    // 18b. 会话目录与任意会话记录：鉴权、参数透传、未知会话 404。
+    seq.add([&](std::function<void()> next) {
+        request(app, port, get("/m/sessions"),
+                [](const QByteArray &resp) {
+                    check(resp.startsWith("HTTP/1.1 401"),
+                          "sessions no token 401", resp);
+                },
+                next);
+    });
+    seq.add([&](std::function<void()> next) {
+        request(app, port, get("/m/sessions", cookieHeader(token)),
+                [](const QByteArray &resp) {
+                    check(resp.startsWith("HTTP/1.1 200"), "sessions 200", resp);
+                    check(resp.contains("会话目录测试"), "sessions payload", resp);
+                    check(resp.contains("WorkBuddy.exe"), "sessions agent", resp);
+                },
+                next);
+    });
+    seq.add([&](std::function<void()> next) {
+        request(app, port,
+                get("/m/session?exe=WorkBuddy.exe&session=sess-1&offset=20&limit=10",
+                    cookieHeader(token)),
+                [&](const QByteArray &resp) {
+                    check(resp.startsWith("HTTP/1.1 200"), "session 200", resp);
+                    check(lastSessionExe == QStringLiteral("WorkBuddy.exe"),
+                          "session exe passthrough");
+                    check(lastSessionId == QStringLiteral("sess-1"),
+                          "session id passthrough");
+                    check(lastSessionOffset == 20, "session offset passthrough");
+                },
+                next);
+    });
+    seq.add([&](std::function<void()> next) {
+        request(app, port, get("/m/session?exe=WorkBuddy.exe",
+                               cookieHeader(token)),
+                [](const QByteArray &resp) {
+                    check(resp.startsWith("HTTP/1.1 400"),
+                          "session missing id 400", resp);
+                },
+                next);
+    });
+    seq.add([&](std::function<void()> next) {
+        request(app, port,
+                get("/m/session?exe=WorkBuddy.exe&session=nope",
+                    cookieHeader(token)),
+                [](const QByteArray &resp) {
+                    check(resp.startsWith("HTTP/1.1 404"),
+                          "session unknown 404", resp);
+                },
+                next);
+    });
+    // 19. 主题素材：正常图 200；越界（../ 与编码变体）404；非图 404；无令牌 401。
     seq.add([&](std::function<void()> next) {
         request(app, port, get("/m/theme/ok.png", cookieHeader(token)),
                 [](const QByteArray &resp) {

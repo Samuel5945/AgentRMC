@@ -128,7 +128,8 @@ text）、`open`（送到 Agent——在 PC 上拉起宿主，遥控器语义成
 
 ### 4.4 手机页面（v1）
 
-- 单列竖屏，三个底部页签：**待我处理 / 事件流 / 状态**。
+- 单列竖屏，三个底部页签：**待我处理 / 派发 / 状态**（原「事件流」于
+  M1.6 被派发页取代）。
   - 待我处理：与桌面**同序**（`displayOrder()`，等待起点优先），卡片 =
     宿主名 + 项目 + 正文 + 「等 N 分」+ 动作按钮（结账 / 派回会话 / 送到
     Agent）；派回会话展开文本框，被守卫拒绝时**草稿留在输入框**并显示原因
@@ -236,6 +237,52 @@ M1。AP 隔离/防火墙排查并入 M1 真机验收（手机页配对失败文�
   `/work-items`、桌面外壳、手机页三处统一补 `session_title`、空项目回填 cwd；
   行身份同口径升级（项目目录名 > 会话标题 > 短 id，同宿主同项目重名优先补标题
   截 12 字）。Qt 列表/桌面 Web/手机页三端一致。`dsh_sessions_test` 22 项断言。
+
+### M1.6 · 派发页（2026-11-16，取代手机事件流）
+- **中间页签「事件流」→「派发」**：事件流在手机上只读、排查价值低；改成
+  「选 Agent → 按项目分组看最近会话 → 点进聊天记录 → 底部直接派活」。
+  项目组标题可折叠/展开（带会话数，切换 Agent 后状态保持）；没有项目路径的
+  会话归入「未分组」；宿主已移除、目录已不存在或自动生成的历史工作区归入
+  「已归档」，默认收起且只读，排在最后。默认只展开最近一个活跃项目。
+- 每个 Agent 的会话目录上限从 12 条提到 200 条，避免较老项目整组被截掉。
+- `GET /m/sessions`（令牌）：各宿主最多 200 条会话，带标题/项目/更新时间/
+  关联活卡状态/归档标记；jsonl 读首屏元数据并按文件 stamp 缓存，ZCode/
+  OpenSquilla 只读 SQLite，DSH 读 projcache，目录读取本机实测 28–563ms
+  （Qoder CN 110 条最慢，约 0.56s；缓存后更快）。
+- `GET /m/session?exe=&session=&offset=&limit=`（令牌）：任意会话的聊天记录，
+  复用 `SessionTranscript` 分页读取；没有活卡也能看。
+- `POST /m/action {"cmd":"dispatchSession",...}`：不依赖待办 id，直接走
+  `SessionDispatch::dispatch`；宿主 exe 经 `supportedDispatchExes()` 白名单校验，
+  拒绝原因原样回 409，页面保留草稿。Qoder 等无手机派发通道的宿主只读。
+- 手机 `/m/state` 不再下发 events（无界面消费），降低 2.5s 轮询体积。
+
+### M1.8 · 电脑端归档会话清理（2026-11-16）
+- 归档项目行提供单条「删除」，页头「清理归档」进入批量多选；只允许 archived
+  且宿主支持安全删除的会话。手机端不开放删除。
+- 删除前由 `SessionCleaner` 完整复制到
+  `AppData/LIG/AgentRMCNative/session-trash/<时间戳>/` 并写 manifest，复制
+  校验成功后才动原件；Windows 原生 `QMessageBox` 二次确认并列出受影响会话。
+- 文件型宿主：WorkBuddy 系 / Qoder 系删除 jsonl + 同 id sidecar（subagents /
+  tool-results / state）；DSH 删除会话目录 + projcache。ZCode/OpenSquilla
+  没有稳定的会话级物理删除接口，返回「该宿主没有安全的会话删除接口」，
+  不硬删数据库。失败逐条回页面，成功/部分成功都会刷新目录。
+- **项目分组按完整路径**，不能按 basename 合并：`D:\githubrepos\tuwen-editor`
+  和已消失的 `C:\Users\PC\Desktop\tuwen-editor` 必须分成两组；同名时标题补
+  上级目录（`tuwen-editor · githubrepos` / `tuwen-editor · Desktop`），
+  折叠态也用路径作 key。
+
+### M1.7 · 电脑端派发页（2026-11-16）
+- 桌面壳页签顺序改为 **待我处理 / 派发 / 事件流 / 系统 / 按键映射 / 应用 /
+  使用引导**；「派发」紧挨待办，复用同一份 Agent/项目/会话目录与分类规则。
+- 数据不塞进 5 秒整窗 state：页面发 `sessionsLoad` / `sessionOpen` /
+  `sessionOlder`，主窗用 `WorkWebView::pushSessions/pushSessionChat` 的轻量
+  `ExecuteScript` 通道回推；任意会话记录复用 `lanSessionTranscript`。
+- `dispatchSession` 在桌面走 `dispatchToSession`，成功/拒绝通过
+  `pushSessionResult` 回页面；失败保留草稿。会话聊天页带刷新入口，默认打开
+  最新记录、上翻加载旧页，归档/未分组/折叠规则与手机一致。
+- 探针：`rc_probe/desktop_web_probe.mjs` 用同一份内嵌 HTML 在 Chromium 验证
+  页签顺序、目录/归档折叠、会话打开、派发 payload 与失败草稿；真实装机用
+  `rc_probe/desktop_dispatch_probe.py` 做 UIA 截图和会话打开冒烟。
 
 ### M2 · 体验
 SSE 推送（轮询兜底）；设备管理细化；美术主题观感复检；`clear`、更多只读

@@ -27,6 +27,11 @@ public:
     // DSH 的插件通道：会话库是 zstd 多帧压缩 native 读不了，归属守卫在插件侧
     // （活表 agents.get 命中才注入，拒绝走 ack 带原因）。
     static bool supportsPluginChannel(const QString &agentExe);
+    // 内联应答（卡片上「允许/拒绝/选项」点了能送进宿主）的宿主范围。
+    // 与 supportsPluginChannel 分开：那条判的是「能不能派发新消息」，还要过
+    // 会话 id 格式哨兵；应答链路只靠 1.2s 轮询的应答件 + 会话 id 对号，
+    // WorkBuddy 这类只有 hook 代答、没有 injection 通道的宿主只该进这一条。
+    static bool supportsInlineAnswer(const QString &agentExe);
     // ZCode 通道：自带 app-server 协议（个人供应商模型会话可用；账号套餐模型
     // 会话在 dispatch() 里拒绝，等上游开放）。
     static bool supportsZcodeChannel(const QString &agentExe);

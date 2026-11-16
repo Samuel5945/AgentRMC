@@ -21,7 +21,9 @@ class QTcpSocket;
 //   GET  /m/            → 手机页（静态 HTML，免鉴权；数据全走下面的路由）
 //   POST /m/pair        {"code":"配对码","name":"设备名"} → 换设备令牌（Set-Cookie）
 //   GET  /m/state       → 裁剪版外壳状态 JSON（work/health/events/theme/dispatch/meta）
-//   POST /m/action      {"cmd":"ack|dispatch|open|raiseZcode|restartZcode|readLast",…}
+//   GET  /m/sessions    → 最近会话目录（按 Agent 分组，手机派发页用）
+//   GET  /m/session     ?exe=&session=&offset=&limit= → 任意会话聊天记录
+//   POST /m/action      {"cmd":"ack|dispatch|dispatchSession|open|…",…}
 //                       → 白名单校验后转主窗 handleWebAction（与桌面外壳同一入口，
 //                         页面里不另起状态机；做完桌面外壳自动跟着刷新）
 //   GET  /m/theme/<rel> → 主题素材（仅 png/jpg/jpeg/webp/gif，禁路径越界）
@@ -50,6 +52,12 @@ public:
     // 返回空串＝待办不存在，服务端回 404。
     void setTranscriptProvider(
         std::function<QString(const QString &id, int offset, int limit)> provider);
+    // GET /m/sessions 的应答来源（手机派发页的 Agent/项目/会话目录）。
+    void setSessionListProvider(std::function<QString()> provider);
+    // GET /m/session?exe=&session=&offset=&limit= 的应答来源；空串 → 404。
+    void setSessionTranscriptProvider(
+        std::function<QString(const QString &agentExe, const QString &sessionId,
+                              int offset, int limit)> provider);
     // POST /m/upload?id=<待办id> 的落盘处理器：把手机传来的文件存进该会话的
     // inbox，返回 {ok, path, code}（path 为 PC 绝对路径，供派发文本引用）。
     void setUploadHandler(
@@ -110,6 +118,9 @@ private:
     QHash<QTcpSocket *, qint64> drain_;
     std::function<QString()> stateProvider_;
     std::function<QString(const QString &, int, int)> transcriptProvider_;
+    std::function<QString()> sessionListProvider_;
+    std::function<QString(const QString &, const QString &, int, int)>
+        sessionTranscriptProvider_;
     std::function<QJsonObject(const QString &, const QString &, const QByteArray &)>
         uploadHandler_;
     std::function<QJsonObject(const QJsonObject &)> actionHandler_;

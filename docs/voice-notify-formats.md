@@ -114,6 +114,12 @@ Cordis bundle）、OpenSquilla（`plugins/opensquilla-bridge` 外部 WebSocket �
   超时 → 静默 exit 0（宿主弹窗）。轮询带 `session` 过滤（并发授权 hook 互踩
   防线，原生 takeAnswerPending 按会话过滤）；开关文件见 README。真机契约实测见
   prompt-optimization-plan.md §4。
+  **2026-11-16 扩到 WorkBuddy**：白名单加 `workbuddy` / `workbuddyai`（它的
+  PermissionRequest 在弹窗**之前**派发，事件名与 schema 与 Claude Code 同源）。
+  开关改为两档：`approval-inline` 只覆盖 ZCode（老用户升级不被顺带开启），
+  新宿主用 `approval-inline-workbuddy` / `approval-inline-workbuddyai` 单独开。
+  待验收项：宿主是否真吃 hook 的决策 JSON（不吃就退回弹窗，不伤可用性），
+  判据看 `approval-inline.log` 的 `flow-start` / `flow-decision` / `gate-reject`。
 - DSH 挂 `session/event`（emit，所有监听器都跑）而不是 `approval/request` /
   `user-questions/request` 瀑布——Web UI 应答者作答后不再调 next()，排后面的监听器
   永远轮不到（实测桌面端点完选方案桌宠一声没响）。

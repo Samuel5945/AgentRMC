@@ -87,6 +87,21 @@ bool SessionDispatch::supportsPluginChannel(const QString &agentExe) {
                             Qt::CaseInsensitive) == 0;
 }
 
+bool SessionDispatch::supportsInlineAnswer(const QString &agentExe) {
+    // 判据：插件的 PermissionRequest hook 会来轮询 /request-answer/pending
+    // 取应答件。DSH / OpenSquilla 走进程内或技能桥；ZCode 与 WorkBuddy 走
+    // bridge 系 hook 的决策式代答（approval-inline / approval-inline-<exe>）。
+    // WorkBuddy 的卡片以前能弹、点了却被 enqueueAnswer 拒在
+    // supportsPluginChannel 上（那条还不含它），看着像「点了没反应」。
+    if (agentExe.compare(QStringLiteral("WorkBuddy.exe"),
+                         Qt::CaseInsensitive) == 0 ||
+        agentExe.compare(QStringLiteral("WorkBuddyAI.exe"),
+                         Qt::CaseInsensitive) == 0) {
+        return true;
+    }
+    return supportsPluginChannel(agentExe);
+}
+
 bool SessionDispatch::supportsZcodeChannel(const QString &agentExe) {
     return ZcodeDispatch::supports(agentExe);
 }

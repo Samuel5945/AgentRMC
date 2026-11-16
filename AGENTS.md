@@ -21,6 +21,11 @@
   空标题和路径揉成 `\\`，Windows 当成 UNC 路径，直接弹「找不到网络路径」对话框
   （已经反复踩过）。要么让用户自己点开始菜单 / 安装目录里的 exe，要么在
   PowerShell 里 `Start-Process "$env:LOCALAPPDATA\AgentRMC\AgentRMCNative.exe"`。
+- **`Start-Process` 起的 GUI 会随工具会话被回收**（2026-11-16 实测）：进程能活
+  几秒到十几秒（`/state` 当时通），随后无声消失，**没有 crash dump、事件日志
+  也没有记录**——别当成新版崩溃去查代码。要让它长期跑，用 explorer 当父进程
+  `Start-Process explorer.exe -ArgumentList '"<安装目录>\AgentRMCNative.exe"'`，
+  起来后 `/state` 能连、`Get-Process` 连续几十秒都在才算真的活着。
 - curl 验证要带 `--noproxy '*'`：本机开着代理，不带的话 127.0.0.1 也会被拦成
   `upstream connect failed`，看起来像应用没起来。
 - 可带参数 `lean`，但**它的真实语义是关闭 sherpa-onnx 编译**（build.bat 把

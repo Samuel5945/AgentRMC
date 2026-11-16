@@ -37,6 +37,12 @@ public:
     void pushTheme(const QJsonObject &theme);
     // 聊天页上翻加载的更旧一页：单独推 window.__setChatPage，不重排整份 state。
     void pushChat(const QJsonObject &page);
+    // 电脑「派发」页：会话目录/任意会话记录/派发结果都走轻量脚本推送，
+    // 不进 5 秒整窗 state（几百条会话每次序列化太贵）。
+    void pushSessions(const QJsonObject &catalog);
+    void pushSessionChat(const QJsonObject &page);
+    void pushSessionResult(const QJsonObject &result);
+    void pushDeleteResult(const QJsonObject &result);
     // WebView2 的边界是物理像素：跨屏换 DPI 时主窗拿原生消息催一次重喂。
     void syncBounds();
     bool ready() const { return webviewReady(); }

@@ -2,6 +2,7 @@
 
 #include <QDateTime>
 #include <QDir>
+#include <QDirIterator>
 #include <QFile>
 #include <QFileInfo>
 #include <QHash>
@@ -9,6 +10,7 @@
 #include <QJsonObject>
 #include <QJsonValue>
 #include <QRegularExpression>
+#include <QSet>
 #include <QSqlDatabase>
 #include <QSqlQuery>
 #include <QUuid>
@@ -21,6 +23,40 @@
 
 #include "core/DshSessions.h"
 #include "core/ZcodeDispatch.h"
+
+// 宿主自动生成的临时工作区：单任务会话本来没有真项目，WorkBuddy 会按
+// 「2026-11-12-21-07-51」这种时间戳建目录，Qoder Documents 工作区、远程控制
+// 沙箱、OpenSquilla 任务目录、VirtualDisplay 同理。拿这种目录名当项目名，会把
+// 同一批单任务拆成一串「按日期」的分组——目录页统一收进「未分类任务」。
+bool SessionTranscript::generatedWorkspace(const QString &project) {
+    const QString trimmed = project.trimmed();
+    if (trimmed.isEmpty()) {
+        return false;
+    }
+    const QString p = QDir::fromNativeSeparators(trimmed).toLower();
+    const QStringList generatedDirs{
+        QStringLiteral("/workbuddy/"),
+        QStringLiteral("/workbuddy ai/"),
+        QStringLiteral("/documents/qoder/"),
+        QStringLiteral("/appdata/roaming/com.qoder.app.stable/remote-control/"),
+        QStringLiteral("/.qwenworkcn/workspace/"),
+        QStringLiteral("/.opensquilla/tasks/"),
+        QStringLiteral("/virtualdisplay"),
+    };
+    for (const QString &dir : generatedDirs) {
+        if (p.contains(dir)) {
+            return true;
+        }
+    }
+    if (p.endsWith(QStringLiteral("/workbuddy")) ||
+        p.endsWith(QStringLiteral("/workbuddy ai"))) {
+        return true;
+    }
+    // 目录名本身就是时间戳：2026-11-12-21-07-51 / 2026-11-12 / 20261112-210751。
+    static const QRegularExpression stamp(QStringLiteral(
+        "^\\d{4}-?\\d{2}-?\\d{2}([-_ .]?\\d{2}[-_.:]?\\d{2}([-_.:]?\\d{2})?)?$"));
+    return stamp.match(QFileInfo(trimmed).fileName()).hasMatch();
+}
 
 namespace {
 
@@ -451,7 +487,330 @@ QString osqStateRoot() {
     return QString();
 }
 
+// ---------- 会话目录：手机派发页选会话用，只读元数据 ----------
+
+struct SessionMeta {
+    QString stamp;
+    QString title;
+    QString project;
+};
+QHash<QString, SessionMeta> g_sessionMeta;
+
+// 项目是否已经不适合算“当前项目”：只认真正不可用的——路径已不存在。
+// 宿主自动生成的临时工作区（见 generatedWorkspace）只决定「归到哪个组」，
+// 不自动算归档：目录还在就说明会话仍可用，不该显示成可删的已归档项
+// （用户 2026-11-16 定：Documents\Qoder 里的真实工作被误判成已归档）。
+bool archivedProject(const QString &project) {
+    if (project.trimmed().isEmpty()) {
+        return false;  // 未分类另算
+    }
+    return !QFileInfo::exists(project);
+}
+
+QString shortTitleOf(const QString &text, const QString &sessionId) {
+    QString t = text.simplified();
+    if (t.size() > 60) {
+        t = t.left(60) + QStringLiteral("…");
+    }
+    if (t.isEmpty()) {
+        t = QStringLiteral("会话 ") + sessionId.left(8);
+    }
+    return t;
+}
+
+// jsonl 的题名可能在前面几行（ai-title / 首条 user），项目在 cwd。
+// 只读首屏，按 mtime+size 缓存；这是目录页 2.5s 轮询不卡的关键。
+SessionMeta jsonlMeta(const QString &path) {
+    const QString stamp = fileStamp(path);
+    auto hit = g_sessionMeta.constFind(path);
+    if (hit != g_sessionMeta.constEnd() && hit->stamp == stamp) {
+        return *hit;
+    }
+    SessionMeta meta;
+    meta.stamp = stamp;
+    QFile f(path);
+    if (!f.open(QIODevice::ReadOnly)) {
+        return meta;
+    }
+    qint64 bytes = 0;
+    int lines = 0;
+    QString firstUser;
+    while (!f.atEnd() && lines < 500 && bytes < 256 * 1024) {
+        const QByteArray line = f.readLine();
+        bytes += line.size();
+        ++lines;
+        const QJsonObject obj = QJsonDocument::fromJson(line).object();
+        if (obj.isEmpty()) {
+            continue;
+        }
+        if (meta.project.isEmpty()) {
+            meta.project = obj.value(QStringLiteral("cwd")).toString();
+            if (meta.project.isEmpty()) {
+                const QJsonArray dirs =
+                    obj.value(QStringLiteral("directories")).toArray();
+                if (!dirs.isEmpty()) {
+                    meta.project = dirs.at(0).toString();
+                }
+            }
+        }
+        if (meta.title.isEmpty()) {
+            const QString aiTitle =
+                obj.value(QStringLiteral("aiTitle")).toString();
+            if (!aiTitle.isEmpty()) {
+                meta.title = aiTitle;
+            }
+        }
+        if (firstUser.isEmpty()) {
+            const QString type = obj.value(QStringLiteral("type")).toString();
+            if (type == QStringLiteral("user") ||
+                type == QStringLiteral("message")) {
+                QString role, text, at;
+                if (SessionTranscript::messageOf(line, &role, &text, &at) &&
+                    role == QStringLiteral("user") && !text.trimmed().isEmpty()) {
+                    firstUser = text;
+                }
+            }
+        }
+        // ai-title 一般在前几行；Qoder 没有 ai-title，拿到首条 user 就够了。
+        if (!meta.title.isEmpty() && !meta.project.isEmpty()) {
+            break;
+        }
+    }
+    if (meta.title.isEmpty()) {
+        meta.title = firstUser;
+    }
+    if (g_sessionMeta.size() >= 256) {
+        g_sessionMeta.clear();
+    }
+    g_sessionMeta.insert(path, meta);
+    return meta;
+}
+
+QVector<SessionTranscript::SessionInfo> listJsonlSessions(const QString &home,
+                                                          int maxSessions) {
+    QVector<SessionTranscript::SessionInfo> out;
+    QVector<QFileInfo> files;
+    QDirIterator it(home + QStringLiteral("/projects"),
+                    QStringList{QStringLiteral("*.jsonl")}, QDir::Files,
+                    QDirIterator::Subdirectories);
+    while (it.hasNext()) {
+        it.next();
+        const QFileInfo fi = it.fileInfo();
+        if (fi.size() > 2) {
+            files.append(fi);
+        }
+    }
+    std::sort(files.begin(), files.end(), [](const QFileInfo &a, const QFileInfo &b) {
+        return a.lastModified() > b.lastModified();
+    });
+    const int scanCap = qMax(60, maxSessions * 6);
+    for (const QFileInfo &fi : files) {
+        if (out.size() >= maxSessions || out.size() >= scanCap) {
+            break;
+        }
+        const QString id = fi.completeBaseName();
+        if (id.isEmpty()) {
+            continue;
+        }
+        const SessionMeta meta = jsonlMeta(fi.absoluteFilePath());
+        SessionTranscript::SessionInfo info;
+        info.id = id;
+        info.title = shortTitleOf(meta.title, id);
+        info.project = meta.project;
+        info.updatedAt =
+            fi.lastModified().toUTC().toString(Qt::ISODateWithMs);
+        info.archived = archivedProject(info.project);
+        out.append(info);
+    }
+    return out;
+}
+
+QVector<SessionTranscript::SessionInfo> listZcodeSessions(const QString &root,
+                                                           int maxSessions) {
+    QVector<SessionTranscript::SessionInfo> out;
+    const QString dbPath = root + QStringLiteral("/cli/db/db.sqlite");
+    if (!QFileInfo::exists(dbPath)) {
+        return out;
+    }
+    ReadOnlyDb db(dbPath);
+    if (!db.ok()) {
+        return out;
+    }
+    // 旧版/测试库不一定有 directory/time_updated/归档列：按实际列拼查询，
+    // 缺列就当没这项元数据，不能因为目录页把整个宿主漏掉。
+    QSet<QString> cols;
+    QSqlQuery pragma(db.db());
+    if (pragma.exec(QStringLiteral("PRAGMA table_info(session)"))) {
+        while (pragma.next()) {
+            cols.insert(pragma.value(1).toString());
+        }
+    }
+    pragma.finish();
+    const bool hasDir = cols.contains(QStringLiteral("directory"));
+    const bool hasUpdated = cols.contains(QStringLiteral("time_updated"));
+    QString sql = QStringLiteral("SELECT id,title");
+    sql += hasDir ? QStringLiteral(",directory") : QStringLiteral(",''");
+    sql += hasUpdated ? QStringLiteral(",time_updated")
+                      : QStringLiteral(",0");
+    sql += QStringLiteral(" FROM session WHERE id NOT LIKE 'sess_subagent_%'");
+    if (cols.contains(QStringLiteral("time_deleted"))) {
+        sql += QStringLiteral(" AND COALESCE(time_deleted,0)=0");
+    }
+    if (cols.contains(QStringLiteral("time_archived"))) {
+        sql += QStringLiteral(" AND COALESCE(time_archived,0)=0");
+    }
+    if (hasUpdated) {
+        sql += QStringLiteral(" ORDER BY time_updated DESC");
+    }
+    sql += QStringLiteral(" LIMIT ") + QString::number(maxSessions);
+    QSqlQuery q(db.db());
+    // 归档/删除/子 Agent 的内部会话不进“派发”列表，避免用户选到不可用的树。
+    if (q.exec(sql)) {
+        while (q.next()) {
+            const QString id = q.value(0).toString();
+            SessionTranscript::SessionInfo info;
+            info.id = id;
+            info.title = shortTitleOf(q.value(1).toString(), id);
+            info.project = q.value(2).toString();
+            const qint64 updated = q.value(3).toLongLong();
+            if (updated > 0) {
+                info.updatedAt = isoFromMs(updated);
+            }
+            info.archived = archivedProject(info.project);
+            out.append(info);
+        }
+    }
+    q.finish();
+    return out;
+}
+
+QVector<SessionTranscript::SessionInfo> listOsqSessions(const QString &stateRoot,
+                                                         int maxSessions) {
+    QVector<SessionTranscript::SessionInfo> out;
+    const QString dbPath = stateRoot + QStringLiteral("/sessions.db");
+    if (!QFileInfo::exists(dbPath)) {
+        return out;
+    }
+    ReadOnlyDb db(dbPath);
+    if (!db.ok()) {
+        return out;
+    }
+    QSqlQuery q(db.db());
+    // 项目以宿主自己的工作区表为准（execution_workspace 只是任务沙箱目录，
+    // 拿来分组会把每个任务当项目）。removed_at 是 OpenSquilla 的归档标记。
+    if (q.exec(QStringLiteral(
+            "SELECT s.session_key, "
+            "COALESCE(NULLIF(s.display_name,''),NULLIF(s.derived_title,''),"
+            "NULLIF(s.subject,''),NULLIF(s.label,''),''), "
+            "COALESCE(p.path,''), COALESCE(p.removed_at,0), s.updated_at "
+            "FROM sessions s LEFT JOIN project_workspaces p "
+            "ON p.workspace_id=s.workspace_id "
+            "ORDER BY s.updated_at DESC LIMIT ") +
+               QString::number(maxSessions))) {
+        while (q.next()) {
+            const QString key = q.value(0).toString();
+            SessionTranscript::SessionInfo info;
+            info.id = key;
+            QString title = q.value(1).toString();
+            if (title.isEmpty()) {
+                // agent:main:webchat:ct2q066i → 会话 ct2q066i（别把 agent:ma 当标题）。
+                title = QStringLiteral("会话 ") + key.section(QLatin1Char(':'), -1);
+            }
+            info.title = shortTitleOf(title, key);
+            info.project = q.value(2).toString();
+            info.updatedAt = isoFromMs(q.value(4).toLongLong());
+            info.archived =
+                q.value(3).toLongLong() > 0 || archivedProject(info.project);
+            out.append(info);
+        }
+    }
+    q.finish();
+    return out;
+}
+
+QVector<SessionTranscript::SessionInfo> listDshSessions(const QString &root,
+                                                         int maxSessions) {
+    QVector<SessionTranscript::SessionInfo> out;
+    const QString dir = root + QStringLiteral(
+                                   "/storages/session_projcache/sessions");
+    QDir d(dir);
+    if (!d.exists()) {
+        return out;
+    }
+    const QFileInfoList files =
+        d.entryInfoList(QStringList{QStringLiteral("session-*.json")},
+                        QDir::Files, QDir::Time);
+    for (const QFileInfo &fi : files) {
+        if (out.size() >= maxSessions) {
+            break;
+        }
+        const QString id = fi.completeBaseName();
+        QFile f(fi.absoluteFilePath());
+        if (!f.open(QIODevice::ReadOnly)) {
+            continue;
+        }
+        const QJsonObject rec =
+            QJsonDocument::fromJson(f.readAll()).object()
+                .value(QStringLiteral("record"))
+                .toObject();
+        const QJsonObject rows = rec.value(QStringLiteral("rows")).toObject();
+        SessionTranscript::SessionInfo info;
+        info.id = id;
+        info.title = shortTitleOf(
+            rows.value(QStringLiteral("title"))
+                .toObject()
+                .value(QStringLiteral("val"))
+                .toString(),
+            id);
+        info.project = rows.value(QStringLiteral("workingDirectory"))
+                           .toObject()
+                           .value(QStringLiteral("val"))
+                           .toString();
+        if (info.project.isEmpty()) {
+            info.project = rec.value(QStringLiteral("identity"))
+                               .toObject()
+                               .value(QStringLiteral("cwd"))
+                               .toString();
+        }
+        info.updatedAt =
+            fi.lastModified().toUTC().toString(Qt::ISODateWithMs);
+        info.archived = archivedProject(info.project);
+        out.append(info);
+    }
+    return out;
+}
+
 }  // namespace
+
+QVector<SessionTranscript::SessionInfo> SessionTranscript::listSessions(
+    const QString &agentExe, int maxSessions, const QString &rootOverride) {
+    if (maxSessions <= 0) {
+        return {};
+    }
+    const QString jsonlHome = jsonlHomeFor(agentExe);
+    if (!jsonlHome.isEmpty()) {
+        return listJsonlSessions(
+            rootOverride.isEmpty() ? jsonlHome : rootOverride, maxSessions);
+    }
+    if (agentExe.compare(QStringLiteral("ZCode.exe"), Qt::CaseInsensitive) == 0) {
+        return listZcodeSessions(
+            rootOverride.isEmpty() ? ZcodeDispatch::zcodeHome() : rootOverride,
+            maxSessions);
+    }
+    if (agentExe.compare(QStringLiteral("OpenSquilla.exe"),
+                         Qt::CaseInsensitive) == 0) {
+        const QString root = rootOverride.isEmpty() ? osqStateRoot() : rootOverride;
+        return root.isEmpty() ? QVector<SessionInfo>{}
+                              : listOsqSessions(root, maxSessions);
+    }
+    if (agentExe.compare(QStringLiteral("DeepSeek Harness.exe"),
+                         Qt::CaseInsensitive) == 0) {
+        return listDshSessions(
+            rootOverride.isEmpty() ? DshSessions::home() : rootOverride,
+            maxSessions);
+    }
+    return {};
+}
 
 QString SessionTranscript::unwrap(const QString &raw) {
     static const QRegularExpression reminder(

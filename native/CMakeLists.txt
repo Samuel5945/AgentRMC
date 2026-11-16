@@ -53,6 +53,8 @@ qt_add_executable(AgentRMCNative
     src/core/SessionDispatch.h
     src/core/SessionTranscript.cpp
     src/core/SessionTranscript.h
+    src/core/SessionCleaner.cpp
+    src/core/SessionCleaner.h
     src/core/UiDispatch.cpp
     src/core/UiDispatch.h
     src/core/ZcodeDispatch.cpp
@@ -367,6 +369,8 @@ add_executable(AgentRMCTranscriptTest
     tests/transcript_test.cpp
     src/core/SessionTranscript.cpp
     src/core/SessionTranscript.h
+    src/core/SessionCleaner.cpp
+    src/core/SessionCleaner.h
     src/core/DshSessions.cpp
     src/core/DshSessions.h
     src/core/ZcodeDispatch.cpp

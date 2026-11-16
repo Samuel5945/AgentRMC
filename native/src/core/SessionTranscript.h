@@ -2,6 +2,7 @@
 
 #include <QJsonArray>
 #include <QString>
+#include <QVector>
 
 // 聊天页记录读取器（只读、分页）：把待办绑定会话的对话拉出来，电脑外壳与手机页
 // 共用。交互口径（用户 2026-11-13 定）：打开直接显示最新记录，旧记录往上翻时
@@ -27,6 +28,29 @@ public:
         int total = 0;       // 可用总条数（SQLite 宿主封顶 500）
         bool hasMore = false; // 还有更旧的页
     };
+
+    // 手机「派发」页选的会话目录项：只读元数据，不含正文。
+    struct SessionInfo {
+        QString id;
+        QString title;
+        QString project;
+        QString updatedAt;  // ISO UTC
+        // 宿主已移除 / 目录已不存在 / 自动临时工作区：手机端归「已归档」，
+        // 不混进当前项目；只是提示性分类，不影响记录读取。
+        bool archived = false;
+    };
+
+    // 宿主自动生成的临时工作区（WorkBuddy 的日期目录、Qoder Documents 工作区、
+    // 远程控制沙箱、OpenSquilla 任务目录、VirtualDisplay）：单任务本来没有真项目，
+    // 目录页把它们统一归「未分类任务」，不按目录名（尤其日期名）分组。
+    static bool generatedWorkspace(const QString &project);
+
+    // 最近会话目录（每宿主最多 maxSessions 条，按更新时间倒序）。
+    // jsonl 宿主按文件 mtime + 首屏元数据，ZCode/OpenSquilla 查只读 SQLite，
+    // DSH 读宿主投影缓存。读不出来返回空表，不抛错。
+    static QVector<SessionInfo> listSessions(
+        const QString &agentExe, int maxSessions = 20,
+        const QString &rootOverride = QString());
 
     // offsetFromEnd＝从最新往旧跳过多少条（0＝最新一页）。
     // rootOverride 非空时用它当会话库根（测试注入临时库）。

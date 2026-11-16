@@ -7,12 +7,14 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QSet>
 #include <QSqlDatabase>
 #include <QSqlQuery>
 #include <QTemporaryDir>
 #include <QTextStream>
 #include <cstdio>
 
+#include "core/SessionCleaner.h"
 #include "core/SessionTranscript.h"
 
 namespace {
@@ -85,6 +87,32 @@ QString qoderLine(const QString &uuid, const QString &type, const QString &text,
 
 int main(int argc, char **argv) {
     QCoreApplication app(argc, argv);
+    // 单任务会话的宿主临时工作区（日期目录等）必须认成「未分类任务」，
+    // 真实仓库不能误判——否则派发页会把单任务拆成一串按日期的分组。
+    {
+        const QStringList autoDirs{
+            QStringLiteral("C:/Users/x/Documents/WorkBuddy/2026-11-12-21-07-51"),
+            QStringLiteral("C:\\Users\\x\\Documents\\WorkBuddy AI\\2026-11-12"),
+            QStringLiteral("C:/Users/x/Documents/2026-11-12-21-07-51"),
+            QStringLiteral("C:/Users/x/Documents/Qoder/20261112-210751"),
+            QStringLiteral(
+                "C:/Users/x/AppData/Roaming/com.qoder.app.stable/remote-control/a"),
+            QStringLiteral("C:/Users/x/.opensquilla/tasks/t1"),
+        };
+        for (const QString &dir : autoDirs) {
+            check(SessionTranscript::generatedWorkspace(dir),
+                  "generated workspace detected");
+        }
+        const QStringList realDirs{
+            QStringLiteral("D:/githubrepos/Agentrmc"),
+            QStringLiteral("C:/Users/x/Documents/report-2026"),
+            QString(),
+        };
+        for (const QString &dir : realDirs) {
+            check(!SessionTranscript::generatedWorkspace(dir),
+                  "real project not treated as generated");
+        }
+    }
     // --live <session-id>：读真实 ~/.dsh 的 DSH 会话（不碰临时库），打印最新一页，
     // 供装机后对真实数据冒烟；正常无参跑仍是全套临时库自测。
     if (argc >= 3 && QByteArray(argv[1]) == "--live") {
@@ -101,6 +129,40 @@ int main(int argc, char **argv) {
                         o.value("text").toString().left(100).toUtf8().constData());
         }
         return (r.supported && r.total > 0) ? 0 : 1;
+    }
+    // --catalog <exe>：装机后对真实宿主会话目录冒烟（不写库）。
+    if (argc >= 3 && QByteArray(argv[1]) == "--catalog") {
+        const QString exe = QString::fromUtf8(argv[2]);
+        const int maxSessions =
+            argc >= 4 ? QString::fromUtf8(argv[3]).toInt() : 8;
+        const auto rows = SessionTranscript::listSessions(exe, maxSessions);
+        QSet<QString> projects;
+        QSet<QString> archivedProjects;
+        int archived = 0;
+        for (const auto &row : rows) {
+            if (!row.project.isEmpty()) {
+                projects.insert(row.project);
+                if (row.archived) {
+                    archivedProjects.insert(row.project);
+                }
+            }
+            if (row.archived) {
+                ++archived;
+            }
+        }
+        std::printf("agent=%s sessions=%d projects=%d archived_sessions=%d "
+                    "archived_projects=%d\n",
+                    exe.toUtf8().constData(), static_cast<int>(rows.size()),
+                    static_cast<int>(projects.size()), archived,
+                    static_cast<int>(archivedProjects.size()));
+        for (const auto &row : rows) {
+            std::printf("%s%s | %s | %s\n",
+                        row.archived ? "A " : "  ",
+                        row.updatedAt.toUtf8().constData(),
+                        row.title.toUtf8().constData(),
+                        row.project.toUtf8().constData());
+        }
+        return rows.isEmpty() ? 1 : 0;
     }
     QTemporaryDir temp;
     if (!temp.isValid()) {
@@ -142,6 +204,47 @@ int main(int argc, char **argv) {
               "wb chronological");
     }
     check(r.total == 4 && !r.hasMore, "wb total/hasMore");
+    {
+        const auto catalog = SessionTranscript::listSessions(
+            QStringLiteral("WorkBuddyAI.exe"), 10, wbHome);
+        check(catalog.size() == 1, "jsonl session catalog count");
+        if (!catalog.isEmpty()) {
+            check(catalog.at(0).id == sid, "jsonl catalog id");
+            check(catalog.at(0).title.contains(QStringLiteral("第一句")),
+                  "jsonl catalog title");
+            check(!catalog.at(0).project.isEmpty(),
+                  "jsonl catalog project");
+            check(catalog.at(0).archived,
+                  "jsonl catalog marks missing project archived");
+        }
+    }
+
+    // ---- 宿主临时目录（日期目录）里会话还在 → 不算已归档 ----
+    {
+        // WorkBuddy 单任务按时间戳建目录：目录存在就说明会话仍可用，只归
+        // 「未分类任务」，不能标成可删的已归档项（用户 2026-11-16 口径）。
+        const QString stampDir =
+            wbHome + QStringLiteral("/WorkBuddy/2026-11-12-21-07-51");
+        QDir().mkpath(stampDir);
+        const QString sid2 = QStringLiteral("bbbbbbbb-cccc-4ddd-8eee-ffffffffffff");
+        writeLines(wbHome + QStringLiteral("/projects/slug-b/") + sid2 +
+                       QStringLiteral(".jsonl"),
+                   {QStringLiteral(R"({"type":"message","cwd":"%1"})").arg(stampDir),
+                    wbLine("m1", "user", QStringLiteral("日期目录单任务"),
+                           base + 6000, sid2)});
+        check(SessionTranscript::generatedWorkspace(stampDir),
+              "date dir classified as single task");
+        bool found = false;
+        for (const auto &row : SessionTranscript::listSessions(
+                 QStringLiteral("WorkBuddyAI.exe"), 10, wbHome)) {
+            if (row.id != sid2) {
+                continue;
+            }
+            found = true;
+            check(!row.archived, "existing date dir session not archived");
+        }
+        check(found, "date dir session in catalog");
+    }
 
     // ---- 分页：120 条，从末尾切 ----
     const QString bigSid = QStringLiteral("aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee");
@@ -334,6 +437,17 @@ int main(int argc, char **argv) {
         check(!hasInject, "zcode injected user rows filtered out");
     }
     check(r.total == 3 && !r.hasMore, "zcode total counts renderable only");
+    {
+        const auto catalog =
+            SessionTranscript::listSessions(QStringLiteral("ZCode.exe"), 10, zRoot);
+        check(catalog.size() == 1, "zcode session catalog count");
+        if (!catalog.isEmpty()) {
+            check(catalog.at(0).id == sid, "zcode catalog id");
+            check(catalog.at(0).title == QStringLiteral("ZCode 会话标题"),
+                  "zcode catalog title");
+            check(!catalog.at(0).archived, "zcode open project not archived");
+        }
+    }
 
     // ---- OpenSquilla：transcript_entries 明文 ----
     const QString oRoot = temp.filePath("osq");
@@ -442,6 +556,86 @@ int main(int argc, char **argv) {
     check(!SessionTranscript::messageOf(R"({"type":"ai-title","aiTitle":"x"})",
                                         &role, &text, &at),
           "non-message line rejected");
+
+    // ---- 归档会话删除：备份成功才删；活跃项目拒绝；不支持宿主拒绝 ----
+    {
+        const QString cleanHome = temp.filePath("cleaner_home");
+        const QString delSid = QStringLiteral("clean-sid-0001");
+        const QString delFile = cleanHome +
+            QStringLiteral("/.workbuddy/projects/slug-clean/") + delSid +
+            QStringLiteral(".jsonl");
+        const QString missingProject = temp.filePath("project-missing");
+        writeLines(delFile, {
+            QString::fromUtf8(QJsonDocument(QJsonObject{
+                {QStringLiteral("type"), QStringLiteral("workspace-directories")},
+                {QStringLiteral("directories"), QJsonArray{missingProject}}}).toJson(
+                QJsonDocument::Compact)),
+            wbLine(QStringLiteral("c1"), QStringLiteral("user"),
+                   QStringLiteral("归档清理测试"), base, delSid),
+        });
+        const QString sidecar = delFile.left(delFile.size() - 6);
+        QDir().mkpath(sidecar + QStringLiteral("/subagents"));
+        QFile side(sidecar + QStringLiteral("/subagents/a.txt"));
+        side.open(QIODevice::WriteOnly);
+        side.write("side");
+        side.close();
+
+        const QJsonArray delItems{QJsonObject{
+            {QStringLiteral("exe"), QStringLiteral("WorkBuddy.exe")},
+            {QStringLiteral("session"), delSid},
+            {QStringLiteral("project"), missingProject},
+            {QStringLiteral("title"), QStringLiteral("归档清理测试")}}};
+        QString why;
+        const QJsonObject result = SessionCleaner::removeArchived(
+            delItems, &why, cleanHome, temp.filePath("cleaner_trash"));
+        check(result.value(QStringLiteral("deleted")).toInt() == 1,
+              "cleaner deletes archived jsonl");
+        check(!QFileInfo::exists(delFile), "cleaner removes session jsonl");
+        check(!QFileInfo::exists(sidecar), "cleaner removes session sidecar");
+        const QString backup = result.value(QStringLiteral("backup")).toString();
+        check(QFileInfo::exists(backup + QStringLiteral("/manifest.json")),
+              "cleaner writes manifest");
+        check(QFileInfo::exists(backup + QStringLiteral("/WorkBuddy.exe/") + delSid +
+                                QLatin1Char('/') + delSid + QStringLiteral(".jsonl")),
+              "cleaner backup present");
+
+        const QString liveProject = temp.filePath("cleaner_live_project");
+        QDir().mkpath(liveProject);
+        const QString liveSid = QStringLiteral("live-sid-0001");
+        const QString liveFile = cleanHome +
+            QStringLiteral("/.workbuddy/projects/slug-live/") + liveSid +
+            QStringLiteral(".jsonl");
+        writeLines(liveFile, {
+            QString::fromUtf8(QJsonDocument(QJsonObject{
+                {QStringLiteral("type"), QStringLiteral("workspace-directories")},
+                {QStringLiteral("directories"), QJsonArray{liveProject}}}).toJson(
+                QJsonDocument::Compact)),
+            wbLine(QStringLiteral("l1"), QStringLiteral("user"),
+                   QStringLiteral("活跃会话"), base, liveSid),
+        });
+        const QJsonArray liveItems{QJsonObject{
+            {QStringLiteral("exe"), QStringLiteral("WorkBuddy.exe")},
+            {QStringLiteral("session"), liveSid},
+            {QStringLiteral("project"), liveProject},
+            {QStringLiteral("title"), QStringLiteral("活跃会话")}}};
+        const QJsonObject liveResult = SessionCleaner::removeArchived(
+            liveItems, &why, cleanHome, temp.filePath("cleaner_trash2"));
+        check(liveResult.value(QStringLiteral("deleted")).toInt() == 0,
+              "cleaner refuses active project");
+        check(liveResult.value(QStringLiteral("failed")).toArray().size() == 1,
+              "cleaner reports active refusal");
+        check(QFileInfo::exists(liveFile), "cleaner keeps active session");
+
+        const QJsonArray badItems{QJsonObject{
+            {QStringLiteral("exe"), QStringLiteral("OpenSquilla.exe")},
+            {QStringLiteral("session"), QStringLiteral("agent:main:x:y")}}};
+        const QJsonObject badResult = SessionCleaner::removeArchived(
+            badItems, &why, cleanHome, temp.filePath("cleaner_trash3"));
+        check(badResult.value(QStringLiteral("deleted")).toInt() == 0,
+              "cleaner refuses unsupported host");
+        check(!SessionCleaner::supportsHost(QStringLiteral("OpenSquilla.exe")),
+              "cleaner supported-host matrix");
+    }
 
     std::printf(ok ? "ALL PASS transcript (%d checks)\n"
                    : "FAIL transcript (%d checks)\n",

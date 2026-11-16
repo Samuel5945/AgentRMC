@@ -242,11 +242,12 @@ function installInto(configHomeDirName) {
 // 这套 e2e 靠「脚本装在哪个配置家」判宿主，所以子进程的环境里不能留着宿主家族
 // 的变量：在 Qoder / WorkBuddy 会话里跑测试时，resolveHost 的判据 3（环境变量）
 // 会抢在路径判据之前命中，WorkBuddy 用例会绿变红。清掉之后同一份测试在任何
-// 宿主里跑结果一致。
+// 宿主里跑结果一致。注意 CLIENT_INFO_PRODUCT_NAME 也要清——WorkBuddy 的 harness
+// 会把它设成 'WorkBuddy'，lib/host.js 的产品名判据认这一条（2026-11-16 踩到）。
 function hostFreeEnv(extra) {
   const env = Object.assign({}, process.env, extra);
   for (const key of Object.keys(env)) {
-    if (/^(QODER_|QODERCN_|CLAUDE_|WORKBUDDY|CODEBUDDY)/.test(key)) delete env[key];
+    if (/^(QODER_|QODERCN_|CLAUDE_|WORKBUDDY|CODEBUDDY|CLIENT_INFO_)/.test(key)) delete env[key];
   }
   return env;
 }
@@ -980,6 +981,18 @@ check('decision gate: 全条件成立才接手，缺一不可', () => {
     { ...ok, exe: 'Qoder.exe' }), false, '只开在实测过的宿主上');
   assert.strictEqual(decision.approvalInlineGate(
     { ...ok, exe: '' }), false, '空 exe 不冒险');
+  // WorkBuddy：PermissionRequest 在弹窗**之前**派发（notify.js 注释有实测），
+  // 决策 schema 与 Claude Code 同源，2026-11-16 放开。
+  assert.strictEqual(decision.approvalInlineGate(
+    { ...ok, exe: 'WorkBuddy.exe' }), true, 'WorkBuddy 走代答');
+  assert.strictEqual(decision.approvalInlineGate(
+    { ...ok, exe: 'WorkBuddyAI.exe' }), true, 'WorkBuddy AI 同引擎同事件');
+  assert.strictEqual(decision.approvalInlineGate(
+    { ...ok, exe: 'D:\\apps\\WorkBuddy.exe' }), true, '带路径的映像名也认');
+  assert.strictEqual(decision.approvalInlineGate(
+    { ...ok, exe: 'CodeBuddy.exe' }), false, 'CodeBuddy 时序未验证');
+  assert.strictEqual(decision.approvalInlineGate(
+    { ...ok, exe: 'Qoder CN.exe' }), false, 'Qoder 家族时序未验证');
 });
 
 check('question 卡 gate: question 事件 + ZCode + 有会话/题 id 才接手', () => {
@@ -1032,6 +1045,36 @@ check('decision 开关: 标记文件在即开，缺省关', () => {
   } };
   assert.strictEqual(decision.approvalInlineEnabled('/x', fakeFs), true);
   assert.strictEqual(decision.approvalInlineEnabled('/y', fakeFs), false);
+});
+
+check('decision 开关: 按宿主开关只对那一个宿主生效', () => {
+  const onlyWb = { statSync(p) {
+    if (String(p) === '/x/approval-inline-workbuddy') return {};
+    throw new Error('no');
+  } };
+  assert.strictEqual(decision.approvalInlineEnabled('/x', onlyWb, 'WorkBuddy.exe'),
+    true, 'approval-inline-workbuddy 认 WorkBuddy');
+  assert.strictEqual(decision.approvalInlineEnabled('/x', onlyWb, 'WorkBuddyAI.exe'),
+    false, '变体名不同：AI 版是 workbuddyai，得单独开');
+  assert.strictEqual(decision.approvalInlineEnabled('/x', onlyWb, 'ZCode.exe'),
+    false, 'ZCode 不该被 WorkBuddy 的开关带上');
+  assert.strictEqual(decision.approvalInlineEnabled('/x', onlyWb),
+    false, '没给 exe 时只认总开关');
+});
+
+check('decision 开关: 总开关不透支到新宿主', () => {
+  // 老用户早就开着 approval-inline 给 ZCode 用；白名单里加了 WorkBuddy 之后，
+  // 不能让他升级即「被开启」——新宿主必须自己那份标记文件。
+  const legacy = { statSync(p) {
+    if (String(p) === '/x/approval-inline') return {};
+    throw new Error('no');
+  } };
+  assert.strictEqual(decision.approvalInlineEnabled('/x', legacy, 'ZCode.exe'),
+    true, '总开关仍然管 ZCode');
+  assert.strictEqual(decision.approvalInlineEnabled('/x', legacy, 'WorkBuddy.exe'),
+    false, '总开关不管 WorkBuddy');
+  assert.strictEqual(decision.approvalInlineEnabled('/x', legacy, 'WorkBuddyAI.exe'),
+    false, '总开关不管 WorkBuddy AI');
 });
 
 async function runDecisionFlowChecks() {

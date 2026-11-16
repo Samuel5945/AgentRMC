@@ -34,8 +34,8 @@
   宿主不开：WorkBuddy 的 PreToolUse(question) 在答完**之后**才派发，推了就是
   一张立刻过期的卡。归一化与 gate 在 `lib/decision.js`（不挂 approval-inline
   开关：只读展示没有代答的安全面）。
-- **决策式远程授权（ZCode，默认关）**：开关文件
-  `%APPDATA%LIGAgentRMCNativeapproval-inline` 存在即开。开着时
+- **决策式远程授权（ZCode 已实测 / WorkBuddy 待验，默认关）**：开关文件
+  `%APPDATA%\LIG\AgentRMCNative\approval-inline` 存在即开。开着时
   `PermissionRequest` hook 不再只是提醒——先照常出声 + 落工单，再推
   `/requests` 可答卡（桌宠弹「允许 / 拒绝」卡），然后限时轮询
   `/request-answer/pending`（60 秒，`AGENTRMC_APPROVAL_WAIT_SECONDS` 可调）：
@@ -43,8 +43,20 @@
   直接放行 / 拒绝；超时或桌宠没开就静默放手（exit 0），宿主照常弹窗。
   流程与红线在 `lib/decision.js`（exit 2 = 硬 deny，绝不允许；stdout 除决策
   JSON 外不能有字）。安全模型与 DSH approvalInline 一致：本机能碰到桌宠的人
-  都能代答。仅 ZCode 实测开启；hooks.json 的 `timeout` 相应放大到 90 秒，
-  **更新插件后要新开会话才生效**（hooks 配置是会话启动快照）。
+  都能代答。
+  **两档开关**（2026-11-16）：`approval-inline` 只对已实测的 ZCode 生效——
+  老用户升级后不会因为白名单加了新宿主就被「顺带开启」；新宿主用
+  `approval-inline-<exe 基名>` 单独开，只影响它自己：`approval-inline-workbuddy`
+  （经典 WorkBuddy）/ `approval-inline-workbuddyai`（WorkBuddy AI）。
+  **WorkBuddy 的验收动作**：开关开好、桌宠可见（`no_raise` 会抑制抢前台，
+  窗口藏起来就看不到卡），在宿主里触发一次真实授权 → 桌宠应弹可答卡 → 点
+  「允许」→ 宿主不再弹窗、工具真的执行。判据看
+  `%APPDATA%\LIG\AgentRMCNative\approval-inline.log`：有 `flow-start` 说明
+  hook 被调且判据全过，有 `flow-decision` 说明决策已写 stdout（宿主吃不吃要
+  看弹窗）；只有 `gate-reject` 说明缺 session/requestId 或宿主不在白名单；
+  一整个文件都没有 = 宿主没派发这个 hook（退回纯提醒，删开关即可）。
+  hooks.json 的 `timeout` 相应放大到 90 秒，**改 hooks 配置要新开会话才生效**；
+  只改脚本（`hooks/`、`lib/`）下一次事件就生效，不用重启。
 - **离线不丢**：AgentRMC 没开、连接失败或 5xx 时，hook 把 payload 追加到
   `%APPDATA%\LIG\AgentRMCNative\pending-events.jsonl`；原生端启动/每 5 秒补投，
   补投只落工单，不补喊。

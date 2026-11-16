@@ -1,5 +1,6 @@
 'use strict';
-// 决策式远程授权（bridge 系 / ZCode，2026-11-15 真机探针三路全通后落地）。
+// 决策式远程授权（bridge 系：ZCode 2026-11-15 真机三路全通后落地；
+// WorkBuddy / WorkBuddy AI 2026-11-16 放开白名单，待真机验一次宿主是否吃决策）。
 // 流程与传输分离：bridge 参数可注入（hook 用真 http，测试用假桥），流程逻辑
 // 只有一份、可进程内单测。返回值不写 stdout、不 exit——那是调用方（hook）的事。
 //
@@ -9,25 +10,65 @@
 //
 // 安全模型：开关文件在 SPOOL_DIR 下（<SPOOL_DIR>/approval-inline），默认关。
 // 开着时，本机能碰到桌宠/聊天页的人都能代答授权——与 DSH approvalInline 同级。
+// 另支持按宿主单独开：<SPOOL_DIR>/approval-inline-<exe 基名，无 .exe>
+// （如 approval-inline-workbuddy）。用来只验一个新宿主、不动已经稳的 ZCode。
 
 const APPROVAL_POLL_MS = 1200;       // 取件节奏（与 DSH 一致）
 const APPROVAL_HEARTBEAT_MS = 10000; // /requests 重推节奏（原生 15s 在线窗内续命）
 
+// 可代答的宿主白名单（exeKey 归一后的名字：小写、无路径、无 .exe 后缀）。
+//   zcode：2026-11-15 三路真机全通。
+//   workbuddy / workbuddyai：PermissionRequest 在弹窗**之前**派发
+//     （hooks/agentrmc-notify.js 的 prompt 分支注释已实测），事件名与输出 schema
+//     跟 Claude Code 同源。2026-11-16 放开——**首次跑要肉眼确认一次**：桌宠点
+//     「允许」后宿主不再弹窗、工具真的执行；若仍弹窗，说明宿主不吃 hook 决策，
+//     把这两个名字从白名单移除即可回到纯提醒（不影响可用性）。
+//   Qoder 家族、CodeBuddy 未验证时序，不放进白名单。
+const APPROVAL_INLINE_HOSTS = new Set([
+  'zcode',
+  'workbuddy',
+  'workbuddyai',
+]);
+
+// 总开关 approval-inline 只覆盖这些「已经稳了」的宿主：它们开着总开关用了很久，
+// 不该因为白名单里加了新宿主就自动跟着变。新宿主一律用 approval-inline-<key>
+// 单独开、单独关（WorkBuddy 首次验证就是这么开的）。
+const ZCODE_LEGACY_HOSTS = new Set(['zcode']);
+
+// 进程映像名归一：去路径、去 .exe、小写。'D:\\apps\\WorkBuddy.exe' → 'workbuddy'
+function exeKey(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/^.*[\\/]/, '')
+    .replace(/\.exe$/, '')
+    .trim();
+}
+
 // 开关判定：标记文件存在即开。fsLike 可注入（测试用假 fs）。
-function approvalInlineEnabled(spoolDir, fsLike) {
+//   approval-inline        → 只对 ZCODE_LEGACY_HOSTS（已经稳了的老宿主）生效，
+//                            老用户开着它升级不会被新宿主一起带进来；
+//   approval-inline-<key>  → 只对那一个宿主生效（如 approval-inline-workbuddy），
+//                            新宿主第一次开就走这个，能单独关掉不动别人；
+//   不给 exe（老调用/单测）→ 按总开关判。
+function approvalInlineEnabled(spoolDir, fsLike, exe) {
   const fsMod = fsLike || require('fs');
-  try {
-    fsMod.statSync(spoolDir + '/approval-inline');
-    return true;
-  } catch {
-    return false;
+  const key = exeKey(exe);
+  const names = [];
+  if (!key || ZCODE_LEGACY_HOSTS.has(key)) names.push('approval-inline');
+  if (key) names.push('approval-inline-' + key);
+  for (const name of names) {
+    try {
+      fsMod.statSync(spoolDir + '/' + name);
+      return true;
+    } catch { /* 没有这个标记就试下一个 */ }
   }
+  return false;
 }
 
 // 拦截条件（hook 的 gate 与测试共用一份判据）：
 //   permission 事件、不是 AskUserQuestion（提问答案注入不进阻塞中的工具调用）、
 //   非 DRY_RUN、有 session 与 requestId（老宿主没法挂账对号）、开关开着、
-//   宿主是 ZCode（其它宿主的事件时序没验证过，不冒险）。
+//   宿主在 APPROVAL_INLINE_HOSTS 里（事件时序验证过的才代答）。
 function approvalInlineGate(input) {
   const i = input || {};
   return i.event === 'permission' &&
@@ -36,7 +77,7 @@ function approvalInlineGate(input) {
     !!String(i.sessionId || '').trim() &&
     !!String(i.requestId || '').trim() &&
     !!i.enabled &&
-    String(i.exe || '').toLowerCase() === 'zcode.exe';
+    APPROVAL_INLINE_HOSTS.has(exeKey(i.exe));
 }
 
 // 流程本体。bridge.request(method, path, payloadObj) -> {status,body}|null
@@ -193,6 +234,8 @@ async function runQuestionDone(bridge, p) {
 module.exports = {
   approvalInlineEnabled,
   approvalInlineGate,
+  APPROVAL_INLINE_HOSTS,
+  exeKey,
   runApprovalInlineFlow,
   normalizeZcodeQuestions,
   questionCardGate,

@@ -467,6 +467,17 @@ function questionDebugLog(entry) {
   } catch { /* 日志失败不影响主流程 */ }
 }
 
+// 决策式远程授权排障日志（开关开着才写）：新宿主第一次接代答时，这行是唯一
+// 能回答「hook 到底有没有被调、拿到会话与请求 id 没有、决策发出去没有」的证据。
+// hook 自己看不到宿主有没有弹窗，所以 stdout 原文也记一笔，便于对照。
+function approvalDebugLog(entry) {
+  try {
+    fs.mkdirSync(SPOOL_DIR, { recursive: true });
+    fs.appendFileSync(path.join(SPOOL_DIR, 'approval-inline.log'),
+      JSON.stringify(Object.assign({ t: new Date().toISOString() }, entry)) + '\n');
+  } catch { /* 日志失败不影响主流程 */ }
+}
+
 // 决策流程专用的桥请求：失败 resolve null（不抛），由流程决定退路。
 function bridgeRequest(method, apiPath, payloadObj) {
   if (process.env.AGENTRMC_DEBUG_BRIDGE) {
@@ -535,15 +546,22 @@ async function runApprovalInline(hook, announce) {
     input.file_path || input.path || input.command || input.url || '',
   );
   const { runApprovalInlineFlow } = require('../lib/decision');
+  const startedAt = Date.now();
+  const exe = raise || 'ZCode.exe';
+  const sid = String(hook.session_id || hook.sessionId || '').trim();
+  const rid = String(
+    hook.requestId || hook.tool_use_id || hook.toolUseId || '',
+  ).trim();
+  approvalDebugLog({ ev: 'flow-start', exe, source: host.source, sid: sid.slice(0, 12),
+    rid: rid.slice(0, 16), tool: String(hook.tool_name || hook.toolName || ''),
+    waitSeconds: APPROVAL_INLINE_WAIT_S });
   const { decision } = await runApprovalInlineFlow(
     { request: bridgeRequest },
     {
       agent,
-      exe: raise || 'ZCode.exe',
-      sid: String(hook.session_id || hook.sessionId || '').trim(),
-      rid: String(
-        hook.requestId || hook.tool_use_id || hook.toolUseId || '',
-      ).trim(),
+      exe,
+      sid,
+      rid,
       project: projectRaw(hook),
       toolName: String(hook.tool_name || hook.toolName || ''),
       reason: detail.length > 60 ? detail.slice(0, 57) + '…' : detail,
@@ -555,9 +573,15 @@ async function runApprovalInline(hook, announce) {
     },
   );
   if (decision) {
-    process.stdout.write(JSON.stringify({
+    const out = JSON.stringify({
       hookSpecificOutput: { hookEventName: 'PermissionRequest', decision },
-    }));
+    });
+    approvalDebugLog({ ev: 'flow-decision', ms: Date.now() - startedAt,
+      behavior: decision.behavior, stdout: out });
+    process.stdout.write(out);
+  } else {
+    // 超时 / 桥断 / 流程异常：静默 exit 0，让宿主自己弹窗。日志留给排障。
+    approvalDebugLog({ ev: 'flow-no-decision', ms: Date.now() - startedAt });
   }
   process.exit(0);
 }
@@ -748,18 +772,30 @@ process.stdin.on('end', () => {
     message = String(hook.message || '有新消息');
   }
 
-  // —— 决策式远程授权拦截（ZCode 专属；approval-inline 开关文件控制）——
+  // —— 决策式远程授权拦截（ZCode / WorkBuddy；approval-inline 开关文件控制）——
   // 必须在 payload 组装前接手：流程自己发 notify、推卡、轮询、输出决策，
   // 走不到下面的统一发送。AskUserQuestion 是提问不是授权（答案注入不进
   // 阻塞中的工具调用），不接手；DRY_RUN 照旧打印 payload；缺 session 或
   // requestId（老宿主）没法挂账对号，也退回纯提醒。
-  if (approvalInlineGate({
+  // 开关开着时把判据落一行日志：新宿主（WorkBuddy）第一次跑，全靠它回答
+  // 「到底是 hook 没被调、还是缺 id、还是宿主不吃决策」。
+  const inlineEnabled = approvalInlineEnabled(SPOOL_DIR, null, raise);
+  const inlineGate = approvalInlineGate({
     event, tool, dryRun: DRY_RUN,
     sessionId: hook.session_id || hook.sessionId,
     requestId: hook.requestId || hook.tool_use_id || hook.toolUseId,
-    enabled: approvalInlineEnabled(SPOOL_DIR),
+    enabled: inlineEnabled,
     exe: raise || 'ZCode.exe',
-  })) {
+  });
+  if (inlineEnabled && !inlineGate) {
+    approvalDebugLog({
+      ev: 'gate-reject', event, tool,
+      hasSid: !!(hook.session_id || hook.sessionId),
+      hasRid: !!(hook.requestId || hook.tool_use_id || hook.toolUseId),
+      exe: raise || '', source: host.source,
+    });
+  }
+  if (inlineGate) {
     runApprovalInline(hook, { message, speech });
     return;
   }

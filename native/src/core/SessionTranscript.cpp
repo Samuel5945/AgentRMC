@@ -153,7 +153,8 @@ QString findJsonl(const QString &home, const QString &sessionId) {
     return QString();
 }
 
-// 全量解析缓存：库文件 mtime+size 变了才重读。翻页与 2.5s 轮询都吃缓存。
+// 全量解析缓存：库文件 mtime+size 变了才重读（SQLite 宿主连 -wal 一起算，见
+// sqliteStamp）。翻页与 2.5s 轮询都吃缓存。
 struct FullCache {
     QString stamp;
     QVector<QJsonObject> all;  // 正序
@@ -166,6 +167,21 @@ QString fileStamp(const QString &path) {
     const QFileInfo fi(path);
     return QString::number(fi.lastModified().toMSecsSinceEpoch()) + QLatin1Char(':') +
            QString::number(fi.size());
+}
+
+// SQLite 宿主（ZCode / OpenSquilla）的库默认是 WAL 模式：新提交先落 <db>-wal，
+// 主库文件只在 checkpoint 时才被动到——而 checkpoint 什么时候来，写入方说了算
+// （本机实测过 16 分钟不 checkpoint 的会话库）。所以只按主库 mtime+size 打 stamp
+// 会让缓存永远不失效：对话页停在上一份快照，点「刷新」也还是同一份缓存
+// （2026-11-17 用户报「OpenSquilla 当前会话停止同步，刷新也没用」）。
+// 把 -wal 一起算进 stamp，WAL 一长缓存就失效。-shm 只反映锁，变化太勤，不算。
+QString sqliteStamp(const QString &dbPath) {
+    QString s = fileStamp(dbPath);
+    const QString wal = dbPath + QStringLiteral("-wal");
+    if (QFileInfo::exists(wal)) {
+        s += QLatin1Char('|') + fileStamp(wal);
+    }
+    return s;
 }
 
 void cachePut(const QString &key, const FullCache &entry) {
@@ -293,7 +309,7 @@ SessionTranscript::Result readZcode(const QString &root, const QString &sessionI
         return out;
     }
     const QString key = QStringLiteral("zcode|") + dbPath + QLatin1Char('|') + sessionId;
-    const QString stamp = fileStamp(dbPath);
+    const QString stamp = sqliteStamp(dbPath);
     auto it = g_cache.constFind(key);
     if (it != g_cache.constEnd() && it->stamp == stamp) {
         return slicePage(*it, limit, offset);
@@ -415,7 +431,7 @@ SessionTranscript::Result readOsq(const QString &stateRoot, const QString &sessi
         return out;
     }
     const QString key = QStringLiteral("osq|") + dbPath + QLatin1Char('|') + sessionKey;
-    const QString stamp = fileStamp(dbPath);
+    const QString stamp = sqliteStamp(dbPath);
     auto it = g_cache.constFind(key);
     if (it != g_cache.constEnd() && it->stamp == stamp) {
         return slicePage(*it, limit, offset);

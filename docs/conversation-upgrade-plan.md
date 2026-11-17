@@ -87,6 +87,11 @@ RequestQuestion(id, header, prompt, options[], multiple, secret,
 
 - 聊天页：`SessionTranscript`（只读分页，已支持 WorkBuddy/Qoder/ZCode/OpenSquilla/**DSH**）；
   桌面外壳 `chatOpen/chatOlder/pushChat`，手机 `GET /m/transcript`。
+- **WAL 缓存失效的坑（2026-11-17 修）**：ZCode / OpenSquilla 的会话库是 WAL 模式，新提交
+  先落 `<db>-wal`，主库 mtime+size 要等 checkpoint 才动（实测 OpenSquilla 主库停在
+  16:48、WAL 里攒了 7MB / 3 条新记录）。缓存 stamp 只算主库时永远不失效 → 会话页停在
+  上一份快照，点「刷新」（走 `sessionOpen` → 同一条 `read` 路径）也还是同一份缓存。
+  `sqliteStamp()` 现在把 `-wal` 一起算进 stamp（回归用例见 `transcript_test.cpp`）。
 - composer：纯文本，`sendChat()` → `dispatch` 动作 → `SessionDispatch` 派回会话。
 - 动作白名单（`LanWebServer::isAllowedAction`）：ack/dispatch/open/raiseZcode/restartZcode/readLast。
 - 授权/提问：目前只走「待我处理」提醒 + 桌宠语音，**聊天页里没有内联可点选交互**。

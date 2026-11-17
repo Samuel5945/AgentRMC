@@ -504,6 +504,65 @@ int main(int argc, char **argv) {
               QStringLiteral("OSQ 问"),
           "osq chronological");
 
+    // ---- OpenSquilla WAL：新提交只在 -wal 里、主库还没 checkpoint 时也要看到 ----
+    // 宿主库是 WAL：新行先落 sessions.db-wal，主库 mtime/size 一动不动。缓存 stamp
+    // 只看主库的话，对话页永远停在上一份快照，点刷新也无效（2026-11-17 实测：
+    // 主库停在 16:48，WAL 里攒了 7MB / 3 条新记录，用户报「停止同步、刷新没用」）。
+    {
+        const QString wRoot = temp.filePath("osq-wal");
+        QDir().mkpath(wRoot);
+        const QString wDb = wRoot + QStringLiteral("/sessions.db");
+        const QString wKey = QStringLiteral("agent:main:cli:wal0001");
+        QSqlDatabase db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"),
+                                                   QStringLiteral("setup_w"));
+        db.setDatabaseName(wDb);
+        check(db.open(), "osq wal: writer opens db");
+        {
+            QSqlQuery mode(db);
+            mode.exec(QStringLiteral("PRAGMA journal_mode=WAL"));
+            QSqlQuery acp(db);
+            acp.exec(QStringLiteral("PRAGMA wal_autocheckpoint=0"));  // 只让 -wal 长
+            QSqlQuery ddl(db);
+            check(ddl.exec(QStringLiteral(
+                      "CREATE TABLE transcript_entries(id INTEGER PRIMARY KEY, "
+                      "session_key TEXT, role TEXT, content TEXT, created_at INTEGER)")),
+                  "osq wal: create table");
+        }
+        auto ins = [&](int id, const QString &role, const QString &text) {
+            QSqlQuery i(db);
+            i.prepare(QStringLiteral("INSERT INTO transcript_entries VALUES(?,?,?,?,?)"));
+            i.addBindValue(id);
+            i.addBindValue(wKey);
+            i.addBindValue(role);
+            i.addBindValue(text);
+            i.addBindValue(1794569091LL + id);
+            return i.exec();
+        };
+        check(ins(1, QStringLiteral("user"), QStringLiteral("WAL 旧")),
+              "osq wal: first row");
+        r = SessionTranscript::read(QStringLiteral("OpenSquilla.exe"), wKey, 50, 0,
+                                    wRoot);
+        check(r.supported && r.messages.size() == 1, "osq wal: warm cache on 1 row");
+        const QFileInfo mainBefore(wDb);
+        const QDateTime mtimeBefore = mainBefore.lastModified();
+        const qint64 sizeBefore = mainBefore.size();
+        check(ins(2, QStringLiteral("assistant"), QStringLiteral("WAL 新")),
+              "osq wal: second row");
+        const QFileInfo mainAfter(wDb);
+        check(mainAfter.lastModified() == mtimeBefore && mainAfter.size() == sizeBefore,
+              "osq wal: main db untouched (frames still in -wal)");
+        r = SessionTranscript::read(QStringLiteral("OpenSquilla.exe"), wKey, 50, 0,
+                                    wRoot);
+        check(r.messages.size() == 2, "osq wal: cache invalidated by -wal growth");
+        if (r.messages.size() == 2) {
+            check(r.messages.at(1).toObject().value("text").toString() ==
+                      QStringLiteral("WAL 新"),
+                  "osq wal: newest row visible");
+        }
+        db.close();
+    }
+    QSqlDatabase::removeDatabase(QStringLiteral("setup_w"));
+
     // ---- DSH：多帧 zstd + reasoning/tool 过滤 + session/title + 缓存失效 ----
     // fixture 由 rc_probe/gen_dsh_transcript_fixture.py 预生成（native 只 vendored
     // 解压子集，压缩靠 Python）：帧1+帧2 共 4 条对话，帧3 一条追加。

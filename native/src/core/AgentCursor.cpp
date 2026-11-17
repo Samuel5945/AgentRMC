@@ -156,24 +156,36 @@ bool invokeAt(IUIAutomation *ui, const QPoint &pt, HWND expected,
     }
     if (expected != nullptr) {
         UIA_HWND owner = 0;
-        if (FAILED(el->get_CurrentNativeWindowHandle(&owner)) ||
-            owner == nullptr) {
-            el->Release();
-            if (detail != nullptr) {
-                *detail = QStringLiteral("UIA 元素没有原生窗口句柄");
+        const bool hasHwnd =
+            SUCCEEDED(el->get_CurrentNativeWindowHandle(&owner)) && owner != nullptr;
+        bool sameTree = false;
+        if (hasHwnd) {
+            // 不要求句柄完全相等：Chromium/Electron 里 UIA 元素常报顶层
+            // Chrome_WidgetWin_1，而这里拿到的是更深的子窗。同一棵窗口树（祖先/后代）
+            // 就算同一目标；跨应用一律拒绝。
+            const HWND ownerHwnd = HWND(owner);
+            sameTree = ownerHwnd == expected || IsChild(ownerHwnd, expected) ||
+                       IsChild(expected, ownerHwnd);
+        } else {
+            // Chromium / CEF / Electron 的 UIA 元素一律报 hwnd=0（本机实测 DSH：
+            // 整棵树 8 层 hop 全是 None，但 CurrentProcessId 每层都正确）。
+            // 早先这里直接判失败，等于把 Chromium 的 UIA 路整条掐掉——显式要
+            // backend=uia 的调用也永远失败。改用进程 ID 判归属：同一个 pid 才算
+            // 同一目标，跨应用照样拒绝。
+            int ownerPid = 0;
+            if (SUCCEEDED(el->get_CurrentProcessId(&ownerPid)) && ownerPid > 0) {
+                DWORD targetPid = 0;
+                GetWindowThreadProcessId(expected, &targetPid);
+                sameTree = targetPid != 0 &&
+                           static_cast<DWORD>(ownerPid) == targetPid;
             }
-            return false;
+            if (!sameTree && detail != nullptr) {
+                *detail = QStringLiteral("UIA 元素既没有窗口句柄，进程也不匹配");
+            }
         }
-        // 不要求句柄完全相等：Chromium/Electron 里 UIA 元素常报顶层
-        // Chrome_WidgetWin_1，而这里拿到的是更深的子窗。同一棵窗口树（祖先/后代）
-        // 就算同一目标；跨应用一律拒绝。
-        const HWND ownerHwnd = HWND(owner);
-        const bool sameTree = ownerHwnd == expected ||
-                              IsChild(ownerHwnd, expected) ||
-                              IsChild(expected, ownerHwnd);
         if (!sameTree) {
             el->Release();
-            if (detail != nullptr) {
+            if (detail != nullptr && detail->isEmpty()) {
                 *detail = QStringLiteral("UIA 命中的元素不属于目标窗口");
             }
             return false;
@@ -292,6 +304,24 @@ bool postClick(HWND hwnd, const QPoint &pt, const QString &button) {
     return true;
 }
 
+// 目标是不是 Chromium 系（Chrome / Edge / Electron / CEF / WebView2）。
+// 判据只看窗口类名：这一族一律用 Chrome_WidgetWin_* / Chrome_RenderWidgetHostHWND，
+// 与具体应用无关（DSH、Qoder、Slack、VS Code 都是）。自下而上走几层，因为命中的
+// 往往是深层的 Chrome_RenderWidgetHostHWND，而顶层才是 Chrome_WidgetWin_1。
+bool isChromiumWindow(HWND hwnd) {
+    for (int hop = 0; hop < 6 && hwnd != nullptr; ++hop) {
+        wchar_t cls[256] = {0};
+        if (GetClassNameW(hwnd, cls, 255) > 0) {
+            const QString klass = QString::fromWCharArray(cls);
+            if (klass.startsWith(QStringLiteral("Chrome_"))) {
+                return true;
+            }
+        }
+        hwnd = GetParent(hwnd);
+    }
+    return false;
+}
+
 ClickResult fail(const QString &error) {
     ClickResult result;
     result.backend = QStringLiteral("none");
@@ -346,7 +376,27 @@ ClickResult performClick(const Request &req) {
 
     const bool wantUia = req.backend == QStringLiteral("auto") ||
                          req.backend == QStringLiteral("uia");
-    if (wantUia) {
+    // Chromium 系在 auto 下优先走 post（2026-11-17 实测修正）：早先以为「Chromium
+    // 不认合成消息」，逐像素严格比对（前后都先隐藏 Agent 指针）后发现 post 对
+    // Electron/CEF 窗口**是生效的**——点 DSH 的导航项，画面真切了页（7.5% 像素差，
+    // 截图确认）。之前误判是因为点在了已激活的导航项上（空操作）＋指针自身的像素
+    // 混进了比对。
+    //
+    // 反过来，UIA 在 Chromium 上有**把渲染进程打崩**的实测：用 auto 点 DSH 的会话
+    // 切换，DSH 当场弹「应用无法启动或已意外停止」，崩溃日志时间戳与点击同一秒
+    // （crash-2026-11-17T12-59-57-618Z-renderer.log）。它的 UIA 树惰性构建，
+    // Invoke 走内部 a11y 通路，碰到重建中的节点就带走渲染进程。
+    // 结论：post 够用且安全，UIA 是「显式要求才给」的选项。
+    const bool chromium = isChromiumWindow(hwnd);
+    const bool allowUia =
+        wantUia && (!chromium || req.backend == QStringLiteral("uia"));
+    if (wantUia && !allowUia) {
+        qInfo().noquote()
+            << "[cursor] chromium target, auto backend prefers post (uia can"
+               " crash the renderer):"
+            << windowLabel(hwnd);
+    }
+    if (allowUia) {
         QString detail;
         if (invokeAt(automation(), req.pos, hwnd, &detail)) {
             result.ok = true;
@@ -389,8 +439,19 @@ ClickResult performClick(const Request &req) {
     result.backend = QStringLiteral("post");
     // 递到了，但「有没有真触发」在目标程序手里——不撒谎说 verified。
     result.verified = false;
-    result.error = QStringLiteral("已把 %1 点击投递给「%2」，是否生效取决于目标程序")
-                       .arg(req.button, result.target);
+    if (chromium) {
+        // Chromium 系实测认合成消息（Electron/CEF 的导航、按钮都能点），但不保证：
+        // 画布内自绘控件、DirectInput 式处理的界面会自己再判一次。所以 ok 归 ok、
+        // verified 一律 false，让调用方按「递到了」理解，别当「已经点到」。
+        result.error =
+            QStringLiteral("已向「%1」投递 %2 点击（Chromium 系通常能生效，但不保证）；"
+                           "要语义点击可显式传 backend=uia，代价是有把目标渲染进程"
+                           "打崩的风险")
+                .arg(result.target, req.button);
+    } else {
+        result.error = QStringLiteral("已把 %1 点击投递给「%2」，是否生效取决于目标程序")
+                           .arg(req.button, result.target);
+    }
     return result;
 }
 

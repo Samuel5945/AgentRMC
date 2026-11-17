@@ -211,6 +211,32 @@ void checkRealClick() {
 
     DestroyWindow(veil);
     DestroyWindow(probe);
+
+    // ---- Chromium 目标在 auto 下绕开 UIA ----
+    // 2026-11-17 实测：Chromium 的 UIA 树惰性构建，Invoke 碰到重建中的节点会把
+    // 渲染进程打崩（DSH 当场弹「应用无法启动或已意外停止」，崩溃日志与点击同一秒）。
+    // 但同一批实测也证明 **post 对 Electron/CEF 是生效的**（逐像素严格比对 + 截图
+    // 确认页面真切了），所以 auto + Chrome_* → 走 post，不是「点不动」而是「更安全
+    // 且够用」。这里用一个类名以 Chrome_ 开头的探针窗复现判据。
+    HWND chromiumLike = createProbe(L"Chrome_RenderWidgetHostHWND", 260, 260, 180, 120,
+                                    false);
+    if (chromiumLike != nullptr) {
+        SetWindowPos(chromiumLike, HWND_TOPMOST, 260, 260, 180, 120,
+                     SWP_NOACTIVATE | SWP_SHOWWINDOW);
+        pump(120);
+        AgentCursor::Request autoChrome =
+            AgentCursor::parseClick(QJsonObject{{QStringLiteral("x"), 330},
+                                                {QStringLiteral("y"), 320}});
+        const AgentCursor::ClickResult r = AgentCursor::performClick(autoChrome);
+        check(r.backend != QLatin1String("uia"),
+              "auto backend avoids UIA on Chromium windows (renderer crash risk)");
+        check(r.backend == QLatin1String("post"),
+              "auto backend falls through to post on Chromium windows");
+        check(!r.verified, "chromium post click stays unverified");
+        check(r.error.contains(QLatin1String("Chromium")),
+              "chromium post click explains the caveat");
+        DestroyWindow(chromiumLike);
+    }
 }
 
 }  // namespace

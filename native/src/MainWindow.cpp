@@ -96,6 +96,7 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+#include <windowsx.h>  // GET_X_LPARAM / GET_Y_LPARAM（WM_NCHITTEST 取坐标）
 #include <QVector>
 #include <QWindow>
 
@@ -627,7 +628,10 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
     qApp->installEventFilter(this);
     setWindowFlags(Qt::Window | Qt::FramelessWindowHint);
     // 再窄左栏就挤不下了：语音卡 + 遥控器卡是固定高度，列表也需要宽度放时间列。
-    setMinimumSize(940, 620);
+    // 2026-11-17 用户要求「整体界面宽高可拉伸缩小」：下限从 940×620 放到 860×540
+    // （外壳形态下真正撑住的是 workWeb_ 的最小尺寸，两边必须同步改，否则外壳
+    // 会把窗口顶回去）；再小就由页面里的 @media 收窄左栏/收掉品牌名与设备图。
+    setMinimumSize(860, 540);
     // F11 全屏开关：完整界面铺满整块屏幕（含任务栏区），再看时再按一次回来。
     auto *fullscreenShortcut = new QShortcut(QKeySequence(Qt::Key_F11), this);
     connect(fullscreenShortcut, &QShortcut::activated, this, [this] {
@@ -853,7 +857,7 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
         tabs_->hide();
         headerBar_->hide();
         leftBody_->hide();
-        workWeb_->setMinimumSize(1000, 560);
+        workWeb_->setMinimumSize(900, 520);
         outer->addWidget(workWeb_, 1);
     } else {
         grid->addWidget(tabs_, 1);
@@ -4359,6 +4363,37 @@ void MainWindow::handleWebAction(const QJsonObject &action) {
         SendMessageW(reinterpret_cast<HWND>(winId()), WM_NCLBUTTONDOWN, HTCAPTION,
                      MAKELPARAM(pt.x, pt.y));
 #endif
+    } else if (cmd == QStringLiteral("winResize")) {
+#ifdef Q_OS_WIN
+        // 无边框窗 + WebView2 铺满：Chromium 的子窗把 WM_NCHITTEST 一律答成
+        // HTCLIENT，系统认不出「鼠标压在窗口边上」，所以拉边由页面热区发起，
+        // 这里同步转成系统的缩放循环（和 winDrag 同一套路，不能只 PostMessage
+        // SC_SIZE：Chromium 已经抓住鼠标，模态循环起不来，实测窗口不动）。
+        const QString dir = action.value(QStringLiteral("dir")).toString();
+        UINT ht = HTBOTTOMRIGHT;
+        if (dir == QStringLiteral("top")) {
+            ht = HTTOP;
+        } else if (dir == QStringLiteral("bottom")) {
+            ht = HTBOTTOM;
+        } else if (dir == QStringLiteral("left")) {
+            ht = HTLEFT;
+        } else if (dir == QStringLiteral("right")) {
+            ht = HTRIGHT;
+        } else if (dir == QStringLiteral("topleft")) {
+            ht = HTTOPLEFT;
+        } else if (dir == QStringLiteral("topright")) {
+            ht = HTTOPRIGHT;
+        } else if (dir == QStringLiteral("bottomleft")) {
+            ht = HTBOTTOMLEFT;
+        }
+        POINT pt{};
+        GetCursorPos(&pt);
+        ReleaseCapture();
+        SendMessageW(reinterpret_cast<HWND>(winId()), WM_NCLBUTTONDOWN, ht,
+                     MAKELPARAM(pt.x, pt.y));
+#else
+        Q_UNUSED(action);
+#endif
     } else if (cmd == QStringLiteral("listen")) {
         toggleListening();
     } else if (cmd == QStringLiteral("update")) {
@@ -5230,12 +5265,12 @@ void MainWindow::fitToScreen() {
     if (avail.width() <= 0 || avail.height() <= 0) {
         return;
     }
-    // 最小尺寸也得跟着屏走：屏比 940×620（外壳 1000×560）还小时，硬撑最小值会把
+    // 最小尺寸也得跟着屏走：屏比 860×540（外壳 900×520）还小时，硬撑最小值会把
     // 窗口顶出屏幕，顶栏右侧那排（含最小化/最大化/关闭）就永远在屏幕外，点不到。
-    setMinimumSize(qMin(940, avail.width()), qMin(620, avail.height()));
+    setMinimumSize(qMin(860, avail.width()), qMin(540, avail.height()));
     if (workWeb_ != nullptr) {
-        workWeb_->setMinimumSize(qMin(1000, avail.width()),
-                                 qMin(560, avail.height()));
+        workWeb_->setMinimumSize(qMin(900, avail.width()),
+                                 qMin(520, avail.height()));
     }
     if (isFullScreen()) {
         // 全屏本来就铺满，别动几何；边界仍要重喂一次（子窗可能停在旧尺寸）。
@@ -6155,6 +6190,53 @@ bool MainWindow::nativeEvent(const QByteArray &eventType, void *message,
     static const UINT wakeMessage =
         RegisterWindowMessageW(L"AgentRMC.Native.Wake");
     auto *msg = static_cast<MSG *>(message);
+    // 无边框窗的边缘缩放：外壳形态下 WebView2 铺满整窗，Chromium 的子窗把命中测试
+    // 全答成 HTCLIENT（实测），顶层的这条消息根本收不到——那条路走页面的 .rz 热区
+    // + winResize。这里是**回退形态**（AGENTRMC_WORKWEB=0 或 WebView2 运行库缺失）
+    // 的保障：Qt 控件自己铺满，没人抢命中测试，就在顶层把 5px 边框认成缩放区。
+    if (msg != nullptr && msg->message == WM_NCHITTEST && workWeb_ == nullptr) {
+        const POINT pt{GET_X_LPARAM(msg->lParam), GET_Y_LPARAM(msg->lParam)};
+        RECT win{};
+        if (GetWindowRect(reinterpret_cast<HWND>(winId()), &win)) {
+            const int border = 5;
+            const bool left = pt.x >= win.left && pt.x < win.left + border;
+            const bool right = pt.x < win.right && pt.x >= win.right - border;
+            const bool top = pt.y >= win.top && pt.y < win.top + border;
+            const bool bottom = pt.y < win.bottom && pt.y >= win.bottom - border;
+            if (top && left) {
+                *result = HTTOPLEFT;
+                return true;
+            }
+            if (top && right) {
+                *result = HTTOPRIGHT;
+                return true;
+            }
+            if (bottom && left) {
+                *result = HTBOTTOMLEFT;
+                return true;
+            }
+            if (bottom && right) {
+                *result = HTBOTTOMRIGHT;
+                return true;
+            }
+            if (left) {
+                *result = HTLEFT;
+                return true;
+            }
+            if (right) {
+                *result = HTRIGHT;
+                return true;
+            }
+            if (top) {
+                *result = HTTOP;
+                return true;
+            }
+            if (bottom) {
+                *result = HTBOTTOM;
+                return true;
+            }
+        }
+    }
     if (msg != nullptr && wakeMessage != 0 && msg->message == wakeMessage) {
         wake();
         *result = 0;

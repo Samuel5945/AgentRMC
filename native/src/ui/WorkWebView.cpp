@@ -700,12 +700,17 @@ QString WorkWebView::htmlFor(const QString &stateJson) const {
  .row.sel{background:var(--a36)}
  .row.msel{background:var(--w10);border-radius:8px}
  .rowacts{position:absolute;right:10px;top:50%;transform:translateY(-50%);
-   display:flex;gap:6px}
- .icobtn{width:32px;height:32px;border-radius:8px;border:1px solid var(--w18);
-   background:var(--w6);color:var(--text-dim);font-size:15px;line-height:1;
+   display:flex;gap:4px}
+ /* 行内两键：回到 Agent = 箭头进窗口（切到宿主窗口），标为已处理 = 对勾。
+     去描边、16px 图标、和顶栏同一档 7px 圆角，两处图标语言统一
+     （2026-11-17 用户：看看回到 Agent 和标记已处理怎么优化下图标）。
+     常态不做降透明处理：0.55~0.72 实测在 1x 屏上几乎看不见，得悬停才找得到。 */
+ .icobtn{width:30px;height:30px;border-radius:7px;border:0;background:transparent;
+   color:var(--muted);display:flex;align-items:center;justify-content:center;
    padding:0;cursor:pointer}
- .icobtn:hover{background:var(--a36);color:var(--text)}
- .icobtn.ack:hover{background:var(--ok);border-color:var(--ok);color:#fff}
+ .icobtn svg{width:16px;height:16px;display:block;pointer-events:none}
+ .icobtn:hover{background:var(--w10);color:var(--accent)}
+ .icobtn.ack:hover{background:var(--ok);color:#fff}
  .bar{position:absolute;left:9px;top:12px;width:3px;height:32px;border-radius:2px}
  .l1{display:flex;align-items:baseline;gap:8px;white-space:nowrap;overflow:hidden}
  .name{font-weight:600;font-size:var(--f12);color:var(--text)}
@@ -814,6 +819,13 @@ QString WorkWebView::htmlFor(const QString &stateJson) const {
  .btn.primary:hover{background:var(--accent-hover)}
  .btn:disabled{color:var(--faint);background:transparent;border-color:var(--w10)}
  .btn.primary:disabled{background:var(--w8);border-color:transparent}
+ /* 窄窗时按钮自己收边距，别把左栏头部那排挤成折行（实测 250px 左栏 +
+    「朗读最近/试一句/遥控器」三颗会各自竖排）。 */
+ @media (max-width:1040px){
+   .btn{padding:6px 9px}
+   .lhead .hbtn{padding:2px 4px}
+   .vdock .btn{padding:6px 8px}
+ }
  .placeholder{flex:1 1 auto;padding:40px;text-align:center;color:var(--muted);
    font-size:var(--f12)}
 /* 派发页：Agent 胶囊 + 项目分组 + 会话行；组可折叠，归档/未分类任务单列。 */
@@ -980,10 +992,17 @@ QString WorkWebView::htmlFor(const QString &stateJson) const {
    color:var(--on-accent);font-weight:700;font-size:var(--f12);
    display:flex;align-items:center;justify-content:center;flex:0 0 22px}
  .brand{font-size:var(--f13);font-weight:700;color:var(--text)}
- .pill{display:flex;align-items:center;gap:6px;padding:3px 11px 3px 9px;
-   border-radius:13px;border:1px solid var(--w14);background:var(--w6);
-   color:var(--muted);font-size:var(--f11);cursor:default}
- .pill.on{color:var(--ok);font-weight:600}
+ /* 监听态只留一颗点（2026-11-17 用户：监听中只保留绿点）：胶囊的边框和「监听中」
+    三个字都是常驻噪音，而顶栏右侧的节奏应该由图标主导。点还是开关本身——
+    点一下开始/停止，悬停给 tooltip，无障碍名在 aria-label 上。
+    点了以外的地方不再是 6px 小点：8px + 一圈淡绿光晕，静默时也能看出「在听」。 */
+ .pill{width:28px;height:26px;display:flex;align-items:center;
+   justify-content:center;border:0;border-radius:7px;background:transparent;
+   padding:0;flex:0 0 28px;cursor:default}
+ .pill:hover{background:var(--w10)}
+ .pill .dot{width:8px;height:8px;border-radius:50%;background:var(--line);
+   flex:0 0 8px;transition:background .12s,box-shadow .12s}
+ .pill .dot.on{background:var(--ok);box-shadow:0 0 0 3px rgba(63,185,80,.16)}
  .dot{width:6px;height:6px;border-radius:3px;background:var(--line);flex:0 0 6px}
  .dot.on{background:var(--ok)}
  .hbtn{border:0;background:transparent;color:var(--text-dim);
@@ -992,10 +1011,29 @@ QString WorkWebView::htmlFor(const QString &stateJson) const {
  .hbtn.boxed{border:1px solid var(--w18);border-radius:8px;padding:4px 10px}
  .hbtn.boxed:hover{background:var(--w8);color:var(--text)}
  .hbtn:disabled{color:var(--faint)}
- .winbtn{width:28px;height:24px;border:0;border-radius:6px;background:transparent;
-   color:var(--text-dim);font-size:var(--f11);cursor:default;flex:0 0 28px}
+ /* 顶栏右侧两排键（2026-11-17 用户：能图标化的就图标化，大小要和谐）：
+    检查更新/主题/新手引导从文字键改成图标键，和窗口键共用 28×26 网格、7px 圆角、
+    16px 图标（currentColor，跟主题与浅色模式）、同一档悬停底。文字按钮排一排
+    宽度差太多，一列看过去节奏是断的；图标等宽以后整排才齐。
+    类名用 topico 不用 icobtn —— 后者是列表行内的动作键，同名会互相覆盖。 */
+ .hgroup{display:flex;align-items:center;gap:2px;margin-left:4px}
+ .wgroup{display:flex;align-items:center;gap:2px;margin-left:8px}
+ .topico{width:28px;height:26px;border:0;border-radius:7px;background:transparent;
+   color:var(--text-dim);display:flex;align-items:center;justify-content:center;
+   flex:0 0 28px;padding:0;cursor:default}
+ .topico svg{width:16px;height:16px;display:block;pointer-events:none}
+ .topico:hover{background:var(--w10);color:var(--text)}
+ .topico:active{background:var(--w14)}
+ /* 新手引导不再画外框（2026-11-17 用户：问号外面矩形框多余）：三颗动作键完全同构。 */
+ .winbtn{width:28px;height:26px;border:0;border-radius:7px;background:transparent;
+   color:var(--text-dim);display:flex;align-items:center;justify-content:center;
+   cursor:default;flex:0 0 28px;padding:0}
+ .winbtn svg{width:16px;height:16px;display:block;pointer-events:none}
  .winbtn:hover{background:var(--w10);color:var(--text)}
  .winbtn.close:hover{background:var(--danger);color:#fff}
+ .winbtn .grest{display:none}
+ .winbtn.maxed .gmax{display:none}
+ .winbtn.maxed .grest{display:block}
  #main{flex:1 1 auto;min-height:0;display:flex;gap:12px;padding:12px 14px 14px}
  #left{flex:0 0 286px;width:286px;min-height:0;display:flex;flex-direction:column}
  #lremote{flex:1;min-height:0;display:flex;flex-direction:column;gap:12px}
@@ -1007,7 +1045,7 @@ QString WorkWebView::htmlFor(const QString &stateJson) const {
  #lvoice{flex:1 1 auto}
  .lhead{display:flex;align-items:center;gap:8px;flex:0 0 auto}
  .ltitle{font-size:var(--f11);font-weight:700;color:var(--muted);
-   letter-spacing:1px}
+   letter-spacing:1px;white-space:nowrap;flex:0 0 auto}
  .lhead .spacer{margin-left:auto}
  .vstate{border:1px solid var(--w14);background:var(--w6);border-radius:10px;
    padding:8px;font-size:var(--f11);color:var(--text-dim);min-height:48px;
@@ -1081,17 +1119,62 @@ QString WorkWebView::htmlFor(const QString &stateJson) const {
    flex-direction:column}
  #right .tabs{padding:0 2px}
  #right .card{margin:10px 0 0}
+ /* ---------- 无边框窗口的边缘拖拽热区（2026-11-17 用户：整体界面宽高可拉伸缩小） ----------
+    WebView2 铺满整窗，Chromium 的子窗把 WM_NCHITTEST 全吃成 HTCLIENT，系统认不出
+    「鼠标在窗口边上」，所以拉边改由页面这层热区发起：按下就发 winResize，Qt 那边
+    转成 WM_NCLBUTTONDOWN(HTxxx) 进系统缩放循环。5px 细条不挡点击（顶栏按钮在 8px
+    内边距之下），四角 10px 给斜向缩放。 */
+ .rz{position:fixed;z-index:90}
+ .rz-t{left:0;right:0;top:0;height:5px;cursor:ns-resize}
+ .rz-b{left:0;right:0;bottom:0;height:5px;cursor:ns-resize}
+ .rz-l{top:0;bottom:0;left:0;width:5px;cursor:ew-resize}
+ .rz-r{top:0;bottom:0;right:0;width:5px;cursor:ew-resize}
+ .rz-tl{left:0;top:0;width:10px;height:10px;cursor:nwse-resize}
+ .rz-tr{right:0;top:0;width:10px;height:10px;cursor:nesw-resize}
+ .rz-bl{left:0;bottom:0;width:10px;height:10px;cursor:nesw-resize}
+ .rz-br{right:0;bottom:0;width:10px;height:10px;cursor:nwse-resize}
+ /* 窗口拉窄/拉矮时先让布局让步：左栏收窄、品牌名收掉、遥控器那颗设备图收掉
+    （图例还留着，功能没少）；页签在更窄时横向可滚，不换行不裁切。 */
+ .tabs{overflow-x:auto;overflow-y:hidden;scrollbar-width:none}
+ .tabs::-webkit-scrollbar{width:0;height:0}
+ @media (max-width:1040px){
+   /* 左栏收到 268px：再窄 lhead 那排（语音 + 朗读最近/试一句/遥控器）就要折行，
+     底部那排下拉也会被挤成「Sens」（实测 212/250px 都踩到）。 */
+   #left{flex:0 1 268px;min-width:268px}
+   .brand{display:none}
+   .tab{padding:7px 10px}
+   .lhead{gap:6px}
+ }
+ /* 头部那排按钮永不折行：窄窗宁可让标题让位，也不要把「语音」竖排。 */
+ .lhead{flex-wrap:nowrap;white-space:nowrap;min-width:0}
+ @media (max-height:640px){
+   .rdev{display:none}
+   #rcard{max-height:none}
+   #topbar{flex:0 0 40px;padding:6px 10px 2px 14px}
+ }
 </style></head><body>
+<div class="rz rz-t" data-dir="top"></div>
+<div class="rz rz-b" data-dir="bottom"></div>
+<div class="rz rz-l" data-dir="left"></div>
+<div class="rz rz-r" data-dir="right"></div>
+<div class="rz rz-tl" data-dir="topleft"></div>
+<div class="rz rz-tr" data-dir="topright"></div>
+<div class="rz rz-bl" data-dir="bottomleft"></div>
+<div class="rz rz-br" data-dir="bottomright"></div>
 <div id="topbar">
   <span class="brandlogo">A</span><span class="brand">AgentRMC</span>
   <span class="spacer" style="margin-left:auto"></span>
-  <button class="pill" id="listenPill" title="监听开关：点击开始 / 停止监听"><span class="dot" id="listenDot"></span><span id="listenText">未监听</span></button>
-  <button class="hbtn" id="hUpdate" title="检查是否有新版本">检查更新</button>
-  <button class="hbtn" id="hTheme" title="切换主题、调卡片不透明度与背景压暗">主题</button>
-  <button class="hbtn boxed" id="hGuide" title="分步引导：没有遥控器怎么用、怎么配对、怎么接入 Agent">新手引导</button>
-  <button class="winbtn" id="wMin">—</button>
-  <button class="winbtn" id="wMax">□</button>
-  <button class="winbtn close" id="wClose">✕</button>
+  <button class="pill" id="listenPill" title="监听开关：点击开始 / 停止监听" aria-label="监听开关"><span class="dot" id="listenDot"></span></button>
+  <span class="hgroup">
+  <button class="topico" id="hUpdate" title="检查更新：看看有没有新版本" aria-label="检查更新"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><g transform="translate(12 12) scale(0.8) translate(-12 -12)" stroke-width="2.4"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></g></svg></button>
+  <button class="topico" id="hTheme" title="主题与外观：换主题、调卡片不透明度与背景压暗" aria-label="主题"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M20.1 14.9A8.6 8.6 0 1 0 16.3 19.5Q14.2 14.2 20.1 14.9Z"/><circle cx="8.6" cy="10.2" r="1.05" fill="currentColor" stroke="none"/><circle cx="12" cy="7.8" r="1.05" fill="currentColor" stroke="none"/><circle cx="15.4" cy="10.2" r="1.05" fill="currentColor" stroke="none"/></svg></button>
+  <button class="topico" id="hGuide" title="新手引导：没有遥控器怎么用、怎么配对、怎么接入 Agent" aria-label="新手引导"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.6"/><path d="M9.5 9.7a2.6 2.6 0 0 1 5.2.8c0 1.8-2.6 2.2-2.6 3.9"/><circle cx="12" cy="17.3" r="0.95" fill="currentColor" stroke="none"/></svg></button>
+  </span>
+  <span class="wgroup">
+  <button class="winbtn" id="wMin" title="最小化" aria-label="最小化"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M6 12h12"/></svg></button>
+  <button class="winbtn" id="wMax" title="最大化 / 还原（双击顶栏）" aria-label="最大化 / 还原"><svg class="gmax" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"><rect x="5.6" y="5.6" width="12.8" height="12.8" rx="2"/></svg><svg class="grest" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="8.6" y="8.6" width="9.8" height="9.8" rx="2"/><path d="M6.1 15.4V8.1a2 2 0 0 1 2-2h7.3"/></svg></button>
+  <button class="winbtn close" id="wClose" title="关闭" aria-label="关闭"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M6.6 6.6l10.8 10.8M17.4 6.6L6.6 17.4"/></svg></button>
+  </span>
 </div>
 <div id="main">
 <div id="left">
@@ -1118,8 +1201,8 @@ QString WorkWebView::htmlFor(const QString &stateJson) const {
     <div class="vhist" id="vHist"></div>
     <div class="vempty" id="vEmpty">说完的话会攒在这里</div>
     <div class="vdock">
-      <div class="vrow"><input type="text" id="vTyped" placeholder="打字说一句话，Enter 发送"><button class="btn" id="vSend">发送</button></div>
-      <div class="vrow"><select id="vBackend2" style="flex:1 1 auto;min-width:0"></select><button class="btn" id="chatBtn" style="flex:0 0 auto" title="桌宠对话模式：说话发给模型聊，回复用 TTS 念出来">对话</button><button class="btn" id="ttsBtn" style="flex:0 0 auto" title="语音反馈：Base URL / API Key / TTS 模型自填">语音</button><button class="btn" id="vSettings2" style="flex:0 0 auto" title="模型设置：识别模型 / 云端 ASR / 桌宠对话">模型</button></div>
+      <div class="vrow"><input type="text" id="vTyped" placeholder="说一句话 · Enter 发送"><button class="btn" id="vSend">发送</button></div>
+      <div class="vrow"><select id="vBackend2" style="flex:1 1 auto"></select><button class="btn" id="chatBtn" style="flex:0 0 auto" title="桌宠对话模式：说话发给模型聊，回复用 TTS 念出来">对话</button><button class="btn" id="ttsBtn" style="flex:0 0 auto" title="语音反馈：Base URL / API Key / TTS 模型自填">语音</button><button class="btn" id="vSettings2" style="flex:0 0 auto" title="模型设置：识别模型 / 云端 ASR / 桌宠对话">模型</button></div>
     </div>
   </div>
 </div>
@@ -1519,12 +1602,19 @@ function row(it){
   // stopPropagation：别把这次点击变成进聊天页。
   const acts=document.createElement('div');acts.className='rowacts';
   const raiseB=document.createElement('button');raiseB.className='icobtn';
-  raiseB.textContent='↗';raiseB.title='回到 Agent（没开着会先启动宿主）';
+  // 「回到 Agent」= 箭头进窗口（不是外链的「方框 + 往外的箭头」：那是「在浏览器
+  // 里打开」的语义）。框里加一条横贯的标题栏，16px 下才读得出是「某个应用的
+  // 窗口」而不是空白方块；箭头尖和框留 0.4 单位缝，贴住会糊成一团（8x 样张比对）。
+  raiseB.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="9.4" y="4.2" width="10.6" height="15.6" rx="2.6"/><path d="M9.4 8.8h10.6"/><path d="M2.6 12h6.2"/><path d="M5.8 9.2L9 12l-3.2 2.8"/></svg>';
+  raiseB.title='回到 Agent（没开着会先启动宿主）';
+  raiseB.setAttribute('aria-label','回到 Agent');
   raiseB.onclick=(e)=>{e.stopPropagation();
     const dd=STATE.dispatch||{};
     post((dd.noticeId===it.id && dd.noticeExe==='ZCode.exe')?'raiseZcode':'open',it.id);};
   const ackB=document.createElement('button');ackB.className='icobtn ack';
-  ackB.textContent='✓';ackB.title='标为已处理';
+  ackB.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5.2 12.4l4.3 4.3L18.8 7.5"/></svg>';
+  ackB.title='标为已处理';
+  ackB.setAttribute('aria-label','标为已处理');
   ackB.onclick=(e)=>{e.stopPropagation();post('ack',it.id);};
   acts.append(raiseB,ackB);
   el.append(acts);
@@ -2357,10 +2447,14 @@ function render(){
 // ---------- 整窗 chrome：顶栏 ----------
 function renderTop(){
   const on=!!HEADER.listening;
+  // 监听态只画一颗点（胶囊与文字已去掉）：tooltip 跟着状态说清「点一下会发生什么」。
   $('listenPill').className='pill'+(on?' on':'');
   $('listenDot').className='dot'+(on?' on':'');
-  $('listenText').textContent=on?'监听中':'未监听';
-  $('wMax').textContent=HEADER.maximized?'❐':'□';
+  const pill=$('listenPill');
+  pill.title=on?'监听中：点一下停止监听':'未监听：点一下开始监听';
+  pill.setAttribute('aria-label',on?'监听中，点击停止':'未监听，点击开始');
+  // 最大化/还原是同一颗键上的两个图标（.gmax / .grest），切 class 而不是换字。
+  $('wMax').classList.toggle('maxed',!!HEADER.maximized);
 }
 // ---------- 左栏：下拉原地更新，开着下拉时不被 5 秒刷新关掉 ----------
 function setSel(el,opts,value,enabled){
@@ -2503,6 +2597,15 @@ $('hGuide').onclick=()=>postObj({cmd:'guide'});
 $('wMin').onclick=()=>postObj({cmd:'winMin'});
 $('wMax').onclick=()=>postObj({cmd:'winMax'});
 $('wClose').onclick=()=>postObj({cmd:'winClose'});
+// 边缘热区：按下就把方向交给 Qt 进系统缩放循环（鼠标抓住窗口边、跟着走）。
+// 只在主按钮按下时发；触屏/右键不动。
+document.querySelectorAll('.rz').forEach(el=>{
+  el.addEventListener('mousedown',e=>{
+    if(e.button!==0) return;
+    e.preventDefault();e.stopPropagation();
+    postObj({cmd:'winResize',dir:el.dataset.dir});
+  });
+});
 $('topbar').addEventListener('mousedown',e=>{
   if(e.target.closest('button,select')) return;
   postObj({cmd:'winDrag'});});

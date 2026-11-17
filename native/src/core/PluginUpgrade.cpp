@@ -462,7 +462,10 @@ QString installSentence(const QString &appDir) {
                "- DeepSeek Harness：它不是 zip，是 %1 里的 deepseek-harness 子目录 —— "
                "用 plugin_manager 的 install_bundle，target 给 %4；"
                "装完必须重启 DeepSeek Harness（Host 换新代码只能重启）。\n"
-               "装好并启用之后，在我等确认、等选方案或任务结束时用桌宠提醒我。")
+               "装好并启用之后，在我等确认、等选方案或任务结束时用桌宠提醒我。"
+               "另外它带一根「Agent 专用指针」：需要指给我看、或替我点某个位置时，"
+               "用 cursor_point 工具（坐标用物理像素）——全程不动我的系统鼠标，"
+               "我还能同时用鼠标。")
         .arg(root, version.isEmpty() ? QStringLiteral("未知") : version, zip,
              bundle);
 }

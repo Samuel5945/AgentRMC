@@ -1328,6 +1328,15 @@ QString WorkWebView::htmlFor(const QString &stateJson) const {
       <div id="lanDevices"></div>
     </div>
   </div>
+  <div class="lanbox" id="curBox">
+    <div class="lanhead">
+      <span class="sectitle">Agent 指针</span>
+      <span class="swlabel" id="curState">已开启</span>
+      <span class="spacer"></span>
+      <button class="sw" id="curSw" title="所有接入本机的 Agent 共用一根自绘指针：指哪点哪，全程不动你的系统鼠标。关掉后 /cursor/* 一律拒绝（409），覆盖层也不再画。默认开——它只画不动真光标，开着不影响你；但「本机任何程序都能让指针真点下去」这件事该有总闸。"></button>
+    </div>
+    <div class="mutedline" style="margin-top:6px" id="curHint">Agent 可以在屏幕上指出它要操作的位置并点击，你的鼠标不动、随时能同时用。</div>
+  </div>
   <div class="wtable" id="sysWorkers"></div>
   <div class="foot" style="border-top:0;padding:8px 0 4px">
     <button class="btn" id="sysRefresh">刷新</button>
@@ -1690,6 +1699,19 @@ function renderSystem(){
     const d=document.createElement('span'); d.textContent=w.last||'—';
     row.append(n,st,a,b,c,d); t.append(row);});
   renderLan(s.lan||{});
+  renderCursor(s.cursor||{});
+}
+// Agent 指针总开关：默认开。关掉后 /cursor/* 一律 409（原生端判据），
+// 这里只是把开关状态画出来 + 发 cursorToggle。
+function renderCursor(c){
+  const sw=$('curSw');
+  const on=c.enabled!==false;   // 缺省当开：老原生端没有这个字段
+  sw.classList.toggle('on',on);
+  sw.onclick=()=>postObj({cmd:'cursorToggle',on:!on});
+  $('curState').textContent=on?'已开启':'已关闭';
+  $('curHint').textContent=on
+    ?'Agent 可以在屏幕上指出它要操作的位置并点击，你的鼠标不动、随时能同时用。'
+    :'已关闭：Agent 调 /cursor/* 会被拒绝。开着只画一根自绘指针，不会移动你的鼠标。';
 }
 // 手机访问卡片：开关/网址/配对二维码/设备吊销。配对码只在这张卡里出现，
 // 不下发手机（/m/state 里没有 lan 块）。二维码内容 = 首个 LAN 网址 + #pair=码。

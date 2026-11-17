@@ -1053,10 +1053,18 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
         // Agent 专用虚拟指针：所有接入本桥的 Agent 共用一根自绘指针，从移动到
         // 点击全程不动系统光标（实现见 core/AgentCursor / ui/CursorOverlay）。
         bridge->setCursorStateProvider([this] {
+            // 关掉开关时连状态也不给（visible 恒 false），别让 /cursor/state 看起来
+            // 还活着——调用方据此就能判断「这条通道被用户关了」。
+            QJsonObject state = cursor_ != nullptr ? cursor_->stateJson()
+                                                   : QJsonObject{};
+            if (!cursorEnabled()) {
+                state = QJsonObject{{QStringLiteral("enabled"), false},
+                                    {QStringLiteral("visible"), false}};
+            } else {
+                state.insert(QStringLiteral("enabled"), true);
+            }
             return QString::fromUtf8(
-                QJsonDocument(cursor_ != nullptr ? cursor_->stateJson()
-                                                 : QJsonObject{})
-                    .toJson(QJsonDocument::Compact));
+                QJsonDocument(state).toJson(QJsonDocument::Compact));
         });
         bridge->setCursorHandler(
             [this](const QJsonObject &payload) { return onCursorAction(payload); });
@@ -2652,6 +2660,8 @@ QJsonObject MainWindow::systemState() {
         {QStringLiteral("problemsOk"), problems.isEmpty()},
         {QStringLiteral("workers"), workerRows},
         {QStringLiteral("lan"), lanState()},
+        // Agent 指针总开关的当前值：外壳系统页那颗开关与 Qt 老界面共用。
+        {QStringLiteral("cursor"), QJsonObject{{QStringLiteral("enabled"), cursorEnabled()}}},
     };
 }
 
@@ -4257,6 +4267,8 @@ void MainWindow::handleWebAction(const QJsonObject &action) {
     } else if (cmd == QStringLiteral("lanToggle")) {
         // 手机访问开关：桌面专用命令，不在 LAN 白名单里（手机不能自己开自己）。
         setLanEnabled(action.value(QStringLiteral("on")).toBool());
+    } else if (cmd == QStringLiteral("cursorToggle")) {
+        setCursorEnabled(action.value(QStringLiteral("on")).toBool());
     } else if (cmd == QStringLiteral("lanPair")) {
         ensureLanServer();
         lan_->beginPairing();
@@ -4986,6 +4998,14 @@ QVector<GuideSection> guideSections() {
                              "（它就是目录市场源）；"
                              "DeepSeek Harness 用 plugin_manager 装 "
                              "plugins 里的 deepseek-harness 子目录")},
+          {QString::fromUtf8("Agent 专用指针"),
+           QString::fromUtf8("插件自带一根「Agent 自己的」指针：Agent 可以在屏幕上指出"
+                             "它要操作的位置，也能真替你点一下，而**全程不动你的系统鼠标**"
+                             "——你的鼠标照样能用，人机可以同时操作。"
+                             "工具名 cursor_point（Qoder/ZCode/WorkBuddy 是 "
+                             "mcp__agentrmc__cursor_point，DSH 是 cursor_point），"
+                             "坐标用物理像素。系统页有一顆总开关：关掉后 Agent 调它会被"
+                             "拒绝（默认开着，因为它只画不动真光标）")},
           {QString::fromUtf8("怎么升级"),
            QString::fromUtf8("Qoder 把上传的包记成本地插件，插件页那个「更新」按钮不拉新包，"
                              "而且 Qoder 和 Qoder CN 是两个独立 app、各装各的。"
@@ -5896,6 +5916,27 @@ void MainWindow::onVoiceTranscribed(const QString &text, int costMs) {
     refreshVoiceUi();
 }
 
+// Agent 指针总开关：默认开（它只画、不动真光标，开着不影响用户），但「能让本机
+// 任何进程在屏幕上画一根指针并真点下去」这件事该有总闸。关掉 = /cursor/* 一律 409
+// + 覆盖层立刻淡出 + 不再建。
+bool MainWindow::cursorEnabled() const {
+    return store_ != nullptr && store_->uiBool(QStringLiteral("agent_cursor"), true);
+}
+
+void MainWindow::setCursorEnabled(bool on) {
+    store_->setUiBool(QStringLiteral("agent_cursor"), on);
+    if (!on && cursor_ != nullptr) {
+        cursor_->hide(200);  // 关闸时屏幕立刻干净，不等 hold 超时
+    }
+    appendEvent(QStringLiteral("status"), QString(), QString(),
+                on ? QString::fromUtf8("Agent 指针已开启（所有 Agent 可指、可点）")
+                   : QString::fromUtf8("Agent 指针已关闭（/cursor/* 一律拒绝）"),
+                0);
+    if (workWeb_ != nullptr) {
+        workWeb_->refresh();  // 系统页那颗开关的状态跟着变
+    }
+}
+
 QJsonObject MainWindow::onCursorAction(const QJsonObject &payload) {
     const QString action = payload.value(QStringLiteral("action")).toString();
     if (cursor_ == nullptr) {
@@ -5903,6 +5944,16 @@ QJsonObject MainWindow::onCursorAction(const QJsonObject &payload) {
                            {QStringLiteral("code"), 503},
                            {QStringLiteral("error"),
                             QStringLiteral("指针服务没起（截图/无托盘模式）")}};
+    }
+    // 开关（ui.agent_cursor，默认开）：关掉后连 state 都不给——不是只挡住画面，
+    // 是让任何本机进程都没法把指针叫出来。默认开是因为它「只画不动真光标」，
+    // 开着不会影响用户；但能真点下去这件事该有个总闸。
+    if (!cursorEnabled()) {
+        return QJsonObject{
+            {QStringLiteral("ok"), false},
+            {QStringLiteral("code"), 409},
+            {QStringLiteral("error"),
+             QStringLiteral("Agent 指针已在设置里关闭（系统页 → Agent 指针）")}};
     }
     if (action == QStringLiteral("hide")) {
         const int fade = payload.value(QStringLiteral("fade_ms")).toInt(260);

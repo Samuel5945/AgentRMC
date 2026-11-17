@@ -240,6 +240,10 @@ private:
     QJsonObject onBridgeCommand(const QJsonObject &body);
     // Agent 专用虚拟指针的 HTTP 动作：move / click / hide / show。
     QJsonObject onCursorAction(const QJsonObject &payload);
+    // Agent 指针总开关（ui.agent_cursor，默认开）：关掉后 /cursor/* 一律 409，
+    // 覆盖层也不画。系统页那颗开关与这里同一份判据。
+    bool cursorEnabled() const;
+    void setCursorEnabled(bool on);
     QJsonArray supportedDispatchExes() const;
     QString itemIdForSession(const QString &sessionId) const;
     void setVoiceStatus(const QString &detail, const QString &color,

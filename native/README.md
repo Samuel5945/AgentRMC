@@ -121,10 +121,14 @@ call "C:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\v
 
 | 端点 | 作用 |
 |---|---|
-| `GET /cursor/state` | 指针状态：`visible` / `agent` / `x` / `y` / `color` / `clicks` |
+| `GET /cursor/state` | 指针状态：`enabled` / `visible` / `agent` / `x` / `y` / `color` / `clicks` / `last_click` |
 | `POST /cursor/move` | `{"x","y","duration_ms","agent","hold_ms"}` 挪指针，不点 |
 | `POST /cursor/click` | 上面全部 + `{"button":"left\|right\|middle\|double","backend":"auto\|uia\|post"}` |
 | `POST /cursor/hide` / `show` | 收起（`fade_ms`）/ 唤出 |
+
+**总开关**：系统页 →「Agent 指针」（`ui.agent_cursor`，默认开）。关掉后 `/cursor/*`
+一律回 `409`，`/cursor/state` 只回 `{"enabled":false,"visible":false}`——不是只挡画面，
+是让本机任何程序都没法把指针叫出来。开着的时候它只画、不动系统光标，不影响用户。
 
 坐标一律**物理像素**（与截图、`GetCursorPos` 同一套数）。逐屏 DPI 换算在覆盖层内部
 做：按设备名把 `EnumDisplayMonitors` 的物理矩形和 Qt 的逻辑矩形对齐，多屏混合缩放
@@ -132,11 +136,22 @@ call "C:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\v
 
 返回 `{"ok","moved","clicked","backend","verified","target"}`。`backend=uia` 才算真的
 语义调用成功（`verified=true`）；`backend=post` 只保证「消息递到了目标窗口」，目标
-程序认不认（Chromium 系、DirectInput 游戏、管理员窗口）不归我们保证，所以
-`verified` 一律 `false`。**点不到就报 `ok:false` + 409，绝不偷偷改用真光标。**
+认不认（画布内自绘控件、DirectInput 游戏、管理员窗口）不归我们保证，所以 `verified`
+一律 `false`。**点不到就报 `ok:false` + 409，绝不偷偷改用真光标。**
 
-给 Agent 用的命令行入口 `native\tools\agent-cursor.ps1`（`%USERPROFILE%\.agents\skills\agent-cursor\`
-里有一份，供其它工具链直接引用），任何能起 shell 的 Agent 都能调：
+**Chromium 系（DSH / Qoder / Slack / VS Code 这类 Electron、CEF）在 `auto` 下走 post**：
+实测 post 对它们**是生效的**（点 DSH 导航项，逐像素严格比对 7.3%、截图确认真切了页），
+而 UIA 的 `Invoke` 有**把渲染进程打崩**的实测（DSH 当场弹「应用无法启动或已意外停止」，
+崩溃日志与点击同一秒——它的 UIA 树惰性构建，Invoke 碰到重建中的节点就带走渲染进程）。
+所以 `auto` 主动避开 UIA，只有显式传 `backend=uia` 才走语义调用（风险自负）。
+
+给 Agent 用的入口有两个，任何能起 shell 的 Agent 都能调：
+
+1. **工具**（装了联动插件就有）：Qoder / Qoder CN / ZCode / WorkBuddy 是
+   `mcp__agentrmc__cursor_point`，DSH 是 `cursor_point`；参数 `x`/`y`（物理像素）、
+   `click`、`button`、`hold_ms`。工具内部会替你回读点击回执。
+2. **命令行** `native\tools\agent-cursor.ps1`（技能包
+   `plugins/agentrmc-bridge/skills/agent-cursor/scripts/cursor.ps1` 是同一份）：
 
 ```powershell
 pwsh -File native\tools\agent-cursor.ps1 click 1200 640 -Agent DSH

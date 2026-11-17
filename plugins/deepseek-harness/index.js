@@ -186,11 +186,20 @@ const SKILL_DESCRIPTION =
   '（回复以问句收尾）、一轮结束四类提醒' +
   '由插件自动完成，不要用工具重复发。';
 
+// 第二个技能：Agent 专用指针（指给用户看 / 真点一下，不动系统鼠标）。
+// 和 pet 技能分开注册：它是另一件事，描述里不该混进「桌宠」的触发词。
+const CURSOR_SKILL_NAME = 'agent-cursor';
+const CURSOR_SKILL_DESCRIPTION =
+  '用 AgentRMC 的「Agent 专用指针」把要操作的位置指给用户看、并真点击，' +
+  '全程不移动用户的系统鼠标。当需要指着屏幕上某处说明、演示 GUI 操作、' +
+  '点按钮/菜单/列表项，或用户抱怨「Agent 一动手我就用不了鼠标」时使用。' +
+  '工具是 cursor_point（坐标用物理像素）。';
+
 /** 读 skill 正文：去掉 SKILL.md 的 YAML frontmatter（元数据已经在 description 里）。 */
-function readSkillBody() {
+function readSkillBody(name = SKILL_NAME) {
   try {
     const text = fs.readFileSync(
-      path.join(PACKAGE_ROOT, 'skills', SKILL_NAME, 'SKILL.md'),
+      path.join(PACKAGE_ROOT, 'skills', name, 'SKILL.md'),
       'utf8',
     );
     return text.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/, '').trim();
@@ -1006,6 +1015,105 @@ export function apply(ctx, rawConfig) {
         return '已汇报 stage=' + stage + '（HTTP ' + res.status + '）' + (res.body || '');
       },
     }),
+    makeTool({
+      name: 'cursor_point',
+      description:
+        '用 AgentRMC 的「Agent 专用指针」把要操作的位置指给用户看，可选真点一下——' +
+        '全程不移动用户的系统鼠标（代码里没有 SetCursorPos/SendInput），' +
+        '所以用户能同时用鼠标。坐标是物理像素（与截图同一套数）。' +
+        '要跟用户说「我点的是这里」、演示操作、或用户抱怨「你一动手我就用不了鼠标」时用它；' +
+        '目标程序有更好的接口（浏览器 CDP、Office COM、命令行）时优先走那些。' +
+        '点击是异步的：调用立刻返回，真实结果在返回正文里（已替你回读回执）。',
+      properties: {
+        x: { type: 'number', description: '目标点横坐标（物理像素，与截图同一套数）' },
+        y: { type: 'number', description: '目标点纵坐标（物理像素）' },
+        click: {
+          type: 'boolean',
+          description: 'true = 移过去并点一下（默认）；false = 只指不点',
+        },
+        button: {
+          type: 'string',
+          enum: ['left', 'right', 'middle', 'double'],
+          description: '点哪个键，默认 left',
+        },
+        hold_ms: {
+          type: 'number',
+          description: '这么久没有新动作就自动淡出（毫秒），默认 8000；0 = 一直留着',
+        },
+      },
+      required: ['x', 'y'],
+      async execute(args, exec) {
+        const x = Number(args.x);
+        const y = Number(args.y);
+        if (!Number.isFinite(x) || !Number.isFinite(y)) {
+          throw new Error('x / y 必须是数字（物理像素）');
+        }
+        const wantsClick = args.click !== false;
+        const button = String(args.button || 'left');
+        const holdMs = Number.isFinite(Number(args.hold_ms))
+          ? Number(args.hold_ms)
+          : 8000;
+        const sessionId = sessionOf(exec.agent);
+        const res = await callBridge(wantsClick ? '/cursor/click' : '/cursor/move', {
+          x: Math.round(x),
+          y: Math.round(y),
+          agent: config.agentName,
+          duration_ms: 240,
+          hold_ms: holdMs,
+          ...(wantsClick ? { button, backend: 'auto' } : {}),
+          ...(sessionId ? { session_id: sessionId } : {}),
+          ...(PLUGIN_VERSION ? { plugin_version: PLUGIN_VERSION } : {}),
+        });
+        if (res.status === 409) {
+          throw new Error(
+            'Agent 指针在 AgentRMC 里被用户关掉了（系统页 → Agent 指针）。' +
+              '改用别的通道，或先请用户打开。',
+          );
+        }
+        if (res.status >= 400) {
+          throw new Error('AgentRMC 拒绝了这次指针动作（HTTP ' + res.status + '）：' + (res.body || ''));
+        }
+        // 点击是异步的：回读一次 last_click，把真实结局摊给模型——
+        // 别让「clicked:true」被当成「真点到了」。先记基线 at_ms：上一次点击的
+        // 回执会一直留在 state 里，不比基线就会把旧回执当本次结果。
+        let receipt = '';
+        if (wantsClick) {
+          let baseline = 0;
+          try {
+            const before = await callBridge('/cursor/state', null);
+            baseline =
+              Number((JSON.parse(before.body || '{}').last_click || {}).at_ms) || 0;
+          } catch {
+            // 读不到基线按 0 处理：最多多等一轮，不会给出错回执。
+          }
+          for (let i = 0; i < 14; i += 1) {
+            await new Promise((r) => setTimeout(r, 150));
+            try {
+              const st = await callBridge('/cursor/state', null);
+              const last = JSON.parse(st.body || '{}').last_click;
+              if (last && Number(last.at_ms) > baseline) {
+                receipt =
+                  ' backend=' + (last.backend || '?') +
+                  ' verified=' + (last.verified ? 'true' : 'false') +
+                  ' target=' + (last.target || '?') +
+                  (last.ok ? '' : ' error=' + (last.error || '?'));
+                break;
+              }
+            } catch {
+              break;
+            }
+          }
+          if (!receipt) {
+            receipt = '（回执还没回来：稍后查 /cursor/state 的 last_click，别当成一定点到了）';
+          }
+        }
+        return (
+          (wantsClick ? '已让指针移过去并点击' : '已把指针移过去') +
+          '（x=' + Math.round(x) + ', y=' + Math.round(y) + '，HTTP ' + res.status + '）' +
+          receipt
+        );
+      },
+    }),
   ];
 
   if (config.registerTools && typeof ctx.tools?.register === 'function') {
@@ -1028,31 +1136,38 @@ export function apply(ctx, rawConfig) {
 
   // —— skill：教模型什么时候该用这几个工具、怎么不刷屏 ——
   // 装了 skills 服务的 profile 才有；没有就跳过，不影响工具与提醒。
+  // 两个技能各注册一次：pet（桌宠提醒）与 agent-cursor（专用指针）。
   if (config.registerSkill) {
-    try {
-      const skills = typeof ctx.get === 'function' ? ctx.get('skills') : undefined;
-      const body = readSkillBody();
-      if (skills && typeof skills.register === 'function' && body) {
+    const registerOne = (name, description) => {
+      try {
+        const skills =
+          typeof ctx.get === 'function' ? ctx.get('skills') : undefined;
+        const body = readSkillBody(name);
+        if (!skills || typeof skills.register !== 'function' || !body) {
+          return;
+        }
         ctx.effect(
           () =>
             skills.register({
-              name: SKILL_NAME,
-              description: SKILL_DESCRIPTION,
+              name,
+              description,
               content: body,
               source: 'custom',
               provider: 'agentrmc-bridge',
               invocation: { modelInvocable: true, userInvocable: true },
               resourceBase: {
                 kind: 'directory',
-                path: path.join(PACKAGE_ROOT, 'skills', SKILL_NAME),
+                path: path.join(PACKAGE_ROOT, 'skills', name),
               },
             }),
-          'agentrmc-bridge skill',
+          'agentrmc-bridge skill ' + name,
         );
+      } catch (error) {
+        warn('skill registration skipped (' + name + '): ' + (error && error.message));
       }
-    } catch (error) {
-      warn('skill registration skipped: ' + (error && error.message));
-    }
+    };
+    registerOne(SKILL_NAME, SKILL_DESCRIPTION);
+    registerOne(CURSOR_SKILL_NAME, CURSOR_SKILL_DESCRIPTION);
   }
 
   // —— 定向派发通道（2026-11-07 接线）：原生端下发 → 本插件轮询取件 →

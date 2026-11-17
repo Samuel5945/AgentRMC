@@ -8,6 +8,7 @@
 //   pet_work_update 主动汇报阶段    → 更新「待我处理」列表里的工单
 //                   （progress 正在干 / blocked 卡住等人 / ready 做完等验收；
 //                    progress 只落工单，blocked / ready 会冒气泡 + 语音提醒）
+//   cursor_point Agent 专用指针      → 指给用户看 / 真点一下，全程不动系统鼠标
 // 等授权、等选方案、等你回话（回复以问句收尾）、任务完成、模型出错（StopFailure，
 // 仅 Qoder / Qoder CN）的提醒由本插件的 hook 自动完成，不要用 pet_notify 重复发。
 "use strict";
@@ -53,9 +54,16 @@ function post(route, payload) {
 }
 
 function getState() {
+  return getRoute("/state");
+}
+
+// GET 任意路由。以前 callBridge(route, null) 会退回 getState()——而 getState 把
+// 路由写死成 /state，于是 /cursor/state 的读取永远拿到桌宠状态（没有 last_click），
+// 指针回执读不到、被当成「回执还没回来」（2026-11-17 实测踩到）。
+function getRoute(route) {
   return new Promise((resolve, reject) => {
     const req = http.request(
-      { host: HOST, port: PORT, path: "/state", method: "GET", timeout: 2000 },
+      { host: HOST, port: PORT, path: route, method: "GET", timeout: 2000 },
       (res) => {
         let data = "";
         res.on("data", (c) => { data += c; });
@@ -70,7 +78,9 @@ function getState() {
 
 async function callBridge(route, payload) {
   try {
-    const res = payload ? await post(route, payload) : await getState();
+    // 没 payload 时走 GET 的**同一条路由**，不是永远打 /state：
+    // /cursor/state 读的是指针回执，打错路由会静默拿到桌宠状态（实测踩到）。
+    const res = payload ? await post(route, payload) : await getRoute(route);
     if (res.status === 0 || res.status === undefined) {
       throw new Error("无响应");
     }
@@ -152,6 +162,37 @@ const TOOLS = [
       required: ["stage"],
     },
   },
+  {
+    name: "cursor_point",
+    description:
+      "用 AgentRMC 的「Agent 专用指针」把要操作的位置指给用户看，可选真点一下——" +
+      "全程不移动用户的系统鼠标（没有 SetCursorPos / SendInput），用户能同时用鼠标。" +
+      "坐标是物理像素（与截图同一套数）。要跟用户说「我点的是这里」、演示操作、" +
+      "或用户抱怨「你一动手我就用不了鼠标」时用它；目标程序有更好的接口" +
+      "（浏览器 CDP、Office COM、命令行）时优先走那些。" +
+      "点击是异步的，本工具会替你回读回执并在正文里给出 backend/verified/target。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        x: { type: "number", description: "目标点横坐标（物理像素）" },
+        y: { type: "number", description: "目标点纵坐标（物理像素）" },
+        click: {
+          type: "boolean",
+          description: "true = 移过去并点一下（默认）；false = 只指不点",
+        },
+        button: {
+          type: "string",
+          enum: ["left", "right", "middle", "double"],
+          description: "点哪个键，默认 left",
+        },
+        hold_ms: {
+          type: "number",
+          description: "这么久没有新动作就自动淡出（毫秒），默认 8000；0 = 一直留着",
+        },
+      },
+      required: ["x", "y"],
+    },
+  },
 ];
 
 async function callTool(name, args) {
@@ -201,6 +242,86 @@ async function callTool(name, args) {
       };
     }
     return { text: `已汇报 stage=${stage}（HTTP ${res.status}）${res.body || ""}` };
+  }
+  if (name === "cursor_point") {
+    const x = Number(args?.x);
+    const y = Number(args?.y);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) {
+      return { isError: true, text: "x / y 必须是数字（物理像素）" };
+    }
+    const wantsClick = args?.click !== false;
+    const button = String(args?.button || "left");
+    const holdMs = Number.isFinite(Number(args?.hold_ms))
+      ? Number(args?.hold_ms)
+      : 8000;
+    const route = wantsClick ? "/cursor/click" : "/cursor/move";
+    const payload = {
+      x: Math.round(x),
+      y: Math.round(y),
+      agent: AGENT,
+      duration_ms: 240,
+      hold_ms: holdMs,
+    };
+    if (wantsClick) {
+      payload.button = button;
+      payload.backend = "auto";
+    }
+    const res = await callBridge(route, payload);
+    if (res.status === 409) {
+      return {
+        isError: true,
+        text:
+          "Agent 指针在 AgentRMC 里被用户关掉了（系统页 → Agent 指针）。" +
+          "改用别的通道，或先请用户打开。",
+      };
+    }
+    if (res.status >= 400) {
+      return {
+        isError: true,
+        text: `AgentRMC 拒绝了这次指针动作（HTTP ${res.status}）：${res.body}`,
+      };
+    }
+    // 点击异步：回读一次 last_click，别让 clicked:true 被当成「真点到了」。
+    // 先记下点击前的 at_ms 当基线——上一次点击的回执会一直留在 state 里，
+    // 不比基线就会把旧回执当成本次结果（假阳性比没有回执更坏）。
+    // UIA 的 Invoke 能阻塞到秒级，所以给到 ~2s。
+    let receipt = "";
+    if (wantsClick) {
+      let baseline = 0;
+      try {
+        const before = await callBridge("/cursor/state", null);
+        baseline = Number((JSON.parse(before.body || "{}").last_click || {}).at_ms) || 0;
+      } catch {
+        // 读不到基线就按 0 处理：最多多等一轮，不会给出错回执。
+      }
+      for (let i = 0; i < 14; i += 1) {
+        await new Promise((r) => setTimeout(r, 150));
+        try {
+          const st = await callBridge("/cursor/state", null);
+          const parsed = JSON.parse(st.body || "{}");
+          const last = parsed.last_click;
+          if (last && Number(last.at_ms) > baseline) {
+            receipt =
+              ` backend=${last.backend || "?"}` +
+              ` verified=${last.verified ? "true" : "false"}` +
+              ` target=${last.target || "?"}` +
+              (last.ok ? "" : ` error=${last.error || "?"}`);
+            break;
+          }
+        } catch {
+          break;
+        }
+      }
+      if (!receipt) {
+        receipt = "（回执还没回来：稍后查 /cursor/state 的 last_click，别当成一定点到了）";
+      }
+    }
+    return {
+      text:
+        (wantsClick ? "已让指针移过去并点击" : "已把指针移过去") +
+        `（x=${Math.round(x)}, y=${Math.round(y)}，HTTP ${res.status}）` +
+        receipt,
+    };
   }
   return { isError: true, text: `未知工具: ${name}` };
 }

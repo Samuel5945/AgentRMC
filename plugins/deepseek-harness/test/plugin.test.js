@@ -345,9 +345,10 @@ await check('turn-stopping 问句收尾: 改发 permission 的「等你回话」
   assert.doesNotMatch(payload.message, /^等你选方案/);
 });
 
-await check('工具注册: 四个 pet_* 都有合法的 schema 与文本渲染', () => {
+await check('工具注册: 五个工具（四个 pet_* + cursor_point）都有合法 schema 与文本渲染', () => {
   const names = harness.tools.map((tool) => tool.name).sort();
   assert.deepStrictEqual(names, [
+    'cursor_point',
     'pet_notify',
     'pet_speak',
     'pet_state',
@@ -363,6 +364,14 @@ await check('工具注册: 四个 pet_* 都有合法的 schema 与文本渲染',
   }
   const speak = harness.tools.find((tool) => tool.name === 'pet_speak');
   assert.deepStrictEqual(speak.parameters.required, ['message']);
+  const cursor = harness.tools.find((tool) => tool.name === 'cursor_point');
+  assert.deepStrictEqual(cursor.parameters.required, ['x', 'y']);
+});
+
+await check('工具注册: cursor_point 缺坐标时拒绝执行', async () => {
+  const cursor = harness.tools.find((tool) => tool.name === 'cursor_point');
+  await assert.rejects(() => cursor.execute({}), /x \/ y 必须是数字/);
+  await assert.rejects(() => cursor.execute({ x: 'a', y: 1 }), /x \/ y 必须是数字/);
 });
 
 await check('工具注册: 参数缺失时拒绝执行（不静默发空气泡）', async () => {
@@ -426,10 +435,10 @@ await check('工具执行: body 带 session_id / project / agent_exe，与 hook 
   }
 });
 
-await check('skill 注册: 名字、正文、目录资源都给了', () => {
-  assert.strictEqual(harness.skills.length, 1);
-  const skill = harness.skills[0];
-  assert.strictEqual(skill.name, 'agentrmc-pet');
+await check('skill 注册: 两个技能（pet + agent-cursor）名字、正文、目录资源都给了', () => {
+  assert.strictEqual(harness.skills.length, 2);
+  const skill = harness.skills.find((s) => s.name === 'agentrmc-pet');
+  assert.ok(skill, 'pet 技能必须注册');
   assert.ok(skill.description.length > 20);
   assert.ok(skill.content.includes('pet_work_update'), '正文要教模型用工具');
   assert.ok(!skill.content.startsWith('---'), 'frontmatter 不该进正文');
@@ -438,6 +447,18 @@ await check('skill 注册: 名字、正文、目录资源都给了', () => {
   assert.deepStrictEqual(skill.invocation, { modelInvocable: true, userInvocable: true });
   assert.strictEqual(skill.resourceBase.kind, 'directory');
   assert.ok(fs.existsSync(skill.resourceBase.path), 'resourceBase 指向的目录必须存在');
+
+  // 第二个技能：专用指针。正文要教模型用 cursor_point、并说清「不动系统鼠标」。
+  const cursor = harness.skills.find((s) => s.name === 'agent-cursor');
+  assert.ok(cursor, 'agent-cursor 技能必须注册');
+  assert.ok(cursor.description.includes('不移动'), '描述要说清不移动系统鼠标');
+  assert.ok(cursor.content.includes('cursor_point'), '正文要教模型用工具');
+  assert.ok(!cursor.content.startsWith('---'), 'frontmatter 不该进正文');
+  assert.ok(fs.existsSync(cursor.resourceBase.path), '指针技能目录必须存在');
+  assert.ok(
+    fs.existsSync(path.join(cursor.resourceBase.path, 'scripts', 'cursor.ps1')),
+    '指针技能要带命令行客户端',
+  );
 });
 
 await check('配置覆盖: agentName / raiseExe / 关掉的提醒都生效', async () => {

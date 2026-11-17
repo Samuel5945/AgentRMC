@@ -62,6 +62,11 @@ public:
     void wake();
     // 标题栏最大化按钮 / 双击标题栏：最大化 ↔ 还原（全屏中先退全屏）。
     void toggleMaximize();
+    // 把窗口拉回当前屏的可用区：改分辨率 / 换缩放 / 换屏之后无边框窗不会自己缩，
+    // 窗口比屏大时顶栏右侧那排（检查更新/主题/新手引导 + 最小化/最大化/关闭）
+    // 就跑到屏幕外＝用户报的「顶栏显示不全」。最小尺寸跟着屏走，并重喂 WebView
+    // 边界（换分辨率后子窗尺寸可能停在旧值，页面按旧宽度排版同样会裁掉顶栏右侧）。
+    void fitToScreen();
 
 protected:
     void closeEvent(QCloseEvent *event) override;

@@ -1,8 +1,10 @@
 #include <QApplication>
 #include <QDebug>
 #include <QFile>
+#include <QGuiApplication>
 #include <QIcon>
 #include <QPainter>
+#include <QScreen>
 #include <QTabWidget>
 #include <QTimer>
 
@@ -510,7 +512,18 @@ int main(int argc, char *argv[]) {
     MainWindow win(shot.isEmpty(), pin, shot.isEmpty());
     // 页签截图要看到整页内容，离屏时把窗口拉高。
     // 主窗默认给足高度：左栏语音 + 遥控器两张卡片、右侧待办列表都要站得下。
-    win.resize(1060, shotTab >= 0 ? 1400 : 720);
+    // 但屏幕逻辑尺寸可能比这个默认值还小（改过分辨率 / 高缩放）：先夹到可用区，
+    // 否则一开窗就顶出屏幕，顶栏右侧那排按钮既看不见也点不到（showOnStartup 里的
+    // fitToScreen 还会再夹一次，这里是保证首帧就不闪出屏外）。
+    QSize want(1060, shotTab >= 0 ? 1400 : 720);
+    if (QScreen *screen = QGuiApplication::primaryScreen()) {
+        const QRect area = screen->availableGeometry();
+        if (area.width() > 0 && area.height() > 0) {
+            want.setWidth(qMin(want.width(), area.width()));
+            want.setHeight(qMin(want.height(), area.height()));
+        }
+    }
+    win.resize(want);
 
     if (!shotMode) {
         // 托盘常驻：窗口隐藏/关闭不该让进程退出。

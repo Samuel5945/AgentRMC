@@ -5166,6 +5166,9 @@ void MainWindow::updateTrayState() {
 }
 
 void MainWindow::showOnStartup(bool startHidden) {
+    // 起手先按当前屏夹一遍：默认 1060×720 逻辑尺寸在改过分辨率 / 高缩放的屏上
+    // 会大过屏幕（无边框窗不会自己缩），开机就是「顶栏显示不全」。
+    fitToScreen();
     // 首次运行按「这次安装」判断：标记文件放在 exe 同目录，重装/升级不会误判。
     const QString marker =
         QCoreApplication::applicationDirPath() + QStringLiteral("/.guide_seen");
@@ -5204,12 +5207,67 @@ void MainWindow::showOnStartup(bool startHidden) {
 void MainWindow::wake() {
     // 只清最小化/藏起来的状态，保留最大化与全屏：托盘叫回窗口不该把
     // 全屏中的界面缩回去（原来无脑 showNormal，全屏会被砸成小窗）。
+    // 叫回来之前先贴一次屏：窗口可能是在别的分辨率/缩放下摆的，比当前屏还大，
+    // 那样一露头就是顶栏右侧全在屏幕外（用户 2026-11-17 报的正是这个）。
+    fitToScreen();
     if (isMinimized()) {
         setWindowState(windowState() & ~Qt::WindowMinimized);
     }
     show();
     raise();
     activateWindow();
+}
+
+void MainWindow::fitToScreen() {
+    QScreen *screen = this->screen();
+    if (screen == nullptr) {
+        screen = QGuiApplication::primaryScreen();
+    }
+    if (screen == nullptr) {
+        return;
+    }
+    const QRect avail = screen->availableGeometry();
+    if (avail.width() <= 0 || avail.height() <= 0) {
+        return;
+    }
+    // 最小尺寸也得跟着屏走：屏比 940×620（外壳 1000×560）还小时，硬撑最小值会把
+    // 窗口顶出屏幕，顶栏右侧那排（含最小化/最大化/关闭）就永远在屏幕外，点不到。
+    setMinimumSize(qMin(940, avail.width()), qMin(620, avail.height()));
+    if (workWeb_ != nullptr) {
+        workWeb_->setMinimumSize(qMin(1000, avail.width()),
+                                 qMin(560, avail.height()));
+    }
+    if (isFullScreen()) {
+        // 全屏本来就铺满，别动几何；边界仍要重喂一次（子窗可能停在旧尺寸）。
+        if (workWeb_ != nullptr) {
+            workWeb_->syncBounds();
+        }
+        return;
+    }
+    if (isMaximized()) {
+        // 无边框最大化窗口在改分辨率/换屏后不一定会自己重算，重设一次状态让它铺满新屏。
+        if (!avail.contains(geometry())) {
+            showNormal();
+            showMaximized();
+        }
+        if (workWeb_ != nullptr) {
+            workWeb_->syncBounds();
+        }
+        return;
+    }
+    QRect g = geometry();
+    if (!avail.contains(g)) {
+        // 先压尺寸再挪位置：能留在原位就留，压不进就贴回可用区内。
+        g.setWidth(qMin(g.width(), avail.width()));
+        g.setHeight(qMin(g.height(), avail.height()));
+        g.moveLeft(qBound(avail.left(), g.left(), avail.right() - g.width() + 1));
+        g.moveTop(qBound(avail.top(), g.top(), avail.bottom() - g.height() + 1));
+        setGeometry(g);
+    }
+    if (workWeb_ != nullptr) {
+        // 即便窗口没被裁，页面边界也可能是旧值（换缩放的坑）：无脑重喂一次。
+        workWeb_->syncBounds();
+    }
 }
 
 void MainWindow::toggleMaximize() {
@@ -6110,8 +6168,16 @@ bool MainWindow::nativeEvent(const QByteArray &eventType, void *message,
         return true;
     }
     // 插拔显示器/改分辨率后，缓存的物理屏句柄会失效，亮度命令要重新取。
-    if (msg != nullptr && msg->message == WM_DISPLAYCHANGE && system_ != nullptr) {
-        system_->invalidateMonitors();
+    if (msg != nullptr && msg->message == WM_DISPLAYCHANGE) {
+        if (system_ != nullptr) {
+            system_->invalidateMonitors();
+        }
+        // 无边框窗口不会自己跟着新分辨率/新缩放缩：窗口比新屏大时顶栏右侧那排
+        // （检查更新/主题/新手引导 + 最小化/最大化/关闭）就整块在屏幕外，用户
+        // 看到的就是「顶栏显示不全」。延后一拍等 Windows 把工作区跟 DPI 更新完，
+        // 再补一次更晚的——跨屏换倍率时 Qt 的几何更新实测会晚到。
+        QTimer::singleShot(0, this, [this] { fitToScreen(); });
+        QTimer::singleShot(350, this, [this] { fitToScreen(); });
         return QMainWindow::nativeEvent(eventType, message, result);
     }
     // 跨屏拖拽换 DPI：逻辑尺寸不变就没有 resizeEvent，widget 级 DPI 事件也

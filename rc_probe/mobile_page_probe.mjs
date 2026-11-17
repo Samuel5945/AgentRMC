@@ -476,13 +476,24 @@ async function runFlow() {
   ok(labels.includes('tuwen-editor · githubrepos'), '同名活跃项目显示上级目录');
   ok(labels.includes('tuwen-editor · Desktop'), '同名归档项目显示上级目录');
   ok(labels.filter((s) => s.includes('tuwen-editor')).length === 2, '同名项目不合并');
-  ok((await heads.nth(4).textContent()).includes('未分组'), '未分组单独成组');
-  ok((await heads.last().textContent()).includes('已归档'), '已归档项目排在最后');
-  ok(await page.locator('#sessList .projgroup.archived .projarch').count() === 1, '归档项目带明确标记');
+  ok((await heads.nth(4).textContent()).includes('未分类'), '未分类任务单独成组');
+  ok(await page.locator('#sessList .arcsec').count() === 1, '已归档单独成区');
+  ok((await page.locator('#sessList .arcsec .arcname').textContent()) === '已归档', '区头写「已归档」');
+  ok((await page.locator('#sessList .arcsec .arccount').textContent()).includes('1 个会话'), '区头报会话数=1');
+  ok(await page.locator('#sessList .arcsec').evaluate((el) => el.classList.contains('closed')), '已归档区默认收起');
+  ok(await page.locator('#sessList').evaluate((el) => el.lastElementChild.classList.contains('arcsec')), '归档区挂在列表最底部');
+  ok(await page.locator('#sessList .projgroup.archived .projarch').count() === 0, '归档区内组头不重复「已归档」徽标');
   ok(await page.locator('#sessList .projgroup.archived .sescard.readonly').count() === 1, '归档项目默认只读');
   ok((await heads.last().textContent()).includes('1 个'), '分组标题显示会话数');
-  ok(await page.locator('#sessList .projbody:not([hidden])').count() === 1, '默认只展开最近一个项目');
-  ok(await page.locator('#sessList .projgroup.archived .projbody').evaluate((el) => el.hidden), '归档项目默认收起');
+  ok(await page.locator('#sessList .projbody:not([hidden])').evaluateAll((els) => els.filter((el) => el.getBoundingClientRect().height > 0).length) === 1, '默认只展开最近一个项目');
+  await page.click('#sessList .archead');
+  await page.waitForTimeout(120);
+  ok(!(await page.locator('#sessList .arcsec').evaluate((el) => el.classList.contains('closed'))), '点区头能展开归档区');
+  ok(!(await page.locator('#sessList .arcsec .projbody').first().evaluate((el) => el.hidden)), '归档区里第一个项目默认展开');
+  ok(await page.locator('#sessList .arcsec .sescard').first().isVisible(), '展开后归档会话可见');
+  await page.click('#sessList .archead');
+  await page.waitForTimeout(120);
+  ok(await page.locator('#sessList .arcsec').evaluate((el) => el.classList.contains('closed')), '再点一次收起归档区');
   ok((await page.textContent('#sessList .sescard .sestitle')).includes('多选与滑动'), '会话标题可见');
   ok((await page.textContent('#sessList .sescard .sestop')).includes('等你处理'), '会话目录带活卡状态');
 
@@ -490,7 +501,7 @@ async function runFlow() {
   await firstGroup.locator('.projhead').click();
   ok(await firstGroup.locator('.projhead').getAttribute('aria-expanded') === 'false', '项目组可收起');
   ok(await firstGroup.locator('.projbody').evaluate((el) => el.hidden), '收起后组内容隐藏');
-  ok(await page.locator('#sessList .projbody:not([hidden]) .sescard').count() === 0, '收起只隐藏本组会话');
+  ok(await page.locator('#sessList .projbody:not([hidden]) .sescard').evaluateAll((els) => els.filter((el) => el.getBoundingClientRect().height > 0).length) === 0, '收起只隐藏本组会话');
 
   await page.locator('#agentChips .chip').nth(1).click();
   await page.waitForTimeout(120);

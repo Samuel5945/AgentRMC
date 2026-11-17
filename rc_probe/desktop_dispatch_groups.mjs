@@ -125,6 +125,30 @@ const groups = await page.evaluate(() => [...document.querySelectorAll('#dspList
 })));
 const summary = await page.textContent('#dspSummary');
 
+// 已归档现在不再跟活跃项目平铺，而是收进列表底部的独立分区（默认收起）。
+const sec = await page.evaluate(() => {
+  const s = document.querySelector('#dspList .dspsec');
+  if (!s) return null;
+  return {
+    closed: s.classList.contains('closed'),
+    bodyHidden: s.querySelector('.dspsecbody').hidden,
+    label: s.querySelector('.dspsecname').textContent,
+    count: s.querySelector('.dspseccount').textContent,
+    badges: s.querySelectorAll('.dspgarch').length,
+    inside: [...s.querySelectorAll('.dspgroup')].map((g) => g.querySelector('.dspgname').textContent),
+    lastChild: document.querySelector('#dspList').lastElementChild === s,
+  };
+});
+check(!!sec, '已归档单独成区');
+check(sec && sec.label === '已归档', '区头写「已归档」', sec);
+check(sec && sec.count === '3 个会话', '区头报会话数=3', sec);
+check(sec && sec.closed && sec.bodyHidden, '已归档区默认收起', sec);
+check(sec && sec.inside.length === 3, '归档区里 3 个组', sec);
+check(sec && sec.badges === 0, '归档区内组头不再重复「已归档」徽标', sec);
+check(sec && sec.lastChild, '归档区挂在列表最底部', sec);
+// 活跃组不许出现在归档区里
+check(sec && !sec.inside.includes('老路径会话'), '活跃区/归档区不交叉', sec);
+
 const byName = (n, arch) => groups.filter((g) => g.name === n && g.archived === arch);
 check(groups.length === 5, '一共 5 个组', groups.map((g) => [g.name, g.archived]));
 check(byName('Agentrmc', false).length === 1, 'Agentrmc 活跃组存在');
@@ -162,8 +186,50 @@ for (const g of groups) {
   check(dels.size <= 1, `组「${g.name}」不混归档/未归档`, g.rows);
 }
 check(/1 个项目/.test(summary), '摘要项目数=1（只有 Agentrmc 有活跃会话）', summary);
-check(/4 个未分类任务/.test(summary), '摘要未分类任务=4', summary);
-check(/2 个已归档/.test(summary), '摘要已归档=2', summary);
+check(/3 个未分类任务/.test(summary), '摘要未分类任务=3（只数活跃的）', summary);
+check(/4 个活跃会话/.test(summary), '摘要活跃会话=4（归档不计入主线）', summary);
+check(!/已归档/.test(summary), '摘要不混归档计数（交给区头）', summary);
+
+// 点开区头：归档组露出来，且折叠状态记进 DSP_GROUP_STATE。
+await page.click('#dspList .dspsecfold');
+const opened = await page.evaluate(() => {
+  const s = document.querySelector('#dspList .dspsec');
+  return {
+    closed: s.classList.contains('closed'),
+    bodyHidden: s.querySelector('.dspsecbody').hidden,
+    visibleGroups: [...s.querySelectorAll('.dspgroup')].filter((g) => g.getBoundingClientRect().height > 0).length,
+  };
+});
+check(!opened.closed && !opened.bodyHidden, '点区头能展开', opened);
+check(opened.visibleGroups === 3, '展开后 3 个归档组都露出来', opened);
+
+// 清理入口长在区头右侧（2026-11-17 定）：不再去顶栏找。
+check(await page.locator('#dspList .dspsecclean').count() === 1, '区头右侧有清理入口');
+check((await page.locator('#dspList .dspsecclean').textContent()) === '清理归档', '清理入口文案=清理归档');
+await page.locator('#dspList .dspsecclean').click();
+await page.waitForTimeout(150);
+const cleaning = await page.evaluate(() => {
+  const s = document.querySelector('#dspList .dspsec');
+  const btn = document.querySelector('#dspList .dspsecclean');
+  return {
+    text: btn && btn.textContent,
+    on: !!(btn && btn.classList.contains('on')),
+    count: s && s.querySelector('.dspseccount').textContent,
+    closed: s && s.classList.contains('closed'),
+    batchHidden: document.getElementById('dspBatch').hidden,
+    refreshHidden: document.getElementById('dspRefresh').hidden,
+    liveGroups: document.querySelectorAll('#dspList .dspgroup:not(.archived)').length,
+  };
+});
+check(cleaning.text === '退出清理' && cleaning.on, '清理模式下按钮变「退出清理」', cleaning);
+check(cleaning.count === '3 条可删', '区头改报可删条数', cleaning);
+check(!cleaning.closed, '清理模式强制展开归档区', cleaning);
+check(!cleaning.batchHidden, '批量条出现', cleaning);
+check(cleaning.refreshHidden, '刷新按钮隐藏', cleaning);
+check(cleaning.liveGroups === 0, '清理模式只留归档区', cleaning);
+await page.locator('#dspList .dspsecclean').click();
+await page.waitForTimeout(150);
+check((await page.locator('#dspList .dspsecclean').textContent()) === '清理归档', '能退出清理回到浏览');
 
 fs.mkdirSync(SHOTS, { recursive: true });
 await page.screenshot({ path: path.join(SHOTS, 'groups_probe.png') });

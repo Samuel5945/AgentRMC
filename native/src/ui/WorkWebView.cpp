@@ -309,10 +309,42 @@ void WorkWebView::syncBounds() {
     }
     // WebView2 的边界是物理像素，Qt 给的是逻辑像素；控件还没布局时是 0x0，
     // 喂 0x0 之后若没人生成 resize 事件，页面就永远画不出来（实测白板）。
-    const qreal ratio = devicePixelRatioF();
-    const RECT r{0, 0, static_cast<LONG>(width() * ratio),
-                 static_cast<LONG>(height() * ratio)};
-    d_->controller->put_IsVisible(width() > 0 && height() > 0 ? TRUE : FALSE);
+    //
+    // 但尺寸不能取控件自己的 width()×devicePixelRatioF()：换缩放 / 改分辨率 /
+    // 插拔屏之后这两个值都可能是旧的（2026-11-17 实测：窗口 1060 逻辑宽，控件还是
+    // 1404、倍率还是旧的 2.65 → 喂进去 2808 物理宽，页面按 1404 CSS 排版，
+    // 顶栏右侧那排「检查更新/主题/新手引导 + 窗口按钮」整块被窗口裁掉，只剩
+    // 「监听」胶囊贴着右边＝用户报的「顶栏显示不全」）。顶层窗客户区是 Windows
+    // 那边的当前事实，PMv2 进程下 GetClientRect 给的就是物理像素，正好是这里
+    // 要的单位，两个陈旧源一次绕开。
+    LONG w = 0;
+    LONG h = 0;
+    QWidget *top = window();
+    if (top != nullptr) {
+        RECT client{};
+        if (GetClientRect(reinterpret_cast<HWND>(top->winId()), &client)) {
+            w = client.right - client.left;
+            h = client.bottom - client.top;
+        }
+    }
+    if (w <= 0 || h <= 0) {
+        // 兜底：顶层还没有 HWND 之类，退回控件尺寸 × 当前倍率。
+        const qreal ratio =
+            top != nullptr ? top->devicePixelRatioF() : devicePixelRatioF();
+        w = static_cast<LONG>(width() * ratio);
+        h = static_cast<LONG>(height() * ratio);
+    } else if (top != nullptr && top != this) {
+        // 控件本身也可能停在旧尺寸（它就是控制器的父窗，比边界小的话页面照样被裁）：
+        // 顺手拉回顶层客户区。本工程里外壳 WebView 就是整窗（外层布局零边距、别的块
+        // 都 hide），所以原点恒为 0,0。
+        const QSize want = top->rect().size();
+        if (want.isValid() && want.width() > 0 && want.height() > 0 &&
+            size() != want) {
+            setGeometry(QRect(QPoint(0, 0), want));
+        }
+    }
+    const RECT r{0, 0, w, h};
+    d_->controller->put_IsVisible(w > 0 && h > 0 ? TRUE : FALSE);
     d_->controller->put_Bounds(r);
 }
 
@@ -816,6 +848,32 @@ QString WorkWebView::htmlFor(const QString &stateJson) const {
   border:1px solid var(--w14);border-radius:6px;padding:0 5px;line-height:1.5}
 .dspgcount{margin-left:auto;flex:0 0 auto;font-size:var(--f10);
   color:var(--faint);background:var(--w6);border-radius:7px;padding:1px 6px}
+/* 已归档是整个列表的底部分区：一条分隔线把它跟活跃项目隔开，整区默认收起。
+   归档会话仍按项目分组，但组头不再每行重复「已归档」徽标——区头已经说过了。
+   清理入口就长在区头右侧：清理的对象是这一区，不该跑到顶栏去够。 */
+.dspsec{margin-top:12px;border-top:1px solid var(--w14);padding-top:3px}
+.dspsechead{display:flex;align-items:center;gap:6px;min-height:30px}
+.dspsecfold{display:flex;align-items:center;gap:6px;flex:1;min-width:0;
+  margin:0;padding:4px 5px;border:0;border-radius:6px;background:transparent;
+  color:var(--muted);font-size:var(--f10);font-weight:600;letter-spacing:.02em;
+  text-align:left;cursor:default}
+.dspsecfold:hover{background:var(--w6)}
+.dspsecchev{flex:0 0 auto;font-size:12px;line-height:1;color:var(--faint);
+  transform:rotate(90deg);transition:transform .16s ease}
+.dspsec.closed .dspsecchev{transform:rotate(0deg)}
+.dspsecname{flex:0 0 auto}
+.dspseccount{flex:0 0 auto;margin-left:auto;font-size:var(--f10);color:var(--faint);
+  background:var(--w6);border-radius:7px;padding:1px 6px}
+.dspsecclean{flex:0 0 auto;height:22px;padding:0 8px;border:1px solid var(--w14);
+  border-radius:6px;background:transparent;color:var(--muted2);
+  font-size:var(--f10);cursor:default}
+.dspsecclean:hover{background:var(--w10);color:var(--text)}
+.dspsecclean.on{border-color:var(--a64);background:var(--a26);color:var(--accent);
+  font-weight:600}
+.dspsecclean:disabled{opacity:.45}
+.dspsecempty{padding:9px 6px;font-size:var(--f10);color:var(--muted2)}
+.dspsecbody[hidden]{display:none}
+.dspsecbody .dspghead{color:var(--muted);font-weight:500}
 .dspbody[hidden]{display:none}
 .dspsess{display:flex;align-items:center;gap:10px;padding:7px 9px;
   border-radius:8px;border-bottom:1px solid var(--w8);cursor:default}
@@ -1085,7 +1143,6 @@ QString WorkWebView::htmlFor(const QString &stateJson) const {
     <span class="total">派发会话</span>
     <span class="dsp-summary" id="dspSummary"></span>
     <span class="spacer"></span>
-    <button class="ghost" id="dspClean" hidden title="只处理已归档会话；删除前会备份并要求二次确认">清理归档</button>
     <button class="ghost" id="dspRefresh" title="重新读取各 Agent 的最近会话">刷新会话</button>
   </div>
   <div class="dspchips" id="dspAgents"></div>
@@ -1877,8 +1934,8 @@ function dspSession(agent,row,archived){
   return el;
 }
 // stateKeyOverride：同名的两个组（活跃的「未分类任务」和它的已归档组）不能
-// 共用折叠状态，各给一个 key。
-function dspGroup(agent,label,rows,fullProject,archived,defaultOpen,stateKeyOverride){
+// 共用折叠状态，各给一个 key。hideBadge：归档分区里的组头不再重复「已归档」。
+function dspGroup(agent,label,rows,fullProject,archived,defaultOpen,stateKeyOverride,hideBadge){
   const groupKey=fullProject?projectKey(fullProject):'__ungrouped';
   const stateKey=stateKeyOverride||(agent.exe+'|'+groupKey);
   const group=document.createElement('div');group.className='dspgroup';
@@ -1887,7 +1944,7 @@ function dspGroup(agent,label,rows,fullProject,archived,defaultOpen,stateKeyOver
   const chev=document.createElement('span');chev.className='dspgchev';chev.textContent='›';
   const name=document.createElement('span');name.className='dspgname';name.textContent=label;
   head.append(chev,name);
-  if(archived){
+  if(archived&&!hideBadge){
     const a=document.createElement('span');a.className='dspgarch';a.textContent='已归档';
     head.append(a);
   }
@@ -1913,6 +1970,61 @@ function dspGroup(agent,label,rows,fullProject,archived,defaultOpen,stateKeyOver
   group.append(head,body);
   return group;
 }
+// 已归档单独成区：整区默认收起（用户 2026-11-17 定：别跟活跃项目混在一串），
+// 展开后内部仍按项目分组——结构跟活跃区一样，只是归属和视觉层级低一档。
+// 清理入口就放在区头右侧（用户 2026-11-17 定）：清理的对象就是这一区。
+function dspArchiveSection(agent,count,defaultOpen,deletable,cleaning){
+  const sec=document.createElement('div');sec.className='dspsec';
+  const head=document.createElement('div');head.className='dspsechead';
+  const fold=document.createElement('button');fold.className='dspsecfold';
+  const chev=document.createElement('span');chev.className='dspsecchev';chev.textContent='›';
+  const name=document.createElement('span');name.className='dspsecname';name.textContent='已归档';
+  const cnt=document.createElement('span');cnt.className='dspseccount';
+  cnt.textContent=cleaning?(count+' 条可删'):(count+' 个会话');
+  fold.append(chev,name,cnt);
+  fold.title=cleaning
+    ?'清理模式：勾选要删除的归档会话，删除前会备份并要求二次确认。'
+    :'已归档会话：项目目录已不存在，或宿主侧已归档。展开可查看记录、删除。';
+  head.append(fold);
+  if(deletable>0||cleaning){
+    const clean=document.createElement('button');
+    clean.className='dspsecclean'+(cleaning?' on':'');
+    clean.textContent=cleaning?'退出清理':'清理归档';
+    clean.disabled=DSP_DELETING;
+    clean.title=cleaning?'退出清理，回到正常浏览'
+      :'只处理已归档会话；删除前会备份并要求二次确认';
+    clean.onclick=e=>{
+      e.stopPropagation();
+      if(DSP_DELETING)return;
+      DSP_CLEAN=!DSP_CLEAN;DSP_DEL_SEL.clear();DSP_SIG='';
+      $('dspList').scrollTop=0;$('dspNotice').hidden=true;
+      render();
+    };
+    head.append(clean);
+  }
+  const body=document.createElement('div');body.className='dspsecbody';
+  const stateKey=agent.exe+'|__archive-section';
+  const stored=DSP_GROUP_STATE.get(stateKey);
+  // 清理模式必须展开（要挑条目），不管之前手动收成什么样。
+  const open=cleaning?true:(stored===undefined?!!defaultOpen:stored);
+  const labelOf=opening=>cleaning
+    ?('已归档，'+count+' 条可删，'+(opening?'已展开':'已收起'))
+    :('已归档，'+count+' 个会话，'+(opening?'已展开':'已收起'));
+  sec.classList.toggle('closed',!open);
+  body.hidden=!open;
+  fold.setAttribute('aria-expanded',String(open));
+  fold.setAttribute('aria-label',labelOf(open));
+  fold.onclick=()=>{
+    const opening=body.hidden;
+    body.hidden=!opening;
+    sec.classList.toggle('closed',!opening);
+    fold.setAttribute('aria-expanded',String(opening));
+    fold.setAttribute('aria-label',labelOf(opening));
+    DSP_GROUP_STATE.set(stateKey,opening);
+  };
+  sec.append(head,body);
+  return {el:sec,body};
+}
 function dspArchivedRows(agent){
   return (agent&&agent.sessions||[]).filter(r=>r.archived&&r.can_delete!==false);
 }
@@ -1925,7 +2037,8 @@ function updateDspBatch(){
   const rows=dspArchivedRows(agent);
   $('dspBatch').hidden=!DSP_CLEAN;
   $('dspBatchCount').textContent='已选 '+DSP_DEL_SEL.size+' 条';
-  $('dspClean').disabled=DSP_DELETING;
+  const cleanBtn=document.querySelector('#dspList .dspsecclean');
+  if(cleanBtn)cleanBtn.disabled=DSP_DELETING;
   $('dspRefresh').disabled=DSP_DELETING;
   $('dspDelete').disabled=DSP_DELETING||!DSP_DEL_SEL.size;
   $('dspDelete').textContent=DSP_DELETING?'删除中…':'删除所选';
@@ -1981,7 +2094,7 @@ function renderDispatch(){
   if(!agents.length){
     chips.replaceChildren();list.replaceChildren();list.hidden=true;
     $('dspEmpty').hidden=false;$('dspSummary').textContent='';
-    $('dspClean').hidden=true;$('dspBatch').hidden=true;
+    $('dspBatch').hidden=true;
     return;
   }
   if(!agents.some(a=>a.exe===DSP_SELECTED))DSP_SELECTED=agents[0].exe;
@@ -2031,24 +2144,22 @@ function renderDispatch(){
     const valid=new Set(deletable.map(r=>agent.exe+'|'+r.id));
     DSP_DEL_SEL.forEach(k=>{if(!valid.has(k))DSP_DEL_SEL.delete(k);});
   }
-  $('dspClean').hidden=!DSP_CLEAN&&!deletable.length;
-  $('dspClean').textContent=DSP_CLEAN?'退出清理':'清理归档';
   $('dspRefresh').hidden=DSP_CLEAN;
   $('dspBatch').hidden=!DSP_CLEAN;
+  // 摘要只报活跃面：归档数量交给底部「已归档」区头，主线不混着算。
+  const liveCount=rows.filter(r=>!r.archived).length;
   $('dspSummary').textContent=DSP_CLEAN
     ?(agent.name+' · 选择要删除的归档会话 · '+deletable.length+' 条可删')
     :(agent.name+' · '+active.length+' 个项目'
-      +(unclassified.length?' · '+unclassified.length+' 个未分类任务':'')
-      +(archived.length?' · '+archived.length+' 个已归档':'')
-      +' · '+rows.length+' 个会话');
+      +(uncLive.length?' · '+uncLive.length+' 个未分类任务':'')
+      +' · '+liveCount+' 个活跃会话');
   const keep=list.scrollTop;list.replaceChildren();list.hidden=false;
   $('dspEmpty').hidden=true;
   const shown = DSP_CLEAN ? archived.filter(g=>g.items.some(r=>r.can_delete!==false)) : null;
   const uncShown = DSP_CLEAN ? uncDead.filter(r=>r.can_delete!==false) : uncDead;
-  if((DSP_CLEAN&&!shown.length&&!uncShown.length)||(!DSP_CLEAN&&!rows.length)){
+  if(!DSP_CLEAN&&!rows.length){
     list.hidden=true;$('dspEmpty').hidden=false;
-    $('dspEmpty').querySelector('b').textContent=DSP_CLEAN
-      ?'没有可删除的归档会话':'还没有可读的会话';
+    $('dspEmpty').querySelector('b').textContent='还没有可读的会话';
   }else{
     if(!DSP_CLEAN){
       active.forEach((g,i)=>list.append(
@@ -2057,13 +2168,28 @@ function renderDispatch(){
       if(uncLive.length)list.append(dspGroup(agent,'未分类任务',uncLive,'',false,false,
         agent.exe+'|__unclassified'));
     }
+    // 已归档全部收进列表底部的独立分区：不再跟活跃项目平铺在同一条列表里。
+    // 清理模式始终渲染这一区（哪怕一条可删的都没有），退出清理的入口就在区头上。
     const ar= DSP_CLEAN ? shown : archived;
-    ar.forEach(g=>list.append(
-      dspGroup(agent,g.label,g.items,g.fullProject,true,DSP_CLEAN)));
-    // 没有项目的已归档单任务也进已归档区，带「已归档」徽标——不能跟活跃的
-    // 未分类任务混在一组里（用户 2026-11-16 定）。
-    if(uncShown.length)list.append(dspGroup(agent,'未分类任务',uncShown,'',true,DSP_CLEAN,
-      agent.exe+'|__unclassified-archived'));
+    const archTotal=DSP_CLEAN
+      ?deletable.length
+      :ar.reduce((n,g)=>n+g.items.length,0)+uncShown.length;
+    if(ar.length||uncShown.length||DSP_CLEAN){
+      const box=dspArchiveSection(agent,archTotal,DSP_CLEAN,deletable.length,DSP_CLEAN);
+      ar.forEach((g,i)=>box.body.append(
+        dspGroup(agent,g.label,g.items,g.fullProject,true,DSP_CLEAN?true:i===0,
+          agent.exe+'|__archived|'+g.key,true)));
+      // 没有项目的已归档单任务也在区里，跟活跃的未分类任务各记各的折叠状态。
+      if(uncShown.length)box.body.append(
+        dspGroup(agent,'未分类任务',uncShown,'',true,DSP_CLEAN,
+          agent.exe+'|__unclassified-archived',true));
+      if(DSP_CLEAN&&!ar.length&&!uncShown.length){
+        const e=document.createElement('div');e.className='dspsecempty';
+        e.textContent='没有可删除的归档会话：这个 Agent 没有已归档记录，或宿主不提供安全删除。';
+        box.body.append(e);
+      }
+      list.append(box.el);
+    }
     list.scrollTop=DSP_NEW?0:keep;
     DSP_NEW=false;
   }
@@ -2427,15 +2553,6 @@ $('kmReload').onclick=()=>postObj({cmd:'keyReload'});
 $('apAdd').onclick=()=>postObj({cmd:'appAdd'});
 $('apRescan').onclick=()=>postObj({cmd:'appRescan'});
 $('dspRefresh').onclick=()=>requestSessions(true);
-$('dspClean').onclick=()=>{
-  if(DSP_DELETING)return;
-  DSP_CLEAN=!DSP_CLEAN;
-  DSP_DEL_SEL.clear();
-  DSP_SIG='';
-  $('dspList').scrollTop=0;
-  $('dspNotice').hidden=true;
-  render();
-};
 $('dspBatchCancel').onclick=()=>{
   if(DSP_DELETING)return;
   DSP_CLEAN=false;DSP_DEL_SEL.clear();DSP_SIG='';render();

@@ -219,6 +219,26 @@ int main(int argc, char **argv) {
         }
     }
 
+    // ---- 子代理会话（agent-*.jsonl）不进目录 ----
+    {
+        // 子代理会话不在宿主 sessions 表里，归档标记查不到；列出来就是一条谁都
+        // 对不上的陌生会话（用户 2026-11-17 报的那条 27 天前 tuwen-editor）。
+        const QString subId = QStringLiteral("agent-a8f3b1");
+        writeLines(wbHome + QStringLiteral("/projects/slug-a/") + subId +
+                       QStringLiteral(".jsonl"),
+                   {QStringLiteral(R"({"type":"message","cwd":"D:/x"})"),
+                    wbLine("s1", "user", QStringLiteral("子代理任务"),
+                           base + 9000, subId)});
+        bool sawSub = false;
+        for (const auto &row : SessionTranscript::listSessions(
+                 QStringLiteral("WorkBuddy.exe"), 10, wbHome)) {
+            if (row.id.startsWith(QStringLiteral("agent-"))) {
+                sawSub = true;
+            }
+        }
+        check(!sawSub, "subagent jsonl not listed");
+    }
+
     // ---- 宿主临时目录（日期目录）里会话还在 → 不算已归档 ----
     {
         // WorkBuddy 单任务按时间戳建目录：目录存在就说明会话仍可用，只归

@@ -586,6 +586,34 @@ SessionMeta jsonlMeta(const QString &path) {
     return meta;
 }
 
+// jsonl 只是正文；哪些会话还算活着，只有宿主自己的库知道。WorkBuddy / WorkBuddy AI
+// 把状态写在 <home>/workbuddy.db 的 sessions 表里：deleted_at 非空＝宿主侧删过，
+// status='archived'＝宿主侧归档。jsonl 不跟着删（实测早删掉的会话文件还躺在磁盘上），
+// 所以只按「项目目录是否存在」判归档会把一堆早就结束的测试会话算成活跃
+// （用户 2026-11-17 拿客户端分组截图对账：客户端只剩 2 条，派发页列了 8 条）。
+QSet<QString> workbuddyArchivedIds(const QString &home) {
+    QSet<QString> out;
+    const QString dbPath = home + QStringLiteral("/workbuddy.db");
+    if (!QFileInfo::exists(dbPath)) {
+        return out;  // Qoder 等其它 jsonl 宿主没有这张表
+    }
+    ReadOnlyDb db(dbPath);
+    if (!db.ok()) {
+        return out;
+    }
+    QSqlQuery q(db.db());
+    // 老库/测试库可能缺这两列：查询失败就当没有归档信息，退回目录判断。
+    if (q.exec(QStringLiteral("SELECT id FROM sessions "
+                              "WHERE deleted_at IS NOT NULL "
+                              "OR LOWER(status) = 'archived'"))) {
+        while (q.next()) {
+            out.insert(q.value(0).toString());
+        }
+    }
+    q.finish();
+    return out;
+}
+
 QVector<SessionTranscript::SessionInfo> listJsonlSessions(const QString &home,
                                                           int maxSessions) {
     QVector<SessionTranscript::SessionInfo> out;
@@ -604,12 +632,20 @@ QVector<SessionTranscript::SessionInfo> listJsonlSessions(const QString &home,
         return a.lastModified() > b.lastModified();
     });
     const int scanCap = qMax(60, maxSessions * 6);
+    // 宿主侧已删除/已归档的会话（只有 WorkBuddy 系有这张表，其余宿主是空集）。
+    const QSet<QString> hostArchived = workbuddyArchivedIds(home);
     for (const QFileInfo &fi : files) {
         if (out.size() >= maxSessions || out.size() >= scanCap) {
             break;
         }
         const QString id = fi.completeBaseName();
         if (id.isEmpty()) {
+            continue;
+        }
+        // 子代理会话（agent-*.jsonl）不是用户会话：宿主客户端不列它，派发也没有意义。
+        // 它不在宿主 sessions 表里，所以上面的归档标记也查不到，只能靠目录判断——
+        // 混在活跃组里就是一条「27 天前」的陌生会话（用户 2026-11-17 报的正是这个）。
+        if (id.startsWith(QStringLiteral("agent-"))) {
             continue;
         }
         const SessionMeta meta = jsonlMeta(fi.absoluteFilePath());
@@ -619,7 +655,7 @@ QVector<SessionTranscript::SessionInfo> listJsonlSessions(const QString &home,
         info.project = meta.project;
         info.updatedAt =
             fi.lastModified().toUTC().toString(Qt::ISODateWithMs);
-        info.archived = archivedProject(info.project);
+        info.archived = archivedProject(info.project) || hostArchived.contains(id);
         out.append(info);
     }
     return out;

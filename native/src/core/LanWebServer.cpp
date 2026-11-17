@@ -1091,6 +1091,20 @@ QString LanWebServer::mobileHtml() const {
  .projcount{margin-left:auto;flex:0 0 auto;font-size:10px;font-weight:600;
    color:var(--faint);background:var(--w6);border-radius:8px;padding:1px 6px}
  .projbody[hidden]{display:none}
+ /* 已归档在列表底部单独成区：分隔线隔开、整区默认收起，不跟活跃项目混排。 */
+ .arcsec{margin-top:10px;border-top:1px solid var(--w14)}
+ .archead{display:flex;align-items:center;gap:6px;width:100%;min-height:44px;
+   margin:0;padding:8px 2px;border:0;background:transparent;font-size:11px;
+   font-weight:600;color:var(--muted);letter-spacing:.02em;text-align:left}
+ .archead:active{opacity:.7}
+ .arcchev{flex:0 0 auto;font-size:14px;line-height:1;color:var(--faint);
+   transform:rotate(90deg);transition:transform .18s ease}
+ .arcsec.closed .arcchev{transform:rotate(0deg)}
+ .arcname{flex:0 0 auto}
+ .arccount{flex:0 0 auto;font-size:10px;font-weight:600;color:var(--faint);
+   background:var(--w6);border-radius:8px;padding:1px 6px}
+ .arcbody[hidden]{display:none}
+ .arcbody .projhead{color:var(--muted)}
  .sescard{display:flex;align-items:center;gap:8px;margin-bottom:7px;
    touch-action:manipulation;padding:11px 11px 11px 13px;border-radius:13px;
    border:1px solid var(--w14);
@@ -2047,7 +2061,7 @@ function sessionCard(agent,row){
  el.onkeydown=(e)=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();open();}};
  return el;
 }
-function projectGroup(agent,label,rows,fullProject,archived,defaultOpen,stateKeyOverride){
+function projectGroup(agent,label,rows,fullProject,archived,defaultOpen,stateKeyOverride,hideBadge){
  const groupKey=fullProject?projectKey(fullProject):'__ungrouped';
  const stateKey=stateKeyOverride||(agent.exe+'|'+groupKey);
  const group=document.createElement('div');group.className='projgroup';
@@ -2057,7 +2071,7 @@ function projectGroup(agent,label,rows,fullProject,archived,defaultOpen,stateKey
  const chev=document.createElement('span');chev.className='projchev';chev.textContent='›';
  const name=document.createElement('span');name.className='projlabel';name.textContent=label;
  head.append(chev,name);
- if(archived){
+ if(archived&&!hideBadge){
   const arc=document.createElement('span');arc.className='projarch';arc.textContent='已归档';
   head.append(arc);
  }
@@ -2083,6 +2097,36 @@ function projectGroup(agent,label,rows,fullProject,archived,defaultOpen,stateKey
  };
  group.append(head,body);
  return group;
+}
+// 已归档单独成区（跟桌面同款）：整区默认收起，展开后内部仍按项目分组。
+function archiveSection(agent,count,defaultOpen){
+ const sec=document.createElement('div');sec.className='arcsec';
+ const head=document.createElement('button');head.className='archead';
+ const chev=document.createElement('span');chev.className='arcchev';chev.textContent='›';
+ const name=document.createElement('span');name.className='arcname';name.textContent='已归档';
+ const cnt=document.createElement('span');cnt.className='arccount';
+ cnt.textContent=count+' 个会话';
+ head.append(chev,name,cnt);
+ head.title='已归档会话：项目目录已不存在，或宿主侧已归档。展开可查看记录。';
+ const body=document.createElement('div');body.className='arcbody';
+ const stateKey=agent.exe+'|__archive-section';
+ const stored=GROUP_STATE.get(stateKey);
+ const open=stored===undefined?!!defaultOpen:stored;
+ const labelOf=opening=>'已归档，'+count+' 个会话，'+(opening?'已展开':'已收起');
+ sec.classList.toggle('closed',!open);
+ body.hidden=!open;
+ head.setAttribute('aria-expanded',String(open));
+ head.setAttribute('aria-label',labelOf(open));
+ head.onclick=()=>{
+  const opening=body.hidden;
+  body.hidden=!opening;
+  sec.classList.toggle('closed',!opening);
+  head.setAttribute('aria-expanded',String(opening));
+  head.setAttribute('aria-label',labelOf(opening));
+  GROUP_STATE.set(stateKey,opening);
+ };
+ sec.append(head,body);
+ return {el:sec,body};
 }
 function renderDispatch(){
  if(!CATALOG){
@@ -2156,21 +2200,29 @@ allGroups.forEach(g=>{
 });
 const uncLive=unclassified.filter(r=>!r.archived);
 const uncDead=unclassified.filter(r=>!!r.archived);
+// 摘要只报活跃面：归档数量交给底部「已归档」区头。
+const liveCount=rows.filter(r=>!r.archived).length;
 $('dispatchCount').textContent=agent.name+' · '+active.length+' 个项目'
- +(unclassified.length?' · '+unclassified.length+' 个未分类任务':'')
- +(archived.length?' · '+archived.length+' 个已归档':'')+' · '+rows.length+' 个会话';
+ +(uncLive.length?' · '+uncLive.length+' 个未分类任务':'')
+ +' · '+liveCount+' 个活跃会话';
 // 默认只展开最近的一个活跃项目，其余收起；项目再多也不会铺成一条长墙。
 active.forEach((g,i)=>list.append(
  projectGroup(agent,g.label,g.items,g.fullProject,false,i===0)));
 // 单任务会话统一收进一个「未分类任务」组，默认折叠。
 if(uncLive.length)list.append(
  projectGroup(agent,'未分类任务',uncLive,'',false,false,agent.exe+'|__unclassified'));
- // 归档项目固定排最后，并默认收起；仍可展开看历史会话。
-archived.forEach(g=>list.append(
- projectGroup(agent,g.label,g.items,g.fullProject,true,false)));
-// 没有项目的已归档单任务也进已归档区，带「已归档」徽标。
-if(uncDead.length)list.append(projectGroup(agent,'未分类任务',uncDead,'',true,false,
- agent.exe+'|__unclassified-archived'));
+ // 已归档收进底部独立分区：不跟活跃项目平铺，整区默认收起；
+ // 展开后内部仍按项目分组，第一个默认展开。
+const archTotal=archived.reduce((n,g)=>n+g.items.length,0)+uncDead.length;
+if(archTotal){
+ const box=archiveSection(agent,archTotal,false);
+ archived.forEach((g,i)=>box.body.append(
+  projectGroup(agent,g.label,g.items,g.fullProject,true,i===0,
+   agent.exe+'|__archived|'+g.key,true)));
+ if(uncDead.length)box.body.append(projectGroup(agent,'未分类任务',uncDead,'',true,false,
+  agent.exe+'|__unclassified-archived',true));
+ list.append(box.el);
+}
  list.scrollTop=keep;
 }
 function renderStatus(){

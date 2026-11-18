@@ -195,6 +195,7 @@ function state(theme) {
 let CURRENT_THEME = 'light';
 const ACK = new Set();
 const UPLOADS = [];  // /m/upload 收到的定位参数 + 文件名/字节数，附件断言用
+const FILES = [];    // /m/files、/m/file 收到的 query，电脑文件面板断言用
 
 function startServer() {
   return new Promise((resolve) => {
@@ -250,6 +251,27 @@ function startServer() {
           }));
         });
         return;
+      }
+      // 电脑文件（会话 inbox）：列表 + 下载。
+      if (url.pathname === '/m/files') {
+        FILES.length = 0;
+        FILES.push({ req: url.search });
+        res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+        return res.end(JSON.stringify({
+          ok: true,
+          files: [
+            { name: '会议记录.md', size: 2048, mtime: iso(NOW) },
+            { name: '截图一.png', size: 40960, mtime: iso(NOW - 60e3) },
+          ],
+        }));
+      }
+      if (url.pathname === '/m/file') {
+        FILES.push({ file: url.search });
+        res.writeHead(200, {
+          'Content-Type': 'application/octet-stream',
+          'Content-Disposition': 'attachment; filename="a.txt"',
+        });
+        return res.end('DOWNLOAD');
       }
       if (url.pathname === '/m/action') {
         let body = '';
@@ -366,6 +388,16 @@ const SCENES = {
       { name: '会议纪要.md', mimeType: 'text/markdown', buffer: Buffer.from('# 纪要') },
     ]);
     await page.waitForFunction(() => ATTS[''] && ATTS[''].length === 2);
+    await page.waitForTimeout(200);
+  },
+  // 电脑文件面板：列会话 inbox。
+  chatFiles: async (page) => {
+    await page.click('#tabbar .tab[data-tab="1"]');
+    await page.waitForSelector('#sessList .sescard');
+    await page.locator('#sessList .sescard').nth(0).click();
+    await page.waitForSelector('#pchat:not([hidden]) .chatlist .bub');
+    await page.click('#chatFiles');
+    await page.waitForSelector('#chatFilePanel:not([hidden]) .frow');
     await page.waitForTimeout(200);
   }
 };
@@ -606,6 +638,20 @@ async function runFlow() {
   await page.locator('#chatAtts .catt .x').click();
   ok(await page.locator('#chatAtts .catt').count() === 0, '× 可移除附件');
   ok(await page.locator('#chatAtts').evaluate((el) => el.hidden), '移除后附件条收起');
+
+  // 电脑文件面板：列出会话 inbox，行上带下载链接，× 能关。
+  FILES.length = 0;
+  await page.click('#chatFiles');
+  await page.waitForSelector('#chatFilePanel:not([hidden]) .frow');
+  ok(await page.locator('#chatFilePanel .frow').count() === 2, '电脑文件面板列出 inbox');
+  ok((await page.textContent('#chatFileCount')) === '2', '面板报文件数');
+  const fhref = await page.locator('#chatFilePanel .frow').first().getAttribute('href');
+  ok(fhref.includes('/m/file?') && fhref.includes('name=') && fhref.includes('session=sess-8f31c2a9'),
+    '文件行指向下载路由且带会话上下文', fhref);
+  ok(FILES.length === 1 && FILES[0].req.includes('session=sess-8f31c2a9'),
+    '列表请求带会话上下文', JSON.stringify(FILES));
+  await page.click('#chatFileClose');
+  ok(await page.locator('#chatFilePanel').evaluate((el) => el.hidden), '× 能关掉文件面板');
 
   await page.click('#chatBack');
   await page.locator('#agentChips .chip').nth(1).click();

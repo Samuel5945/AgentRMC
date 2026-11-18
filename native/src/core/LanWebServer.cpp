@@ -131,6 +131,26 @@ QString isoNow() {
     return QDateTime::currentDateTimeUtc().toString(Qt::ISODate);
 }
 
+// 上传/列目录/下载共用的定位字段（?id=&session=&project=&name=），
+// 一律 percent 解码。白名单之外的键直接丢，不往下游传。
+QJsonObject queryMeta(const QByteArray &query) {
+    QJsonObject meta;
+    const QList<QByteArray> pairs = query.split('&');
+    for (const QByteArray &pair : pairs) {
+        const int eq = pair.indexOf('=');
+        if (eq <= 0) {
+            continue;
+        }
+        const QString key = QString::fromUtf8(pair.left(eq));
+        if (key == QLatin1String("id") || key == QLatin1String("session")
+            || key == QLatin1String("project") || key == QLatin1String("exe")
+            || key == QLatin1String("name")) {
+            meta.insert(key, QUrl::fromPercentEncoding(pair.mid(eq + 1)));
+        }
+    }
+    return meta;
+}
+
 }  // namespace
 
 LanWebServer::LanWebServer(QObject *parent) : QObject(parent) {}
@@ -207,6 +227,16 @@ void LanWebServer::setThemeRoot(const QString &root) {
 void LanWebServer::setUploadHandler(
     std::function<QJsonObject(const QJsonObject &, const QByteArray &)> handler) {
     uploadHandler_ = std::move(handler);
+}
+
+void LanWebServer::setInboxListProvider(
+    std::function<QString(const QJsonObject &)> provider) {
+    inboxListProvider_ = std::move(provider);
+}
+
+void LanWebServer::setInboxFileProvider(
+    std::function<QJsonObject(const QJsonObject &)> provider) {
+    inboxFileProvider_ = std::move(provider);
 }
 
 void LanWebServer::setDevices(const QJsonArray &devices) {
@@ -587,20 +617,7 @@ void LanWebServer::route(QTcpSocket *socket, const QByteArray &method,
         // 直接进会话」的那条路（没有待办 id，只认会话工作目录）。文件名走
         // X-AgentRMC-Filename 头（percent 编码，兼容中文）；body 是原始字节。
         // 落盘与路径解析在主窗 uploadHandler。
-        QJsonObject meta;
-        const QList<QByteArray> pairs = query.split('&');
-        for (const QByteArray &pair : pairs) {
-            const int eq = pair.indexOf('=');
-            if (eq <= 0) {
-                continue;
-            }
-            const QString key = QString::fromUtf8(pair.left(eq));
-            const QString value = QUrl::fromPercentEncoding(pair.mid(eq + 1));
-            if (key == QLatin1String("id") || key == QLatin1String("session")
-                || key == QLatin1String("project") || key == QLatin1String("exe")) {
-                meta.insert(key, value);
-            }
-        }
+        QJsonObject meta = queryMeta(query);
         meta.insert(QStringLiteral("filename"),
                     QUrl::fromPercentEncoding(
                         headerValue(headerLines, "x-agentrmc-filename")));
@@ -616,6 +633,57 @@ void LanWebServer::route(QTcpSocket *socket, const QByteArray &method,
         finish(socket, status,
                QJsonDocument(result).toJson(QJsonDocument::Compact),
                "application/json");
+        return;
+    }
+    // 手机上翻「电脑文件」：列会话 inbox（GET /m/files）与下载（GET /m/file）。
+    // 定位字段跟 /m/upload 同一套；下载只认 inbox 里的 basename，具体校验在
+    // 主窗（canonical 前缀 + 40MB 上限）。
+    if (path == "/m/files" && method == "GET") {
+        if (authDevice(headerLines) < 0) {
+            finish(socket, "401 Unauthorized");
+            return;
+        }
+        const QString body =
+            inboxListProvider_ ? inboxListProvider_(queryMeta(query)) : QString();
+        if (body.isEmpty()) {
+            finish(socket, "404 Not Found");
+            return;
+        }
+        finish(socket, "200 OK", body.toUtf8(), "application/json");
+        return;
+    }
+    if (path == "/m/file" && method == "GET") {
+        if (authDevice(headerLines) < 0) {
+            finish(socket, "401 Unauthorized");
+            return;
+        }
+        const QJsonObject result =
+            inboxFileProvider_ ? inboxFileProvider_(queryMeta(query)) : QJsonObject();
+        if (!result.value(QStringLiteral("ok")).toBool()) {
+            finish(socket, "404 Not Found");
+            return;
+        }
+        const QByteArray data = QByteArray::fromBase64(
+            result.value(QStringLiteral("data")).toString().toLatin1());
+        const QString name = result.value(QStringLiteral("name")).toString();
+        // Content-Disposition 双写：filename* 用 RFC 5987 带中文，filename 给
+        // 老客户端一个纯 ASCII 兜底（非 ASCII 一律换下划线）。
+        QByteArray ascii;
+        for (const QChar c : name) {
+            ascii += (c.unicode() < 128 && c != QLatin1Char('"')
+                      && c != QLatin1Char('\\'))
+                         ? QByteArray(1, static_cast<char>(c.unicode()))
+                         : QByteArray("_");
+        }
+        const QByteArray headers =
+            QByteArray("Content-Disposition: attachment; filename=\"") + ascii
+            + "\"; filename*=UTF-8''" + QUrl::toPercentEncoding(name) + "\r\n";
+        QByteArray type =
+            result.value(QStringLiteral("contentType")).toString().toLatin1();
+        if (type.isEmpty()) {
+            type = "application/octet-stream";
+        }
+        finish(socket, "200 OK", data, type.constData(), headers, "no-store");
         return;
     }
     if (path.startsWith("/m/theme/") && method == "GET") {
@@ -1154,6 +1222,24 @@ QString LanWebServer::mobileHtml() const {
  .mpsec{padding:10px 14px 2px;font-size:12px;color:var(--muted)}
  .mpfoot{padding:12px 14px;border-top:1px solid var(--w10);
    font-size:14px;color:var(--text)}
+ /* 「电脑上的文件」面板：复用 mpanel 的上浮壳，行改成可点下载的 <a>。 */
+ .fphead{display:flex;align-items:center;gap:8px;padding:11px 14px;
+   background:var(--w8);border-bottom:1px solid var(--w10);
+   font-size:14px;color:var(--text)}
+ .fphead b{font-weight:600}
+ .fphead span{color:var(--muted2);font-size:12px;margin-right:auto;
+   font-variant-numeric:tabular-nums}
+ .fphead .fpx{flex:0 0 auto;width:24px;height:24px;border:none;
+   border-radius:50%;background:transparent;color:var(--muted2);
+   font-size:17px;line-height:1;padding:0;font-family:inherit}
+ .fphead .fpx:active{background:var(--w14);color:var(--text)}
+ .fempty{padding:24px 18px;text-align:center;color:var(--muted2);
+   font-size:13px;line-height:1.75;white-space:pre-line}
+ .frow{text-decoration:none;color:var(--text)}
+ .frow:active{background:var(--w6)}
+ .frow .mpico svg{width:16px;height:16px;display:block}
+ .fsize{flex:0 0 auto;font-size:11.5px;color:var(--muted2);
+   font-variant-numeric:tabular-nums}
  .mpfoot[hidden]{display:none}
  .mpthought{padding:12px 14px;border-top:1px solid var(--w10)}
  .mpthought[hidden]{display:none}
@@ -1331,6 +1417,7 @@ QString LanWebServer::mobileHtml() const {
    <div class="chathead">
     <button class="btn" id="chatBack">‹ 待办</button>
     <div class="chtitles"><div class="name" id="chatTitle"></div><div class="where" id="chatSub"></div></div>
+    <button class="cicobtn" id="chatFiles" title="电脑上的文件" aria-label="电脑上的文件"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7.5A2 2 0 0 1 5 5.5h4l2 2.5h8a2 2 0 0 1 2 2v7.5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/></svg></button>
    </div>
    <div class="chatwrap">
     <div class="chatlist" id="chatList"></div>
@@ -1363,6 +1450,11 @@ QString LanWebServer::mobileHtml() const {
       <input type="range" id="chatMpRange" min="0" max="5" value="0" step="1">
      </div>
      <div class="mpfoot" id="chatMpFoot">管理模型</div>
+    </div>
+    <div class="mpanel" id="chatFilePanel" hidden>
+     <div class="fphead"><b>电脑上的文件</b><span id="chatFileCount"></span><button class="fpx" id="chatFileClose" aria-label="关闭">×</button></div>
+     <div class="mplist" id="chatFileList"></div>
+     <div class="mpfoot">点文件名下载到手机</div>
     </div>
    </div>
   </div>
@@ -1990,6 +2082,64 @@ async function attUpload(files){
  else if(skipN&&!failN)cNotice('','文件超过 25MB，传不了','bad');
  attBusy=false;
 }
+// ---------- 电脑上的文件（会话 inbox）：列表 + 下载 ----------
+// 手机只能看到「会话 inbox」一个目录：手机传上来的、电脑上 Ctrl+V 粘的图都
+// 落在那里，所以这份列表天然就是「这次对话相关的文件」。下载用 <a download>
+// 同源跳转，设备令牌 cookie 自动带上；路由侧只认 basename，跳不出 inbox。
+const FP_ICON='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3v5h5"/><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8l-5-5Z"/></svg>';
+let fpOpen=false;
+function fpUrl(name){
+ let q='?id='+encodeURIComponent(chatKind==='session'?'':chatId);
+ if(chatKind==='session')
+  q+='&session='+encodeURIComponent(chatSession||'')
+    +'&project='+encodeURIComponent(chatProject||'');
+ if(name)q+='&name='+encodeURIComponent(name);
+ return '/m/'+(name?'file':'files')+q;
+}
+function fpClose(){$('chatFilePanel').hidden=true;fpOpen=false;}
+async function fpLoad(){
+ const list=$('chatFileList');if(!list)return;
+ list.replaceChildren();
+ const ld=document.createElement('div');ld.className='fempty';
+ ld.textContent='正在读电脑上的文件…';list.append(ld);
+ try{
+  const r=await fetch(fpUrl(''),{cache:'no-store'});
+  if(r.status===401){showPair();return;}
+  const j=await r.json();
+  const files=(j&&j.files)||[];
+  list.replaceChildren();
+  $('chatFileCount').textContent=files.length?String(files.length):'';
+  if(!files.length){
+   const e=document.createElement('div');e.className='fempty';
+   e.textContent='这个会话还没有文件。\n手机传上来的、电脑上粘的图都会落在这里。';
+   list.append(e);return;
+  }
+  files.forEach(f=>{
+   const a=document.createElement('a');a.className='mprow frow';
+   a.href=fpUrl(f.name);a.download=f.name||'';
+   const ic=document.createElement('span');ic.className='mpico';
+   ic.innerHTML=FP_ICON;
+   const nm=document.createElement('span');nm.className='mpname';
+   nm.textContent=f.name||'';
+   const sz=document.createElement('span');sz.className='fsize';
+   sz.textContent=attFmt(f.size||0);
+   a.append(ic,nm,sz);list.append(a);
+  });
+ }catch(e){
+  list.replaceChildren();
+  const er=document.createElement('div');er.className='fempty';
+  er.textContent='连不上电脑';list.append(er);
+ }
+}
+$('chatFiles').onclick=()=>{
+ if(fpOpen){fpClose();return;}
+ fpOpen=true;
+ // 两个上浮面板抢同一块位置：开一个就关另一个。
+ mpOpen=false;$('chatModelPanel').hidden=true;
+ $('chatFilePanel').hidden=false;
+ fpLoad();
+};
+$('chatFileClose').onclick=fpClose;
 function cGrow(p){
  const ta=$(p+'chatText');if(!ta)return;
  ta.style.height='auto';
@@ -2177,7 +2327,7 @@ function mpRenderPanel(){
 $('chatModelChip').onclick=()=>{
  if(!mpActive())return;
  mpOpen=!mpOpen;
- if(mpOpen)mpRenderPanel();else $('chatModelPanel').hidden=true;
+ if(mpOpen){fpClose();mpRenderPanel();}else $('chatModelPanel').hidden=true;
 };
 $('chatMpBack').onclick=()=>{mpLevel='providers';mpRenderPanel();};
 $('chatMpRange').addEventListener('input',()=>{
@@ -2245,7 +2395,7 @@ function startChat(kind,id,meta){
  chatExe=meta&&meta.exe||'';chatSession=meta&&meta.session||'';
  chatProject=meta&&meta.project||'';chatAgentName=meta&&meta.agentName||'';
  chatCanDispatch=meta&&meta.canDispatch!==false;
- cValue('','');cNotice('','');attClear('');
+ cValue('','');cNotice('','');attClear('');fpClose();
  render();fetchTranscript(0,'init');
 }
 function openChat(id){startChat('work',id,{});}
@@ -2256,7 +2406,7 @@ function openSession(agent,row){
 }
 function closeChat(){
  chatId='';chatMsgs=[];chatIds=new Set();
- attClear('');
+ attClear('');fpClose();
  chatKind='work';chatExe='';chatSession='';chatProject='';chatAgentName='';
  chatCanDispatch=true;
  render();

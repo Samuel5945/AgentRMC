@@ -65,6 +65,11 @@ public:
     void setUploadHandler(
         std::function<QJsonObject(const QJsonObject &meta,
                                   const QByteArray &data)> handler);
+    // GET /m/files 的应答来源（JSON 字符串）：列会话 inbox，meta 同 /m/upload。
+    void setInboxListProvider(std::function<QString(const QJsonObject &meta)> provider);
+    // GET /m/file 的应答来源：{ok,name,contentType,data(base64)}。404 用 ok=false。
+    void setInboxFileProvider(
+        std::function<QJsonObject(const QJsonObject &meta)> provider);
     // POST /m/action 的处理器（白名单已在服务端验过）：
     // 返回 {"ok":bool,"code":200|400|403|409}，code 直接当 HTTP 状态。
     void setActionHandler(
@@ -125,6 +130,8 @@ private:
         sessionTranscriptProvider_;
     std::function<QJsonObject(const QJsonObject &, const QByteArray &)>
         uploadHandler_;
+    std::function<QString(const QJsonObject &)> inboxListProvider_;
+    std::function<QJsonObject(const QJsonObject &)> inboxFileProvider_;
     std::function<QJsonObject(const QJsonObject &)> actionHandler_;
     QString themeRoot_;
     QJsonArray devices_;  // {id,name,tokenHash,pairedAt,lastSeen}

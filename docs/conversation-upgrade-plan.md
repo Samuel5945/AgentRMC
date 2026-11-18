@@ -1,7 +1,7 @@
 # 对话能力升级：借鉴 Luma 的方案
 
-> 状态：**C 手机传文件已实现并完整化（2026-11-18：多选/进度/附件条 + 桌面 📎）；
-> B1 待答请求只读展示已实现**（2026-11-14 真机验收）；
+> 状态：**C 传文件双向闭环（2026-11-18：手机多选/进度/附件条 + 桌面 📎 与
+> Ctrl+V 粘贴 + 手机列/下电脑文件）；B1 待答请求只读展示已实现**（2026-11-14 真机验收）；
 > B2/B3 内联应答与 A OpenCode/Codex 接入仍为设计。触发：用户给了
 > [Luma](https://github.com/modao7067/luma)（安卓上跑 Codex/Claude Code/OpenCode/DSH
 > 等 CLI 的对话前端），要借鉴它的 OpenCode/Codex 接法、授权/选择项显示、文件传输，
@@ -244,6 +244,23 @@ RequestQuestion(id, header, prompt, options[], multiple, secret,
   - 测试：`lanweb_test` 115 checks（新增会话上下文上传 5 项）；
     `rc_probe/mobile_page_probe.mjs flow` 增 13 项附件断言 + `chatAtt` 截图场景；
     新增 `rc_probe/desktop_chat_attachments.mjs`（mock WebView2 通道，14 项）。
+- **反向：PC → 手机（2026-11-18 晚）**。会话聊天页顶栏加「电脑上的文件」
+  （文件夹图标）→ 上浮面板列 `<inbox>` 里最近 100 个文件（按时间倒序），
+  点行即下载（`<a download>`，同源跳转自动带设备令牌）。
+  - 路由：`GET /m/files`（列）与 `GET /m/file`（下载），定位字段跟 `/m/upload`
+    完全同一套（`id?/session/project`）——三条路由共用 `queryMeta` 与
+    `MainWindow::resolveInboxTarget`，不会出现"上传能到、下载找不到"的错位。
+  - `Content-Disposition` 双写：`filename=` 给纯 ASCII 兜底、`filename*=UTF-8''`
+    带中文（RFC 5987）。
+  - 安全：`name` 只取 basename；目录与文件都取 `canonicalFilePath()` 再比前缀
+    （符号链接也跳不出 inbox）；单文件 40MB 上限（一次性读进内存，回 base64）。
+  - 语义：inbox 就是「这次对话相关的文件」——手机传上来的、电脑上粘的图都在
+    里面，所以不需要另做「文件中心」。
+- **桌面 Ctrl+V 粘贴图片（2026-11-18 晚）**：剪贴板里只有 blob、拿不到本机
+  路径 → 页面读 blob 转 base64 → `savePaste` WebMessage → native 复用
+  `lanUpload` 落进 inbox（事件流记「粘贴图片」而非「上传文件」）→ 回推路径
+  当附件。纯文字粘贴不拦，照常进 textarea；落盘失败回一句 bad notice，
+  不让「点了粘贴毫无反应」。
 
 ## 4. 分期建议
 

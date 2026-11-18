@@ -3112,11 +3112,66 @@ function attAdd(p,files){
 function attText(p){
  return attList(p).map(a=>'请查看文件：'+a.path).join('\n');
 }
-// 📎 回调：native 弹完对话框回推选中的本机路径。
+// 📎 / 粘贴 回调：native 弹完对话框或写完盘回推。
 window.__setFiles=function(o){
- if(!o||!o.plane||!ATTS[o.plane])return;
- attAdd(o.plane,o.files||[]);
+  if(!o||!o.plane||!ATTS[o.plane])return;
+  if(o.error){cNotice(o.plane,'没存下来：'+o.error,'bad');return;}
+  attAdd(o.plane,o.files||[]);
 };
+// ---------- 粘贴图片（桌面端）----------
+// 剪贴板里的图只有 blob、没有本机路径，所以走「页面读 blob → base64 →
+// WebMessage → native 落进会话 inbox → 回推路径当附件」。和手机上传同一套
+// 语义，只是不过 HTTP。纯文字粘贴不拦，照常进 textarea。
+function pastePlane(){
+  if(dchatOpen&&!$('dchat').hidden)return 'dchat';
+  if(CHAT&&!$('chat').hidden)return 'chat';
+  return '';
+}
+function pasteCtx(plane){
+  if(plane==='dchat'&&DSCHAT)
+    return {id:'',session:DSCHAT.row.id,
+      project:DSCHAT.row.project||'',exe:DSCHAT.agent.exe};
+  // 待办派发面：chatOpenedId 就是待办 id，native 按它反查项目/会话。
+  if(plane==='chat'&&CHAT)
+    return {id:chatOpenedId,session:'',project:'',exe:CHAT.agentExe||''};
+  return null;
+}
+function blobB64(blob){
+  return new Promise((res,rej)=>{
+    const r=new FileReader();
+    r.onload=()=>{
+      const s=String(r.result||'');const i=s.indexOf(',');
+      res(i<0?'':s.slice(i+1));
+    };
+    r.onerror=()=>rej(r.error||new Error('读取失败'));
+    r.readAsDataURL(blob);
+  });
+}
+document.addEventListener('paste',async e=>{
+  const plane=pastePlane();if(!plane)return;
+  const ctx=pasteCtx(plane);if(!ctx)return;
+  const items=(e.clipboardData&&e.clipboardData.items)||[];
+  const imgs=[];
+  for(const it of items){
+    if(it.kind==='file'&&/^image\//i.test(it.type)){
+      const f=it.getAsFile();if(f)imgs.push(f);
+    }
+  }
+  if(!imgs.length)return;  // 没有图片：放行，让文字正常粘进输入框
+  e.preventDefault();
+  cNotice(plane,'正在保存粘贴的图片…');
+  for(let i=0;i<imgs.length;i++){
+    const f=imgs[i];
+    const ext=/jpe?g/i.test(f.type)?'jpg':'png';
+    const name='粘贴图片'+(imgs.length>1?('-'+(i+1)):'')+'.'+ext;
+    let data='';
+    try{data=await blobB64(f);}catch(_){
+      cNotice(plane,'粘贴失败：读不出剪贴板图片','bad');continue;
+    }
+    postObj({cmd:'savePaste',plane,name,data,
+      id:ctx.id,session:ctx.session,project:ctx.project,exe:ctx.exe});
+  }
+});
 function cGrow(prefix){
   const ta=$(prefix+'Text');if(!ta)return;
   ta.style.height='auto';

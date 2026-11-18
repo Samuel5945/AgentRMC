@@ -107,6 +107,13 @@ await page.addInitScript(({ catalog, chat }) => {
           ],
         }), 0);
       }
+      // Ctrl+V 粘贴：native 落盘后回推同名路径（这里模拟落盘成功）。
+      if (msg.cmd === 'savePaste') {
+        setTimeout(() => window.__setFiles && window.__setFiles({
+          plane: msg.plane,
+          files: [{ name: msg.name, path: 'D:/githubrepos/Agentrmc/.agentrmc/inbox/s1/20261118-' + msg.name, size: 4 }],
+        }), 0);
+      }
       if (msg.cmd === 'dispatchSession' || msg.cmd === 'dispatch') {
         const r = window.__nextResult;
         setTimeout(() => window.__setDispatchResult && window.__setDispatchResult(r), 0);
@@ -143,6 +150,25 @@ await page.screenshot({ path: path.join(SHOTS, 'chat_att_chips.png') });
 await page.evaluate(() => window.__setFiles({ plane: 'dchat', files: [{ name: '报告.pdf', path: 'D:/tmp/报告.pdf', size: 2048 }] }));
 await page.waitForTimeout(80);
 check(await page.locator('#dchatAtts .catt').count() === 2, '同一路径重复选不叠 chip');
+
+// Ctrl+V 截图：剪贴板只有 blob、没有本机路径 → base64 送 native 落盘 → 回推路径。
+await page.evaluate(() => {
+  const b64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8AAAwAB/AF+H+YAAAAASUVORK5CYII=';
+  const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+  const dt = new DataTransfer();
+  dt.items.add(new File([bytes], 'image.png', { type: 'image/png' }));
+  document.dispatchEvent(new ClipboardEvent('paste', {
+    clipboardData: dt, bubbles: true, cancelable: true,
+  }));
+});
+await page.waitForFunction(() => ATTS.dchat && ATTS.dchat.length === 3, null, { timeout: 8000 });
+const pasteMsg = await page.evaluate(() => window.__posted.filter((m) => m.cmd === 'savePaste').pop());
+check(pasteMsg && pasteMsg.plane === 'dchat' && pasteMsg.session === 's1',
+  'Ctrl+V 带上会话上下文', pasteMsg && { plane: pasteMsg.plane, session: pasteMsg.session });
+check(pasteMsg && pasteMsg.name === '粘贴图片.png', '粘贴图按类型取扩展名', pasteMsg && pasteMsg.name);
+check(pasteMsg && /^[A-Za-z0-9+/=]+$/.test(pasteMsg.data || '') && pasteMsg.data.length > 20,
+  '粘贴图走 base64 送 native');
+check(await page.locator('#dchatAtts .catt').count() === 3, '粘贴图片进附件条');
 
 await page.evaluate(() => { window.__posted.length = 0; });
 await page.locator('#dchatSend').click();

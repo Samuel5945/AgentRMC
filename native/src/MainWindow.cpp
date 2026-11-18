@@ -52,6 +52,7 @@
 #include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
+#include <QMimeDatabase>
 #include <QMimeData>
 #include <QSettings>
 #include <QDateTime>
@@ -3412,6 +3413,10 @@ void MainWindow::ensureLanServer() {
         [this](const QJsonObject &meta, const QByteArray &data) {
             return lanUpload(meta, data);
         });
+    lan_->setInboxListProvider(
+        [this](const QJsonObject &meta) { return lanInboxList(meta); });
+    lan_->setInboxFileProvider(
+        [this](const QJsonObject &meta) { return lanInboxFile(meta); });
     lan_->setThemeRoot(ThemeManager::themesRoot());
     // 白名单已在服务端验过；这里与桌面外壳走同一个 handleWebAction，
     // 做完它内部统一 refresh，桌面外壳自动跟着刷新，双端一致免费。
@@ -3991,6 +3996,59 @@ QString MainWindow::dispatchToSession(const QString &agentExe,
     return QString();
 }
 
+bool MainWindow::resolveInboxTarget(const QJsonObject &meta, QString *project,
+                                    QString *sessionKey) const {
+    const QString id = meta.value(QStringLiteral("id")).toString();
+    QString proj = meta.value(QStringLiteral("project")).toString().trimmed();
+    QString sess = meta.value(QStringLiteral("session")).toString().trimmed();
+    // 会话上下文两条来源：① 待办 id（队列里的活，project/sessionId 可信）；
+    // ② 客户端带上来的 session/project（从派发页直接进会话时没有待办）。
+    if (workItems_ != nullptr && !id.isEmpty()) {
+        for (const WorkItem &it : workItems_->items()) {
+            if (it.id == id) {
+                if (!it.project.isEmpty()) {
+                    proj = it.project;
+                }
+                sess = it.sessionId.isEmpty() ? it.id : it.sessionId;
+                break;
+            }
+        }
+    }
+    if (proj.isEmpty() && sess.isEmpty()) {
+        return false;
+    }
+    // project 可能是客户端带上来的路径：只接受**已存在的绝对目录**、拒盘根。
+    // 校验不过就丢掉（退到中央 uploads 目录），绝不按客户端给的坏路径写。
+    if (!proj.isEmpty()) {
+        const QFileInfo pi(proj);
+        const QString norm = QDir::fromNativeSeparators(proj);
+        if (!pi.isDir() || !pi.isAbsolute() || norm.size() <= 3) {
+            proj.clear();
+        }
+    }
+    // sessionKey 直接拼进路径：去掉分隔符与控制字符，杜绝 .. 穿越。
+    sess.remove(QRegularExpression(QStringLiteral("[\\\\/:*?\"<>|\\x00-\\x1f]")));
+    sess = sess.trimmed();
+    if (sess.isEmpty() || sess == QLatin1String("..") || sess == QLatin1String(".")) {
+        sess = QStringLiteral("adhoc");
+    }
+    *project = proj;
+    *sessionKey = sess;
+    return true;
+}
+
+QString MainWindow::inboxDirFor(const QJsonObject &meta) const {
+    QString project, session;
+    if (!resolveInboxTarget(meta, &project, &session)) {
+        return QString();
+    }
+    if (!project.isEmpty()) {
+        return project + QStringLiteral("/.agentrmc/inbox/") + session;
+    }
+    return QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) +
+           QStringLiteral("/uploads/") + session;
+}
+
 QJsonObject MainWindow::lanUpload(const QJsonObject &meta,
                                   const QByteArray &data) {
     const auto fail = [](int code, const QString &why) {
@@ -3998,39 +4056,13 @@ QJsonObject MainWindow::lanUpload(const QJsonObject &meta,
                            {QStringLiteral("code"), code},
                            {QStringLiteral("error"), why}};
     };
-    const QString id = meta.value(QStringLiteral("id")).toString();
     QString filename = meta.value(QStringLiteral("filename")).toString();
-    // 会话上下文两条来源：① 待办 id（队列里的活，project/sessionId 可信）；
-    // ② 手机带上来的 session/project/exe（从派发页直接进会话时没有待办）。
-    QString project = meta.value(QStringLiteral("project")).toString().trimmed();
-    QString sessionKey = meta.value(QStringLiteral("session")).toString().trimmed();
-    if (workItems_ != nullptr && !id.isEmpty()) {
-        for (const WorkItem &it : workItems_->items()) {
-            if (it.id == id) {
-                if (!it.project.isEmpty()) {
-                    project = it.project;
-                }
-                sessionKey = it.sessionId.isEmpty() ? it.id : it.sessionId;
-                break;
-            }
-        }
-    }
-    if (project.isEmpty() && sessionKey.isEmpty()) {
+    QString project, sessionKey;
+    if (!resolveInboxTarget(meta, &project, &sessionKey)) {
         return fail(404, QStringLiteral("待办不存在"));
     }
     if (data.isEmpty()) {
         return fail(400, QStringLiteral("空文件"));
-    }
-    // project 现在可能是客户端带上来的路径：只接受**已存在的绝对目录**，且
-    // 拒绝盘根。上传本身要设备令牌（已配对手机），这里再收一层，避免拿着
-    // 令牌就能往任意路径写。
-    if (!project.isEmpty()) {
-        const QFileInfo pi(project);
-        const QString norm = QDir::fromNativeSeparators(project);
-        const bool driveRoot = norm.size() <= 3;  // C:/ 、C: 、/
-        if (!pi.isDir() || !pi.isAbsolute() || driveRoot) {
-            return fail(400, QStringLiteral("会话工作目录无效"));
-        }
     }
     // 文件名 sanitize：只取 basename，去路径分隔符/控制字符，限长保扩展名。
     // 服务端不信任客户端文件名，杜绝 ../ 穿越。
@@ -4047,13 +4079,6 @@ QJsonObject MainWindow::lanUpload(const QJsonObject &meta,
     }
     if (name.size() > 120) {
         name = name.right(120);
-    }
-    // 会话 key 同理：它直接拼进路径，必须去掉分隔符与 .. 。
-    sessionKey.remove(QRegularExpression(QStringLiteral("[\\\\/:*?\"<>|\\x00-\\x1f]")));
-    sessionKey = sessionKey.trimmed();
-    if (sessionKey.isEmpty() || sessionKey == QLatin1String("..")
-        || sessionKey == QLatin1String(".")) {
-        sessionKey = QStringLiteral("adhoc");
     }
     // 落盘：会话工作目录下 .agentrmc/inbox/<session>/（agent 天然可达）；
     // 无项目退统一 uploads 目录。时间戳前缀防重名。
@@ -4092,13 +4117,91 @@ QJsonObject MainWindow::lanUpload(const QJsonObject &meta,
     }
     f.close();
     const QString abs = QFileInfo(path).absoluteFilePath();
+    // 落盘器两条来源共用（手机上传 / 桌面 Ctrl+V 粘贴），事件流按来源记。
+    const bool pasted =
+        meta.value(QStringLiteral("source")).toString() == QLatin1String("paste");
     appendEvent(QStringLiteral("status"), QString(), QString(),
-                QString::fromUtf8("手机上传文件：%1").arg(name), 0);
+                (pasted ? QStringLiteral("粘贴图片：%1")
+                        : QStringLiteral("上传文件：%1"))
+                    .arg(name),
+                0);
     return QJsonObject{{QStringLiteral("ok"), true},
                        {QStringLiteral("code"), 200},
                        {QStringLiteral("path"), abs},
                        {QStringLiteral("name"), name},
                        {QStringLiteral("size"), data.size()}};
+}
+
+// 手机「电脑文件」：列会话 inbox。空目录也回合法空列表——前端据此显示
+// 「还没有文件」，不要用 404 把整个面板当错误处理。
+QString MainWindow::lanInboxList(const QJsonObject &meta) {
+    const QString dir = inboxDirFor(meta);
+    if (dir.isEmpty()) {
+        return QString();
+    }
+    QJsonArray arr;
+    // NoSymLinks：inbox 里出现符号链接一律不列（下载侧还有 canonical 校验）。
+    const QFileInfoList infos =
+        QDir(dir).entryInfoList(QDir::Files | QDir::NoSymLinks, QDir::Time);
+    int n = 0;
+    for (const QFileInfo &fi : infos) {
+        if (n++ >= 100) {
+            break;
+        }
+        arr.append(QJsonObject{
+            {QStringLiteral("name"), fi.fileName()},
+            {QStringLiteral("size"), static_cast<double>(fi.size())},
+            {QStringLiteral("mtime"),
+             fi.lastModified().toUTC().toString(Qt::ISODate)}});
+    }
+    return QString::fromUtf8(
+        QJsonDocument(QJsonObject{{QStringLiteral("ok"), true},
+                                  {QStringLiteral("files"), arr}})
+            .toJson(QJsonDocument::Compact));
+}
+
+// 下载 inbox 里的一个文件。name 由客户端给、不可信：只认 basename，再用
+// canonical 前缀校验兜住符号链接——不许读 inbox 以外任何东西。
+QJsonObject MainWindow::lanInboxFile(const QJsonObject &meta) {
+    const auto fail = [] { return QJsonObject{{QStringLiteral("ok"), false}}; };
+    const QString dir = inboxDirFor(meta);
+    if (dir.isEmpty()) {
+        return fail();
+    }
+    QString name = meta.value(QStringLiteral("name")).toString();
+    name.replace(QLatin1Char('\\'), QLatin1Char('/'));
+    name = name.mid(name.lastIndexOf(QLatin1Char('/')) + 1);
+    name.remove(QRegularExpression(QStringLiteral("[\\x00-\\x1f]")));
+    if (name.isEmpty() || name == QLatin1String(".") || name == QLatin1String("..")) {
+        return fail();
+    }
+    const QString canonDir = QFileInfo(dir).canonicalFilePath();
+    const QString canonFile =
+        QFileInfo(dir + QLatin1Char('/') + name).canonicalFilePath();
+    if (canonDir.isEmpty() || canonFile.isEmpty()
+        || !canonFile.startsWith(canonDir + QLatin1Char('/'), Qt::CaseInsensitive)) {
+        return fail();
+    }
+    QFile f(canonFile);
+    // 一次性读进内存：inbox 里都是上传/粘贴进来的小文件；再压一道 40MB 上限，
+    // 万一被丢了大的进去也不至于把主窗撑爆。
+    if (!f.open(QIODevice::ReadOnly) || f.size() > 40LL * 1024 * 1024) {
+        f.close();
+        return fail();
+    }
+    const QByteArray data = f.readAll();
+    f.close();
+    const QString mime =
+        QMimeDatabase()
+            .mimeTypeForFile(canonFile, QMimeDatabase::MatchExtension)
+            .name();
+    return QJsonObject{{QStringLiteral("ok"), true},
+                       {QStringLiteral("name"), name},
+                       {QStringLiteral("contentType"),
+                        mime.isEmpty() ? QStringLiteral("application/octet-stream")
+                                       : mime},
+                       {QStringLiteral("data"),
+                        QString::fromLatin1(data.toBase64())}};
 }
 
 // 页面上的按钮/双击回到这里：全部转给既有实现，不在页面里另起一套状态机。
@@ -4231,6 +4334,41 @@ void MainWindow::handleWebAction(const QJsonObject &action) {
             }
             workWeb_->pushFiles(QJsonObject{{QStringLiteral("plane"), plane},
                                             {QStringLiteral("files"), arr}});
+        }
+        return;
+    }
+    // 桌面聊天页 Ctrl+V 截图：剪贴板里的图页面只能拿到 blob（没有本机路径），
+    // 所以把 base64 送上来、由 native 落进会话 inbox——跟手机上传同一个落盘器
+    // （lanUpload），回来后还是「路径当附件」那套。落盘失败也要回一句，
+    // 否则页面那边点了粘贴毫无反应。
+    if (cmd == QStringLiteral("savePaste")) {
+        const QString plane = action.value(QStringLiteral("plane")).toString(
+            QStringLiteral("dchat"));
+        const QJsonObject meta{
+            {QStringLiteral("filename"), action.value(QStringLiteral("name"))},
+            {QStringLiteral("id"), action.value(QStringLiteral("id"))},
+            {QStringLiteral("session"), action.value(QStringLiteral("session"))},
+            {QStringLiteral("project"), action.value(QStringLiteral("project"))},
+            {QStringLiteral("source"), QStringLiteral("paste")}};
+        const QByteArray data = QByteArray::fromBase64(
+            action.value(QStringLiteral("data")).toString().toLatin1());
+        const QJsonObject res = lanUpload(meta, data);
+        if (workWeb_ != nullptr) {
+            if (res.value(QStringLiteral("ok")).toBool()) {
+                workWeb_->pushFiles(QJsonObject{
+                    {QStringLiteral("plane"), plane},
+                    {QStringLiteral("files"),
+                     QJsonArray{QJsonObject{
+                         {QStringLiteral("name"), res.value(QStringLiteral("name"))},
+                         {QStringLiteral("path"), res.value(QStringLiteral("path"))},
+                         {QStringLiteral("size"),
+                          res.value(QStringLiteral("size"))}}}}});
+            } else {
+                workWeb_->pushFiles(QJsonObject{
+                    {QStringLiteral("plane"), plane},
+                    {QStringLiteral("error"),
+                     res.value(QStringLiteral("error")).toString()}});
+            }
         }
         return;
     }

@@ -187,6 +187,26 @@ int main(int argc, char **argv) {
                            {QStringLiteral("path"),
                             QStringLiteral("/inbox/") + upName}};
     });
+    // 电脑文件（inbox）：列表与下载。下载侧只认 a.txt，其余一律 ok=false。
+    QString lastInboxSession, lastInboxProject, lastInboxName;
+    lan.setInboxListProvider([&](const QJsonObject &meta) {
+        lastInboxSession = meta.value(QStringLiteral("session")).toString();
+        lastInboxProject = meta.value(QStringLiteral("project")).toString();
+        return QString::fromUtf8(
+            R"({"ok":true,"files":[{"name":"a.txt","size":5},{"name":"图.png","size":7}]})");
+    });
+    lan.setInboxFileProvider([&](const QJsonObject &meta) {
+        const QString name = meta.value(QStringLiteral("name")).toString();
+        lastInboxName = name;
+        if (name != QStringLiteral("a.txt")) {
+            return QJsonObject{{QStringLiteral("ok"), false}};
+        }
+        return QJsonObject{
+            {QStringLiteral("ok"), true},
+            {QStringLiteral("name"), name},
+            {QStringLiteral("contentType"), QStringLiteral("text/plain")},
+            {QStringLiteral("data"), QString::fromLatin1(QByteArray("HELLO").toBase64())}};
+    });
     QJsonArray persisted;
     int persistCalls = 0;
     QObject::connect(&lan, &LanWebServer::devicesChanged,
@@ -445,6 +465,59 @@ int main(int argc, char **argv) {
                           "upload project percent-decoded");
                     check(upData == QByteArray("SESSIONBYTES"),
                           "upload by session bytes passed");
+                },
+                next);
+    });
+    // 9i. 电脑文件列表：无令牌 401；带令牌 200 且定位字段透传。
+    seq.add([&](std::function<void()> next) {
+        request(app, port,
+                get("/m/files?session=sess-9&project=D%3A%2Fwork%2Fdemo"),
+                [](const QByteArray &resp) {
+                    check(resp.startsWith("HTTP/1.1 401"), "files no token 401",
+                          resp);
+                },
+                next);
+    });
+    seq.add([&](std::function<void()> next) {
+        request(app, port,
+                get("/m/files?session=sess-9&project=D%3A%2Fwork%2Fdemo",
+                    cookieHeader(token)),
+                [&](const QByteArray &resp) {
+                    check(resp.startsWith("HTTP/1.1 200"), "files 200", resp);
+                    check(lastInboxSession == QStringLiteral("sess-9"),
+                          "files session passed through");
+                    check(lastInboxProject == QStringLiteral("D:/work/demo"),
+                          "files project percent-decoded");
+                    check(resp.contains("\"a.txt\""), "files body lists name",
+                          resp);
+                },
+                next);
+    });
+    // 9j. 下载：200 + attachment 头 + 原字节。
+    seq.add([&](std::function<void()> next) {
+        request(app, port,
+                get("/m/file?session=sess-9&project=D%3A%2Fwork%2Fdemo&name=a.txt",
+                    cookieHeader(token)),
+                [&](const QByteArray &resp) {
+                    check(resp.startsWith("HTTP/1.1 200"), "file 200", resp);
+                    check(resp.contains("Content-Disposition: attachment;"),
+                          "file is an attachment", resp);
+                    check(resp.contains("filename*=UTF-8''a.txt"),
+                          "file name in header", resp);
+                    check(resp.contains("HELLO"), "file bytes returned", resp);
+                    check(lastInboxName == QStringLiteral("a.txt"),
+                          "file name passed through");
+                },
+                next);
+    });
+    // 9k. 下载：未知文件 → 404（ok=false 一律当没找到，不区分原因）。
+    seq.add([&](std::function<void()> next) {
+        request(app, port,
+                get("/m/file?session=sess-9&project=D%3A%2Fwork%2Fdemo&name=nope.bin",
+                    cookieHeader(token)),
+                [](const QByteArray &resp) {
+                    check(resp.startsWith("HTTP/1.1 404"), "file unknown 404",
+                          resp);
                 },
                 next);
     });

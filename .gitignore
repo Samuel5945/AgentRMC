@@ -74,3 +74,6 @@ audio_test.wav
 
 # ---------- 宿主工具本地状态 ----------
 .workbuddy/
+
+# 测试用 TEMP（DSH 沙箱要求指到工作区内）
+tmp_t/

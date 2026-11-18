@@ -1501,16 +1501,16 @@ function rgbaOf(v){
  return null;
 }
 // 半透明卡片色合成到不透明底：上浮面板（模型/电脑文件）必须实心，否则
-// 透出底下聊天气泡就读不清了。
+// 透出底下聊天气泡就读不清了。底只用同色系 card.bg2 或按卡片亮度挑的中性色，
+// 不能用主题 bg——插画主题的 bg 是插画主色，会把面板染成粉紫。
 function panelSolid(t){
  const card=rgbaOf(t['card.bg']);
  if(!card)return '';
  if(card[3]>=0.999)return 'rgb('+(card[0]|0)+','+(card[1]|0)+','+(card[2]|0)+')';
- let base=rgbaOf(t['bg'])||rgbaOf(t['card.bg2']);
+ let base=rgbaOf(t['card.bg2']);
  if(!base||base[3]<0.999){
-  const txt=rgbaOf(t['text'])||[23,30,42,1];
-  const lum=txt[0]*0.299+txt[1]*0.587+txt[2]*0.114;
-  base=lum>140?[16,21,32,1]:[255,255,255,1];
+  const lum=card[0]*0.299+card[1]*0.587+card[2]*0.114;
+  base=lum>140?[255,255,255,1]:[18,23,34,1];
  }
  const a=Math.max(0,Math.min(1,card[3]));
  const mix=i=>Math.round(card[i]*a+base[i]*(1-a));

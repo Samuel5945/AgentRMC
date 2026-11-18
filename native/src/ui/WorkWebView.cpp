@@ -1623,16 +1623,18 @@ function rgbaOf(v){
   return null;
 }
 // 把半透明的卡片色合成到一个不透明底上，得到同色系但实心的面板色。
-// 底优先用主题 bg，其次 card.bg2；都半透明就按文字亮度猜明暗（浅字配深底）。
+// 底**只能**用同色系的 card.bg2，或按卡片自身亮度挑的中性色（偏亮给白、
+// 偏暗给深灰）。绝对不要用主题的 bg：插画主题的 bg 是插画主色（粉紫/青绿），
+// 拿它当底会把面板整个染成那个颜色（用户 2026-11-18：「怎么是紫色」，
+// 实测白卡片 rgba(255,255,255,.388) 合成了 rgb(248,137,249)）。
 function panelSolid(t){
   const card=rgbaOf(t['card.bg']);
   if(!card)return '';
   if(card[3]>=0.999)return 'rgb('+(card[0]|0)+','+(card[1]|0)+','+(card[2]|0)+')';
-  let base=rgbaOf(t['bg'])||rgbaOf(t['card.bg2']);
+  let base=rgbaOf(t['card.bg2']);
   if(!base||base[3]<0.999){
-    const txt=rgbaOf(t['text'])||[23,30,42,1];
-    const lum=txt[0]*0.299+txt[1]*0.587+txt[2]*0.114;
-    base=lum>140?[16,21,32,1]:[255,255,255,1];
+    const lum=card[0]*0.299+card[1]*0.587+card[2]*0.114;
+    base=lum>140?[255,255,255,1]:[18,23,34,1];
   }
   const a=Math.max(0,Math.min(1,card[3]));
   const mix=i=>Math.round(card[i]*a+base[i]*(1-a));

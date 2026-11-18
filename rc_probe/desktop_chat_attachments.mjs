@@ -198,9 +198,10 @@ await page.waitForTimeout(220);
 check((await page.inputValue('#dchatText')) === '', '成功后输入框清空');
 
 // 美术主题（card.bg 可能是半透明 rgba）下面板必须实心——用户 2026-11-18 报的
-// 「切换模型背景是透明的看不清」就是这条。两种写法都要覆盖：
-//   rgba(...,0.216) → 合成成实色
-//   rgba(...,55)    → Qt 的 0-255 写法，CSS 会钳成 1，浏览器渲染就是实色
+// 「切换模型背景是透明的看不清 / 怎么是紫色」就是这条。覆盖三种写法：
+//   rgba(...,0.216) 深色卡片 → 合成成深色系
+//   rgba(...,55)    Qt 的 0-255 写法，CSS 钳成 1，浏览器渲染就是实色
+//   白色半透明卡片 + 粉紫插画底 → 必须合成成白，不能被 bg 染成粉紫
 const panelCheck = await page.evaluate(() => {
   const s = document.documentElement;
   const read = () => getComputedStyle(s).getPropertyValue('--panel').trim();
@@ -208,10 +209,14 @@ const panelCheck = await page.evaluate(() => {
   const frac = read();
   applyTheme({ 'card.bg': 'rgba(8,12,20,55)', 'card.bg2': 'rgba(10,15,24,48)', text: '#171e2a' });
   const byte = read();
+  // 用户的真实场景：卡片是半透明白（透明度调过），主题 bg 是插画主色（粉紫）。
+  applyTheme({ 'card.bg': 'rgba(255,255,255,0.388)', 'card.bg2': 'rgba(255,255,255,0.30)',
+               bg: '#f889f9', text: '#171e2a' });
+  const white = read();
   const box = document.querySelector('#dchatModelPanel');
   const bg = box ? getComputedStyle(box).backgroundColor : '';
   const inline = box ? box.style.background : '';
-  return { frac, byte, bg, inline };
+  return { frac, byte, white, bg, inline };
 });
 check(/^rgb\(\s*\d+,\s*\d+,\s*\d+\s*\)$/.test(panelCheck.frac),
   '半透明小数 alpha → 面板色合成成实色', panelCheck.frac);
@@ -219,6 +224,8 @@ check(panelCheck.frac !== 'rgb(8,12,20)',
   '合成结果确实被提亮了（不是直接取原色）', panelCheck.frac);
 check(panelCheck.byte === 'rgb(8,12,20)',
   '0-255 写法按浏览器语义当不透明原色', panelCheck.byte);
+check(panelCheck.white === 'rgb(255,255,255)',
+  '白卡片半透明时合成成白，不被插画主色染成粉紫', panelCheck.white);
 check(/^rgb\(/.test(panelCheck.bg) && !/rgba/.test(panelCheck.bg),
   '模型面板背景不含 alpha', panelCheck.bg);
 check(/^rgb\(/.test(panelCheck.inline) && !/rgba/.test(panelCheck.inline),

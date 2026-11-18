@@ -228,6 +228,7 @@ void UiDispatch::start(const Job &job) {
     job_ = job;
     stage_ = 0;
     tries_ = 0;
+    wakeTries_ = 0;
     scrolled_ = false;
     expandTries_ = 0;
     busy_ = true;
@@ -260,7 +261,17 @@ void UiDispatch::step() {
     }
     HWND hwnd = static_cast<HWND>(AgentWindow::mainWindow(job_.exe));
     if (hwnd == nullptr) {
-        finishFail(QStringLiteral("宿主主窗不在（%1）").arg(job_.exe), false);
+        // 宿主被收进托盘/隐藏时 mainWindow 命中不了（它要求 IsWindowVisible），
+        // 但窗口还在 EnumWindows 列表里——先主动叫出来再重试，别一上来就报错：
+        // 遥控场景下用户本来就是"不在电脑前"，不该让他手动去点宿主。
+        if (wakeTries_ < 3 && AgentWindow::wake(job_.exe)) {
+            ++wakeTries_;
+            QTimer::singleShot(800, this, [this] { step(); });
+            return;
+        }
+        finishFail(QStringLiteral("宿主窗口被隐藏了（%1），先把它打开再派发")
+                       .arg(job_.exe),
+                   false);
         return;
     }
     tagRECT wr{};

@@ -73,6 +73,30 @@ BOOL CALLBACK collectAgentWindows(HWND hwnd, LPARAM lparam) {
     return TRUE;  // 继续找更大的
 }
 
+// 不限可见性：宿主收进托盘（IsWindowVisible=false）时，窗口仍在 EnumWindows
+// 列表里，标题也还在。隐藏窗口的 GetWindowRect 可能全 0，所以面积打平时
+// 用「先到先得」，保证至少能拿到一个。
+BOOL CALLBACK collectAnyAgentWindow(HWND hwnd, LPARAM lparam) {
+    auto *ctx = reinterpret_cast<LargestWindowCtx *>(lparam);
+    if (GetWindowTextLengthW(hwnd) == 0) {
+        return TRUE;  // 无标题的多是辅助/工具窗口，不是主窗
+    }
+    if (!matchesImage(hwnd, ctx->exe)) {
+        return TRUE;
+    }
+    RECT r{};
+    GetWindowRect(hwnd, &r);
+    LONG area = (r.right - r.left) * (r.bottom - r.top);
+    if (area <= 0) {
+        area = 1;  // 隐藏窗口没有真实几何，给个最小分以便被选中
+    }
+    if (ctx->best == nullptr || area > ctx->bestArea) {
+        ctx->best = hwnd;
+        ctx->bestArea = area;
+    }
+    return TRUE;
+}
+
 HWND windowFor(const QString &exeName) {
     if (exeName.isEmpty()) {
         return nullptr;
@@ -307,6 +331,33 @@ void *mainWindow(const QString &exe) {
     LargestWindowCtx ctx{image.c_str(), nullptr, 0};
     EnumWindows(collectAgentWindows, reinterpret_cast<LPARAM>(&ctx));
     return ctx.best;
+}
+
+void *mainWindowAny(const QString &exe) {
+    if (exe.isEmpty()) {
+        return nullptr;
+    }
+    const std::wstring image = exe.toStdWString();
+    LargestWindowCtx ctx{image.c_str(), nullptr, 0};
+    EnumWindows(collectAnyAgentWindow, reinterpret_cast<LPARAM>(&ctx));
+    return ctx.best;
+}
+
+bool wake(const QString &exe) {
+    HWND hwnd = static_cast<HWND>(mainWindowAny(exe));
+    if (hwnd == nullptr) {
+        return false;
+    }
+    if (IsIconic(hwnd)) {
+        ShowWindow(hwnd, SW_RESTORE);
+    } else if (!IsWindowVisible(hwnd)) {
+        // 收进托盘时进程自己 Hide 了窗口，外部 SW_SHOW 能把它叫回来。
+        ShowWindow(hwnd, SW_SHOW);
+    }
+    keybd_event(VK_MENU, 0, 0, 0);
+    keybd_event(VK_MENU, 0, KEYEVENTF_KEYUP, 0);
+    SetForegroundWindow(hwnd);
+    return true;
 }
 
 }  // namespace AgentWindow

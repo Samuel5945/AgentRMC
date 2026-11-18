@@ -44,6 +44,7 @@ private:
     bool busy_ = false;
     int stage_ = 0;
     int tries_ = 0;
+    int wakeTries_ = 0;  // 宿主主窗被隐藏时的唤醒重试次数
     bool scrolled_ = false;
     int expandTries_ = 0;
     QString savedClipboard_;

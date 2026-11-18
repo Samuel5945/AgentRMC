@@ -49,6 +49,15 @@ bool present(const QString &preferred = QString());
 // exeName 为空时退回 ZCode.exe，兼容老手写 hook。找不到窗口就静默返回。
 void raise(const QString &exeName);
 
+// 不限「窗口是否可见」地找主窗口：宿主被收进托盘时 IsWindowVisible 为假，
+// 但它仍是 EnumWindows 列表里的顶层窗口（标题通常还在）。取面积最大的那个；
+// 隐藏窗口 rect 可能是 0，此时退回第一个匹配到的。找不到返回 nullptr。
+void *mainWindowAny(const QString &exe);
+
+// 唤醒宿主主窗口：隐藏的 SW_SHOW 出来、最小化的 SW_RESTORE 还原，再抢前台。
+// 返回是否真的找到并显示了一个窗口——派发侧靠它决定「重试」还是「报错」。
+bool wake(const QString &exe);
+
 // 派活时先把焦点落到聊天输入框的组合键（如 "ctrl+n"）。拉到前台≠焦点在输入框：
 // Electron 宿主内部焦点可能停在编辑器/别的元素，直接 Ctrl+V 会粘错地方或丢弃。
 // 返回空 = 该宿主没有已知聚焦键，调用方退回「等焦点稳定后直接粘贴」。

@@ -146,7 +146,8 @@ QJsonObject queryMeta(const QByteArray &query) {
         const QString key = QString::fromUtf8(pair.left(eq));
         if (key == QLatin1String("id") || key == QLatin1String("session")
             || key == QLatin1String("project") || key == QLatin1String("exe")
-            || key == QLatin1String("name")) {
+            || key == QLatin1String("name") || key == QLatin1String("scope")
+            || key == QLatin1String("rel")) {
             meta.insert(key, QUrl::fromPercentEncoding(pair.mid(eq + 1)));
         }
     }
@@ -1339,6 +1340,11 @@ QString LanWebServer::mobileHtml() const {
  #pchat{padding:0 14px}
  .chathead{flex:0 0 auto;display:flex;align-items:center;gap:10px;padding:4px 0 8px}
  .chathead .btn{min-height:40px;padding:6px 12px;flex:0 0 auto}
+ /* 返回键只留箭头图标（不写「待办/派发」文字），做成方形触控块；
+    语义放在 aria-label 里，renderChatFrame 只改 aria-label。 */
+ #chatBack{width:40px;min-width:40px;padding:0;display:flex;align-items:center;
+   justify-content:center}
+ #chatBack svg{width:20px;height:20px;display:block;pointer-events:none}
  .chtitles{flex:1;min-width:0}
  .chtitles .name{font-weight:700;font-size:16px;overflow:hidden;
    text-overflow:ellipsis;white-space:nowrap}
@@ -1358,6 +1364,18 @@ QString LanWebServer::mobileHtml() const {
    color:var(--text-soft)}
  .bub .who{display:block;font-weight:600;font-size:11px;color:var(--muted);
    margin-bottom:2px}
+ /* Agent 产出的文件条：气泡下方一行一个，右侧「下载到手机」。 */
+ .bubfiles{display:flex;flex-direction:column;gap:6px;margin-top:8px;
+   white-space:normal}
+ .bubfile{display:flex;align-items:center;gap:8px;padding:8px 10px;
+   border-radius:10px;background:var(--w6);border:1px solid var(--w14);
+   text-decoration:none;color:var(--text);font-size:13px;min-height:44px}
+ .bubfile:active{background:var(--w10)}
+ .bubfile .ic{flex:0 0 auto;display:flex;color:var(--muted)}
+ .bubfile .ic svg{width:16px;height:16px;display:block}
+ .bubfile b{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;
+   white-space:nowrap;font-weight:500}
+ .bubfile .dl{flex:0 0 auto;color:var(--accent);font-size:12px;font-weight:600}
  .bub .bt{display:block;font-size:11px;color:var(--muted2);margin-top:4px}
  .reqcard{flex:0 0 auto;align-self:stretch;margin:6px 0;padding:10px 12px;
    border-radius:12px;background:var(--w8);border:1px solid var(--a64)}
@@ -1695,7 +1713,7 @@ QString LanWebServer::mobileHtml() const {
   <div id="pstatus" class="page" hidden><div id="statusBody" class="scroll"></div></div>
   <div id="pchat" class="page" hidden>
    <div class="chathead">
-    <button class="btn" id="chatBack">‹ 待办</button>
+    <button class="btn" id="chatBack" aria-label="返回待办"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5 8 12l7 7"/></svg></button>
     <div class="chtitles"><div class="name" id="chatTitle"></div><div class="where" id="chatSub"></div></div>
     <button class="cicobtn" id="chatFiles" title="电脑上的文件" aria-label="电脑上的文件"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7.5A2 2 0 0 1 5 5.5h4l2 2.5h8a2 2 0 0 1 2 2v7.5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/></svg></button>
    </div>
@@ -2126,6 +2144,36 @@ function card(it){
 }
 // ---------- 聊天页：点卡片进入，打开即最新，旧记录上翻按页加载 ----------
 function msgKey(m){return m.id||(m.at+'|'+m.role+'|'+(m.text||'').slice(0,80));}
+// Agent 回复里提到的产物路径 → 气泡下方的文件条（带「下载到手机」）。
+// 只认产物类扩展名；绝对路径必须落在会话工作目录里（转成相对），相对路径
+// 直接当工作区相对路径。真正的校验在服务端（canonical + 白名单）。
+const MSG_FILE_EXT=new Set(('png jpg jpeg gif webp bmp svg ico mp4 mov webm mkv '+
+ 'mp3 wav m4a pdf md txt doc docx xls xlsx ppt pptx zip 7z rar exe msi apk').split(' '));
+const MSG_FILE_RE=/([A-Za-z]:[\\/][^\s"'<>|`\r\n]{0,180}?\.([A-Za-z0-9]{1,5}))|((?:[\w.\-]+\/){1,6}[\w.\-]{1,60}\.([A-Za-z0-9]{1,5}))/g;
+function msgFiles(text){
+ if(!text||text.length<5)return [];
+ const out=[],seen=new Set();
+ const root=(chatProject||'').replace(/\\/g,'').replace(/\/+$/,'').toLowerCase();
+ let m;
+ MSG_FILE_RE.lastIndex=0;
+ while((m=MSG_FILE_RE.exec(text))){
+  const ext=(m[2]||m[4]||'').toLowerCase();
+  if(!MSG_FILE_EXT.has(ext))continue;
+  let p=(m[1]||m[3]||'').replace(/[，。；：、）】》,.;:)\]}]+$/,'');
+  if(!p)continue;
+  let rel=p.replace(/\\/g,'');
+  if(/^[A-Za-z]:\//.test(rel)||rel[0]==='/'){
+   const lower=rel.toLowerCase();
+   if(!root||!lower.startsWith(root+'/'))continue;  // 不在工作区里，不给下
+   rel=rel.slice(root.length+1);
+  }
+  if(!rel||seen.has(rel))continue;
+  seen.add(rel);
+  out.push({rel:rel,name:rel.split('/').pop()});
+  if(out.length>=8)break;
+ }
+ return out;
+}
 function bubble(m){
  const d=document.createElement('div');
  d.className='bub '+(m.role==='user'?'user':'assistant');
@@ -2133,6 +2181,25 @@ function bubble(m){
  who.textContent=m.role==='user'?'我':'Agent';
  const body=document.createElement('span');body.textContent=m.text||'';
  d.append(who,body);
+ if(m.role!=='user'){
+  const files=msgFiles(m.text||'');
+  if(files.length){
+   const box=document.createElement('div');box.className='bubfiles';
+   files.forEach(f=>{
+    const a=document.createElement('a');
+    a.className='bubfile';
+    a.href=fpUrl(null,f.rel);
+    a.setAttribute('download','');
+    const ic=document.createElement('span');ic.className='ic';
+    ic.innerHTML=ATT_ICON;
+    const nm=document.createElement('b');nm.textContent=f.name;
+    const dl=document.createElement('span');dl.className='dl';dl.textContent='下载到手机';
+    a.append(ic,nm,dl);
+    box.append(a);
+   });
+   d.append(box);
+  }
+ }
  if(m.at){const t=document.createElement('span');t.className='bt';
   t.textContent=hhmm(m.at);d.append(t);}
  return d;
@@ -2499,13 +2566,16 @@ async function attUpload(files){
 // 同源跳转，设备令牌 cookie 自动带上；路由侧只认 basename，跳不出 inbox。
 const FP_ICON='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3v5h5"/><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8l-5-5Z"/></svg>';
 let fpOpen=false;
-function fpUrl(name){
+// rel 有值＝下工作区里的产物（scope=project，服务端做 canonical + 白名单）；
+// 否则按 inbox 里的 basename 下。
+function fpUrl(name,rel){
  let q='?id='+encodeURIComponent(chatKind==='session'?'':chatId);
  if(chatKind==='session')
   q+='&session='+encodeURIComponent(chatSession||'')
     +'&project='+encodeURIComponent(chatProject||'');
- if(name)q+='&name='+encodeURIComponent(name);
- return '/m/'+(name?'file':'files')+q;
+ if(rel)q+='&scope=project&rel='+encodeURIComponent(rel);
+ else if(name)q+='&name='+encodeURIComponent(name);
+ return '/m/'+((name||rel)?'file':'files')+q;
 }
 function fpClose(){$('chatFilePanel').hidden=true;fpOpen=false;}
 async function fpLoad(){
@@ -2604,7 +2674,8 @@ function cNoticeDropOnEmpty(p){
     &&!$(p+'chatText').value.trim())bar.hidden=true;
 }
 function renderChatFrame(){
- $('chatBack').textContent=chatKind==='session'?'‹ 派发':'‹ 待办';
+ // 返回键纯图标：这里只同步无障碍标签，别写 textContent（会把 SVG 冲掉）。
+ $('chatBack').setAttribute('aria-label',chatKind==='session'?'返回派发':'返回待办');
  const title=chatMeta.sessionTitle||chatMeta.title||
   (chatKind==='session'?'会话 '+String(chatSession||'').slice(0,8):'会话');
  $('chatTitle').textContent=title;

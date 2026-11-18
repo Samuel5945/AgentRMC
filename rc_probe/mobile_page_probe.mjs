@@ -175,7 +175,9 @@ function sessionTranscript(exe, session) {
     agentName: agent.name, sessionId: session,
     messages: [
       { id: 'sm1', role: 'user', at: iso(NOW - 700e3), text: '这个会话现在做到哪一步了？' },
-      { id: 'sm2', role: 'assistant', at: iso(NOW - 650e3), text: '卡片层级已经拆好了，现在在收滑动阈值和批量动效。' },
+      { id: 'sm2', role: 'assistant', at: iso(NOW - 650e3),
+        text: '卡片层级已经拆好了，现在在收滑动阈值和批量动效。产物：'
+          + 'rc_probe/mobile_shots/chatAtt-light.png 和 dist/AgentRMC-Setup.exe' },
       { id: 'sm3', role: 'user', at: iso(NOW - 480e3), text: '继续，把交互再收一下。' }
     ],
     requests: []
@@ -225,7 +227,9 @@ function startServer() {
           agentExe: 'WorkBuddyAI.exe',
           messages: [
             { id: 'm1', role: 'user', at: iso(NOW - 600e3), text: '把手机页的多选和滑动再打磨一下' },
-            { id: 'm2', role: 'assistant', at: iso(NOW - 540e3), text: '好，我先把卡片拆成手势层和卡面层。' },
+            { id: 'm2', role: 'assistant', at: iso(NOW - 540e3),
+              text: '好，我先把卡片拆成手势层和卡面层。安装包已出 dist/AgentRMC-Setup.exe，'
+                + '截图在 rc_probe/mobile_shots/chatAtt-light.png 。' },
             { id: 'm3', role: 'user', at: iso(NOW - 300e3), text: '动效要轻，别挡着看内容' }
           ],
           requests: []
@@ -585,7 +589,9 @@ async function runFlow() {
   // （chatMeta 由 /m/session 的响应写入）再断言标题/条数，否则会在
   // fetch 往返的空窗里读到初始 {}（2026-11-18 踩到）。
   await page.waitForFunction(() => chatMeta && chatMeta.sessionTitle);
-  ok((await page.textContent('#chatBack')).includes('派发'), '会话聊天页返回派发');
+  // 返回键是纯图标（文字退到 aria-label），别断言 textContent。
+  ok((await page.getAttribute('#chatBack', 'aria-label')).includes('派发'),
+    '会话聊天页返回派发');
   ok((await page.textContent('#chatTitle')).includes('手机页多选'), '会话聊天页标题正确');
   ok((await page.textContent('#chatSub')).includes('WorkBuddy AI'), '会话聊天页显示 Agent');
   ok(await page.locator('#chatList .bub').count() === 3, '会话聊天记录已加载');
@@ -638,6 +644,14 @@ async function runFlow() {
   await page.locator('#chatAtts .catt .x').click();
   ok(await page.locator('#chatAtts .catt').count() === 0, '× 可移除附件');
   ok(await page.locator('#chatAtts').evaluate((el) => el.hidden), '移除后附件条收起');
+
+  // Agent 产物：回复里提到的文件要在气泡下方生效，链接指向工作区下载。
+  ok((await page.locator('.bubfile').count()) >= 2, 'Agent 产物的文件条渲染出来');
+  const bf = await page.locator('.bubfile').first().getAttribute('href');
+  ok(bf.includes('scope=project') && bf.includes('rel='),
+    '文件条指向工作区下载（scope=project）', bf);
+  const bfTxt = await page.locator('.bubfile').first().textContent();
+  ok(bfTxt.includes('下载到手机'), '文件条带「下载到手机」', bfTxt);
 
   // 电脑文件面板：列出会话 inbox，行上带下载链接，× 能关。
   FILES.length = 0;

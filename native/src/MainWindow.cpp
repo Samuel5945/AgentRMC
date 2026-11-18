@@ -4386,17 +4386,60 @@ QString MainWindow::lanInboxList(const QJsonObject &meta) {
 
 // 下载 inbox 里的一个文件。name 由客户端给、不可信：只认 basename，再用
 // canonical 前缀校验兜住符号链接——不许读 inbox 以外任何东西。
+// 手机能下载的文件扩展名白名单。工作区里有 .env / 私钥 / 源码，不能因为
+// 「能给 agent 写文件」就把整个目录放开。只放产物类：媒体、文档、压缩包、安装包。
+bool shareableExt(const QString &path) {
+    static const QSet<QString> kOk = {
+        QStringLiteral("png"),  QStringLiteral("jpg"),  QStringLiteral("jpeg"),
+        QStringLiteral("gif"),  QStringLiteral("webp"), QStringLiteral("bmp"),
+        QStringLiteral("svg"),  QStringLiteral("ico"),  QStringLiteral("mp4"),
+        QStringLiteral("mov"),  QStringLiteral("webm"), QStringLiteral("mkv"),
+        QStringLiteral("mp3"),  QStringLiteral("wav"),  QStringLiteral("m4a"),
+        QStringLiteral("pdf"),  QStringLiteral("md"),   QStringLiteral("txt"),
+        QStringLiteral("doc"),  QStringLiteral("docx"), QStringLiteral("xls"),
+        QStringLiteral("xlsx"), QStringLiteral("ppt"),  QStringLiteral("pptx"),
+        QStringLiteral("zip"),  QStringLiteral("7z"),   QStringLiteral("rar"),
+        QStringLiteral("exe"),  QStringLiteral("msi"),  QStringLiteral("apk")};
+    const QString ext = QFileInfo(path).suffix().toLower();
+    return !ext.isEmpty() && kOk.contains(ext);
+}
+
 LanWebServer::Download MainWindow::lanInboxFile(const QJsonObject &meta) {
     const auto fail = [] { return LanWebServer::Download{}; };
-    const QString dir = inboxDirFor(meta);
+    // 两种作用域：
+    //   （默认）inbox —— 手机传上来的、桌面粘进来的，只认 basename；
+    //   project —— agent 在会话工作区里产出的文件（图/视频/安装包），允许子目录，
+    //             但要 canonical 校验 + 扩展名白名单。
+    const QString scope = meta.value(QStringLiteral("scope")).toString();
+    const bool projectScope = scope == QLatin1String("project");
+    QString dir;
+    if (projectScope) {
+        QString project, session;
+        if (!resolveInboxTarget(meta, &project, &session) || project.isEmpty()) {
+            return fail();
+        }
+        dir = project;
+    } else {
+        dir = inboxDirFor(meta);
+    }
     if (dir.isEmpty()) {
         return fail();
     }
-    QString name = meta.value(QStringLiteral("name")).toString();
+    QString name = projectScope
+                       ? meta.value(QStringLiteral("rel")).toString()
+                       : meta.value(QStringLiteral("name")).toString();
     name.replace(QLatin1Char('\\'), QLatin1Char('/'));
-    name = name.mid(name.lastIndexOf(QLatin1Char('/')) + 1);
+    if (!projectScope) {
+        name = name.mid(name.lastIndexOf(QLatin1Char('/')) + 1);
+    }
     name.remove(QRegularExpression(QStringLiteral("[\\x00-\\x1f]")));
+    // 去掉 .. 段与前导斜杠：canonical 校验是最后一道，这里先粗筛。
+    name.remove(QRegularExpression(QStringLiteral("(^|/)\\.\\.?(/|$)")));
+    name.remove(QRegularExpression(QStringLiteral("^/+")));
     if (name.isEmpty() || name == QLatin1String(".") || name == QLatin1String("..")) {
+        return fail();
+    }
+    if (projectScope && !shareableExt(name)) {
         return fail();
     }
     const QString canonDir = QFileInfo(dir).canonicalFilePath();
@@ -4407,7 +4450,6 @@ LanWebServer::Download MainWindow::lanInboxFile(const QJsonObject &meta) {
         return fail();
     }
     QFile f(canonFile);
-    // 上限跟上传侧对齐（100MB），不然"手机传得上去、却下不回来"很别扭。
     if (!f.open(QIODevice::ReadOnly) || f.size() > 100LL * 1024 * 1024) {
         f.close();
         return fail();

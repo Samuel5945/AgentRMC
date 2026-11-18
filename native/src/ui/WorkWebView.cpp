@@ -989,7 +989,9 @@ QString WorkWebView::htmlFor(const QString &stateJson) const {
   /* 底部输入区重构（2026-11-18）：composer 卡片——状态行（notice/重启键）在上，
      输入卡在下。输入改多行 textarea（Shift+Enter 换行、Enter 发送、自增高），
      模型胶囊与发送键整合进卡内底行；颜色全走主题 token。桌面与手机页同构。 */
-  .chatfoot{flex:0 0 auto;position:relative;margin-top:8px}
+  /* 底部留白：composer 卡片不能贴死窗口底边（用户 2026-11-18：紧贴不好看，
+     要呼吸感）。左右留白由页面容器给，这里只补下边，做成比左右略大一点。 */
+  .chatfoot{flex:0 0 auto;position:relative;margin-top:8px;padding-bottom:16px}
   /* .chatfoot 在 .page（display:flex）里，UA 的 [hidden] 压不住它自己的
      display，聊天页隐藏时输入区会漏在其它页下面（同 .page 的历史坑）。 */
   .chatfoot[hidden]{display:none !important}

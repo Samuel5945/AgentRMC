@@ -1115,7 +1115,9 @@ QString LanWebServer::mobileHtml() const {
  /* 底部输入区重构（2026-11-18，与桌面端同款）：composer 卡片——状态行
     （notice）在上，输入卡在下；textarea 多行自增高，附件/模型/发送收进卡内
     底行。左右留白 + 安全区，防圆角/手势条裁切；输入 16px 防 iOS 聚焦放大。 */
- .chatfoot{position:relative;padding:8px 0 calc(12px + env(safe-area-inset-bottom))}
+ /* 底部留白：12→16px（含安全区）。原来 12px 在全面屏上仍显得贴底，
+    与桌面端对齐成 16（用户 2026-11-18：留个空隙有呼吸感）。 */
+ .chatfoot{position:relative;padding:8px 0 calc(16px + env(safe-area-inset-bottom))}
  .cbar{display:flex;align-items:center;gap:8px}
  .cbar[hidden]{display:none !important}
  .cnotice{flex:1;min-width:0;font-size:12.5px;color:var(--text-dim);

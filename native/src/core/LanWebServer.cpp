@@ -1202,13 +1202,12 @@ QString LanWebServer::mobileHtml() const {
    white-space:nowrap}
  .modelchip .lvl{flex:0 0 auto;color:var(--muted)}
  .modelchip .caret{flex:0 0 auto;color:var(--muted);font-size:12px}
- /* 面板必须实心：美术主题的 card.bg 是 rgba(8,12,20,.22)，直接当背景会透出
-    底下聊天气泡（用户 2026-11-18 反馈"切换模型背景透明的看不清"）。--panel
-    由 applyTheme 合成；blur 是兜底。 */
+ /* 面板必须实心：美术主题的 card.bg 是半透明，直接当背景会透出底下聊天气泡
+    （用户 2026-11-18 反馈"切换模型背景透明的看不清"）。--panel 由 applyTheme
+    合成；别加 backdrop-filter——实色底用不上，且它配 border-radius +
+    overflow:hidden 在 WebView2 上会把面板渲染成洋红。 */
  .mpanel{position:absolute;left:0;right:0;bottom:calc(100% + 8px);z-index:30;
    background:var(--panel,var(--surface));
-   backdrop-filter:blur(18px) saturate(1.4);
-   -webkit-backdrop-filter:blur(18px) saturate(1.4);
    border:1px solid var(--w14);border-radius:14px;
    box-shadow:0 12px 32px rgba(15,23,42,.18);overflow:hidden}
  .mpback{display:block;width:100%;text-align:left;background:var(--w8);

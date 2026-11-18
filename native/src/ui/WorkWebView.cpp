@@ -1079,13 +1079,13 @@ QString WorkWebView::htmlFor(const QString &stateJson) const {
  .modelchip .lvl{flex:0 0 auto;color:var(--muted)}
  .modelchip .caret{flex:0 0 auto;color:var(--muted);font-size:var(--f11)}
   .mpanel{position:absolute;left:0;right:0;bottom:calc(100% + 8px);z-index:30;
-    /* 面板必须实心：主题的 card.bg 在美术主题下是 rgba(8,12,20,.22)，直接当
-       背景用会透出底下聊天气泡，字糊成一片（用户 2026-11-18 反馈）。--panel
-       由 applyTheme 把 card.bg 按 alpha 合成到不透明底上；blur 是 JS 那步
-       失败时的兜底，让下面的文字至少糊掉。 */
+    /* 面板必须实心：主题的 card.bg 在美术主题下是半透明，直接当背景用会透出
+       底下聊天气泡，字糊成一片（用户 2026-11-18 反馈）。--panel 由 applyTheme
+       把 card.bg 按 alpha 合成到不透明底上。
+       别在这里加 backdrop-filter：实色底用不上它，而它和 border-radius +
+       overflow:hidden 一起在 WebView2 上会采样到未初始化纹理，整块面板变
+       洋红（2026-11-18 实测踩到）。 */
     background:var(--panel,var(--surface));
-    backdrop-filter:blur(18px) saturate(1.4);
-    -webkit-backdrop-filter:blur(18px) saturate(1.4);
     border:1px solid var(--w14);border-radius:12px;
     box-shadow:0 10px 28px rgba(15,23,42,.22);overflow:hidden}
  .mpback{display:block;width:100%;text-align:left;background:var(--w8);

@@ -205,8 +205,7 @@ void LanWebServer::setThemeRoot(const QString &root) {
 }
 
 void LanWebServer::setUploadHandler(
-    std::function<QJsonObject(const QString &, const QString &, const QByteArray &)>
-        handler) {
+    std::function<QJsonObject(const QJsonObject &, const QByteArray &)> handler) {
     uploadHandler_ = std::move(handler);
 }
 
@@ -584,23 +583,31 @@ void LanWebServer::route(QTcpSocket *socket, const QByteArray &method,
             finish(socket, "401 Unauthorized");
             return;
         }
-        // id=待办 id（query）；文件名走 X-AgentRMC-Filename 头（percent 编码，
-        // 兼容中文）。body 是文件原始字节。落盘与路径解析在主窗 uploadHandler。
-        QString id;
+        // 定位信息走 query：id=待办 id（可空）、session/project/exe 给「从派发页
+        // 直接进会话」的那条路（没有待办 id，只认会话工作目录）。文件名走
+        // X-AgentRMC-Filename 头（percent 编码，兼容中文）；body 是原始字节。
+        // 落盘与路径解析在主窗 uploadHandler。
+        QJsonObject meta;
         const QList<QByteArray> pairs = query.split('&');
         for (const QByteArray &pair : pairs) {
             const int eq = pair.indexOf('=');
-            if (eq > 0 && pair.left(eq) == "id") {
-                id = QUrl::fromPercentEncoding(pair.mid(eq + 1));
+            if (eq <= 0) {
+                continue;
+            }
+            const QString key = QString::fromUtf8(pair.left(eq));
+            const QString value = QUrl::fromPercentEncoding(pair.mid(eq + 1));
+            if (key == QLatin1String("id") || key == QLatin1String("session")
+                || key == QLatin1String("project") || key == QLatin1String("exe")) {
+                meta.insert(key, value);
             }
         }
-        const QString filename = QUrl::fromPercentEncoding(
-            headerValue(headerLines, "x-agentrmc-filename"));
+        meta.insert(QStringLiteral("filename"),
+                    QUrl::fromPercentEncoding(
+                        headerValue(headerLines, "x-agentrmc-filename")));
         const QJsonObject result =
-            uploadHandler_
-                ? uploadHandler_(id, filename, body)
-                : QJsonObject{{QStringLiteral("ok"), false},
-                              {QStringLiteral("code"), 400}};
+            uploadHandler_ ? uploadHandler_(meta, body)
+                           : QJsonObject{{QStringLiteral("ok"), false},
+                                         {QStringLiteral("code"), 400}};
         const int code = result.value(QStringLiteral("code")).toInt(400);
         const char *status = code == 200   ? "200 OK"
                              : code == 404 ? "404 Not Found"
@@ -1060,6 +1067,37 @@ QString LanWebServer::mobileHtml() const {
  .cbox textarea::-webkit-scrollbar{width:0;height:0}
  .cbox textarea::placeholder{color:var(--muted2)}
  .cbox textarea:disabled{color:var(--faint)}
+ /* 附件条：chip 横排，超出横向滚动（隐藏滚动条，UI 约定）；图片给缩略图。
+    上传中单独一行细进度条 + 文件名，多选时串行一个个传。 */
+ .catts{display:flex;gap:6px;overflow-x:auto;scrollbar-width:none;
+   padding:1px 0 2px}
+ .catts[hidden]{display:none !important}
+ .catts::-webkit-scrollbar{width:0;height:0}
+ .catt{flex:0 0 auto;display:flex;align-items:center;gap:6px;max-width:230px;
+   padding:4px 5px 4px 4px;border-radius:9px;background:var(--w10);
+   border:1px solid var(--w14)}
+ .catt img{width:26px;height:26px;object-fit:cover;border-radius:6px;
+   flex:0 0 auto;display:block}
+ .catt .ic{width:26px;height:26px;display:flex;align-items:center;
+   justify-content:center;border-radius:6px;background:var(--w8);
+   color:var(--text-dim);flex:0 0 auto}
+ .catt .ic svg{width:14px;height:14px;display:block}
+ .catt b{font-weight:400;font-size:12px;overflow:hidden;
+   text-overflow:ellipsis;white-space:nowrap;min-width:0}
+ .catt i{font-style:normal;font-size:10.5px;color:var(--muted2);
+   flex:0 0 auto}
+ .catt .x{flex:0 0 auto;width:20px;height:20px;border:none;background:transparent;
+   color:var(--muted2);font-size:15px;line-height:1;cursor:pointer;padding:0;
+   font-family:inherit;border-radius:50%}
+ .catt .x:active{background:var(--w14);color:var(--text)}
+ .cup{display:flex;align-items:center;gap:8px;padding:4px 2px 1px}
+ .cup[hidden]{display:none !important}
+ .cupbar{flex:1;min-width:0;height:3px;border-radius:2px;background:var(--w10);
+   overflow:hidden}
+ .cupbar i{display:block;height:100%;width:0;border-radius:2px;
+   background:var(--accent);transition:width .12s linear}
+ .cup span{flex:0 0 auto;max-width:62%;font-size:11px;color:var(--muted2);
+   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
  .crow{display:flex;align-items:center;gap:4px;flex-wrap:nowrap}
  .cicobtn{flex:0 0 auto;width:36px;height:36px;display:flex;align-items:center;
    justify-content:center;border:none;border-radius:10px;background:transparent;
@@ -1303,7 +1341,12 @@ QString LanWebServer::mobileHtml() const {
       <div class="cnotice" id="chatNotice"></div>
     </div>
     <div class="cbox">
-     <input id="chatFile" type="file" hidden>
+     <input id="chatFile" type="file" multiple hidden>
+     <div class="catts" id="chatAtts" hidden></div>
+     <div class="cup" id="chatUp" hidden>
+      <div class="cupbar"><i id="chatUpFill"></i></div>
+      <span id="chatUpLabel"></span>
+     </div>
      <textarea id="chatText" rows="1" placeholder="写一句任务，派到这个会话…" enterkeyhint="send"></textarea>
      <div class="crow">
       <button class="modelchip" id="chatModelChip" hidden><b id="chatModelLabel">选择模型</b><span class="lvl" id="chatModelLvl" hidden></span><span class="caret">⌄</span></button>
@@ -1830,6 +1873,123 @@ function paintChat(mode,prevH,prevTop){
 // 手机页只有会话聊天一个面，前缀传空串（id 即 chatText/chatSend/…）。
 const C_MAX=4000;  // 派发正文软上限：native 侧另有守卫，这里只提前提醒
 const C_PLANE_SVG='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12l16-7-6.3 16-2.9-6.4L4 12Z"/></svg>';
+// ---------- 附件：多选队列 / 串行上传 / 进度 / 附件条 ----------
+// 手机这条是**真的把字节传上来**：PC 落盘进会话目录、回来绝对路径，发送时
+// 拼进派发正文（agent 按路径读）。桌面端相反——本机路径直接引用，不复制。
+const ATT_MAX=25*1024*1024;  // 与 /m/upload 的 kMaxUploadBytes 对齐
+const ATT_ICON='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3v5h5"/><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8l-5-5Z"/></svg>';
+const ATTS={};  // prefix -> [{id,name,size,path,url(图片预览 blob)}]
+function attList(p){return ATTS[p]||(ATTS[p]=[]);}
+function attHas(p){return attList(p).length>0;}
+function attFmt(n){
+ if(n<1024)return n+'B';
+ if(n<1048576)return (n/1024).toFixed(1)+'KB';
+ return (n/1048576).toFixed(1)+'MB';
+}
+function attIcon(){
+ const ic=document.createElement('span');ic.className='ic';
+ ic.innerHTML=ATT_ICON;return ic;
+}
+function attRender(p){
+ const box=$(p+'chatAtts');if(!box)return;
+ box.replaceChildren();
+ attList(p).forEach(a=>{
+  const el=document.createElement('div');el.className='catt';
+  if(a.url){
+   const im=document.createElement('img');im.src=a.url;im.alt='';
+   // 解码失败（改后缀/坏图）退回文档图标，别留一个破图方块。
+   im.onerror=()=>im.replaceWith(attIcon());
+   el.appendChild(im);
+  }else el.appendChild(attIcon());
+  const nm=document.createElement('b');nm.textContent=a.name;el.appendChild(nm);
+  const sz=document.createElement('i');sz.textContent=attFmt(a.size);
+  el.appendChild(sz);
+  const x=document.createElement('button');x.className='x';x.textContent='×';
+  x.setAttribute('aria-label','移除附件 '+a.name);
+  x.onclick=()=>attDrop(p,a.id);
+  el.appendChild(x);box.appendChild(el);
+ });
+ box.hidden=!attHas(p);
+ cSync(p);
+}
+function attDrop(p,id){
+ const list=attList(p),i=list.findIndex(a=>a.id===id);
+ if(i<0)return;
+ if(list[i].url)URL.revokeObjectURL(list[i].url);
+ list.splice(i,1);attRender(p);
+}
+function attClear(p){
+ attList(p).forEach(a=>{if(a.url)URL.revokeObjectURL(a.url);});
+ ATTS[p]=[];attRender(p);
+}
+// 附件 → 派发正文：每行一个「请查看文件：<PC 绝对路径>」。agent 读的是路径，
+// 所以正文可以完全由附件构成（只发文件不写字也成立）。
+function attText(p){
+ return attList(p).map(a=>'请查看文件：'+a.path).join('\n');
+}
+// 上传定位：能拿待办 id 就带上；从派发页直接进会话没有待办 id，必须把
+// session/project/exe 一起带上——否则 native 侧按待办查不到，只能回 404
+// （这条路径在改之前是坏的）。
+function attUrl(id){
+ let q='/m/upload?id='+encodeURIComponent(id||'');
+ if(chatKind==='session')
+  q+='&session='+encodeURIComponent(chatSession||'')
+    +'&project='+encodeURIComponent(chatProject||'')
+    +'&exe='+encodeURIComponent(chatExe||'');
+ return q;
+}
+// fetch 拿不到上传进度，只能 XHR。
+function attPost(url,file,onp){
+ return new Promise((res,rej)=>{
+  const x=new XMLHttpRequest();
+  x.open('POST',url,true);
+  x.setRequestHeader('X-Requested-With','fetch');
+  x.setRequestHeader('X-AgentRMC-Filename',encodeURIComponent(file.name));
+  x.setRequestHeader('Content-Type','application/octet-stream');
+  x.timeout=120000;
+  if(x.upload)x.upload.onprogress=e=>{
+   if(e.lengthComputable)onp(e.loaded/e.total);};
+  x.onload=()=>{
+   let j={};try{j=JSON.parse(x.responseText);}catch(_){}
+   if(x.status>=200&&x.status<300&&j.path)res(j);
+   else rej(new Error(j.error||('HTTP '+x.status)));
+  };
+  x.onerror=()=>rej(new Error('连不上电脑'));
+  x.ontimeout=()=>rej(new Error('上传超时'));
+  x.send(file);
+ });
+}
+let attBusy=false;
+async function attUpload(files){
+ if(!chatCanDispatch||!chatId)return;
+ const arr=Array.prototype.slice.call(files||[]);
+ if(!arr.length)return;
+ if(attBusy){cNotice('','上一批还在传，稍等一下','bad');return;}
+ attBusy=true;
+ const url=attUrl(chatKind==='session'?'':chatId);
+ let okN=0,skipN=0,failN=0;
+ for(let i=0;i<arr.length;i++){
+  const f=arr[i];
+  if(f.size>ATT_MAX){skipN++;continue;}
+  $('chatUp').hidden=false;
+  $('chatUpLabel').textContent=(arr.length>1?('('+(i+1)+'/'+arr.length+') '):'')
+   +f.name;
+  $('chatUpFill').style.width='0%';
+  try{
+   const j=await attPost(url,f,r=>{
+    $('chatUpFill').style.width=(r*100).toFixed(0)+'%';});
+   attList('').push({id:j.path,name:j.name||f.name,size:f.size,path:j.path,
+    url:/^image\//i.test(f.type)?URL.createObjectURL(f):''});
+   okN++;
+  }catch(e){failN++;cNotice('','上传失败 '+f.name+'：'+(e.message||e),'bad');}
+ }
+ $('chatUp').hidden=true;$('chatUpFill').style.width='0%';
+ attRender('');
+ if(okN&&!failN)cNotice('','已附上 '+okN+' 个文件'
+  +(skipN?('（'+skipN+' 个超过 25MB，没传）'):''),'good');
+ else if(skipN&&!failN)cNotice('','文件超过 25MB，传不了','bad');
+ attBusy=false;
+}
 function cGrow(p){
  const ta=$(p+'chatText');if(!ta)return;
  ta.style.height='auto';
@@ -1849,7 +2009,8 @@ function cSync(p){
   cc.className='cchars'+(n>C_MAX?' over':(n>C_MAX*0.8?' warn':''));}
  const b=$(p+'chatSend');
  if(b&&b.dataset.busy==='1')return;  // 在途：保持「派发中…」
- cSendReady(p,!ta.disabled&&n>0);
+ // 只有附件没有正文也能发（正文由路径自动拼）。
+ cSendReady(p,!ta.disabled&&(n>0||attHas(p)));
 }
 function cSendReady(p,on){
  const b=$(p+'chatSend');if(!b)return;
@@ -1859,6 +2020,12 @@ function cSendReady(p,on){
 function cBusy(p){
  const b=$(p+'chatSend');if(!b)return;
  b.dataset.busy='1';b.disabled=true;b.innerHTML='派发中…';
+}
+// 解在途锁：只清标志，按钮状态交给下一次 cSync 按内容重算。手机这端
+// postResult 是同步等 HTTP 回执的，失败/成功都必须自己复位，否则
+// cSync 见 busy=1 会一直 return，按钮永远停在「派发中…」。
+function cIdle(p){
+ const b=$(p+'chatSend');if(b)b.dataset.busy='0';
 }
 function cNotice(p,text,kind){
  const bar=$(p+'chatBar'),el=$(p+'chatNotice');
@@ -2078,7 +2245,7 @@ function startChat(kind,id,meta){
  chatExe=meta&&meta.exe||'';chatSession=meta&&meta.session||'';
  chatProject=meta&&meta.project||'';chatAgentName=meta&&meta.agentName||'';
  chatCanDispatch=meta&&meta.canDispatch!==false;
- cValue('','');cNotice('','');
+ cValue('','');cNotice('','');attClear('');
  render();fetchTranscript(0,'init');
 }
 function openChat(id){startChat('work',id,{});}
@@ -2089,12 +2256,15 @@ function openSession(agent,row){
 }
 function closeChat(){
  chatId='';chatMsgs=[];chatIds=new Set();
+ attClear('');
  chatKind='work';chatExe='';chatSession='';chatProject='';chatAgentName='';
  chatCanDispatch=true;
  render();
 }
 async function sendChat(){
- const t=$('chatText').value.trim();
+ const typed=$('chatText').value.trim();
+ const refs=attText('');
+ const t=typed?(refs?typed+'\n'+refs:typed):refs;
  if(!t||!chatId||!chatCanDispatch)return;
  cBusy('');
  const model=pickedModel();
@@ -2103,13 +2273,16 @@ async function sendChat(){
      project:chatProject,text:t,model:model||undefined})
   :await postResult({cmd:'dispatch',id:chatId,text:t,model:model||undefined});
  if(!res.ok){
-  // 失败：正文留在框里改完可重发（cValue 会把高度/计数/按钮一起复位）。
-  cValue('',t);
+  // 失败：正文留在框里改完可重发（cValue 会把高度/计数/按钮一起复位）；
+  // 附件不清——路径还在 native 落盘目录里，直接再发一次即可。
+  cIdle('');
+  cValue('',typed);
   const why=(res.data&&res.data.error)||('HTTP '+res.status);
   cNotice('','没发出去：'+why+'（草稿已保留）','bad');
   return;
  }
- cValue('','');
+ cIdle('');
+ cValue('','');attClear('');
  // 派发成功：模型选择是一次性的，关掉面板并重置，下一发默认回「会话当前」。
  mpOpen=false;$('chatModelPanel').hidden=true;mpResetState();
  cNotice('',chatKind==='session'
@@ -2121,23 +2294,11 @@ async function sendChat(){
 $('chatBack').onclick=closeChat;
 $('chatSend').onclick=sendChat;
 $('chatAttach').onclick=()=>$('chatFile').click();
-$('chatFile').onchange=async()=>{
- const f=$('chatFile').files[0];$('chatFile').value='';
- if(!f||!chatId)return;
- if(f.size>25*1024*1024){cNotice('','文件超过 25MB，传不了','bad');return;}
- cNotice('','上传中… '+f.name);
- try{
-  const r=await fetch('/m/upload?id='+encodeURIComponent(chatId),{method:'POST',
-   headers:{'X-Requested-With':'fetch','X-AgentRMC-Filename':encodeURIComponent(f.name),'Content-Type':'application/octet-stream'},
-   body:f});
-  const j=await r.json();
-  if(r.ok&&j.path){
-   const cur=$('chatText').value;
-   cValue('',(cur?cur+'\n':'')+'请查看文件：'+j.path);
-   cNotice('','已上传 '+j.name+'，路径已填入输入框，点发送让 agent 读取','good');
-   $('chatText').focus();
-  }else{cNotice('','上传失败：'+(j.error||('HTTP '+r.status)),'bad');}
- }catch(e){cNotice('','上传失败：连不上电脑','bad');}
+$('chatFile').onchange=()=>{
+ // 先把 FileList 快照成数组再清 input.value——value 一清，FileList 当场变空。
+ const files=Array.prototype.slice.call($('chatFile').files||[]);
+ $('chatFile').value='';
+ if(files.length)attUpload(files);
 };
 $('chatText').addEventListener('keydown',e=>{
  // 手机软键盘 enterkeyhint=send：Enter 直接发送；组合输入（拼音）中不发送。

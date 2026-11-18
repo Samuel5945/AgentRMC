@@ -42,6 +42,9 @@ public:
     void pushSessions(const QJsonObject &catalog);
     void pushSessionChat(const QJsonObject &page);
     void pushSessionResult(const QJsonObject &result);
+    // 📎 选文件的结果：{plane:"dchat|chat", files:[{name,path,size}]}，页面
+    // 据此生成附件条（本机路径直接引用，不复制）。
+    void pushFiles(const QJsonObject &payload);
     void pushDeleteResult(const QJsonObject &result);
     // WebView2 的边界是物理像素：跨屏换 DPI 时主窗拿原生消息催一次重喂。
     void syncBounds();

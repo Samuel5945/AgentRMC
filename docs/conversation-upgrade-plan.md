@@ -1,6 +1,7 @@
 # 对话能力升级：借鉴 Luma 的方案
 
-> 状态：**C 手机传文件已实现；B1 待答请求只读展示已实现**（2026-11-14 真机验收）；
+> 状态：**C 手机传文件已实现并完整化（2026-11-18：多选/进度/附件条 + 桌面 📎）；
+> B1 待答请求只读展示已实现**（2026-11-14 真机验收）；
 > B2/B3 内联应答与 A OpenCode/Codex 接入仍为设计。触发：用户给了
 > [Luma](https://github.com/modao7067/luma)（安卓上跑 Codex/Claude Code/OpenCode/DSH
 > 等 CLI 的对话前端），要借鉴它的 OpenCode/Codex 接法、授权/选择项显示、文件传输，
@@ -223,6 +224,26 @@ RequestQuestion(id, header, prompt, options[], multiple, secret,
   - **去冗余回执通知（用户 2026-11-14）**：聊天页已能直接看记录，派发成功不再弹
     「会话 X 回执已落账」；ZCode 桌面端不热刷新，保留重启提示；失败通知保留。
   - `lanweb_test` 增 10 项（401/403/200/404/中文文件名解码/100KB 超 64KB 限）。
+- **完整化（2026-11-18）**：这一轮把「能传」补成「好用」，两端 composer 同构。
+  - **修掉的硬伤**：`/m/upload` 原来只按**待办 id** 找会话，而手机从派发页直接进
+    的会话（`openSession`）没有待办 id → 这条路径上传**必 404**。现在 `id` 之外
+    还可以带 `session`/`project`/`exe`，native 侧两种定位都认；`project` 只接受
+    **已存在的绝对目录**且拒绝盘根（客户端带来的路径不可全信），`session` 拼进
+    路径前过滤分隔符与 `..`。
+  - **手机端**：`<input multiple>` 多选 → 串行上传（XHR 才有 `upload.onprogress`）
+    → 附件条 chip（图片带缩略图、坏图回退文件图标、× 移除、大小格式化）；上传中
+    单独一行细进度条。发送时附件路径按行拼进正文，**只有附件没有正文也能发**；
+    成功清空、失败保留（路径还在硬盘上，改完能直接重发）。
+  - **桌面端**：📎 走 native `QFileDialog::getOpenFileNames`（WebView2 的 HTML5
+    拖拽拿不到本机路径），回推 `window.__setFiles({plane,files})`；本机文件
+    **不复制**、直接给绝对路径。两个聊天面（dchat/chat）共用一套 att* 逻辑。
+  - **发送键在途态**：手机端 `postResult` 是同步等 HTTP 的，失败/成功都要自己
+    `cIdle()` 解 busy 锁——否则 `cSync` 见 busy 就 return，按钮永久停在「派发中…」
+    （踩到过）。桌面 chat 面另加 5 秒看门狗（连发同会话时 notice 文案不变，
+    在途判定收不了场）。
+  - 测试：`lanweb_test` 115 checks（新增会话上下文上传 5 项）；
+    `rc_probe/mobile_page_probe.mjs flow` 增 13 项附件断言 + `chatAtt` 截图场景；
+    新增 `rc_probe/desktop_chat_attachments.mjs`（mock WebView2 通道，14 项）。
 
 ## 4. 分期建议
 

@@ -194,6 +194,7 @@ function state(theme) {
 
 let CURRENT_THEME = 'light';
 const ACK = new Set();
+const UPLOADS = [];  // /m/upload 收到的定位参数 + 文件名/字节数，附件断言用
 
 function startServer() {
   return new Promise((resolve) => {
@@ -228,6 +229,27 @@ function startServer() {
           ],
           requests: []
         }));
+      }
+      if (url.pathname === '/m/upload') {
+        let body = '';
+        req.on('data', (c) => (body += c));
+        req.on('end', () => {
+          const name = decodeURIComponent(req.headers['x-agentrmc-filename'] || 'f.bin');
+          const rec = {
+            id: url.searchParams.get('id') || '',
+            session: url.searchParams.get('session') || '',
+            project: url.searchParams.get('project') || '',
+            name, size: Buffer.byteLength(body),
+          };
+          UPLOADS.push(rec);
+          console.log('[upload]', JSON.stringify(rec));
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            ok: true, code: 200, name, size: rec.size,
+            path: 'D:/githubrepos/Agentrmc/.agentrmc/inbox/sess-8f31c2a9/20261118-' + name,
+          }));
+        });
+        return;
       }
       if (url.pathname === '/m/action') {
         let body = '';
@@ -331,6 +353,20 @@ const SCENES = {
     await page.locator('#sessList .sescard').nth(0).click();
     await page.waitForSelector('#pchat:not([hidden]) .chatlist .bub');
     await page.waitForTimeout(160);
+  },
+  // 附件态：会话聊天页挂两个附件（图片带缩略图、文档走图标）。
+  chatAtt: async (page) => {
+    await page.click('#tabbar .tab[data-tab="1"]');
+    await page.waitForSelector('#sessList .sescard');
+    await page.locator('#sessList .sescard').nth(0).click();
+    await page.waitForSelector('#pchat:not([hidden]) .chatlist .bub');
+    await page.waitForFunction(() => chatMeta && chatMeta.sessionTitle);
+    await page.setInputFiles('#chatFile', [
+      { name: '截图一.png', mimeType: 'image/png', buffer: Buffer.from('PNG') },
+      { name: '会议纪要.md', mimeType: 'text/markdown', buffer: Buffer.from('# 纪要') },
+    ]);
+    await page.waitForFunction(() => ATTS[''] && ATTS[''].length === 2);
+    await page.waitForTimeout(200);
   }
 };
 
@@ -513,6 +549,10 @@ async function runFlow() {
 
   await page.locator('#sessList .sescard').nth(0).click();
   await page.waitForSelector('#pchat:not([hidden]) .chatlist .bub');
+  // 聊天页 DOM 是复用的：切会话时 .bub 可能还是上一屏的，等**数据到齐**
+  // （chatMeta 由 /m/session 的响应写入）再断言标题/条数，否则会在
+  // fetch 往返的空窗里读到初始 {}（2026-11-18 踩到）。
+  await page.waitForFunction(() => chatMeta && chatMeta.sessionTitle);
   ok((await page.textContent('#chatBack')).includes('派发'), '会话聊天页返回派发');
   ok((await page.textContent('#chatTitle')).includes('手机页多选'), '会话聊天页标题正确');
   ok((await page.textContent('#chatSub')).includes('WorkBuddy AI'), '会话聊天页显示 Agent');
@@ -531,6 +571,41 @@ async function runFlow() {
   ok(posts.some((p) => p.cmd === 'dispatchSession' && p.session === 'sess-8f31c2a9' && p.agent === 'WorkBuddyAI.exe'), '任意会话派发参数正确', JSON.stringify(posts));
   ok((await page.textContent('#chatNotice')).includes('已派发'), '派发成功提示可见');
   ok((await page.inputValue('#chatText')) === '', '派发成功后清空草稿');
+
+  // 附件：多选上传 → chip 条 → 只有附件也能发 → 路径拼进正文 → 送达后清空。
+  // 上传走的是「无待办 id、只带 session/project」那条路（派发页直进会话），
+  // 正是 2026-11-18 修掉必 404 的分支。
+  UPLOADS.length = 0;
+  ok(await page.locator('#chatAtts').evaluate((el) => el.hidden), '无附件时附件条隐藏');
+  await page.setInputFiles('#chatFile', [
+    // 真 PNG 字节（1x1）：坏图会走 onerror 退回图标，缩略图断言就测不到了。
+    { name: '截图一.png', mimeType: 'image/png',
+      buffer: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8AAAwAB/AF+H+YAAAAASUVORK5CYII=', 'base64') },
+    { name: 'notes.txt', mimeType: 'text/plain', buffer: Buffer.from('hello') },
+  ]);
+  await page.waitForFunction(() => ATTS[''] && ATTS[''].length === 2);
+  ok(await page.locator('#chatAtts .catt').count() === 2, '多选附件都进 chip 条');
+  ok(await page.locator('#chatAtts img').count() === 1, '图片附件带缩略图');
+  ok(UPLOADS.length === 2 && UPLOADS[0].session === 'sess-8f31c2a9' && UPLOADS[0].id === '',
+    '上传带会话上下文（无待办 id 也能定位）', JSON.stringify(UPLOADS));
+  ok((await page.textContent('#chatAtts')).includes('截图一.png'), 'chip 显示文件名');
+  ok(await page.isEnabled('#chatSend'), '只有附件也能点亮发送键');
+
+  posts.length = 0;
+  await page.click('#chatSend');
+  await page.waitForTimeout(360);
+  const sentAtt = posts.filter((p) => p.cmd === 'dispatchSession').pop();
+  ok(sentAtt && sentAtt.text.includes('请查看文件：') && sentAtt.text.includes('notes.txt'),
+    '发送时把附件路径拼进正文', JSON.stringify(sentAtt));
+  ok((await page.inputValue('#chatText')) === '', '附件路径不落回输入框');
+  ok(await page.locator('#chatAtts .catt').count() === 0, '派发成功后附件条清空');
+
+  await page.setInputFiles('#chatFile', [
+    { name: 'x.md', mimeType: 'text/markdown', buffer: Buffer.from('# x') }]);
+  await page.waitForFunction(() => ATTS[''] && ATTS[''].length === 1);
+  await page.locator('#chatAtts .catt .x').click();
+  ok(await page.locator('#chatAtts .catt').count() === 0, '× 可移除附件');
+  ok(await page.locator('#chatAtts').evaluate((el) => el.hidden), '移除后附件条收起');
 
   await page.click('#chatBack');
   await page.locator('#agentChips .chip').nth(1).click();

@@ -165,21 +165,27 @@ int main(int argc, char **argv) {
             }
             return QString();  // 未知会话 → 404
         });
-    QString upId, upName;
+    QString upId, upName, upSession, upProject;
     QByteArray upData;
-    lan.setUploadHandler([&](const QString &id, const QString &filename,
-                             const QByteArray &data) {
-        upId = id;
-        upName = filename;
+    lan.setUploadHandler([&](const QJsonObject &meta, const QByteArray &data) {
+        upId = meta.value(QStringLiteral("id")).toString();
+        upName = meta.value(QStringLiteral("filename")).toString();
+        upSession = meta.value(QStringLiteral("session")).toString();
+        upProject = meta.value(QStringLiteral("project")).toString();
         upData = data;
-        if (id != QStringLiteral("item-1")) {
+        // 两种定位都算合法：待办 id，或 session+project（从派发页直接进会话）。
+        const bool byId = upId == QStringLiteral("item-1");
+        const bool bySession =
+            upSession == QStringLiteral("sess-9") &&
+            upProject == QStringLiteral("D:/work/demo");
+        if (!byId && !bySession) {
             return QJsonObject{{QStringLiteral("ok"), false},
                                {QStringLiteral("code"), 404}};
         }
         return QJsonObject{{QStringLiteral("ok"), true},
                            {QStringLiteral("code"), 200},
                            {QStringLiteral("path"),
-                            QStringLiteral("/inbox/") + filename}};
+                            QStringLiteral("/inbox/") + upName}};
     });
     QJsonArray persisted;
     int persistCalls = 0;
@@ -419,6 +425,26 @@ int main(int argc, char **argv) {
                     check(resp.startsWith("HTTP/1.1 200"),
                           "upload 100KB over 64KB limit ok", resp);
                     check(upData.size() == 100 * 1024, "upload 100KB bytes intact");
+                },
+                next);
+    });
+    // 9g2. 上传：没有待办 id、只带 session/project（从派发页直接进会话）→ 200，
+    // 上下文原样透传给落盘处理器。这条路径以前只认 id，必 404（2026-11-18 修）。
+    seq.add([&](std::function<void()> next) {
+        request(app, port,
+                post("/m/upload?session=sess-9&project=D%3A%2Fwork%2Fdemo",
+                     "SESSIONBYTES",
+                     cookieHeader(token) + csrf() + "X-AgentRMC-Filename: s.txt\r\n"),
+                [&](const QByteArray &resp) {
+                    check(resp.startsWith("HTTP/1.1 200"),
+                          "upload by session 200", resp);
+                    check(upId.isEmpty(), "upload by session has no id");
+                    check(upSession == QStringLiteral("sess-9"),
+                          "upload session passed through");
+                    check(upProject == QStringLiteral("D:/work/demo"),
+                          "upload project percent-decoded");
+                    check(upData == QByteArray("SESSIONBYTES"),
+                          "upload by session bytes passed");
                 },
                 next);
     });

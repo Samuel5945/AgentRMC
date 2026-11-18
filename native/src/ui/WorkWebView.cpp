@@ -559,6 +559,18 @@ void WorkWebView::pushSessionResult(const QJsonObject &result) {
                                nullptr);
 }
 
+void WorkWebView::pushFiles(const QJsonObject &payload) {
+    if (!documentReady_ || d_->webview == nullptr) {
+        return;
+    }
+    const QString json = QString::fromUtf8(
+        QJsonDocument(payload).toJson(QJsonDocument::Compact));
+    const QString script = QStringLiteral("window.__setFiles(") + jsEscape(json)
+                           + QStringLiteral(");");
+    d_->webview->ExecuteScript(reinterpret_cast<LPCWSTR>(script.utf16()),
+                               nullptr);
+}
+
 void WorkWebView::pushDeleteResult(const QJsonObject &result) {
     if (!documentReady_ || d_->webview == nullptr) {
         return;
@@ -1005,6 +1017,34 @@ QString WorkWebView::htmlFor(const QString &stateJson) const {
   .cbox textarea::-webkit-scrollbar{width:0;height:0}
   .cbox textarea::placeholder{color:var(--muted2)}
   .cbox textarea:disabled{color:var(--faint);cursor:default}
+  /* 附件条（桌面端）：本机路径直接引用、不复制文件，所以不带图片预览——
+     file:// 在 WebView2 里读不到，缩略图留空用文件图标。超出横向滚动。 */
+  .catts{display:flex;gap:6px;overflow-x:auto;scrollbar-width:none;
+    padding:1px 0 2px}
+  .catts[hidden]{display:none !important}
+  .catts::-webkit-scrollbar{width:0;height:0}
+  .catt{flex:0 0 auto;display:flex;align-items:center;gap:5px;max-width:250px;
+    padding:3px 4px 3px 3px;border-radius:8px;background:var(--w10);
+    border:1px solid var(--w14)}
+  .catt .ic{width:22px;height:22px;display:flex;align-items:center;
+    justify-content:center;border-radius:6px;background:var(--w8);
+    color:var(--text-dim);flex:0 0 auto}
+  .catt .ic svg{width:12px;height:12px;display:block}
+  .catt b{font-weight:400;font-size:var(--f10);overflow:hidden;
+    text-overflow:ellipsis;white-space:nowrap;min-width:0}
+  .catt .sz{font-style:normal;font-size:var(--f10);color:var(--muted2);
+    flex:0 0 auto}
+  .catt .x{flex:0 0 auto;width:18px;height:18px;border:none;background:transparent;
+    color:var(--muted2);font-size:13px;line-height:1;cursor:default;padding:0;
+    font-family:inherit;border-radius:50%}
+  .catt .x:hover{background:var(--w14);color:var(--text)}
+  /* 📎 图标键：和模型胶囊同排，视觉上是 composer 的工具位。 */
+  .cico{flex:0 0 auto;width:26px;height:26px;display:flex;align-items:center;
+    justify-content:center;border:none;border-radius:7px;background:transparent;
+    color:var(--text-dim);cursor:default;padding:0}
+  .cico:hover{background:var(--w10);color:var(--text)}
+  .cico svg{width:15px;height:15px;display:block;pointer-events:none}
+  .cico:disabled{color:var(--faint)}
   .crow{display:flex;align-items:center;gap:6px;flex-wrap:nowrap}
   .chint{font-size:var(--f10);color:var(--ghost);margin-right:auto;
     white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -1356,8 +1396,10 @@ QString WorkWebView::htmlFor(const QString &stateJson) const {
       <div class="cnotice" id="dchatNotice"></div>
     </div>
     <div class="cbox">
+      <div class="catts" id="dchatAtts" hidden></div>
       <textarea id="dchatText" rows="1" placeholder="写一句任务，派到这个会话…"></textarea>
       <div class="crow">
+        <button class="cico" id="dchatAttach" title="附上本机文件（不复制，直接给路径）" aria-label="附上本机文件"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20.4 11.6 12 20a5 5 0 0 1-7-7l8.5-8.5a3.4 3.4 0 0 1 4.8 4.8L9.7 17.9a1.8 1.8 0 0 1-2.5-2.5l7.8-7.8"/></svg></button>
         <button class="modelchip" id="dchatModelChip" hidden><b id="dchatModelLabel">选择模型</b><span class="lvl" id="dchatModelLvl" hidden></span><span class="caret">⌄</span></button>
         <span class="chint" id="dchatHint">Enter 发送 · Shift+Enter 换行</span>
         <span class="cchars" id="dchatChars" hidden></span>
@@ -1396,8 +1438,10 @@ QString WorkWebView::htmlFor(const QString &stateJson) const {
         title="ZCode 对话区不热刷新：重启宿主后打开会话即可看到派发消息全文。会中断 ZCode 里正在跑的其它轮次">重启 ZCode</button></span>
     </div>
     <div class="cbox">
+      <div class="catts" id="chatAtts" hidden></div>
       <textarea id="chatText" rows="1" placeholder="派回这条会话的指令，回执到了转进行中…"></textarea>
       <div class="crow">
+        <button class="cico" id="chatAttach" title="附上本机文件（不复制，直接给路径）" aria-label="附上本机文件"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20.4 11.6 12 20a5 5 0 0 1-7-7l8.5-8.5a3.4 3.4 0 0 1 4.8 4.8L9.7 17.9a1.8 1.8 0 0 1-2.5-2.5l7.8-7.8"/></svg></button>
         <button class="modelchip" id="chatModelChip" hidden><b id="chatModelLabel">选择模型</b><span class="lvl" id="chatModelLvl" hidden></span><span class="caret">⌄</span></button>
         <span class="chint" id="chatHint">Enter 发送 · Shift+Enter 换行</span>
         <span class="cchars" id="chatChars" hidden></span>
@@ -2444,8 +2488,7 @@ function openDSession(agent,row){
   dchatMsgs=[];dchatIds=new Set();dchatTotal=0;dchatHasMore=false;dchatLoading=true;
   DCHAT_PENDING='';DCHAT_REFRESHING=false;
   mpReset('dchat');mpSyncChip('dchat');
-  $('dchatText').value='';
-  cValue('dchat','');
+  cValue('dchat','');attClear('dchat');
   render();
   postObj({cmd:'sessionOpen',exe:agent.exe,session:row.id,offset:0,limit:50});
 }
@@ -2464,6 +2507,7 @@ function renderDchatHeader(){
     :'这个 Agent 暂不支持手机/桌面派发，记录只读';
   cLabel('dchat',dchatTotal?'派发':'派首条');
   $('dchatText').disabled=!DSCHAT.canDispatch;
+  $('dchatAttach').disabled=!DSCHAT.canDispatch;
   mpSyncChip('dchat');mpRenderPanel('dchat');
   if(!DSCHAT.canDispatch)
     cNotice('dchat','只读：该 Agent 的派发通道未开通；记录仍可查看。');
@@ -2647,8 +2691,12 @@ function mpToggle(prefix){
 });
 function sendDchat(){
   if(!dchatOpen||!DSCHAT||!DSCHAT.canDispatch)return;
-  const t=$('dchatText').value.trim();if(!t)return;
-  DCHAT_PENDING=t;
+  const typed=$('dchatText').value.trim();
+  const refs=attText('dchat');
+  const t=typed?(refs?typed+'\n'+refs:typed):refs;
+  if(!t)return;
+  // DCHAT_PENDING 记**原文**（不含路径行）：回执回来要对上输入框里的内容。
+  DCHAT_PENDING=typed;
   cBusy('dchat');
   cNotice('dchat','正在派发，等回执…');
   const model=mpPicked('dchat');
@@ -2660,10 +2708,12 @@ window.__setDispatchResult=function(r){
   cSendReady('dchat',DSCHAT.canDispatch);
   if(r&&r.ok){
     if($('dchatText').value===DCHAT_PENDING)cValue('dchat','');
+    attClear('dchat');  // 附件已随正文派出去，chip 不能留在下一发
     // 派发成功：override 是一次性的，关面板并重置回「会话当前」。
     mpReset('dchat');mpSyncChip('dchat');$('dchatModelPanel').hidden=true;
     cNotice('dchat','已派发。送达回执到了会进「待我处理」；这里继续看会话记录。','good');
   }else{
+    // 失败保留附件（路径还在硬盘上，改完正文能直接重发）。
     cNotice('dchat','没发出去：'+((r&&r.error)||'未知原因')+'（草稿已保留）','bad');
   }
   DCHAT_PENDING='';
@@ -2671,6 +2721,7 @@ window.__setDispatchResult=function(r){
 function closeDSession(){
   dchatOpen=false;DSCHAT=null;dchatMsgs=[];dchatIds=new Set();dchatKey='';
   cSendReady('dchat',true);
+  attClear('dchat');
   mpReset('dchat');mpSyncChip('dchat');
   render();
 }
@@ -2973,6 +3024,8 @@ $('dchatRefresh').onclick=()=>{
     offset:0,limit:50});
 };
 $('dchatSend').onclick=sendDchat;
+// 📎：本机文件走 native 系统对话框（页面拿不到本机路径），选完回推 __setFiles。
+$('dchatAttach').onclick=()=>postObj({cmd:'pickFiles',plane:'dchat'});
 $('dchatText').addEventListener('keydown',e=>{
   if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing&&e.keyCode!==229){
     e.preventDefault();sendDchat();}
@@ -3004,6 +3057,66 @@ document.addEventListener('keydown',e=>{
 const C_MAX=4000;  // 派发正文软上限：native 侧另有守卫，这里只提前提醒
 // 发送键空闲态图标（纸飞机）；派发中整颗键只留文字。
 const C_PLANE_SVG='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12l16-7-6.3 16-2.9-6.4L4 12Z"/></svg>';
+// ---------- 附件（桌面端）：本机路径直接引用，不复制文件 ----------
+// 📎 走 native 的系统文件对话框（WebView2 的 HTML5 拖拽拿不到本机路径），
+// 回推 __setFiles({plane,files:[{name,path,size}]})；这里只维护 chip 列表，
+// 发送时把路径拼进正文，agent 按路径读。
+const ATTS={dchat:[],chat:[]};
+const ATT_ICON='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3v5h5"/><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8l-5-5Z"/></svg>';
+function attList(p){return ATTS[p]||(ATTS[p]=[]);}
+function attHas(p){return attList(p).length>0;}
+function attFmt(n){
+ if(n<1024)return n+'B';
+ if(n<1048576)return (n/1024).toFixed(1)+'KB';
+ return (n/1048576).toFixed(1)+'MB';
+}
+function attRender(p){
+ const box=$(p+'Atts');if(!box)return;
+ box.replaceChildren();
+ attList(p).forEach(a=>{
+  const el=document.createElement('div');el.className='catt';
+  const ic=document.createElement('span');ic.className='ic';
+  ic.innerHTML=ATT_ICON;el.appendChild(ic);
+  const nm=document.createElement('b');nm.textContent=a.name;el.appendChild(nm);
+  const sz=document.createElement('span');sz.className='sz';
+  sz.textContent=attFmt(a.size);el.appendChild(sz);
+  const x=document.createElement('button');x.className='x';x.textContent='×';
+  x.setAttribute('aria-label','移除附件 '+a.name);
+  x.onclick=()=>attDrop(p,a.id);
+  el.appendChild(x);box.appendChild(el);
+ });
+ box.hidden=!attHas(p);
+ cSync(p);
+}
+function attDrop(p,id){
+ const list=attList(p),i=list.findIndex(a=>a.id===id);
+ if(i<0)return;
+ list.splice(i,1);attRender(p);
+}
+function attClear(p){
+ if(!ATTS[p]||!ATTS[p].length)return;
+ ATTS[p]=[];attRender(p);
+}
+function attAdd(p,files){
+ if(!files||!files.length)return;
+ const list=attList(p);
+ files.forEach(f=>{
+  if(!f||!f.path)return;
+  if(list.some(a=>a.path===f.path))return;  // 同一个文件重复选＝忽略
+  list.push({id:f.path,name:f.name||f.path.split(/[\\/]/).pop(),
+    size:f.size||0,path:f.path});
+ });
+ attRender(p);
+ if(list.length)cNotice(p,'已附上 '+list.length+' 个文件，发送时把路径交给 agent','good');
+}
+function attText(p){
+ return attList(p).map(a=>'请查看文件：'+a.path).join('\n');
+}
+// 📎 回调：native 弹完对话框回推选中的本机路径。
+window.__setFiles=function(o){
+ if(!o||!o.plane||!ATTS[o.plane])return;
+ attAdd(o.plane,o.files||[]);
+};
 function cGrow(prefix){
   const ta=$(prefix+'Text');if(!ta)return;
   ta.style.height='auto';
@@ -3024,7 +3137,8 @@ function cSync(prefix){
   // 派发未回执：按钮保持「派发中…」，别让清空后的 sync 把它解禁。
   const b=$(prefix+'Send');
   if(b&&b.dataset.busy==='1')return;
-  cSendReady(prefix,!ta.disabled&&n>0);
+  // 只有附件没有正文也能发（正文由路径自动拼）。
+  cSendReady(prefix,!ta.disabled&&(n>0||attHas(prefix)));
 }
 function cSendReady(prefix,on,sendLabel){
   const b=$(prefix+'Send');if(!b)return;
@@ -3037,6 +3151,11 @@ function cBusy(prefix){
   const b=$(prefix+'Send');if(!b)return;
   b.dataset.busy='1';b.disabled=true;
   b.innerHTML='派发中…';
+}
+// 解在途锁（只清标志，按钮状态交给下一次 cSync 按内容重算）。桌面两端都是
+// 异步回执：dchat 由 __setDispatchResult 复位，chat 由在途收场/看门狗复位。
+function cIdle(prefix){
+  const b=$(prefix+'Send');if(b)b.dataset.busy='0';
 }
 function cNotice(prefix,text,kind){
   const bar=$(prefix+'Bar'),el=$(prefix+'Notice');
@@ -3247,11 +3366,12 @@ function renderChatFrame(){
   // notice 文案变了＝受理或回执。两条路径都退出「派发中…」。
   if(CHAT_PENDING&&((d.notice||'')!==CHAT_SENT_NOTICE
                     ||d.draftId===chatOpenedId)){
-    if(d.draftId===chatOpenedId&&d.draftText)
-      cValue('chat',d.draftText);
+    const rejected=d.draftId===chatOpenedId&&d.draftText;
+    if(rejected)cValue('chat',d.draftText);
+    else attClear('chat');  // 受理了：附件路径已随正文送出去
     CHAT_PENDING='';CHAT_SENT_NOTICE='';
     cSendReady('chat',!$('chatText').disabled
-      &&$('chatText').value.trim().length>0);
+      &&($('chatText').value.trim().length>0||attHas('chat')));
   }
   cNotice('chat',notice,d.noticeKind||'');
   // 失败原因也落到那张卡上（页顶 notice 在长记录里容易被滚出视野）。
@@ -3283,15 +3403,26 @@ window.__setChatPage=function(p){
   paintChat('prepend',prevH,prevTop);
 };
 function sendChat(){
-  const t=$('chatText').value.trim();
+  const typed=$('chatText').value.trim();
+  const refs=attText('chat');
+  const t=typed?(refs?typed+'\n'+refs:typed):refs;
   if(!t||!chatOpenedId)return;
   const model=mpPicked('chat');
-  CHAT_PENDING=t;
+  // 在途正文记原文（不含路径行）：收场时拿它跟输入框对账。
+  CHAT_PENDING=typed||t;
   CHAT_SENT_NOTICE=((STATE.dispatch||{}).notice)||'';
   cBusy('chat');
   cNotice('chat','正在派发，等回执…');
   postObj({cmd:'dispatch',id:chatOpenedId,text:t,model:model||undefined});
   cValue('chat','');
+  // 看门狗：postMessage 是单向的，连发同一会话时新 notice 与上一发同文案，
+  // 在途判定不会触发，按钮会永久停在「派发中…」。5 秒兜底解一次锁。
+  setTimeout(()=>{
+    if(!CHAT_PENDING)return;
+    CHAT_PENDING='';CHAT_SENT_NOTICE='';
+    cSendReady('chat',!$('chatText').disabled
+      &&($('chatText').value.trim().length>0||attHas('chat')));
+  },5000);
   // 派发指令已接受：override 是一次性的，关面板并重置回「会话当前」。
   // 若被守卫拒绝，notice 会把原因写回本页（草稿留在 notice 提示里可复制）。
   mpReset('chat');mpSyncChip('chat');$('chatModelPanel').hidden=true;
@@ -3304,14 +3435,15 @@ function cLabel(prefix,label){
   const b=$(prefix+'Send');if(!b)return;
   if(b.dataset.busy==='1')return;  // 派发中不改文案
   b.dataset.label=label;
-  $(prefix+'Hint').textContent=label==='发送'
-    ?'Enter 发送 · Shift+Enter 换行'
-    :'Enter 发首条 · Shift+Enter 换行';
+  // hint 跟按钮文案走（派发/发送/发首条三档），别写死两档——dchat 面复用
+  // 这个函数时曾把「派发」显示成「发首条」。
+  $(prefix+'Hint').textContent='Enter '+label+' · Shift+Enter 换行';
   cSendReady(prefix,!$(prefix+'Text').disabled
-    &&$(prefix+'Text').value.trim().length>0,label);
+    &&($(prefix+'Text').value.trim().length>0||attHas(prefix)),label);
 }
 $('chatBack').onclick=()=>postObj({cmd:'chatBack'});
 $('chatSend').onclick=sendChat;
+$('chatAttach').onclick=()=>postObj({cmd:'pickFiles',plane:'chat'});
 $('chatText').addEventListener('keydown',e=>{
   if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing&&e.keyCode!==229){
     e.preventDefault();sendChat();}});
@@ -3348,7 +3480,7 @@ function adopt(s){
     if(chatOpenedId!==c.id){
       chatOpenedId=c.id;selected=c.id;
       chatMsgs=[];chatIds=new Set();chatLoading=false;
-      mpReset('chat');cValue('chat','');
+      mpReset('chat');cValue('chat','');attClear('chat');
       CHAT=c;render();mergeChatPage(c,'init');
     }else{
       CHAT=c;render();mergeChatPage(c,'append');

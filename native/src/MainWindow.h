@@ -137,10 +137,10 @@ private:
     QString dispatchToSession(const QString &agentExe, const QString &sessionId,
                               const QString &project, const QString &text,
                               const QJsonObject &modelOverride = QJsonObject());
-    // 手机传文件落盘：按待办 id 找到会话工作目录，存进 .agentrmc/inbox/<session>/，
-    // 返回 PC 绝对路径供派发文本引用（agent 按路径读）。
-    QJsonObject lanUpload(const QString &id, const QString &filename,
-                          const QByteArray &data);
+    // 手机传文件落盘：meta={id?,session,project,exe,filename}。有 id 时按待办
+    // 解析会话工作目录；没有（从派发页直接进会话）按 project/session 定位。
+    // 存进 .agentrmc/inbox/<session>/，返回 PC 绝对路径供派发文本引用。
+    QJsonObject lanUpload(const QJsonObject &meta, const QByteArray &data);
     // 系统页「手机访问」卡片的状态：开关/监听/URL/配对/设备（配对码只给桌面）。
     QJsonObject lanState();
     // 懒创建 LAN 服务并接好 provider/持久化；开关与恢复启动都走这里。

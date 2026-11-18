@@ -50,6 +50,7 @@
 #include <QDragEnterEvent>
 #include <QDropEvent>
 #include <QFile>
+#include <QFileDialog>
 #include <QFileInfo>
 #include <QMimeData>
 #include <QSettings>
@@ -3407,10 +3408,10 @@ void MainWindow::ensureLanServer() {
         [this](const QString &exe, const QString &session, int offset, int limit) {
             return lanSessionTranscript(exe, session, offset, limit);
         });
-    lan_->setUploadHandler([this](const QString &id, const QString &filename,
-                                  const QByteArray &data) {
-        return lanUpload(id, filename, data);
-    });
+    lan_->setUploadHandler(
+        [this](const QJsonObject &meta, const QByteArray &data) {
+            return lanUpload(meta, data);
+        });
     lan_->setThemeRoot(ThemeManager::themesRoot());
     // 白名单已在服务端验过；这里与桌面外壳走同一个 handleWebAction，
     // 做完它内部统一 refresh，桌面外壳自动跟着刷新，双端一致免费。
@@ -3990,28 +3991,46 @@ QString MainWindow::dispatchToSession(const QString &agentExe,
     return QString();
 }
 
-QJsonObject MainWindow::lanUpload(const QString &id, const QString &filename,
+QJsonObject MainWindow::lanUpload(const QJsonObject &meta,
                                   const QByteArray &data) {
     const auto fail = [](int code, const QString &why) {
         return QJsonObject{{QStringLiteral("ok"), false},
                            {QStringLiteral("code"), code},
                            {QStringLiteral("error"), why}};
     };
-    if (workItems_ == nullptr || id.isEmpty()) {
-        return fail(404, QStringLiteral("待办不存在"));
-    }
-    const WorkItem *item = nullptr;
-    for (const WorkItem &it : workItems_->items()) {
-        if (it.id == id) {
-            item = &it;
-            break;
+    const QString id = meta.value(QStringLiteral("id")).toString();
+    QString filename = meta.value(QStringLiteral("filename")).toString();
+    // 会话上下文两条来源：① 待办 id（队列里的活，project/sessionId 可信）；
+    // ② 手机带上来的 session/project/exe（从派发页直接进会话时没有待办）。
+    QString project = meta.value(QStringLiteral("project")).toString().trimmed();
+    QString sessionKey = meta.value(QStringLiteral("session")).toString().trimmed();
+    if (workItems_ != nullptr && !id.isEmpty()) {
+        for (const WorkItem &it : workItems_->items()) {
+            if (it.id == id) {
+                if (!it.project.isEmpty()) {
+                    project = it.project;
+                }
+                sessionKey = it.sessionId.isEmpty() ? it.id : it.sessionId;
+                break;
+            }
         }
     }
-    if (item == nullptr) {
+    if (project.isEmpty() && sessionKey.isEmpty()) {
         return fail(404, QStringLiteral("待办不存在"));
     }
     if (data.isEmpty()) {
         return fail(400, QStringLiteral("空文件"));
+    }
+    // project 现在可能是客户端带上来的路径：只接受**已存在的绝对目录**，且
+    // 拒绝盘根。上传本身要设备令牌（已配对手机），这里再收一层，避免拿着
+    // 令牌就能往任意路径写。
+    if (!project.isEmpty()) {
+        const QFileInfo pi(project);
+        const QString norm = QDir::fromNativeSeparators(project);
+        const bool driveRoot = norm.size() <= 3;  // C:/ 、C: 、/
+        if (!pi.isDir() || !pi.isAbsolute() || driveRoot) {
+            return fail(400, QStringLiteral("会话工作目录无效"));
+        }
     }
     // 文件名 sanitize：只取 basename，去路径分隔符/控制字符，限长保扩展名。
     // 服务端不信任客户端文件名，杜绝 ../ 穿越。
@@ -4029,13 +4048,18 @@ QJsonObject MainWindow::lanUpload(const QString &id, const QString &filename,
     if (name.size() > 120) {
         name = name.right(120);
     }
+    // 会话 key 同理：它直接拼进路径，必须去掉分隔符与 .. 。
+    sessionKey.remove(QRegularExpression(QStringLiteral("[\\\\/:*?\"<>|\\x00-\\x1f]")));
+    sessionKey = sessionKey.trimmed();
+    if (sessionKey.isEmpty() || sessionKey == QLatin1String("..")
+        || sessionKey == QLatin1String(".")) {
+        sessionKey = QStringLiteral("adhoc");
+    }
     // 落盘：会话工作目录下 .agentrmc/inbox/<session>/（agent 天然可达）；
     // 无项目退统一 uploads 目录。时间戳前缀防重名。
-    const QString sessionKey =
-        item->sessionId.isEmpty() ? item->id : item->sessionId;
     QString dir;
-    if (!item->project.isEmpty()) {
-        dir = item->project + QStringLiteral("/.agentrmc/inbox/") + sessionKey;
+    if (!project.isEmpty()) {
+        dir = project + QStringLiteral("/.agentrmc/inbox/") + sessionKey;
     } else {
         dir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) +
               QStringLiteral("/uploads/") + sessionKey;
@@ -4048,8 +4072,8 @@ QJsonObject MainWindow::lanUpload(const QString &id, const QString &filename,
     }
     // 项目相对落盘时自动写 .agentrmc/.gitignore（忽略全部），防止上传文件被误
     // 提交进项目仓库（用户 2026-11-14 顾虑仓库污染）；中央 uploads 目录无需。
-    if (!item->project.isEmpty()) {
-        const QString gi = item->project + QStringLiteral("/.agentrmc/.gitignore");
+    if (!project.isEmpty()) {
+        const QString gi = project + QStringLiteral("/.agentrmc/.gitignore");
         if (!QFileInfo::exists(gi)) {
             QFile g(gi);
             if (g.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
@@ -4073,7 +4097,8 @@ QJsonObject MainWindow::lanUpload(const QString &id, const QString &filename,
     return QJsonObject{{QStringLiteral("ok"), true},
                        {QStringLiteral("code"), 200},
                        {QStringLiteral("path"), abs},
-                       {QStringLiteral("name"), name}};
+                       {QStringLiteral("name"), name},
+                       {QStringLiteral("size"), data.size()}};
 }
 
 // 页面上的按钮/双击回到这里：全部转给既有实现，不在页面里另起一套状态机。
@@ -4184,6 +4209,28 @@ void MainWindow::handleWebAction(const QJsonObject &action) {
             workWeb_->pushSessionChat(QJsonDocument::fromJson(
                 lanSessionTranscript(exe, session, offset, 50).toUtf8())
                                           .object());
+        }
+        return;
+    }
+    // 桌面聊天页 📎：弹系统选文件对话框，把**本机绝对路径**回推给页面当附件
+    // （同机不复制文件，agent 直接按路径读；手机那条相反，必须先把字节传上来）。
+    // WebView2 的 HTML5 拖拽拿不到本机路径，所以入口只留这一个对话框。
+    if (cmd == QStringLiteral("pickFiles")) {
+        const QString plane = action.value(QStringLiteral("plane")).toString(
+            QStringLiteral("dchat"));
+        const QStringList picked = QFileDialog::getOpenFileNames(
+            this, QStringLiteral("选择要交给 Agent 的文件"));
+        if (!picked.isEmpty() && workWeb_ != nullptr) {
+            QJsonArray arr;
+            for (const QString &p : picked) {
+                const QFileInfo fi(p);
+                arr.append(QJsonObject{
+                    {QStringLiteral("name"), fi.fileName()},
+                    {QStringLiteral("path"), fi.absoluteFilePath()},
+                    {QStringLiteral("size"), static_cast<double>(fi.size())}});
+            }
+            workWeb_->pushFiles(QJsonObject{{QStringLiteral("plane"), plane},
+                                            {QStringLiteral("files"), arr}});
         }
         return;
     }

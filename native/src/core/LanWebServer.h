@@ -58,10 +58,12 @@ public:
     void setSessionTranscriptProvider(
         std::function<QString(const QString &agentExe, const QString &sessionId,
                               int offset, int limit)> provider);
-    // POST /m/upload?id=<待办id> 的落盘处理器：把手机传来的文件存进该会话的
-    // inbox，返回 {ok, path, code}（path 为 PC 绝对路径，供派发文本引用）。
+    // POST /m/upload 的落盘处理器：把手机传来的文件存进该会话的 inbox，返回
+    // {ok, path, code}（path 为 PC 绝对路径，供派发文本引用）。meta 带定位信息：
+    // {id（待办 id，可空）, session, project, exe}——从派发页直接进的会话没有
+    // 待办 id，只能按 session/project 定位，不能只看 id。
     void setUploadHandler(
-        std::function<QJsonObject(const QString &id, const QString &filename,
+        std::function<QJsonObject(const QJsonObject &meta,
                                   const QByteArray &data)> handler);
     // POST /m/action 的处理器（白名单已在服务端验过）：
     // 返回 {"ok":bool,"code":200|400|403|409}，code 直接当 HTTP 状态。
@@ -121,7 +123,7 @@ private:
     std::function<QString()> sessionListProvider_;
     std::function<QString(const QString &, const QString &, int, int)>
         sessionTranscriptProvider_;
-    std::function<QJsonObject(const QString &, const QString &, const QByteArray &)>
+    std::function<QJsonObject(const QJsonObject &, const QByteArray &)>
         uploadHandler_;
     std::function<QJsonObject(const QJsonObject &)> actionHandler_;
     QString themeRoot_;

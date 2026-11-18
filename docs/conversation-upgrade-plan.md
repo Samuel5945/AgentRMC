@@ -2,7 +2,8 @@
 
 > 状态：**C 传文件双向闭环（2026-11-18：手机多选/进度/附件条 + 桌面 📎 与
 > Ctrl+V 粘贴 + 手机列/下电脑文件）；B1 待答请求只读展示已实现**（2026-11-14 真机验收）；
-> B2/B3 内联应答与 A OpenCode/Codex 接入仍为设计。触发：用户给了
+> A 接入 OpenCode **已放弃**（2026-11-18 本机卸载），Codex 仍为设计；
+> B2/B3 内联应答已落地（见 §B 分期落地）。触发：用户给了
 > [Luma](https://github.com/modao7067/luma)（安卓上跑 Codex/Claude Code/OpenCode/DSH
 > 等 CLI 的对话前端），要借鉴它的 OpenCode/Codex 接法、授权/选择项显示、文件传输，
 > 升级 AgentRMC 的对话能力。Luma 源码已浅克隆到 `out/luma-src`（GPL-3.0，
@@ -102,11 +103,35 @@ RequestQuestion(id, header, prompt, options[], multiple, secret,
 
 ### A. 接入 OpenCode（优先）/ Codex 的派发 + 记录
 
+> **2026-11-18：OpenCode 这条已放弃**（用户把本机 OpenCode v1/v2 全卸载了），
+> 本节留作协议资料备查、不再排期。下面这组事实是当天在 1.19.5 上实测出来的，
+> 将来要接可直接用，不用重新探：
+>
+> - `GET /session` → 会话数组 `{id, slug, title, projectID, directory, time{created,updated}}`
+> - `GET /session/{id}/message` → `[{info:{role,time:{created,completed}}, parts:[{type,text}]}]`
+> - `POST /session/{id}/message` 派发，body **必带** `parts:[{type:'text',text}]`
+>   （只给 `{}` 会回 400 `Missing key at ["parts"]`）；注意它是**同步的**——把
+>   整轮跑完才返回，长任务会挂住连接，不是 SSE。
+> - `GET /global/health` → `{healthy:true, version:"1.19.5"}`（做版本探测用这个）
+> - `POST /session` 建会话（可带 `{title}`），`DELETE /session/{id}` 删会话
+> - 本地库 `~/.local/share/opencode/opencode.db` 三表同库：
+>   `session(id,title,directory,time_created,time_updated,time_archived,parent_id)`
+>   / `message(session_id,time_created,data JSON)` / `part(message_id,session_id,time_created,data JSON)`；
+>   无 sequence 列，按 `time_created` 排；part 有 step-start/step-finish/tool，
+>   **只收 `type=="text"`**。读记录不依赖 server。
+> - **v2 是另一条产品线**：独立包 `@opencode/cli`（bin 同时给 `opencode` 和
+>   `opencode2`，最新 2.3.2），架构改成常驻 background service + "v2 API"，
+>   命令集多了 `service`/`api`/`pair`/`mini`，`serve` 起的是 v2 API；
+>   `opencode upgrade --major` 的语义是「升到 2 **并移除 1**」。
+>   v1/v2 **共用** `~/.local/share/opencode` 与 `~/.config/opencode`，
+>   所以 v2 首启大概率迁移 opencode.db，v1 会话能否读回未验证。
+
 - **OpenCode**：新增 `OpencodeDispatch`（HTTP 客户端，照 `ZcodeDispatch` 的守卫/回执模式）：
   派发 = `POST /api/session/{id}/prompt`；记录 = `SessionTranscript::readOpencode`
   （`GET …/message?cursor=`，游标分页转成 RMC 的 offset-from-end 口径）；
   归属守卫 = `GET /api/session/{id}` 命中。server 地址/密码从 OpenCode 配置探明
   （Luma 用 `opencode-launch.py` 起；RMC 场景 OpenCode 已在 PC 跑，需探明其 server 口）。
+  （注：`/api/...` 是 Luma 那版的记法；1.19.5 实测是上面那套 `/session/...` 顶层路径。）
 - **Codex**：app-server JSON-RPC（复用 ZCode 的 ndjson 经验），resume(threadId) + 发消息；
   记录读 Codex 会话库。提问走 §1.2 的特殊回复消息。
 - 价值：宿主从 4 个扩到 6 个，OpenCode/Codex 用户也能「派一句话 + 看记录」。

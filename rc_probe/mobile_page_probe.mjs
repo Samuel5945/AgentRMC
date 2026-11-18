@@ -174,6 +174,8 @@ function sessionTranscript(exe, session) {
     total: 3, supported: true, sessionTitle: row.title, agentExe: exe,
     agentName: agent.name, sessionId: session,
     messages: [
+      { id: 'sm0', role: 'user', at: iso(NOW - 760e3),
+        text: '请查看文件：D:/githubrepos/Agentrmc/.agentrmc/inbox/sess-8f31c2a9/20261118-204924-965-shot.jpg' },
       { id: 'sm1', role: 'user', at: iso(NOW - 700e3), text: '这个会话现在做到哪一步了？' },
       { id: 'sm2', role: 'assistant', at: iso(NOW - 650e3),
         text: '卡片层级已经拆好了，现在在收滑动阈值和批量动效。产物：'
@@ -594,7 +596,7 @@ async function runFlow() {
     '会话聊天页返回派发');
   ok((await page.textContent('#chatTitle')).includes('手机页多选'), '会话聊天页标题正确');
   ok((await page.textContent('#chatSub')).includes('WorkBuddy AI'), '会话聊天页显示 Agent');
-  ok(await page.locator('#chatList .bub').count() === 3, '会话聊天记录已加载');
+  ok(await page.locator('#chatList .bub').count() === 4, '会话聊天记录已加载');
 
   posts.length = 0;
   await page.fill('#chatText', '拒绝这条派发');
@@ -644,6 +646,11 @@ async function runFlow() {
   await page.locator('#chatAtts .catt .x').click();
   ok(await page.locator('#chatAtts .catt').count() === 0, '× 可移除附件');
   ok(await page.locator('#chatAtts').evaluate((el) => el.hidden), '移除后附件条收起');
+
+  // 手机传的附件：正文里的「请查看文件：路径」要折叠成缩略图/文件条。
+  ok((await page.locator('.bubatt').count()) >= 1, '附件行折叠成缩略图/文件条');
+  const uTxt = await page.locator('.bub.user').first().textContent();
+  ok(!uTxt.includes('请查看文件'), '正文里不再露出「请查看文件：路径」', uTxt);
 
   // Agent 产物：回复里提到的文件要在气泡下方生效，链接指向工作区下载。
   ok((await page.locator('.bubfile').count()) >= 2, 'Agent 产物的文件条渲染出来');

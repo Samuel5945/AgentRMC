@@ -1340,11 +1340,9 @@ QString LanWebServer::mobileHtml() const {
  #pchat{padding:0 14px}
  .chathead{flex:0 0 auto;display:flex;align-items:center;gap:10px;padding:4px 0 8px}
  .chathead .btn{min-height:40px;padding:6px 12px;flex:0 0 auto}
- /* 返回键只留箭头图标（不写「待办/派发」文字），做成方形触控块；
+ /* 返回键只留箭头图标（不写「待办/派发」文字），直接复用 .cicobtn：和右侧
+    文件按钮同规格 36x36 / 18px 图标 / 无边框透明底，一行里左右对称。
     语义放在 aria-label 里，renderChatFrame 只改 aria-label。 */
- #chatBack{width:40px;min-width:40px;padding:0;display:flex;align-items:center;
-   justify-content:center}
- #chatBack svg{width:20px;height:20px;display:block;pointer-events:none}
  .chtitles{flex:1;min-width:0}
  .chtitles .name{font-weight:700;font-size:16px;overflow:hidden;
    text-overflow:ellipsis;white-space:nowrap}
@@ -1376,6 +1374,20 @@ QString LanWebServer::mobileHtml() const {
  .bubfile b{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;
    white-space:nowrap;font-weight:500}
  .bubfile .dl{flex:0 0 auto;color:var(--accent);font-size:12px;font-weight:600}
+ /* 用户气泡里的附件：图片给缩略图，其它给文件条（正文里的路径行已摘掉）。 */
+ .bubatts{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px;white-space:normal}
+ .bubatt{display:flex;align-items:center;gap:7px;padding:7px 10px;
+   border-radius:10px;background:var(--w10);border:1px solid var(--w14);
+   text-decoration:none;color:var(--text);font-size:12px;min-height:40px;
+   max-width:100%}
+ .bubatt img{display:block;width:96px;height:96px;object-fit:cover;
+   border-radius:8px}
+ .bubatt.img{padding:0;border:none;background:transparent;min-height:0}
+ .bubatt .ic{flex:0 0 auto;display:flex;color:var(--muted)}
+ .bubatt .ic svg{width:15px;height:15px;display:block}
+ .bubatt b{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;
+   white-space:nowrap;font-weight:500}
+ .bubatt .dl{flex:0 0 auto;color:var(--accent);font-size:12px;font-weight:600}
  .bub .bt{display:block;font-size:11px;color:var(--muted2);margin-top:4px}
  .reqcard{flex:0 0 auto;align-self:stretch;margin:6px 0;padding:10px 12px;
    border-radius:12px;background:var(--w8);border:1px solid var(--a64)}
@@ -1713,7 +1725,7 @@ QString LanWebServer::mobileHtml() const {
   <div id="pstatus" class="page" hidden><div id="statusBody" class="scroll"></div></div>
   <div id="pchat" class="page" hidden>
    <div class="chathead">
-    <button class="btn" id="chatBack" aria-label="返回待办"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5 8 12l7 7"/></svg></button>
+    <button class="cicobtn" id="chatBack" aria-label="返回待办"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5 8 12l7 7"/></svg></button>
     <div class="chtitles"><div class="name" id="chatTitle"></div><div class="where" id="chatSub"></div></div>
     <button class="cicobtn" id="chatFiles" title="电脑上的文件" aria-label="电脑上的文件"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7.5A2 2 0 0 1 5 5.5h4l2 2.5h8a2 2 0 0 1 2 2v7.5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/></svg></button>
    </div>
@@ -2144,6 +2156,26 @@ function card(it){
 }
 // ---------- 聊天页：点卡片进入，打开即最新，旧记录上翻按页加载 ----------
 function msgKey(m){return m.id||(m.at+'|'+m.role+'|'+(m.text||'').slice(0,80));}
+// 手机上传的附件在正文里是「请查看文件：<PC 绝对路径>」——那是给 agent 按路径
+// 读文件用的，对用户没意义。渲染时把这行摘掉，换成缩略图/附件条
+// （2026-11-18 用户反馈：「不是局域网传输嘛，怎么是串路径」）。
+const ATT_LINE_RE=/^请查看文件：(.+)$/gm;
+function toRelPath(p){
+ if(!p)return '';
+ let rel=p.replace(/\\/g,'').trim();
+ const root=(chatProject||'').replace(/\\/g,'').replace(/\/+$/,'');
+ if(/^[A-Za-z]:\//.test(rel)||rel[0]==='/'){
+  if(!root||!rel.toLowerCase().startsWith(root.toLowerCase()+'/'))return '';
+  rel=rel.slice(root.length+1);
+ }
+ return rel;
+}
+function splitAttLines(text){
+ const files=[];
+ const rest=(text||'').replace(ATT_LINE_RE,(m,p)=>{files.push(p.trim());return '';})
+  .replace(/\n{3,}/g,'\n\n').trim();
+ return {files:files,rest:rest};
+}
 // Agent 回复里提到的产物路径 → 气泡下方的文件条（带「下载到手机」）。
 // 只认产物类扩展名；绝对路径必须落在会话工作目录里（转成相对），相对路径
 // 直接当工作区相对路径。真正的校验在服务端（canonical + 白名单）。
@@ -2175,14 +2207,46 @@ function msgFiles(text){
  return out;
 }
 function bubble(m){
+ const isUser=m.role==='user';
+ // 手机传的附件：正文里那几行「请查看文件：<PC 路径>」是给 agent 读文件的，
+ // 对用户没意义 —— 摘掉，换成缩略图/文件条（2026-11-18 用户反馈）。
+ let text=m.text||'', attFiles=[];
+ if(isUser){const sp=splitAttLines(text);text=sp.rest;attFiles=sp.files;}
  const d=document.createElement('div');
- d.className='bub '+(m.role==='user'?'user':'assistant');
+ d.className='bub '+(isUser?'user':'assistant');
  const who=document.createElement('span');who.className='who';
- who.textContent=m.role==='user'?'我':'Agent';
- const body=document.createElement('span');body.textContent=m.text||'';
- d.append(who,body);
- if(m.role!=='user'){
-  const files=msgFiles(m.text||'');
+ who.textContent=isUser?'我':'Agent';
+ d.append(who);
+ if(text){const body=document.createElement('span');body.textContent=text;d.append(body);}
+ if(attFiles.length){
+  const box=document.createElement('div');box.className='bubatts';
+  attFiles.forEach(p=>{
+   const name=p.split(/[\\/]/).pop()||'附件';
+   const rel=toRelPath(p);
+   const isImg=/\.(png|jpe?g|gif|webp|bmp)$/i.test(name);
+   const a=document.createElement('a');
+   a.className=isImg?'bubatt img':'bubatt';
+   if(rel){a.href=fpUrl(null,rel);a.setAttribute('download','');}
+   else{a.href='#';a.onclick=e=>e.preventDefault();}
+   if(isImg){
+    const im=document.createElement('img');im.src=a.href;im.alt=name;
+    // 图坏了（读不到/已删）退回文件条，别留个破图方块。
+    im.onerror=()=>{a.className='bubatt';a.replaceChildren();
+     const ic=document.createElement('span');ic.className='ic';ic.innerHTML=ATT_ICON;
+     const nm=document.createElement('b');nm.textContent=name;a.append(ic,nm);};
+    a.append(im);
+   }else{
+    const ic=document.createElement('span');ic.className='ic';ic.innerHTML=ATT_ICON;
+    const nm=document.createElement('b');nm.textContent=name;
+    const dl=document.createElement('span');dl.className='dl';dl.textContent='下载到手机';
+    a.append(ic,nm,dl);
+   }
+   box.append(a);
+  });
+  d.append(box);
+ }
+ if(!isUser){
+  const files=msgFiles(text);
   if(files.length){
    const box=document.createElement('div');box.className='bubfiles';
    files.forEach(f=>{
@@ -2190,8 +2254,7 @@ function bubble(m){
     a.className='bubfile';
     a.href=fpUrl(null,f.rel);
     a.setAttribute('download','');
-    const ic=document.createElement('span');ic.className='ic';
-    ic.innerHTML=ATT_ICON;
+    const ic=document.createElement('span');ic.className='ic';ic.innerHTML=ATT_ICON;
     const nm=document.createElement('b');nm.textContent=f.name;
     const dl=document.createElement('span');dl.className='dl';dl.textContent='下载到手机';
     a.append(ic,nm,dl);

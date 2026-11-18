@@ -941,6 +941,11 @@ QString WorkWebView::htmlFor(const QString &stateJson) const {
 /* 聊天页：点待办进入，打开即最新记录；旧记录上翻按页加载。
    滚动条隐藏（全局约定），上下渐隐暗示可滚；新消息 pill 不打断读历史。 */
  .chathead{flex:0 0 auto;display:flex;align-items:center;gap:8px}
+ /* 返回键只留箭头图标（「待办 / 派发」只作 title + aria-label），做成方形块，
+    和手机页同一条规矩：位置够也别再塞文字。 */
+ #chatBack,#dchatBack{width:28px;height:28px;padding:0;display:inline-flex;
+   align-items:center;justify-content:center;flex:0 0 auto}
+ #chatBack svg,#dchatBack svg{width:15px;height:15px;display:block;pointer-events:none}
  .chathead .name{font-weight:700;font-size:var(--f13);overflow:hidden;
    text-overflow:ellipsis;white-space:nowrap}
  .chatwrap{flex:1 1 auto;min-height:0;position:relative;margin-top:8px}
@@ -1392,7 +1397,7 @@ QString WorkWebView::htmlFor(const QString &stateJson) const {
 </div>
 <div id="dchat" class="page" hidden>
   <div class="chathead">
-    <button class="btn" id="dchatBack" title="回到派发列表">‹ 派发</button>
+    <button class="btn" id="dchatBack" title="回到派发列表" aria-label="回到派发列表"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5 8 12l7 7"/></svg></button>
     <span class="name" id="dchatTitle"></span>
     <span class="stage" id="dchatStage"></span>
     <span class="spacer"></span>
@@ -1432,7 +1437,7 @@ QString WorkWebView::htmlFor(const QString &stateJson) const {
 </div>
 <div id="chat" class="page" hidden>
   <div class="chathead">
-    <button class="btn" id="chatBack" title="回到待办列表">‹ 待办</button>
+    <button class="btn" id="chatBack" title="回到待办列表" aria-label="回到待办列表"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5 8 12l7 7"/></svg></button>
     <span class="name" id="chatTitle"></span>
     <span class="stage" id="chatStage"></span>
     <span class="spacer"></span>

@@ -1475,7 +1475,7 @@ QString LanWebServer::mobileHtml() const {
 <div id="toast"></div>
 <script>
 )HTML") + QString::fromUtf8(R"HTML(let STATE=null,tab=0,timer=null,lastSig='';
-let chatId='',chatMsgs=[],chatIds=new Set(),chatTotal=0,chatHasMore=false,chatLoading=false,chatAtBottom=true,chatMeta={};
+let chatId='',chatMsgs=[],chatIds=new Set(),chatTotal=0,chatHasMore=false,chatLoading=false,chatAtBottom=true,chatMeta={},chatModel='';
 let chatKind='work',chatExe='',chatSession='',chatProject='',chatAgentName='',chatCanDispatch=true;
 let CATALOG=null,catalogLoading=false,catalogAt=0,catalogError='',dispatchSig='',selectedExe='';
 const GROUP_STATE=new Map();  // 项目折叠态：跨轮询/切换 Agent/进出聊天保持
@@ -2290,7 +2290,14 @@ function mpModels(){return ((STATE||{}).dispatch||{}).models||[];}
 function mpThoughts(){return ((STATE||{}).dispatch||{}).thoughtLevels||
  ['low','medium','high','xhigh','max'];}
 function mpActive(){
- if(!chatCanDispatch||mpModels().length===0)return false;
+ // 只要有会话就显示胶囊：用户要看的是「这条会话在用什么模型」，跟能不能在
+ // 这里切模型是两件事。非 ZCode 时只报当前模型，不列可选。
+ if(!chatCanDispatch)return false;
+ return !!(chatKind==='session'?chatExe:chatMeta.agentExe);
+}
+// 有没有可切换的模型目录（只有 ZCode 的个人供应商走这条路）。
+function mpSwitchable(){
+ if(mpModels().length===0)return false;
  const exe=chatKind==='session'?chatExe:(chatMeta.agentExe||'');
  return exe==='ZCode.exe';
 }
@@ -2300,7 +2307,7 @@ function syncModelChip(){
  const on=mpActive();
  chip.hidden=!on;
  if(!on){panel.hidden=true;return;}
- $('chatModelLabel').textContent=mpSel?mpSel.modelId:'选择模型';
+ $('chatModelLabel').textContent=mpSel?mpSel.modelId:(chatModel||'选择模型');
  const lvl=$('chatModelLvl');
  lvl.hidden=!(mpSel&&mpSel.level);
  if(mpSel&&mpSel.level)lvl.textContent=MP_LVL_LABELS[mpSel.level]||mpSel.level;
@@ -2343,9 +2350,14 @@ function mpRenderPanel(){
  thought.hidden=true;
  if(mpLevel==='providers'){
   foot.hidden=false;
-  list.append(mpTextRow('会话当前（不切换）',!mpSel,()=>{
+  // 第一行是「会话自己当前的模型」：读到真实模型名就报出来，读不到才写
+  // 「不切换」。选中态＝没做 override。
+  const switchable=mpSwitchable();
+  foot.textContent=switchable?'管理模型':'当前宿主不支持在 RMC 里切换模型';
+  list.append(mpTextRow(chatModel?('会话当前 · '+chatModel):'会话当前（不切换）',!mpSel,()=>{
    mpSel=null;mpOpen=false;syncModelChip();panel.hidden=true;
   }));
+  if(!switchable)return;
   mpModels().forEach(p=>{
    list.append(mpSvgRow(MP_CUBE_SVG,p.name||p.providerId,'API',
     mpSel&&mpSel.providerId===p.providerId,
@@ -2397,7 +2409,7 @@ function pickedModel(){
  return model;
 }
 function mergeChatPage(p,mode){
- chatTotal=p.total||0; const msgs=p.messages||[];
+ chatTotal=p.total||0; chatModel=p.model||chatModel; const msgs=p.messages||[];
  if(mode==='init'){
   chatMsgs=msgs.slice();chatIds=new Set(chatMsgs.map(msgKey));
   paintChat('init');
@@ -2457,7 +2469,7 @@ function openSession(agent,row){
   agentName:agent.name,canDispatch:row.can_dispatch!==false});
 }
 function closeChat(){
- chatId='';chatMsgs=[];chatIds=new Set();
+ chatId='';chatMsgs=[];chatIds=new Set();chatModel='';
  attClear('');fpClose();
  chatKind='work';chatExe='';chatSession='';chatProject='';chatAgentName='';
  chatCanDispatch=true;

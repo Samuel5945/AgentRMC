@@ -3798,6 +3798,8 @@ QJsonObject MainWindow::chatStateFor(const QString &id, int offset, int limit) {
         {QStringLiteral("supported"), r.supported},
         {QStringLiteral("error"), r.error},
         {QStringLiteral("sessionTitle"), r.title},
+        // 会话当前模型（宿主记的显示名）；空＝读不到，页面显示「跟随会话」。
+        {QStringLiteral("model"), r.model},
         {QStringLiteral("messages"), r.messages},
         {QStringLiteral("total"), r.total},
         {QStringLiteral("hasMore"), r.hasMore},
@@ -3934,6 +3936,8 @@ QString MainWindow::lanSessionTranscript(const QString &agentExe,
         {QStringLiteral("sessionId"), sessionId},
         {QStringLiteral("title"), r.title},
         {QStringLiteral("sessionTitle"), r.title},
+        // 会话当前模型（宿主记的显示名）；空＝读不到，页面显示「跟随会话」。
+        {QStringLiteral("model"), r.model},
         {QStringLiteral("supported"), r.supported},
         {QStringLiteral("error"), r.error},
         {QStringLiteral("messages"), r.messages},

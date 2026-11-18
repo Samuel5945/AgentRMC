@@ -2633,11 +2633,22 @@ function mpModels(){return (STATE.dispatch||{}).models||[];}
 function mpThoughts(){return (STATE.dispatch||{}).thoughtLevels||
   ['low','medium','high','xhigh','max'];}
 function mpReset(prefix){MP[prefix]={open:false,level:'providers',provider:null,sel:null};}
+// 胶囊只要有会话就显示——用户要看的是"这条会话在用什么模型"，跟能不能在这里
+// 切模型是两件事：非 ZCode（或没配个人供应商目录）时只报当前模型，不列可选。
 function mpActive(prefix){
+  if(prefix==='dchat')return !!(dchatOpen&&DSCHAT&&DSCHAT.canDispatch&&DSCHAT.agent);
+  return !!(CHAT&&CHAT.agentExe);
+}
+// 有没有可切换的模型目录（只有 ZCode 的个人供应商走这条路）。
+function mpSwitchable(prefix){
   if(!mpModels().length)return false;
-  if(prefix==='dchat')return !!(dchatOpen&&DSCHAT&&DSCHAT.canDispatch&&
-    DSCHAT.agent&&DSCHAT.agent.exe==='ZCode.exe');
+  if(prefix==='dchat')return !!(DSCHAT&&DSCHAT.agent&&DSCHAT.agent.exe==='ZCode.exe');
   return !!(CHAT&&CHAT.agentExe==='ZCode.exe');
+}
+// 当前会话在用的模型（宿主记的显示名）。读不到就空，胶囊退回「选择模型」。
+function mpCurModel(prefix){
+  if(prefix==='dchat')return (DSCHAT&&DSCHAT.meta&&DSCHAT.meta.model)||'';
+  return (CHAT&&CHAT.model)||'';
 }
 function mpSyncChip(prefix){
   const $chip=$(prefix+'ModelChip'),$panel=$(prefix+'ModelPanel');
@@ -2645,7 +2656,8 @@ function mpSyncChip(prefix){
   $chip.hidden=!on;
   if(!on){$panel.hidden=true;return;}
   const sel=(MP[prefix]||{}).sel;
-  $(prefix+'ModelLabel').textContent=sel?sel.modelId:'选择模型';
+  const cur=mpCurModel(prefix);
+  $(prefix+'ModelLabel').textContent=sel?sel.modelId:(cur||'选择模型');
   const lvl=$(prefix+'ModelLvl');
   lvl.hidden=!(sel&&sel.level);
   if(sel&&sel.level)lvl.textContent=MP_LVL_LABELS[sel.level]||sel.level;
@@ -2687,9 +2699,14 @@ function mpRenderPanel(prefix){
   thought.hidden=true;
   if(ctx.level==='providers'){
     foot.hidden=false;
-    list.append(mpTextRow('会话当前（不切换）',!ctx.sel,()=>{
+    const curModel=mpCurModel(prefix);
+    const switchable=mpSwitchable(prefix);
+    // 非 ZCode / 没配供应商目录：这里只报当前模型，底部说明为什么不给切。
+    foot.textContent=switchable?'管理模型':'当前宿主不支持在 RMC 里切换模型';
+    list.append(mpTextRow(curModel?('会话当前 · '+curModel):'会话当前（不切换）',!ctx.sel,()=>{
       ctx.sel=null;ctx.open=false;mpSyncChip(prefix);$panel.hidden=true;
     }));
+    if(!switchable)return;
     mpModels().forEach(p=>{
       list.append(mpSvgRow(MP_CUBE_SVG,p.name||p.providerId,'API',
         ctx.sel&&ctx.sel.providerId===p.providerId,

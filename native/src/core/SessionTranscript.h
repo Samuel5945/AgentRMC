@@ -24,6 +24,10 @@ public:
         bool supported = false;
         QString error;       // 不支持/读失败的原因（给用户看）
         QString title;       // 会话标题（拿得到就给）
+        // 会话当前在用的模型（显示名，如 "DeepSeek-V4.1-Flash" / "GLM-5.3"）。
+        // 宿主记在最后一条 assistant 消息的元数据里：jsonl 系看 providerData，
+        // ZCode 看 message.data.model。读不到就空——页面显示「跟随会话」。
+        QString model;
         QJsonArray messages; // 按时间正序的一页 [{id, role, text, at}]
         int total = 0;       // 可用总条数（SQLite 宿主封顶 500）
         bool hasMore = false; // 还有更旧的页

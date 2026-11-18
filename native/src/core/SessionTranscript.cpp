@@ -163,6 +163,7 @@ struct FullCache {
     QString stamp;
     QVector<QJsonObject> all;  // 正序
     QString title;
+    QString model;  // 会话当前模型（能读到就给）
     int realTotal = 0;  // 实际可渲染条数（SQLite 封顶 500 内、滤掉注入后）
 };
 QHash<QString, FullCache> g_cache;
@@ -200,6 +201,7 @@ SessionTranscript::Result slicePage(const FullCache &full, int limit, int offset
     SessionTranscript::Result out;
     out.supported = true;
     out.title = full.title;
+    out.model = full.model;
     out.total = full.realTotal;
     const int end = qMax(0, full.all.size() - offset);
     const int start = qMax(0, end - limit);
@@ -243,6 +245,25 @@ SessionTranscript::Result readJsonl(const QString &home, const QString &sessionI
         const QString sid = obj.value(QStringLiteral("sessionId")).toString();
         if (!sid.isEmpty() && sid != sessionId) {
             continue;
+        }
+        // 当前模型记在 assistant 行的 providerData 里（WorkBuddy/Qoder 都有，
+        // 显示名在 requestModelName）。取最后一条有值的就是"现在在用的"。
+        if (role == QLatin1String("assistant")) {
+            const QJsonObject pd =
+                obj.value(QStringLiteral("providerData")).toObject();
+            QString m = pd.value(QStringLiteral("requestModelName")).toString();
+            if (m.isEmpty()) {
+                m = pd.value(QStringLiteral("model")).toString();
+            }
+            if (m.isEmpty()) {
+                m = obj.value(QStringLiteral("message"))
+                        .toObject()
+                        .value(QStringLiteral("model"))
+                        .toString();
+            }
+            if (!m.isEmpty()) {
+                full.model = m;
+            }
         }
         full.all.append(QJsonObject{
             {QStringLiteral("id"), id},
@@ -332,6 +353,25 @@ SessionTranscript::Result readZcode(const QString &root, const QString &sessionI
     if (titleQ.exec() && titleQ.next()) {
         full.title = titleQ.value(0).toString();
     }
+    titleQ.finish();
+    // 当前模型在 message.data.model（{providerID, modelID, variant}）里，取最新
+    // 一条带 model 的即可——ZCode 每条 assistant 都会记。
+    QSqlQuery modelQ(db.db());
+    modelQ.prepare(QStringLiteral(
+        "SELECT data FROM message WHERE session_id=? AND data LIKE '%\"model\"%' "
+        "ORDER BY sequence DESC LIMIT 1"));
+    modelQ.addBindValue(sessionId);
+    if (modelQ.exec() && modelQ.next()) {
+        const QJsonValue mv = QJsonDocument::fromJson(modelQ.value(0).toByteArray())
+                                  .object()
+                                  .value(QStringLiteral("model"));
+        if (mv.isObject()) {
+            full.model = mv.toObject().value(QStringLiteral("modelID")).toString();
+        } else if (mv.isString()) {
+            full.model = mv.toString();
+        }
+    }
+    modelQ.finish();
     QSqlQuery countQ(db.db());
     countQ.prepare(QStringLiteral("SELECT COUNT(*) FROM message WHERE session_id=?"));
     countQ.addBindValue(sessionId);

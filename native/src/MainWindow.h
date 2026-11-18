@@ -152,6 +152,25 @@ private:
     QString lanUploadTarget(const QJsonObject &meta, const QString &filename);
     QJsonObject lanUploadCommit(const QJsonObject &meta, const QString &tmpPath,
                                 const QString &filename);
+    // 分片上传（并发 + 续传）：分片落 <inbox>/.parts/<uploadId>/<index>，
+    // done 时按序合并。会话表放进程内，一小时没动静的残局会被顺手清掉。
+    struct ChunkSession {
+        QString dir;
+        QString finalPath;
+        QString name;
+        qint64 total = 0;
+        int chunkSize = 0;
+        int chunks = 0;
+        QSet<int> got;
+        qint64 lastAt = 0;
+    };
+    QHash<QString, ChunkSession> chunkSessions_;
+    LanWebServer::ChunkInit lanChunkInit(const QJsonObject &meta,
+                                         const QString &filename, qint64 size);
+    QJsonObject lanChunkWrite(const QString &uploadId, int index,
+                              const QByteArray &data);
+    QJsonObject lanChunkDone(const QString &uploadId);
+    void lanChunkAbort(const QString &uploadId);
     // 手机上翻「电脑文件」：列会话 inbox（默认 100 条、按时间倒序）。
     QString lanInboxList(const QJsonObject &meta);
     // 下载 inbox 里的一个文件：只认 basename + canonical 前缀校验，不许跳出 inbox。

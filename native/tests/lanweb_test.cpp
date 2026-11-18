@@ -624,6 +624,102 @@ int main(int argc, char **argv) {
         lan.setUploadStreamProviders(nullptr, nullptr);
         next();
     });
+    // 9n-9q. 分片上传：init → chunk(PUT)×2 → done，字节按序拼对。
+    // provider 里的状态必须是 static：request() 是异步的，捕获局部变量会悬垂。
+    seq.add([&](std::function<void()> next) {
+        static QMap<int, QByteArray> got;
+        got.clear();
+        lan.setChunkUploadProviders(
+            [](const QJsonObject &meta, const QString &filename, qint64 size) {
+                Q_UNUSED(meta)
+                LanWebServer::ChunkInit out;
+                if (filename.isEmpty() || size <= 0) {
+                    out.error = QStringLiteral("bad");
+                    return out;
+                }
+                out.ok = true;
+                out.uploadId = QStringLiteral("up-test");
+                out.chunkSize = 4;
+                out.chunks = static_cast<int>((size + 3) / 4);
+                return out;
+            },
+            [](const QString &, int index, const QByteArray &data) {
+                got.insert(index, data);
+                return QJsonObject{{QStringLiteral("ok"), true},
+                                   {QStringLiteral("received"), got.size()}};
+            },
+            [](const QString &) {
+                QByteArray all;
+                for (auto it = got.cbegin(); it != got.cend(); ++it) {
+                    all += it.value();
+                }
+                return QJsonObject{{QStringLiteral("ok"), all.size() == 8},
+                                   {QStringLiteral("path"), QStringLiteral("X:/p")},
+                                   {QStringLiteral("name"), QStringLiteral("a.bin")},
+                                   {QStringLiteral("size"), all.size()},
+                                   {QStringLiteral("all"), QString::fromLatin1(all)}};
+            },
+            [](const QString &) { got.clear(); });
+        const QByteArray body =
+            R"({"session":"sess-9","name":"a.bin","size":8})";
+        QByteArray req = "POST /m/upload/init HTTP/1.1\r\nHost: 127.0.0.1\r\n";
+        req += "X-Requested-With: fetch\r\n";
+        req += "Content-Length: " + QByteArray::number(body.size()) + "\r\n";
+        req += cookieHeader(token);
+        req += "\r\n";
+        req += body;
+        request(app, port, req,
+                [](const QByteArray &resp) {
+                    check(resp.startsWith("HTTP/1.1 200"), "chunk init 200", resp);
+                    check(resp.contains("\"chunks\":2"), "chunk init 按 4B 切片 = 2 片",
+                          resp);
+                    check(resp.contains("up-test"), "chunk init 回 uploadId", resp);
+                },
+                next);
+    });
+    const auto putChunk = [&](int index, const QByteArray &data,
+                              std::function<void(const QByteArray &)> onResp,
+                              std::function<void()> next) {
+        QByteArray req = "PUT /m/upload/chunk?upload=up-test&index=" +
+                         QByteArray::number(index) + " HTTP/1.1\r\n";
+        req += "Host: 127.0.0.1\r\nX-Requested-With: fetch\r\n";
+        req += "Content-Length: " + QByteArray::number(data.size()) + "\r\n";
+        req += cookieHeader(token);
+        req += "\r\n";
+        req += data;
+        request(app, port, req, onResp, next);
+    };
+    seq.add([&](std::function<void()> next) {
+        putChunk(0, "AAAA",
+                 [](const QByteArray &resp) {
+                     check(resp.startsWith("HTTP/1.1 200"), "chunk 0 写入 200", resp);
+                 },
+                 next);
+    });
+    seq.add([&](std::function<void()> next) {
+        putChunk(1, "BBBB",
+                 [](const QByteArray &resp) {
+                     check(resp.startsWith("HTTP/1.1 200"), "chunk 1 写入 200", resp);
+                 },
+                 next);
+    });
+    seq.add([&](std::function<void()> next) {
+        const QByteArray body = R"({"uploadId":"up-test"})";
+        QByteArray req = "POST /m/upload/done HTTP/1.1\r\nHost: 127.0.0.1\r\n";
+        req += "X-Requested-With: fetch\r\n";
+        req += "Content-Length: " + QByteArray::number(body.size()) + "\r\n";
+        req += cookieHeader(token);
+        req += "\r\n";
+        req += body;
+        request(app, port, req,
+                [&lan](const QByteArray &resp) {
+                    check(resp.startsWith("HTTP/1.1 200"), "chunk done 200", resp);
+                    check(resp.contains("AAAABBBB"), "done 时两片按序拼对", resp);
+                    lan.setChunkUploadProviders(nullptr, nullptr, nullptr,
+                                                nullptr);
+                },
+                next);
+    });
     // 10. cookie 鉴权读状态。
     seq.add([&](std::function<void()> next) {
         request(app, port, get("/m/state", cookieHeader(token)),

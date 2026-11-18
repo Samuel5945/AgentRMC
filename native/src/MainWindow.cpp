@@ -3423,6 +3423,16 @@ void MainWindow::ensureLanServer() {
                const QString &filename) {
             return lanUploadCommit(meta, tmpPath, filename);
         });
+    // 分片上传（并发 + 续传）：init → N 次 PUT chunk → done 合并。
+    lan_->setChunkUploadProviders(
+        [this](const QJsonObject &meta, const QString &filename, qint64 size) {
+            return lanChunkInit(meta, filename, size);
+        },
+        [this](const QString &uploadId, int index, const QByteArray &data) {
+            return lanChunkWrite(uploadId, index, data);
+        },
+        [this](const QString &uploadId) { return lanChunkDone(uploadId); },
+        [this](const QString &uploadId) { lanChunkAbort(uploadId); });
     lan_->setInboxListProvider(
         [this](const QJsonObject &meta) { return lanInboxList(meta); });
     lan_->setInboxFileProvider(
@@ -4200,6 +4210,150 @@ QJsonObject MainWindow::lanUploadCommit(const QJsonObject &meta,
                        {QStringLiteral("path"), fi.absoluteFilePath()},
                        {QStringLiteral("name"), fi.fileName()},
                        {QStringLiteral("size"), static_cast<double>(fi.size())}};
+}
+
+// 分片上传①：建会话。分片落 <inbox>/.parts/<uploadId>/<index>，done 时按序
+// 合并成正式文件。顺带清掉一小时没动静的残局（手机半路退出的遗留）。
+LanWebServer::ChunkInit MainWindow::lanChunkInit(const QJsonObject &meta,
+                                                 const QString &filename,
+                                                 qint64 size) {
+    LanWebServer::ChunkInit out;
+    const QString dir = inboxDirFor(meta);
+    if (dir.isEmpty()) {
+        out.error = QStringLiteral("定位不到会话目录");
+        return out;
+    }
+    if (size <= 0) {
+        out.error = QStringLiteral("文件是空的");
+        return out;
+    }
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    for (auto it = chunkSessions_.begin(); it != chunkSessions_.end();) {
+        if (now - it->lastAt > 60LL * 60 * 1000) {
+            QDir(it->dir).removeRecursively();
+            it = chunkSessions_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    QDir().mkpath(dir);
+    const QString uploadId = QUuid::createUuid().toString(QUuid::Id128);
+    const QString partsDir =
+        dir + QStringLiteral("/.parts/") + uploadId;
+    if (!QDir().mkpath(partsDir)) {
+        out.error = QStringLiteral("建分片目录失败");
+        return out;
+    }
+    const QString stamp =
+        QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd-HHmmss-zzz"));
+    ChunkSession s;
+    s.dir = partsDir;
+    s.name = stamp + QLatin1Char('-') + sanitizeUploadName(filename);
+    s.finalPath = dir + QLatin1Char('/') + s.name;
+    s.total = size;
+    s.chunkSize = 8 * 1024 * 1024;  // 8MB/片：重试便宜，也不至于请求太碎
+    s.chunks = static_cast<int>((size + s.chunkSize - 1) / s.chunkSize);
+    s.lastAt = now;
+    chunkSessions_.insert(uploadId, s);
+    out.ok = true;
+    out.uploadId = uploadId;
+    out.chunkSize = s.chunkSize;
+    out.chunks = s.chunks;
+    return out;
+}
+
+// 分片上传②：写一片。重复写同一片是幂等的（直接覆盖），断点续传靠这个。
+QJsonObject MainWindow::lanChunkWrite(const QString &uploadId, int index,
+                                      const QByteArray &data) {
+    auto it = chunkSessions_.find(uploadId);
+    if (it == chunkSessions_.end()) {
+        return QJsonObject{{QStringLiteral("ok"), false},
+                           {QStringLiteral("error"),
+                            QStringLiteral("上传会话不存在（可能已超时）")}};
+    }
+    ChunkSession &s = *it;
+    if (index < 0 || index >= s.chunks) {
+        return QJsonObject{{QStringLiteral("ok"), false},
+                           {QStringLiteral("error"), QStringLiteral("分片序号越界")}};
+    }
+    const QString path = s.dir + QLatin1Char('/') + QString::number(index);
+    QFile f(path);
+    if (!f.open(QIODevice::WriteOnly) || f.write(data) != data.size()) {
+        return QJsonObject{{QStringLiteral("ok"), false},
+                           {QStringLiteral("error"), QStringLiteral("写分片失败")}};
+    }
+    f.close();
+    s.got.insert(index);
+    s.lastAt = QDateTime::currentMSecsSinceEpoch();
+    return QJsonObject{{QStringLiteral("ok"), true},
+                       {QStringLiteral("received"), s.got.size()},
+                       {QStringLiteral("chunks"), s.chunks}};
+}
+
+// 分片上传③：按序合并。缺片时回 missing，前端只补那几片（真续传）。
+QJsonObject MainWindow::lanChunkDone(const QString &uploadId) {
+    auto it = chunkSessions_.find(uploadId);
+    if (it == chunkSessions_.end()) {
+        return QJsonObject{{QStringLiteral("ok"), false},
+                           {QStringLiteral("error"),
+                            QStringLiteral("上传会话不存在（可能已超时）")}};
+    }
+    const ChunkSession s = *it;
+    if (s.got.size() != s.chunks) {
+        QJsonArray missing;
+        for (int i = 0; i < s.chunks; ++i) {
+            if (!s.got.contains(i) && missing.size() < 64) {
+                missing.append(i);
+            }
+        }
+        return QJsonObject{{QStringLiteral("ok"), false},
+                           {QStringLiteral("error"), QStringLiteral("分片不全")},
+                           {QStringLiteral("missing"), missing}};
+    }
+    QFile out(s.finalPath);
+    if (!out.open(QIODevice::WriteOnly)) {
+        return QJsonObject{{QStringLiteral("ok"), false},
+                           {QStringLiteral("error"),
+                            QStringLiteral("建目标文件失败")}};
+    }
+    bool bad = false;
+    for (int i = 0; i < s.chunks && !bad; ++i) {
+        QFile part(s.dir + QLatin1Char('/') + QString::number(i));
+        if (!part.open(QIODevice::ReadOnly)) {
+            bad = true;
+            break;
+        }
+        while (!part.atEnd()) {
+            const QByteArray block = part.read(256 * 1024);
+            if (out.write(block) != block.size()) {
+                bad = true;
+                break;
+            }
+        }
+    }
+    out.close();
+    if (bad || out.size() != s.total) {
+        QFile::remove(s.finalPath);  // 合并出问题不留残文件
+        return QJsonObject{{QStringLiteral("ok"), false},
+                           {QStringLiteral("error"), QStringLiteral("合并失败")}};
+    }
+    QDir(s.dir).removeRecursively();
+    chunkSessions_.erase(it);
+    appendEvent(QStringLiteral("status"), QString(), QString(),
+                QStringLiteral("上传文件：%1").arg(s.name), 0);
+    return QJsonObject{{QStringLiteral("ok"), true},
+                       {QStringLiteral("path"), s.finalPath},
+                       {QStringLiteral("name"), s.name},
+                       {QStringLiteral("size"), static_cast<double>(s.total)}};
+}
+
+void MainWindow::lanChunkAbort(const QString &uploadId) {
+    auto it = chunkSessions_.find(uploadId);
+    if (it == chunkSessions_.end()) {
+        return;
+    }
+    QDir(it->dir).removeRecursively();
+    chunkSessions_.erase(it);
 }
 
 // 手机「电脑文件」：列会话 inbox。空目录也回合法空列表——前端据此显示

@@ -66,16 +66,33 @@ public:
     void setUploadHandler(
         std::function<QJsonObject(const QJsonObject &meta,
                                   const QByteArray &data)> handler);
-    // 流式上传（/m/upload）：大文件不再整个读进内存再落盘，而是「边收边写」——
-    // 内存只有一次 socket 读取的几十 KB，大小只受磁盘限制（LocalSend 同款思路）。
-    //   target：header 解析完就问目标临时路径，空串＝拒绝；
-    //   commit：收满 Content-Length 后收尾（改名/记账），返回 {ok,path,name,size}。
-    // 两个都设了才走流式；否则退回 uploadHandler 的整包路径（测试/兼容用）。
+    // 流式上传（/m/upload，单连接边收边写盘）。
     void setUploadStreamProviders(
         std::function<QString(const QJsonObject &meta, const QString &filename)>
             target,
         std::function<QJsonObject(const QJsonObject &meta, const QString &tmpPath,
                                   const QString &filename)> commit);
+    // 分片上传（大文件并发 + 断点续传）：手机把文件切片，几条连接同时 PUT，
+    // 服务端逐片落盘、最后一次合并。并发能把 WiFi 上行跑满，重试只补缺的片。
+    //   init  ：建会话，回 {ok, uploadId, chunkSize, chunks}
+    //   chunk ：写一片（uploadId/index/data），回 {ok, received, chunks}
+    //   done  ：按序合并，回 {ok, path, name, size}
+    //   abort ：放弃，清掉分片目录
+    struct ChunkInit {
+        bool ok = false;
+        QString uploadId;
+        int chunkSize = 8 * 1024 * 1024;
+        int chunks = 0;
+        int received = 0;  // 续传：服务端已有的分片数
+        QString error;
+    };
+    void setChunkUploadProviders(
+        std::function<ChunkInit(const QJsonObject &meta, const QString &filename,
+                                qint64 size)> init,
+        std::function<QJsonObject(const QString &uploadId, int index,
+                                  const QByteArray &data)> chunk,
+        std::function<QJsonObject(const QString &uploadId)> done,
+        std::function<void(const QString &uploadId)> abortFn);
     // GET /m/files 的应答来源（JSON 字符串）：列会话 inbox，meta 同 /m/upload。
     void setInboxListProvider(std::function<QString(const QJsonObject &meta)> provider);
     // GET /m/file 的下载体。**直接给字节**，不要再走 base64 + JSON：那样
@@ -125,6 +142,13 @@ private:
                const QList<QByteArray> &headerLines, const QByteArray &body);
     void routePair(QTcpSocket *socket, const QList<QByteArray> &headerLines,
                    const QByteArray &body);
+    void routeChunkInit(QTcpSocket *socket, const QList<QByteArray> &headerLines,
+                        const QByteArray &query, const QByteArray &body);
+    void routeChunkWrite(QTcpSocket *socket, const QList<QByteArray> &headerLines,
+                         const QByteArray &query, const QByteArray &body);
+    void routeChunkFinish(QTcpSocket *socket, bool done,
+                          const QList<QByteArray> &headerLines,
+                          const QByteArray &query, const QByteArray &body);
     void routeTheme(QTcpSocket *socket, const QByteArray &path);
     // 返回设备下标；-1 = 未鉴权。顺带更新 lastSeen（落盘节流 30s）。
     int authDevice(const QList<QByteArray> &headerLines);
@@ -165,6 +189,12 @@ private:
     QHash<QTcpSocket *, StreamUpload> streams_;
     void streamFeed(QTcpSocket *socket, const QByteArray &chunk);
     void streamAbort(QTcpSocket *socket);
+    std::function<ChunkInit(const QJsonObject &, const QString &, qint64)>
+        chunkInitProvider_;
+    std::function<QJsonObject(const QString &, int, const QByteArray &)>
+        chunkWriteProvider_;
+    std::function<QJsonObject(const QString &)> chunkDoneProvider_;
+    std::function<void(const QString &)> chunkAbortProvider_;
     std::function<QString(const QJsonObject &)> inboxListProvider_;
     std::function<Download(const QJsonObject &)> inboxFileProvider_;
     std::function<QJsonObject(const QJsonObject &)> actionHandler_;

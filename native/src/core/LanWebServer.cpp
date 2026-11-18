@@ -153,6 +153,19 @@ QJsonObject queryMeta(const QByteArray &query) {
     return meta;
 }
 
+// 单键取值：分片路由要 upload/index 这种不在 queryMeta 白名单里的键。
+QString queryValue(const QByteArray &query, const char *key) {
+    const QList<QByteArray> pairs = query.split('&');
+    for (const QByteArray &pair : pairs) {
+        const int eq = pair.indexOf('=');
+        if (eq <= 0 || pair.left(eq) != key) {
+            continue;
+        }
+        return QUrl::fromPercentEncoding(pair.mid(eq + 1));
+    }
+    return QString();
+}
+
 }  // namespace
 
 LanWebServer::LanWebServer(QObject *parent) : QObject(parent) {}
@@ -234,6 +247,17 @@ void LanWebServer::setThemeRoot(const QString &root) {
 void LanWebServer::setUploadHandler(
     std::function<QJsonObject(const QJsonObject &, const QByteArray &)> handler) {
     uploadHandler_ = std::move(handler);
+}
+
+void LanWebServer::setChunkUploadProviders(
+    std::function<ChunkInit(const QJsonObject &, const QString &, qint64)> init,
+    std::function<QJsonObject(const QString &, int, const QByteArray &)> chunk,
+    std::function<QJsonObject(const QString &)> done,
+    std::function<void(const QString &)> abortFn) {
+    chunkInitProvider_ = std::move(init);
+    chunkWriteProvider_ = std::move(chunk);
+    chunkDoneProvider_ = std::move(done);
+    chunkAbortProvider_ = std::move(abortFn);
 }
 
 void LanWebServer::setUploadStreamProviders(
@@ -476,7 +500,7 @@ void LanWebServer::onReadable(QTcpSocket *socket) {
         path = path.left(queryAt);
     }
 
-    if (method == "POST") {
+    if (method == "POST" || method == "PUT") {
         // qint64：流式上传不限大小后，>2GB 用 int 会溢出成负数。
         qint64 contentLength = -1;
         const QByteArray lengthText = headerValue(headerLines, "content-length");
@@ -521,13 +545,21 @@ void LanWebServer::onReadable(QTcpSocket *socket) {
             streamFeed(socket, head);
             return;
         }
-        // 上传：配了流式 provider 就放到 8GB（内存不随大小涨），否则退回
-        // 整包 64MB 的兜底；其余路由仍 64KB。
+        // body 上限按路由分档：
+        //   整包 /m/upload  + 流式 provider → 8GB（内存不随大小涨）
+        //   整包 /m/upload  无 provider     → 64MB 兜底
+        //   分片 /m/upload/chunk            → 16MB（一片 8MB + 余量）
+        //   其余                            → 64KB
         const bool streaming =
             path == "/m/upload" && uploadTargetProvider_ && uploadCommitProvider_;
-        const qint64 bodyLimit = streaming   ? kMaxStreamBytes
-                                 : path == "/m/upload" ? kMaxUploadBytes
-                                                       : kMaxBodyBytes;
+        qint64 bodyLimit = kMaxBodyBytes;
+        if (streaming) {
+            bodyLimit = kMaxStreamBytes;
+        } else if (path == "/m/upload") {
+            bodyLimit = kMaxUploadBytes;
+        } else if (path == "/m/upload/chunk") {
+            bodyLimit = 16 * 1024 * 1024;
+        }
         if (contentLength > bodyLimit) {
             // 排干再回 413（见 drain_ 注释）。声称超过 1MB 的 body 不陪跑：
             // 直接断开，这种客户端不是浏览器就是攻击。
@@ -560,6 +592,116 @@ void LanWebServer::onReadable(QTcpSocket *socket) {
     }
     // OPTIONS 也落这里：不开 CORS，预检一律 404。
     finish(socket, "404 Not Found");
+}
+
+// 分片上传①：建会话。body 是 JSON（{session,project,name,size}），回
+// {ok,uploadId,chunkSize,chunks}。前端据此切片并发 PUT。
+void LanWebServer::routeChunkInit(QTcpSocket *socket,
+                                  const QList<QByteArray> &headerLines,
+                                  const QByteArray &query,
+                                  const QByteArray &body) {
+    if (!hasCsrfHeader(headerLines)) {
+        finish(socket, "403 Forbidden");
+        return;
+    }
+    if (authDevice(headerLines) < 0) {
+        finish(socket, "401 Unauthorized");
+        return;
+    }
+    if (!chunkInitProvider_) {
+        finish(socket, "501 Not Implemented");
+        return;
+    }
+    QJsonObject meta = queryMeta(query);
+    const QJsonObject req = QJsonDocument::fromJson(body).object();
+    for (auto it = req.begin(); it != req.end(); ++it) {
+        meta.insert(it.key(), it.value());
+    }
+    const QString name = req.value(QStringLiteral("name")).toString();
+    const qint64 size =
+        static_cast<qint64>(req.value(QStringLiteral("size")).toDouble());
+    const ChunkInit init = chunkInitProvider_(meta, name, size);
+    QJsonObject out{{QStringLiteral("ok"), init.ok},
+                    {QStringLiteral("chunkSize"), init.chunkSize},
+                    {QStringLiteral("chunks"), init.chunks},
+                    {QStringLiteral("received"), init.received}};
+    if (init.ok) {
+        out.insert(QStringLiteral("uploadId"), init.uploadId);
+    } else {
+        out.insert(QStringLiteral("error"), init.error);
+    }
+    finish(socket, init.ok ? "200 OK" : "400 Bad Request",
+           QJsonDocument(out).toJson(QJsonDocument::Compact), "application/json");
+}
+
+void LanWebServer::routeChunkWrite(QTcpSocket *socket,
+                                   const QList<QByteArray> &headerLines,
+                                   const QByteArray &query,
+                                   const QByteArray &body) {
+    if (!hasCsrfHeader(headerLines)) {
+        finish(socket, "403 Forbidden");
+        return;
+    }
+    if (authDevice(headerLines) < 0) {
+        finish(socket, "401 Unauthorized");
+        return;
+    }
+    if (!chunkWriteProvider_) {
+        finish(socket, "501 Not Implemented");
+        return;
+    }
+    const QString uploadId = queryValue(query, "upload");
+    const int index = queryValue(query, "index").toInt();
+    if (uploadId.isEmpty() || index < 0) {
+        finish(socket, "400 Bad Request");
+        return;
+    }
+    const QJsonObject out = chunkWriteProvider_(uploadId, index, body);
+    finish(socket, out.value(QStringLiteral("ok")).toBool() ? "200 OK"
+                                                            : "400 Bad Request",
+           QJsonDocument(out).toJson(QJsonDocument::Compact), "application/json");
+}
+
+// 分片上传③：合并 + ④：放弃。都只带 uploadId。
+void LanWebServer::routeChunkFinish(QTcpSocket *socket, bool done,
+                                    const QList<QByteArray> &headerLines,
+                                    const QByteArray &query,
+                                    const QByteArray &body) {
+    if (!hasCsrfHeader(headerLines)) {
+        finish(socket, "403 Forbidden");
+        return;
+    }
+    if (authDevice(headerLines) < 0) {
+        finish(socket, "401 Unauthorized");
+        return;
+    }
+    const QJsonObject req = QJsonDocument::fromJson(body).object();
+    QString uploadId = queryValue(query, "upload");
+    if (uploadId.isEmpty()) {
+        uploadId = req.value(QStringLiteral("uploadId")).toString();
+    }
+    if (uploadId.isEmpty()) {
+        finish(socket, "400 Bad Request");
+        return;
+    }
+    if (!done) {
+        if (chunkAbortProvider_) {
+            chunkAbortProvider_(uploadId);
+        }
+        finish(socket, "200 OK",
+               QJsonDocument(QJsonObject{{QStringLiteral("ok"), true}})
+                   .toJson(QJsonDocument::Compact),
+               "application/json");
+        return;
+    }
+    if (!chunkDoneProvider_) {
+        finish(socket, "501 Not Implemented");
+        return;
+    }
+    const QJsonObject out = chunkDoneProvider_(uploadId);
+    finish(socket, out.value(QStringLiteral("ok")).toBool() ? "200 OK"
+                                                            : "400 Bad Request",
+           QJsonDocument(out).toJson(QJsonDocument::Compact), "application/json");
 }
 
 void LanWebServer::route(QTcpSocket *socket, const QByteArray &method,
@@ -716,6 +858,23 @@ void LanWebServer::route(QTcpSocket *socket, const QByteArray &method,
         finish(socket, status,
                QJsonDocument(result).toJson(QJsonDocument::Compact),
                "application/json");
+        return;
+    }
+    // ---- 分片上传（并发 + 续传）：init → N 次 chunk(PUT) → done ----
+    if (path == "/m/upload/init" && method == "POST") {
+        routeChunkInit(socket, headerLines, query, body);
+        return;
+    }
+    if (path == "/m/upload/chunk" && method == "PUT") {
+        routeChunkWrite(socket, headerLines, query, body);
+        return;
+    }
+    if (path == "/m/upload/done" && method == "POST") {
+        routeChunkFinish(socket, true, headerLines, query, body);
+        return;
+    }
+    if (path == "/m/upload/abort" && method == "POST") {
+        routeChunkFinish(socket, false, headerLines, query, body);
         return;
     }
     if (path == "/m/upload" && method == "POST") {
@@ -2190,6 +2349,14 @@ function attText(p){
 // 上传定位：能拿待办 id 就带上；从派发页直接进会话没有待办 id，必须把
 // session/project/exe 一起带上——否则 native 侧按待办查不到，只能回 404
 // （这条路径在改之前是坏的）。
+function attMeta(id){
+ const m={};
+ if(id)m.id=id;
+ if(chatKind==='session'){
+  m.session=chatSession||'';m.project=chatProject||'';m.exe=chatExe||'';
+ }
+ return m;
+}
 function attUrl(id){
  let q='/m/upload?id='+encodeURIComponent(id||'');
  if(chatKind==='session')
@@ -2197,6 +2364,79 @@ function attUrl(id){
     +'&project='+encodeURIComponent(chatProject||'')
     +'&exe='+encodeURIComponent(chatExe||'');
  return q;
+}
+function attPostJson(url,obj){
+ return new Promise((res,rej)=>{
+  const x=new XMLHttpRequest();
+  x.open('POST',url,true);
+  x.setRequestHeader('X-Requested-With','fetch');
+  x.setRequestHeader('Content-Type','application/json');
+  x.timeout=30000;
+  x.onload=()=>{
+   let j={};try{j=JSON.parse(x.responseText);}catch(_){}
+   if(x.status>=200&&x.status<300)res(j);
+   else rej(new Error(j.error||('HTTP '+x.status)));
+  };
+  x.onerror=()=>rej(new Error('连不上电脑'));
+  x.ontimeout=()=>rej(new Error('等待电脑响应超时'));
+  x.send(JSON.stringify(obj));
+ });
+}
+function attPutChunk(uploadId,index,blob){
+ return new Promise((res,rej)=>{
+  const x=new XMLHttpRequest();
+  x.open('PUT','/m/upload/chunk?upload='+encodeURIComponent(uploadId)
+   +'&index='+index,true);
+  x.setRequestHeader('X-Requested-With','fetch');
+  x.setRequestHeader('Content-Type','application/octet-stream');
+  x.timeout=180000;
+  x.onload=()=>{
+   let j={};try{j=JSON.parse(x.responseText);}catch(_){}
+   if(x.status>=200&&x.status<300&&j.ok)res(j);
+   else rej(new Error(j.error||('HTTP '+x.status)));
+  };
+  x.onerror=()=>rej(new Error('连不上电脑'));
+  x.ontimeout=()=>rej(new Error('分片传输超时'));
+  x.send(blob);
+ });
+}
+// 大文件：切片 + 4 路并发 + 单片重试 + 缺片补传。
+// 为什么并发：单个 TCP 流吃不满手机上行，几条一起才跑得满 WiFi。
+// 为什么按片重试：8MB 一片重传代价小，整文件重来在弱网下基本传不完。
+async function attUploadChunked(meta,f,onp){
+ const init=await attPostJson('/m/upload/init',
+  Object.assign({},meta,{name:f.name,size:f.size,type:f.type||''}));
+ if(!init.ok)throw new Error(init.error||'初始化失败');
+ const uploadId=init.uploadId,chunkSize=init.chunkSize||(8*1024*1024),
+       chunks=init.chunks;
+ const queue=[];
+ for(let i=0;i<chunks;i++)queue.push(i);
+ let sent=0;
+ const sliceOf=i=>{
+  const s=i*chunkSize,e=Math.min(s+chunkSize,f.size);
+  return f.slice(s,e);
+ };
+ const worker=async()=>{
+  while(queue.length){
+   const i=queue.shift();
+   let err=null;
+   for(let t=0;t<3;t++){
+    try{await attPutChunk(uploadId,i,sliceOf(i));err=null;break;}
+    catch(e){err=e;await new Promise(r=>setTimeout(r,300*(t+1)));}
+   }
+   if(err)throw err;
+   sent++;onp(sent/chunks);
+  }
+ };
+ await Promise.all([worker(),worker(),worker(),worker()]);
+ let fin=await attPostJson('/m/upload/done',{uploadId});
+ // 服务端回 missing：只补这几片再合并一次，不用从头传。
+ if(!fin.ok&&Array.isArray(fin.missing)&&fin.missing.length){
+  for(const i of fin.missing)await attPutChunk(uploadId,i,sliceOf(i));
+  fin=await attPostJson('/m/upload/done',{uploadId});
+ }
+ if(!fin.ok)throw new Error(fin.error||'合并失败');
+ return fin;
 }
 // fetch 拿不到上传进度，只能 XHR。
 function attPost(url,file,onp){
@@ -2236,8 +2476,11 @@ async function attUpload(files){
    +f.name;
   $('chatUpFill').style.width='0%';
   try{
-   const j=await attPost(url,f,r=>{
-    $('chatUpFill').style.width=(r*100).toFixed(0)+'%';});
+   const prog=r=>{$('chatUpFill').style.width=(r*100).toFixed(0)+'%';};
+   // 小文件单请求最省事（少两次往返）；大文件切片并发，才能跑满上行。
+   const j=(f.size>8*1024*1024)
+    ? await attUploadChunked(attMeta(chatKind==='session'?'':chatId),f,prog)
+    : await attPost(url,f,prog);
    attList('').push({id:j.path,name:j.name||f.name,size:f.size,path:j.path,
     url:/^image\//i.test(f.type)?URL.createObjectURL(f):''});
    okN++;

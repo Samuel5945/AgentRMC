@@ -283,8 +283,14 @@ RequestQuestion(id, header, prompt, options[], multiple, secret,
   - 下载（`/m/file`）同样放进来的字节**不走 base64**：`LanWebServer::Download`
     直接返回 `QByteArray`，避免 100MB→133MB base64→266MB UTF-16 的膨胀。
   - 进度：沿用 XHR `upload.onprogress`（per-file 进度条），流式不改前端契约。
-  - 后续可做（未做）：分片 + 3~6 路并发（能再提 1.5~2 倍并支持断点续传）、
-    TUS 协议、传输加密（当前是明文 HTTP + 令牌，LocalSend 用自签 TLS）。
+  - **分片并发已做（2026-11-18 晚，同一轮）**：>8MB 的文件走三段协议
+    `POST /m/upload/init`（回 uploadId/chunkSize/chunks）→ `PUT /m/upload/chunk?upload=&index=`
+    ×N（**4 路并发**，单片失败重试 3 次）→ `POST /m/upload/done`（缺片时回
+    `missing`，前端只补那几片再合并）。分片落 `<inbox>/.parts/<uploadId>/<index>`，
+    合并用 256KB 块流式拼，内存不随文件大小涨。8MB/片是重试代价与请求开销的折中。
+    `POST /m/upload/abort` 主动放弃；一小时没动静的会话在下次 init 时清掉。
+  - 仍未做：TUS 标准协议、跨页面刷新的续传（需 IndexedDB 存 fileHash）、
+    传输加密（当前明文 HTTP + 令牌，LocalSend 用自签 TLS）。
 - **反向：PC → 手机（2026-11-18 晚）**。会话聊天页顶栏加「电脑上的文件」  （文件夹图标）→ 上浮面板列 `<inbox>` 里最近 100 个文件（按时间倒序），
   点行即下载（`<a download>`，同源跳转自动带设备令牌）。
   - 路由：`GET /m/files`（列）与 `GET /m/file`（下载），定位字段跟 `/m/upload`

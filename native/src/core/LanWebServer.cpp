@@ -1180,7 +1180,7 @@ QString LanWebServer::mobileHtml() const {
  .cchars.warn{color:var(--pending)}
  .cchars.over{color:var(--danger)}
  .csend{flex:0 0 auto;margin-left:auto;display:inline-flex;align-items:center;
-   justify-content:center;border:none;border-radius:11px;width:52px;min-height:36px;
+   justify-content:center;border:none;border-radius:50%;width:36px;height:36px;
    padding:0;cursor:pointer;color:var(--on-accent);background:var(--accent);
    transition:background .12s ease,opacity .12s ease}
  .csend svg{width:15px;height:15px;display:block;pointer-events:none}

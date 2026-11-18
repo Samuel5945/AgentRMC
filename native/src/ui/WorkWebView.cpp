@@ -1054,10 +1054,10 @@ QString WorkWebView::htmlFor(const QString &stateJson) const {
     font-variant-numeric:tabular-nums}
   .cchars.warn{color:var(--pending)}
   .cchars.over{color:var(--danger)}
-  /* 纯图标按钮（用户 2026-11-18：别写「派发」两个字）。固定 30×27，进行中
-     换成旋转环，切换时宽度不跳。文字只留在 title/aria-label 里。 */
+  /* 纯图标圆形按钮（用户 2026-11-18：别写「派发」、要圆的）。宽=高 27，
+     半径 50%，进行中换旋转环，切换时尺寸不跳。文字只留在 title/aria-label。 */
   .csend{flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;
-    border:none;border-radius:9px;width:30px;height:27px;padding:0;cursor:default;
+    border:none;border-radius:50%;width:27px;height:27px;padding:0;cursor:default;
     color:var(--on-accent);background:var(--accent);
     transition:background .12s ease,opacity .12s ease}
   .csend:hover{background:var(--accent-hover)}

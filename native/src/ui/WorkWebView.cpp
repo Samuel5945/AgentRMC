@@ -1080,14 +1080,15 @@ QString WorkWebView::htmlFor(const QString &stateJson) const {
  .modelchip .caret{flex:0 0 auto;color:var(--muted);font-size:var(--f11)}
   .mpanel{position:absolute;left:0;right:0;bottom:calc(100% + 8px);z-index:30;
     /* 面板必须实心：主题的 card.bg 在美术主题下是半透明，直接当背景用会透出
-       底下聊天气泡，字糊成一片（用户 2026-11-18 反馈）。--panel 由 applyTheme
-       把 card.bg 按 alpha 合成到不透明底上。
-       别在这里加 backdrop-filter：实色底用不上它，而它和 border-radius +
-       overflow:hidden 一起在 WebView2 上会采样到未初始化纹理，整块面板变
-       洋红（2026-11-18 实测踩到）。 */
-    background:var(--panel,var(--surface));
+       底下聊天气泡，字糊成一片（用户 2026-11-18 反馈）。
+       背景由 applyTheme 算出实色后**直接写内联样式**（见 setPanelSolid），
+       这里的声明只是首帧兜底。
+       两个坑都别再踩：① backdrop-filter 配 border-radius 会整块渲染成洋红；
+       ② overflow:hidden 的圆角遮罩同样会出洋红——列表本来也不会溢出，
+       干脆不用它裁。 */
+    background:#fff;
     border:1px solid var(--w14);border-radius:12px;
-    box-shadow:0 10px 28px rgba(15,23,42,.22);overflow:hidden}
+    box-shadow:0 10px 28px rgba(15,23,42,.22)}
  .mpback{display:block;width:100%;text-align:left;background:var(--w8);
    border:none;border-bottom:1px solid var(--w10);color:var(--text);
    font-size:var(--f12);padding:9px 12px;font-family:inherit;cursor:default}
@@ -1637,6 +1638,13 @@ function panelSolid(t){
   const mix=i=>Math.round(card[i]*a+base[i]*(1-a));
   return 'rgb('+mix(0)+','+mix(1)+','+mix(2)+')';
 }
+// 直接把实色写进面板元素的 style。比走 CSS 变量稳：变量万一没生效，面板就
+// 退回半透明，而 WebView2 里半透明区域合成出来是洋红（用户看到一块品红）。
+function setPanelSolid(panel){
+  document.querySelectorAll('.mpanel').forEach(el=>{
+    el.style.background = panel || '';
+  });
+}
 const TOKENS = {'--bg':'bg','--surface':'card.bg','--surface2':'card.bg2',
   '--text':'text','--text-soft':'text.soft','--text-dim':'text.dim',
   '--muted':'muted','--muted2':'muted.2','--ghost':'ghost','--faint':'faint',
@@ -1653,6 +1661,7 @@ function applyTheme(t){
   // （用户 2026-11-18 反馈"切换模型背景是透明的看不清"）。
   const panel = panelSolid(t);
   if(panel) s.setProperty('--panel', panel);
+  setPanelSolid(panel);
   // 字号倍率：和 ThemeManager::scaledPx 同一套算法（四舍五入到整像素、下限 7px），
   // 否则 QSS 缩了、这一页还是老尺寸，一眼看出不齐。
   const fs = t.fontScale || 1;

@@ -1203,13 +1203,13 @@ QString LanWebServer::mobileHtml() const {
  .modelchip .lvl{flex:0 0 auto;color:var(--muted)}
  .modelchip .caret{flex:0 0 auto;color:var(--muted);font-size:12px}
  /* 面板必须实心：美术主题的 card.bg 是半透明，直接当背景会透出底下聊天气泡
-    （用户 2026-11-18 反馈"切换模型背景透明的看不清"）。--panel 由 applyTheme
-    合成；别加 backdrop-filter——实色底用不上，且它配 border-radius +
-    overflow:hidden 在 WebView2 上会把面板渲染成洋红。 */
+    （用户 2026-11-18 反馈"切换模型背景透明的看不清"）。实色由 applyTheme 算
+    完直接写内联样式；这里只是首帧兜底。别加 backdrop-filter、也别用
+    overflow:hidden 裁圆角——两者都会在 WebView2 上把整块渲染成洋红。 */
  .mpanel{position:absolute;left:0;right:0;bottom:calc(100% + 8px);z-index:30;
-   background:var(--panel,var(--surface));
+   background:#fff;
    border:1px solid var(--w14);border-radius:14px;
-   box-shadow:0 12px 32px rgba(15,23,42,.18);overflow:hidden}
+   box-shadow:0 12px 32px rgba(15,23,42,.18)}
  .mpback{display:block;width:100%;text-align:left;background:var(--w8);
    border:none;border-bottom:1px solid var(--w10);color:var(--text);
    font-size:14px;padding:12px 14px;font-family:inherit}
@@ -1516,6 +1516,13 @@ function panelSolid(t){
  const mix=i=>Math.round(card[i]*a+base[i]*(1-a));
  return 'rgb('+mix(0)+','+mix(1)+','+mix(2)+')';
 }
+// 实色直接写进面板元素：走 CSS 变量万一没生效，面板退回半透明，而 WebView2
+// 里半透明区域合成出来是洋红。
+function setPanelSolid(panel){
+ document.querySelectorAll('.mpanel').forEach(el=>{
+  el.style.background=panel||'';
+ });
+}
 const TOKENS={'--bg':'bg','--surface':'card.bg','--surface2':'card.bg2',
  '--text':'text','--text-soft':'text.soft','--text-dim':'text.dim',
  '--muted':'muted','--muted2':'muted.2','--ghost':'ghost','--faint':'faint',
@@ -1529,6 +1536,7 @@ function applyTheme(t){
  // 上浮面板要实色底（主题 card.bg 可能是半透明，见 panelSolid 注释）。
  const panel=panelSolid(t);
  if(panel)s.setProperty('--panel',panel);
+ setPanelSolid(panel);
  const b=document.body.style;
  b.backgroundColor=t.bg||'var(--bg)';
  if(t.image){

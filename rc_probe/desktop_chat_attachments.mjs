@@ -210,7 +210,8 @@ const panelCheck = await page.evaluate(() => {
   const byte = read();
   const box = document.querySelector('#dchatModelPanel');
   const bg = box ? getComputedStyle(box).backgroundColor : '';
-  return { frac, byte, bg };
+  const inline = box ? box.style.background : '';
+  return { frac, byte, bg, inline };
 });
 check(/^rgb\(\s*\d+,\s*\d+,\s*\d+\s*\)$/.test(panelCheck.frac),
   '半透明小数 alpha → 面板色合成成实色', panelCheck.frac);
@@ -220,6 +221,8 @@ check(panelCheck.byte === 'rgb(8,12,20)',
   '0-255 写法按浏览器语义当不透明原色', panelCheck.byte);
 check(/^rgb\(/.test(panelCheck.bg) && !/rgba/.test(panelCheck.bg),
   '模型面板背景不含 alpha', panelCheck.bg);
+check(/^rgb\(/.test(panelCheck.inline) && !/rgba/.test(panelCheck.inline),
+  '实色被直接写进面板内联样式（不依赖 CSS 变量）', panelCheck.inline);
 
 console.log(bad ? `\n${bad} 项失败` : '\nALL PASS desktop chat attachments');
 await browser.close();

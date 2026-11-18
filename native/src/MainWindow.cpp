@@ -4166,8 +4166,8 @@ QString MainWindow::lanInboxList(const QJsonObject &meta) {
 
 // 下载 inbox 里的一个文件。name 由客户端给、不可信：只认 basename，再用
 // canonical 前缀校验兜住符号链接——不许读 inbox 以外任何东西。
-QJsonObject MainWindow::lanInboxFile(const QJsonObject &meta) {
-    const auto fail = [] { return QJsonObject{{QStringLiteral("ok"), false}}; };
+LanWebServer::Download MainWindow::lanInboxFile(const QJsonObject &meta) {
+    const auto fail = [] { return LanWebServer::Download{}; };
     const QString dir = inboxDirFor(meta);
     if (dir.isEmpty()) {
         return fail();
@@ -4187,25 +4187,23 @@ QJsonObject MainWindow::lanInboxFile(const QJsonObject &meta) {
         return fail();
     }
     QFile f(canonFile);
-    // 一次性读进内存：inbox 里都是上传/粘贴进来的小文件；再压一道 40MB 上限，
-    // 万一被丢了大的进去也不至于把主窗撑爆。
-    if (!f.open(QIODevice::ReadOnly) || f.size() > 40LL * 1024 * 1024) {
+    // 上限跟上传侧对齐（100MB），不然"手机传得上去、却下不回来"很别扭。
+    if (!f.open(QIODevice::ReadOnly) || f.size() > 100LL * 1024 * 1024) {
         f.close();
         return fail();
     }
-    const QByteArray data = f.readAll();
+    LanWebServer::Download out;
+    out.data = f.readAll();
     f.close();
     const QString mime =
         QMimeDatabase()
             .mimeTypeForFile(canonFile, QMimeDatabase::MatchExtension)
             .name();
-    return QJsonObject{{QStringLiteral("ok"), true},
-                       {QStringLiteral("name"), name},
-                       {QStringLiteral("contentType"),
-                        mime.isEmpty() ? QStringLiteral("application/octet-stream")
-                                       : mime},
-                       {QStringLiteral("data"),
-                        QString::fromLatin1(data.toBase64())}};
+    out.ok = true;
+    out.name = name;
+    out.contentType =
+        mime.isEmpty() ? QByteArray("application/octet-stream") : mime.toUtf8();
+    return out;
 }
 
 // 页面上的按钮/双击回到这里：全部转给既有实现，不在页面里另起一套状态机。

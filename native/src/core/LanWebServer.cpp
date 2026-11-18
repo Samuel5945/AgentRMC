@@ -19,8 +19,9 @@ namespace {
 
 constexpr int kMaxHeaderBytes = 16 * 1024;
 constexpr int kMaxBodyBytes = 64 * 1024;
-// 手机传文件单独放宽（图片/文档）；局域网传输，25MB 足够且能在 stale 超时内收完。
-constexpr qint64 kMaxUploadBytes = 25 * 1024 * 1024;
+// 手机传文件单独放宽。局域网上传，服务端是「一次读完整个 body」的写法，
+// 所以上限直接等于峰值内存——100MB 既能盖住短视频和安装包，又不会把主窗拖垮。
+constexpr qint64 kMaxUploadBytes = 100 * 1024 * 1024;
 constexpr int kStaleMs = 10000;
 constexpr int kPairFailLimit = 5;
 constexpr qint64 kPairLockMs = 15 * 60 * 1000;
@@ -235,7 +236,7 @@ void LanWebServer::setInboxListProvider(
 }
 
 void LanWebServer::setInboxFileProvider(
-    std::function<QJsonObject(const QJsonObject &)> provider) {
+    std::function<Download(const QJsonObject &)> provider) {
     inboxFileProvider_ = std::move(provider);
 }
 
@@ -412,7 +413,7 @@ void LanWebServer::onReadable(QTcpSocket *socket) {
             finish(socket, "400 Bad Request");
             return;
         }
-        // 上传路由单独放宽到 25MB；其余路由仍 64KB。
+        // 上传路由单独放宽到 kMaxUploadBytes（100MB）；其余路由仍 64KB。
         const qint64 bodyLimit =
             (path == "/m/upload") ? kMaxUploadBytes : kMaxBodyBytes;
         if (contentLength > bodyLimit) {
@@ -657,15 +658,14 @@ void LanWebServer::route(QTcpSocket *socket, const QByteArray &method,
             finish(socket, "401 Unauthorized");
             return;
         }
-        const QJsonObject result =
-            inboxFileProvider_ ? inboxFileProvider_(queryMeta(query)) : QJsonObject();
-        if (!result.value(QStringLiteral("ok")).toBool()) {
+        const Download file =
+            inboxFileProvider_ ? inboxFileProvider_(queryMeta(query)) : Download{};
+        if (!file.ok || file.data.isEmpty()) {
             finish(socket, "404 Not Found");
             return;
         }
-        const QByteArray data = QByteArray::fromBase64(
-            result.value(QStringLiteral("data")).toString().toLatin1());
-        const QString name = result.value(QStringLiteral("name")).toString();
+        const QByteArray data = file.data;
+        const QString name = file.name;
         // Content-Disposition 双写：filename* 用 RFC 5987 带中文，filename 给
         // 老客户端一个纯 ASCII 兜底（非 ASCII 一律换下划线）。
         QByteArray ascii;
@@ -678,8 +678,7 @@ void LanWebServer::route(QTcpSocket *socket, const QByteArray &method,
         const QByteArray headers =
             QByteArray("Content-Disposition: attachment; filename=\"") + ascii
             + "\"; filename*=UTF-8''" + QUrl::toPercentEncoding(name) + "\r\n";
-        QByteArray type =
-            result.value(QStringLiteral("contentType")).toString().toLatin1();
+        QByteArray type = file.contentType;
         if (type.isEmpty()) {
             type = "application/octet-stream";
         }
@@ -2022,7 +2021,7 @@ const C_SPIN_SVG='<svg class="cspin" viewBox="0 0 24 24" fill="none" stroke="cur
 // ---------- 附件：多选队列 / 串行上传 / 进度 / 附件条 ----------
 // 手机这条是**真的把字节传上来**：PC 落盘进会话目录、回来绝对路径，发送时
 // 拼进派发正文（agent 按路径读）。桌面端相反——本机路径直接引用，不复制。
-const ATT_MAX=25*1024*1024;  // 与 /m/upload 的 kMaxUploadBytes 对齐
+const ATT_MAX=100*1024*1024;  // 与 /m/upload 的 kMaxUploadBytes 对齐
 const ATT_ICON='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3v5h5"/><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8l-5-5Z"/></svg>';
 const ATTS={};  // prefix -> [{id,name,size,path,url(图片预览 blob)}]
 function attList(p){return ATTS[p]||(ATTS[p]=[]);}
@@ -2132,8 +2131,8 @@ async function attUpload(files){
  $('chatUp').hidden=true;$('chatUpFill').style.width='0%';
  attRender('');
  if(okN&&!failN)cNotice('','已附上 '+okN+' 个文件'
-  +(skipN?('（'+skipN+' 个超过 25MB，没传）'):''),'good');
- else if(skipN&&!failN)cNotice('','文件超过 25MB，传不了','bad');
+  +(skipN?('（'+skipN+' 个超过 100MB，没传）'):''),'good');
+ else if(skipN&&!failN)cNotice('','文件超过 100MB，传不了','bad');
  attBusy=false;
 }
 // ---------- 电脑上的文件（会话 inbox）：列表 + 下载 ----------

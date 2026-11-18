@@ -67,9 +67,16 @@ public:
                                   const QByteArray &data)> handler);
     // GET /m/files 的应答来源（JSON 字符串）：列会话 inbox，meta 同 /m/upload。
     void setInboxListProvider(std::function<QString(const QJsonObject &meta)> provider);
-    // GET /m/file 的应答来源：{ok,name,contentType,data(base64)}。404 用 ok=false。
-    void setInboxFileProvider(
-        std::function<QJsonObject(const QJsonObject &meta)> provider);
+    // GET /m/file 的下载体。**直接给字节**，不要再走 base64 + JSON：那样
+    // 100MB 的文件会先变 133MB base64、再变 266MB UTF-16 的 QString，
+    // 中间还有一次 JSON 序列化拷贝，主窗内存直接爆。
+    struct Download {
+        bool ok = false;
+        QString name;
+        QByteArray contentType;
+        QByteArray data;
+    };
+    void setInboxFileProvider(std::function<Download(const QJsonObject &meta)> provider);
     // POST /m/action 的处理器（白名单已在服务端验过）：
     // 返回 {"ok":bool,"code":200|400|403|409}，code 直接当 HTTP 状态。
     void setActionHandler(
@@ -131,7 +138,7 @@ private:
     std::function<QJsonObject(const QJsonObject &, const QByteArray &)>
         uploadHandler_;
     std::function<QString(const QJsonObject &)> inboxListProvider_;
-    std::function<QJsonObject(const QJsonObject &)> inboxFileProvider_;
+    std::function<Download(const QJsonObject &)> inboxFileProvider_;
     std::function<QJsonObject(const QJsonObject &)> actionHandler_;
     QString themeRoot_;
     QJsonArray devices_;  // {id,name,tokenHash,pairedAt,lastSeen}

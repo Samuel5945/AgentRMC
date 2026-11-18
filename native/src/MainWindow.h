@@ -10,6 +10,7 @@
 
 #include <memory>
 
+#include "core/LanWebServer.h"
 #include "core/Profiles.h"
 #include "core/SystemControl.h"
 #include "core/WorkItems.h"
@@ -150,7 +151,9 @@ private:
     // 手机上翻「电脑文件」：列会话 inbox（默认 100 条、按时间倒序）。
     QString lanInboxList(const QJsonObject &meta);
     // 下载 inbox 里的一个文件：只认 basename + canonical 前缀校验，不许跳出 inbox。
-    QJsonObject lanInboxFile(const QJsonObject &meta);
+    // 下载 inbox 里的一个文件：只认 basename + canonical 前缀校验，不许跳出 inbox。
+    // 直接返回字节（不走 base64），100MB 的包才不会把内存放大三倍。
+    LanWebServer::Download lanInboxFile(const QJsonObject &meta);
     // 系统页「手机访问」卡片的状态：开关/监听/URL/配对/设备（配对码只给桌面）。
     QJsonObject lanState();
     // 懒创建 LAN 服务并接好 provider/持久化；开关与恢复启动都走这里。

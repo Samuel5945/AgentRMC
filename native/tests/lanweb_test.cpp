@@ -198,14 +198,15 @@ int main(int argc, char **argv) {
     lan.setInboxFileProvider([&](const QJsonObject &meta) {
         const QString name = meta.value(QStringLiteral("name")).toString();
         lastInboxName = name;
+        LanWebServer::Download out;
         if (name != QStringLiteral("a.txt")) {
-            return QJsonObject{{QStringLiteral("ok"), false}};
+            return out;  // ok=false → 404
         }
-        return QJsonObject{
-            {QStringLiteral("ok"), true},
-            {QStringLiteral("name"), name},
-            {QStringLiteral("contentType"), QStringLiteral("text/plain")},
-            {QStringLiteral("data"), QString::fromLatin1(QByteArray("HELLO").toBase64())}};
+        out.ok = true;
+        out.name = name;
+        out.contentType = QByteArray("text/plain");
+        out.data = QByteArray("HELLO");
+        return out;
     });
     QJsonArray persisted;
     int persistCalls = 0;

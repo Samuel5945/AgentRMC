@@ -258,6 +258,10 @@ private:
     // 第 3 批定向派发路由（Qoder 系 CLI 通道）；拒绝原因/草稿回显给外壳。
     SessionDispatch *dispatch_ = nullptr;
     QString dispatchNotice_;
+    // 提示语义色（聊天页 composer 状态行用）：good=成功绿、bad=警示黄，
+    // 空=中性。只在 dispatchNotice_ 赋文案处一起维护，随 state 的 noticeKind
+    // 下发给桌面/手机两个外壳。
+    QString dispatchNoticeKind_;
     QString dispatchNoticeId_;
     // 应答失败回执归属的请求 id：聊天页据此把原因写在**对应那张卡**上，而不是
     // 只在页顶飘一条 notice（长记录里滚到中间根本看不见，用户 2026-11-16 反馈）。

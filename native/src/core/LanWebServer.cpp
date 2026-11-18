@@ -975,9 +975,9 @@ QString LanWebServer::mobileHtml() const {
 @keyframes bump{0%{transform:scale(1)}45%{transform:scale(1.32)}100%{transform:scale(1)}}
  #tabCount.bump{animation:bump .3s ease}
  @media(prefers-reduced-motion:reduce){
-  .face,.chk,.hint,#toast,#batchBar{transition-duration:.01ms !important;
-   animation-duration:.01ms !important}
-  .chk.pop,#tabCount.bump,.dload::before{animation:none !important}
+  .face,.chk,.hint,#toast,#batchBar,.cnotice,.csend,.cbox{
+   transition-duration:.01ms !important;animation-duration:.01ms !important}
+  .chk.pop,#tabCount.bump,.dload::before,.cnotice{animation:none !important}
  }
  .btn{min-height:44px;border:1px solid var(--w18);background:var(--w6);
    color:var(--text-dim);font-size:14px;border-radius:10px;padding:8px 14px}
@@ -1037,22 +1037,59 @@ QString LanWebServer::mobileHtml() const {
  .chatempty{flex:1;display:flex;align-items:center;justify-content:center;
    color:var(--muted);font-size:14px;text-align:center;padding:24px;
    line-height:1.7;white-space:pre-line}
- /* 底部输入行：左右留白 + 安全区，防手机圆角/手势条裁切发送按钮。 */
- .chatfoot{position:relative;display:flex;align-items:center;gap:8px;
-   padding:8px 0 calc(12px + env(safe-area-inset-bottom))}
- .chatfoot input{flex:1;min-width:0;min-height:44px;font-size:15px;color:var(--text);
-   background:var(--w6);border:1px solid var(--w14);border-radius:10px;
-   padding:8px 12px;font-family:inherit}
- .chatfoot input:focus{outline:none;border-color:var(--accent);background:var(--w8)}
- .chatfoot .btn{flex:0 0 auto}
+ /* 底部输入区重构（2026-11-18，与桌面端同款）：composer 卡片——状态行
+    （notice）在上，输入卡在下；textarea 多行自增高，附件/模型/发送收进卡内
+    底行。左右留白 + 安全区，防圆角/手势条裁切；输入 16px 防 iOS 聚焦放大。 */
+ .chatfoot{position:relative;padding:8px 0 calc(12px + env(safe-area-inset-bottom))}
+ .cbar{display:flex;align-items:center;gap:8px}
+ .cbar[hidden]{display:none !important}
+ .cnotice{flex:1;min-width:0;font-size:12.5px;color:var(--text-dim);
+   line-height:1.5;word-break:break-word;white-space:pre-wrap;padding:7px 10px;
+   border-radius:10px;background:var(--w6);border:1px solid var(--w14);
+   animation:crise .18s ease}
+ .cnotice.good{color:var(--ok);border-color:var(--a64);background:var(--a26)}
+ .cnotice.bad{color:var(--warn);border-color:var(--w30)}
+ .cbox{display:flex;flex-direction:column;gap:2px;margin-top:6px;
+   padding:4px 8px 6px;border-radius:16px;border:1px solid var(--w14);
+   background:var(--w6);transition:border-color .14s ease,background .14s ease}
+ .cbox:focus-within{border-color:var(--a64);background:var(--w8)}
+ .cbox textarea{width:100%;box-sizing:border-box;min-height:44px;max-height:150px;
+   overflow-y:auto;scrollbar-width:none;resize:none;border:none;outline:none;
+   background:transparent;font-size:16px;line-height:1.5;color:var(--text);
+   font-family:inherit;padding:10px 4px 0;display:block}
+ .cbox textarea::-webkit-scrollbar{width:0;height:0}
+ .cbox textarea::placeholder{color:var(--muted2)}
+ .cbox textarea:disabled{color:var(--faint)}
+ .crow{display:flex;align-items:center;gap:4px;flex-wrap:nowrap}
+ .cicobtn{flex:0 0 auto;width:36px;height:36px;display:flex;align-items:center;
+   justify-content:center;border:none;border-radius:10px;background:transparent;
+   color:var(--text-dim);cursor:pointer}
+ .cicobtn svg{width:18px;height:18px;display:block;pointer-events:none}
+ .cicobtn:active{background:var(--w10)}
+ .cicobtn:disabled{color:var(--faint)}
+ .cchars{font-size:11px;color:var(--muted2);flex:0 0 auto;margin-left:2px;
+   font-variant-numeric:tabular-nums}
+ .cchars.warn{color:var(--pending)}
+ .cchars.over{color:var(--danger)}
+ .csend{flex:0 0 auto;margin-left:auto;display:inline-flex;align-items:center;
+   gap:5px;border:none;border-radius:11px;min-height:36px;padding:8px 16px;
+   cursor:pointer;font-family:inherit;font-size:14px;font-weight:600;
+   color:var(--on-accent);background:var(--accent);
+   transition:background .12s ease,opacity .12s ease}
+ .csend svg{width:15px;height:15px;display:block;pointer-events:none}
+ .csend:active{background:var(--accent-hover)}
+ .csend:disabled{background:var(--w10);color:var(--faint)}
+ @keyframes crise{from{opacity:0;transform:translateY(3px)}to{opacity:1;
+   transform:none}}
  /* 模型选择（对齐 ZCode remote v4）：输入行灰底胶囊「选择模型 ⌄」/
    「模型名 档位 ⌄」；上浮面板一级＝‹ 上一步灰条 + 供应商行（立方体图标+
    名+API 徽标+当前 ✓）+ 底部「管理模型」，二级＝供应商头行 +「模型」分组
    + 模型行 + 思考强度（绿蓝渐变滑杆，最左档＝跟随会话）。 */
- .modelchip{flex:0 0 auto;max-width:46%;display:flex;align-items:center;gap:5px;
-   font-size:14px;color:var(--text);background:var(--w8);
-   border:none;border-radius:12px;padding:10px 12px;
-   font-family:inherit;overflow:hidden}
+ .modelchip{flex:0 0 auto;max-width:44%;min-height:36px;display:flex;
+   align-items:center;gap:5px;font-size:13px;color:var(--text-dim);
+   background:transparent;border:none;border-radius:10px;padding:6px 8px;
+   font-family:inherit;overflow:hidden;cursor:pointer}
+ .modelchip:active{background:var(--w10);color:var(--text)}
  .modelchip b{font-weight:400;overflow:hidden;text-overflow:ellipsis;
    white-space:nowrap}
  .modelchip .lvl{flex:0 0 auto;color:var(--muted)}
@@ -1262,11 +1299,19 @@ QString LanWebServer::mobileHtml() const {
     <button class="newpill" id="chatNew" hidden>有新消息 ↓</button>
    </div>
    <div class="chatfoot">
-    <input id="chatText" type="text" placeholder="写一句任务，派到这个会话…" enterkeyhint="send">
-    <input id="chatFile" type="file" hidden>
-    <button class="modelchip" id="chatModelChip" hidden><b id="chatModelLabel">选择模型</b><span class="lvl" id="chatModelLvl" hidden></span><span class="caret">⌄</span></button>
-     <button class="btn" id="chatAttach" title="传文件">📎</button>
-     <button class="btn primary" id="chatSend">派发</button>
+    <div class="cbar" id="chatBar" hidden>
+      <div class="cnotice" id="chatNotice"></div>
+    </div>
+    <div class="cbox">
+     <input id="chatFile" type="file" hidden>
+     <textarea id="chatText" rows="1" placeholder="写一句任务，派到这个会话…" enterkeyhint="send"></textarea>
+     <div class="crow">
+      <button class="modelchip" id="chatModelChip" hidden><b id="chatModelLabel">选择模型</b><span class="lvl" id="chatModelLvl" hidden></span><span class="caret">⌄</span></button>
+      <button class="cicobtn" id="chatAttach" title="传文件" aria-label="传文件"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20.4 11.6 12 20a5 5 0 0 1-7-7l8.5-8.5a3.4 3.4 0 0 1 4.8 4.8L9.7 17.9a1.8 1.8 0 0 1-2.5-2.5l7.8-7.8"/></svg></button>
+      <span class="cchars" id="chatChars" hidden></span>
+      <button class="csend" id="chatSend" data-label="派发">派发<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12l16-7-6.3 16-2.9-6.4L4 12Z"/></svg></button>
+     </div>
+    </div>
     <div class="mpanel" id="chatModelPanel" hidden>
      <button class="mpback" id="chatMpBack">‹ 上一步</button>
      <div class="mplist" id="chatMpList"></div>
@@ -1277,7 +1322,6 @@ QString LanWebServer::mobileHtml() const {
      <div class="mpfoot" id="chatMpFoot">管理模型</div>
     </div>
    </div>
-   <div class="notice" id="chatNotice" hidden></div>
   </div>
  </div>
  <div id="tabbar">
@@ -1782,6 +1826,53 @@ function paintChat(mode,prevH,prevTop){
  }
  maybeAutoLoad();
 }
+// ---------- 底部 composer：自增高 / 字符计数 / 发送态 / 状态行 ----------
+// 手机页只有会话聊天一个面，前缀传空串（id 即 chatText/chatSend/…）。
+const C_MAX=4000;  // 派发正文软上限：native 侧另有守卫，这里只提前提醒
+const C_PLANE_SVG='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12l16-7-6.3 16-2.9-6.4L4 12Z"/></svg>';
+function cGrow(p){
+ const ta=$(p+'chatText');if(!ta)return;
+ ta.style.height='auto';
+ ta.style.height=Math.min(ta.scrollHeight,150)+'px';
+}
+function cValue(p,v){
+ const ta=$(p+'chatText');if(!ta)return;
+ ta.value=v;cGrow(p);cSync(p);
+}
+function cSync(p){
+ const ta=$(p+'chatText');if(!ta)return;
+ cGrow(p);
+ cNoticeDropOnEmpty(p);
+ const n=ta.value.trim().length,cc=$(p+'chatChars');
+ cc.hidden=n===0;
+ if(n){cc.textContent=String(n);
+  cc.className='cchars'+(n>C_MAX?' over':(n>C_MAX*0.8?' warn':''));}
+ const b=$(p+'chatSend');
+ if(b&&b.dataset.busy==='1')return;  // 在途：保持「派发中…」
+ cSendReady(p,!ta.disabled&&n>0);
+}
+function cSendReady(p,on){
+ const b=$(p+'chatSend');if(!b)return;
+ b.dataset.busy='0';b.disabled=!on;
+ b.innerHTML='派发'+C_PLANE_SVG;
+}
+function cBusy(p){
+ const b=$(p+'chatSend');if(!b)return;
+ b.dataset.busy='1';b.disabled=true;b.innerHTML='派发中…';
+}
+function cNotice(p,text,kind){
+ const bar=$(p+'chatBar'),el=$(p+'chatNotice');
+ el.textContent=text||'';
+ el.className='cnotice'+(kind?' '+kind:'');
+ bar.hidden=!text;
+}
+// 输入清空 → 中性/成功类 notice 收起（"已派回，等回执…"这类不该在发下一发
+// 之前一直占行）；失败类（bad）留着，草稿没了它还是唯一的拒绝原因可读。
+function cNoticeDropOnEmpty(p){
+ const bar=$(p+'chatBar');
+ if(bar&&!bar.hidden&&!$(p+'chatNotice').classList.contains('bad')
+    &&!$(p+'chatText').value.trim())bar.hidden=true;
+}
 function renderChatFrame(){
  $('chatBack').textContent=chatKind==='session'?'‹ 派发':'‹ 待办';
  const title=chatMeta.sessionTitle||chatMeta.title||
@@ -1798,21 +1889,20 @@ function renderChatFrame(){
   ?(chatKind==='session'?'写一句任务，派到这个会话…':'派回这条会话…')
   :'这个 Agent 暂不支持手机派发，记录只读';
  $('chatText').disabled=!chatCanDispatch;
- $('chatSend').disabled=!chatCanDispatch;
  $('chatAttach').disabled=!chatCanDispatch;
  syncModelChip();
  mpRenderPanel();
- if(!chatCanDispatch){
-  $('chatNotice').hidden=false;
-  $('chatNotice').textContent='只读：该 Agent 的手机派发通道未开通；记录仍可查看。';
- }
+ if(!chatCanDispatch)
+  cNotice('','只读：该 Agent 的手机派发通道未开通；记录仍可查看。');
  if(chatKind!=='session'){
   const d=(STATE||{}).dispatch||{};
   const notice=(d.noticeId===chatId)?(d.notice||''):'';
-  $('chatNotice').hidden=!notice;$('chatNotice').textContent=notice;
+  cNotice('',notice,d.noticeKind||'');
   if(d.draftId===chatId&&d.draftText&&!$('chatText').value)
-   $('chatText').value=d.draftText;
+   cValue('',d.draftText);
  }
+ // 发送键只在有正文时点亮；派发未回执的在途态不接管。
+ cSync('');
  // 失败原因也落到那张卡上（页顶 notice 在长记录里容易被滚出视野）。
  applyAnswerFailure();
 }
@@ -1988,7 +2078,7 @@ function startChat(kind,id,meta){
  chatExe=meta&&meta.exe||'';chatSession=meta&&meta.session||'';
  chatProject=meta&&meta.project||'';chatAgentName=meta&&meta.agentName||'';
  chatCanDispatch=meta&&meta.canDispatch!==false;
- $('chatText').value='';$('chatNotice').hidden=true;$('chatNotice').textContent='';
+ cValue('','');cNotice('','');
  render();fetchTranscript(0,'init');
 }
 function openChat(id){startChat('work',id,{});}
@@ -2006,28 +2096,25 @@ function closeChat(){
 async function sendChat(){
  const t=$('chatText').value.trim();
  if(!t||!chatId||!chatCanDispatch)return;
- $('chatText').blur();
- const btn=$('chatSend'),old=btn.textContent;
- btn.disabled=true;btn.textContent='派发中…';
+ cBusy('');
  const model=pickedModel();
  const res=chatKind==='session'
   ?await postResult({cmd:'dispatchSession',agent:chatExe,session:chatSession,
      project:chatProject,text:t,model:model||undefined})
   :await postResult({cmd:'dispatch',id:chatId,text:t,model:model||undefined});
- btn.disabled=false;btn.textContent=old;
  if(!res.ok){
-  const note=$('chatNotice');note.hidden=false;
+  // 失败：正文留在框里改完可重发（cValue 会把高度/计数/按钮一起复位）。
+  cValue('',t);
   const why=(res.data&&res.data.error)||('HTTP '+res.status);
-  note.textContent='没发出去：'+why+'（草稿已保留）';
+  cNotice('','没发出去：'+why+'（草稿已保留）','bad');
   return;
  }
- $('chatText').value='';
+ cValue('','');
  // 派发成功：模型选择是一次性的，关掉面板并重置，下一发默认回「会话当前」。
  mpOpen=false;$('chatModelPanel').hidden=true;mpResetState();
- const note=$('chatNotice');note.hidden=false;
- note.textContent=chatKind==='session'
+ cNotice('',chatKind==='session'
   ?'已派发。送达回执到了会进「待我处理」；这里继续看会话记录。'
-  :'已派回这条会话，等回执…';
+  :'已派回这条会话，等回执…','good');
  toast('已派发');
  load();fetchTranscript(0,'append');
 }
@@ -2037,9 +2124,8 @@ $('chatAttach').onclick=()=>$('chatFile').click();
 $('chatFile').onchange=async()=>{
  const f=$('chatFile').files[0];$('chatFile').value='';
  if(!f||!chatId)return;
- const note=$('chatNotice');note.hidden=false;
- if(f.size>25*1024*1024){note.textContent='文件超过 25MB，传不了';return;}
- note.textContent='上传中… '+f.name;
+ if(f.size>25*1024*1024){cNotice('','文件超过 25MB，传不了','bad');return;}
+ cNotice('','上传中… '+f.name);
  try{
   const r=await fetch('/m/upload?id='+encodeURIComponent(chatId),{method:'POST',
    headers:{'X-Requested-With':'fetch','X-AgentRMC-Filename':encodeURIComponent(f.name),'Content-Type':'application/octet-stream'},
@@ -2047,14 +2133,17 @@ $('chatFile').onchange=async()=>{
   const j=await r.json();
   if(r.ok&&j.path){
    const cur=$('chatText').value;
-   $('chatText').value=(cur?cur+'\n':'')+'请查看文件：'+j.path;
-   note.textContent='已上传 '+j.name+'，路径已填入输入框，点发送让 agent 读取';
+   cValue('',(cur?cur+'\n':'')+'请查看文件：'+j.path);
+   cNotice('','已上传 '+j.name+'，路径已填入输入框，点发送让 agent 读取','good');
    $('chatText').focus();
-  }else{note.textContent='上传失败：'+(j.error||('HTTP '+r.status));}
- }catch(e){note.textContent='上传失败：连不上电脑';}
+  }else{cNotice('','上传失败：'+(j.error||('HTTP '+r.status)),'bad');}
+ }catch(e){cNotice('','上传失败：连不上电脑','bad');}
 };
 $('chatText').addEventListener('keydown',e=>{
- if(e.key==='Enter'){e.preventDefault();sendChat();}});
+ // 手机软键盘 enterkeyhint=send：Enter 直接发送；组合输入（拼音）中不发送。
+ if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing&&e.keyCode!==229){
+  e.preventDefault();sendChat();}});
+$('chatText').addEventListener('input',()=>cSync(''));
 $('chatNew').onclick=()=>{const l=$('chatList');l.scrollTop=l.scrollHeight;
  chatAtBottom=true;$('chatNew').hidden=true;};
 $('chatList').addEventListener('scroll',()=>{

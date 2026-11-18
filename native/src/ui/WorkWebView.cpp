@@ -974,20 +974,64 @@ QString WorkWebView::htmlFor(const QString &stateJson) const {
  .chatempty{flex:1;display:flex;align-items:center;justify-content:center;
    color:var(--muted);font-size:var(--f12);text-align:center;padding:20px;
    line-height:1.7;white-space:pre-line}
- .chatfoot{flex:0 0 auto;display:flex;gap:8px;margin-top:8px}
- .chatfoot input{flex:1;min-width:0;font-size:var(--f12);color:var(--text);
-   background:var(--w6);border:1px solid var(--w14);border-radius:9px;
-   padding:7px 10px;font-family:inherit}
- .chatfoot input::placeholder{color:var(--muted2)}
- .chatfoot input:focus{outline:none;border-color:var(--accent);background:var(--w8)}
- /* 模型选择（对齐 ZCode remote v4）：胶囊「选择模型 ⌄」/「模型名 档位 ⌄」；
-   一级＝‹ 上一步 + 供应商行（立方体图标+名+API 徽标+✓/›）+ 底部「管理模型」，
-   二级＝「模型」分组 + 模型行 + 思考强度滑杆。与手机页同款。 */
- .chatfoot{position:relative}
- .modelchip{flex:0 0 auto;max-width:38%;display:flex;align-items:center;gap:5px;
-   font-size:var(--f12);color:var(--text);background:var(--w8);
-   border:none;border-radius:11px;padding:7px 10px;
-   font-family:inherit;cursor:default;overflow:hidden}
+  /* 底部输入区重构（2026-11-18）：composer 卡片——状态行（notice/重启键）在上，
+     输入卡在下。输入改多行 textarea（Shift+Enter 换行、Enter 发送、自增高），
+     模型胶囊与发送键整合进卡内底行；颜色全走主题 token。桌面与手机页同构。 */
+  .chatfoot{flex:0 0 auto;position:relative;margin-top:8px}
+  /* .chatfoot 在 .page（display:flex）里，UA 的 [hidden] 压不住它自己的
+     display，聊天页隐藏时输入区会漏在其它页下面（同 .page 的历史坑）。 */
+  .chatfoot[hidden]{display:none !important}
+  .cbar{display:flex;align-items:center;gap:8px}
+  .cbar[hidden]{display:none !important}
+  .cbar-acts{display:flex;align-items:center;gap:6px;flex:0 0 auto}
+  .cnotice{flex:1;min-width:0;font-size:var(--f11);color:var(--text-dim);
+    line-height:1.55;word-break:break-word;white-space:pre-wrap;padding:5px 9px;
+    border-radius:8px;background:var(--w6);border:1px solid var(--w14);
+    animation:crise .18s ease}
+  .cnotice.good{color:var(--ok);border-color:var(--a64);background:var(--a26)}
+  .cnotice.bad{color:var(--warn);border-color:var(--w30)}
+  .crise{border:1px solid var(--w30);background:transparent;color:var(--warn);
+    font-size:var(--f10);border-radius:8px;padding:3px 9px;cursor:default;
+    white-space:nowrap;flex:0 0 auto}
+  .crise:hover{background:var(--w6)}
+  .cbox{display:flex;flex-direction:column;gap:5px;margin-top:7px;
+    padding:7px 9px 6px;border-radius:14px;border:1px solid var(--w14);
+    background:var(--w6);transition:border-color .14s ease,background .14s ease}
+  .cbox:focus-within{border-color:var(--a64);background:var(--w8)}
+  .cbox textarea{width:100%;box-sizing:border-box;min-height:30px;max-height:132px;
+    overflow-y:auto;scrollbar-width:none;resize:none;border:none;outline:none;
+    background:transparent;font-size:var(--f12);line-height:1.55;color:var(--text);
+    font-family:inherit;padding:4px 2px 0;display:block}
+  .cbox textarea::-webkit-scrollbar{width:0;height:0}
+  .cbox textarea::placeholder{color:var(--muted2)}
+  .cbox textarea:disabled{color:var(--faint);cursor:default}
+  .crow{display:flex;align-items:center;gap:6px;flex-wrap:nowrap}
+  .chint{font-size:var(--f10);color:var(--ghost);margin-right:auto;
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .cchars{font-size:var(--f10);color:var(--muted2);flex:0 0 auto;
+    font-variant-numeric:tabular-nums}
+  .cchars.warn{color:var(--pending)}
+  .cchars.over{color:var(--danger)}
+  .csend{flex:0 0 auto;display:inline-flex;align-items:center;gap:5px;
+    border:none;border-radius:10px;padding:5px 12px;cursor:default;
+    font-family:inherit;font-size:var(--f11);font-weight:600;
+    color:var(--on-accent);background:var(--accent);
+    transition:background .12s ease,opacity .12s ease}
+  .csend:hover{background:var(--accent-hover)}
+  .csend svg{width:13px;height:13px;display:block;pointer-events:none}
+  .csend:disabled{background:var(--w10);color:var(--faint);cursor:default}
+  @keyframes crise{from{opacity:0;transform:translateY(3px)}to{opacity:1;
+    transform:none}}
+  @media (prefers-reduced-motion:reduce){
+    .cnotice,.csend,.cbox{animation:none;transition:none}}
+  /* 模型选择（对齐 ZCode remote v4）：胶囊「选择模型 ⌄」/「模型名 档位 ⌄」；
+    一级＝‹ 上一步 + 供应商行（立方体图标+名+API 徽标+✓/›）+ 底部「管理模型」，
+    二级＝「模型」分组 + 模型行 + 思考强度滑杆。与手机页同款。 */
+  .modelchip{flex:0 0 auto;max-width:46%;display:flex;align-items:center;gap:4px;
+    font-size:var(--f11);color:var(--text-dim);background:transparent;
+    border:none;border-radius:8px;padding:4px 7px;
+    font-family:inherit;cursor:default;overflow:hidden}
+  .modelchip:hover{background:var(--w10);color:var(--text)}
  .modelchip b{font-weight:400;overflow:hidden;text-overflow:ellipsis;
    white-space:nowrap}
  .modelchip .lvl{flex:0 0 auto;color:var(--muted)}
@@ -1308,9 +1352,18 @@ QString WorkWebView::htmlFor(const QString &stateJson) const {
     <div class="chatfade bottom"></div>
   </div>
   <div class="chatfoot">
-    <input id="dchatText" placeholder="写一句任务，派到这个会话（Enter 发送）">
-    <button class="modelchip" id="dchatModelChip" hidden><b id="dchatModelLabel">选择模型</b><span class="lvl" id="dchatModelLvl" hidden></span><span class="caret">⌄</span></button>
-    <button class="btn primary" id="dchatSend">派发</button>
+    <div class="cbar" id="dchatBar" hidden>
+      <div class="cnotice" id="dchatNotice"></div>
+    </div>
+    <div class="cbox">
+      <textarea id="dchatText" rows="1" placeholder="写一句任务，派到这个会话…"></textarea>
+      <div class="crow">
+        <button class="modelchip" id="dchatModelChip" hidden><b id="dchatModelLabel">选择模型</b><span class="lvl" id="dchatModelLvl" hidden></span><span class="caret">⌄</span></button>
+        <span class="chint" id="dchatHint">Enter 发送 · Shift+Enter 换行</span>
+        <span class="cchars" id="dchatChars" hidden></span>
+        <button class="csend" id="dchatSend" data-label="派发">派发<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12l16-7-6.3 16-2.9-6.4L4 12Z"/></svg></button>
+      </div>
+    </div>
     <div class="mpanel" id="dchatModelPanel" hidden>
      <button class="mpback" id="dchatMpBack">‹ 上一步</button>
      <div class="mplist" id="dchatMpList"></div>
@@ -1321,7 +1374,6 @@ QString WorkWebView::htmlFor(const QString &stateJson) const {
      <div class="mpfoot" id="dchatMpFoot">管理模型</div>
     </div>
   </div>
-  <div class="notice" id="dchatNotice" hidden style="margin-top:6px"></div>
 </div>
 <div id="chat" class="page" hidden>
   <div class="chathead">
@@ -1338,9 +1390,20 @@ QString WorkWebView::htmlFor(const QString &stateJson) const {
     <button class="newpill" id="chatNew" hidden>有新消息 ↓</button>
   </div>
   <div class="chatfoot">
-    <input id="chatText" placeholder="派回这条会话的指令（Enter 发送，回执到了转进行中）">
-    <button class="modelchip" id="chatModelChip" hidden><b id="chatModelLabel">选择模型</b><span class="lvl" id="chatModelLvl" hidden></span><span class="caret">⌄</span></button>
-    <button class="btn primary" id="chatSend">发送</button>
+    <div class="cbar" id="chatBar" hidden>
+      <div class="cnotice" id="chatNotice"></div>
+      <span class="cbar-acts"><button class="crise" id="chatRestart" hidden
+        title="ZCode 对话区不热刷新：重启宿主后打开会话即可看到派发消息全文。会中断 ZCode 里正在跑的其它轮次">重启 ZCode</button></span>
+    </div>
+    <div class="cbox">
+      <textarea id="chatText" rows="1" placeholder="派回这条会话的指令，回执到了转进行中…"></textarea>
+      <div class="crow">
+        <button class="modelchip" id="chatModelChip" hidden><b id="chatModelLabel">选择模型</b><span class="lvl" id="chatModelLvl" hidden></span><span class="caret">⌄</span></button>
+        <span class="chint" id="chatHint">Enter 发送 · Shift+Enter 换行</span>
+        <span class="cchars" id="chatChars" hidden></span>
+        <button class="csend" id="chatSend" data-label="发送">发送<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12l16-7-6.3 16-2.9-6.4L4 12Z"/></svg></button>
+      </div>
+    </div>
     <div class="mpanel" id="chatModelPanel" hidden>
      <button class="mpback" id="chatMpBack">‹ 上一步</button>
      <div class="mplist" id="chatMpList"></div>
@@ -1350,12 +1413,7 @@ QString WorkWebView::htmlFor(const QString &stateJson) const {
      </div>
      <div class="mpfoot" id="chatMpFoot">管理模型</div>
     </div>
-    </div>
   </div>
-  <div class="notice" id="chatNotice" hidden style="margin-top:6px"></div>
-  <button class="btn" id="chatRestart" hidden style="margin-top:6px;width:100%;
-    color:var(--warn);border-color:var(--warn)"
-    title="ZCode 对话区不热刷新：重启宿主后打开会话即可看到派发消息全文。会中断 ZCode 里正在跑的其它轮次">重启 ZCode</button>
 </div>
 <div id="empty" class="empty" hidden>
   <h3>没有需要你处理的事</h3>
@@ -2381,11 +2439,13 @@ function renderDispatch(){
 }
 function openDSession(agent,row){
   DSCHAT={agent,row,meta:{},canDispatch:row.can_dispatch!==false};
+  cLabel('dchat','派发');
   dchatOpen=true;dchatKey=agent.exe+'|'+row.id;
   dchatMsgs=[];dchatIds=new Set();dchatTotal=0;dchatHasMore=false;dchatLoading=true;
   DCHAT_PENDING='';DCHAT_REFRESHING=false;
   mpReset('dchat');mpSyncChip('dchat');
-  $('dchatText').value='';$('dchatNotice').hidden=true;$('dchatNotice').textContent='';
+  $('dchatText').value='';
+  cValue('dchat','');
   render();
   postObj({cmd:'sessionOpen',exe:agent.exe,session:row.id,offset:0,limit:50});
 }
@@ -2400,15 +2460,16 @@ function renderDchatHeader(){
     +(dspHasProject(row.project)&&!row.generated?' · '+dspProjectName(row.project):'')
     +' · 共 '+dchatTotal+' 条';
   $('dchatText').placeholder=DSCHAT.canDispatch
-    ?'写一句任务，派到这个会话（Enter 发送）'
+    ?'写一句任务，派到这个会话…'
     :'这个 Agent 暂不支持手机/桌面派发，记录只读';
+  cLabel('dchat',dchatTotal?'派发':'派首条');
   $('dchatText').disabled=!DSCHAT.canDispatch;
-  $('dchatSend').disabled=!DSCHAT.canDispatch;
   mpSyncChip('dchat');mpRenderPanel('dchat');
-  if(!DSCHAT.canDispatch){
-    $('dchatNotice').hidden=false;
-    $('dchatNotice').textContent='只读：该 Agent 的派发通道未开通；记录仍可查看。';
-  }
+  if(!DSCHAT.canDispatch)
+    cNotice('dchat','只读：该 Agent 的派发通道未开通；记录仍可查看。');
+  else if(!dchatNoticePin())
+    cNotice('dchat','');
+  cSync('dchat');
 }
 function paintDchat(mode,prevH,prevTop){
   const list=$('dchatList');list.replaceChildren();
@@ -2450,7 +2511,7 @@ window.__setSessionChat=function(p){
   dchatHasMore=dchatMsgs.length<dchatTotal;
   if(DCHAT_REFRESHING){
     DCHAT_REFRESHING=false;
-    $('dchatNotice').hidden=true;$('dchatNotice').textContent='';
+    cNotice('dchat','');
   }
   renderDchatHeader();
 };
@@ -2588,29 +2649,28 @@ function sendDchat(){
   if(!dchatOpen||!DSCHAT||!DSCHAT.canDispatch)return;
   const t=$('dchatText').value.trim();if(!t)return;
   DCHAT_PENDING=t;
-  $('dchatSend').disabled=true;$('dchatSend').textContent='派发中…';
-  const n=$('dchatNotice');n.hidden=false;n.textContent='正在派发，等回执…';
+  cBusy('dchat');
+  cNotice('dchat','正在派发，等回执…');
   const model=mpPicked('dchat');
   postObj({cmd:'dispatchSession',exe:DSCHAT.agent.exe,session:DSCHAT.row.id,
     project:DSCHAT.row.project||'',text:t,model:model||undefined});
 }
 window.__setDispatchResult=function(r){
   if(!dchatOpen||!DSCHAT)return;
-  $('dchatSend').disabled=!DSCHAT.canDispatch;$('dchatSend').textContent='派发';
-  const n=$('dchatNotice');n.hidden=false;
+  cSendReady('dchat',DSCHAT.canDispatch);
   if(r&&r.ok){
-    if($('dchatText').value===DCHAT_PENDING)$('dchatText').value='';
+    if($('dchatText').value===DCHAT_PENDING)cValue('dchat','');
     // 派发成功：override 是一次性的，关面板并重置回「会话当前」。
     mpReset('dchat');mpSyncChip('dchat');$('dchatModelPanel').hidden=true;
-    n.textContent='已派发。送达回执到了会进「待我处理」；这里继续看会话记录。';
+    cNotice('dchat','已派发。送达回执到了会进「待我处理」；这里继续看会话记录。','good');
   }else{
-    n.textContent='没发出去：'+((r&&r.error)||'未知原因')+'（草稿已保留）';
+    cNotice('dchat','没发出去：'+((r&&r.error)||'未知原因')+'（草稿已保留）','bad');
   }
   DCHAT_PENDING='';
 };
 function closeDSession(){
   dchatOpen=false;DSCHAT=null;dchatMsgs=[];dchatIds=new Set();dchatKey='';
-  $('dchatSend').disabled=false;$('dchatSend').textContent='派发';
+  cSendReady('dchat',true);
   mpReset('dchat');mpSyncChip('dchat');
   render();
 }
@@ -2908,14 +2968,16 @@ $('dchatBack').onclick=closeDSession;
 $('dchatRefresh').onclick=()=>{
   if(!DSCHAT)return;
   DCHAT_REFRESHING=true;
-  const n=$('dchatNotice');n.hidden=false;n.textContent='正在刷新记录…';
+  cNotice('dchat','正在刷新记录…');
   postObj({cmd:'sessionOpen',exe:DSCHAT.agent.exe,session:DSCHAT.row.id,
     offset:0,limit:50});
 };
 $('dchatSend').onclick=sendDchat;
 $('dchatText').addEventListener('keydown',e=>{
-  if(e.key==='Enter'){e.preventDefault();sendDchat();}
+  if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing&&e.keyCode!==229){
+    e.preventDefault();sendDchat();}
 });
+$('dchatText').addEventListener('input',()=>cSync('dchat'));
 $('dchatList').addEventListener('scroll',()=>{
   const list=$('dchatList');
   if(list.scrollTop<80&&dchatHasMore&&!dchatLoading&&DSCHAT){
@@ -2928,7 +2990,7 @@ document.addEventListener('keydown',e=>{
   // 快捷键只属于待办页：Qt 侧事件流是 NoSelection/NoFocus，别的页也不接。
   if(activeTab!==0 || !selected) return;
   if(STATE.chat&&STATE.chat.id) return;  // 聊天页有自己的 Enter 发送
-  if(e.target && e.target.tagName==='INPUT') return;
+  if(e.target && (e.target.tagName==='INPUT'||e.target.tagName==='TEXTAREA')) return;
   if(e.key==='Enter'){post(window.ZC_NOTICE?'raiseZcode':'open',selected);}
   else if(e.key==='Delete'){
     if(multiMode){multiSel.forEach(id=>post('ack',id));
@@ -2936,6 +2998,63 @@ document.addEventListener('keydown',e=>{
     else post('ack',selected);
   }
 });
+// ---------- 底部 composer：自增高 / 字符计数 / 发送态 / 状态行 ----------
+// 两个聊天面（'dchat'、'chat'）共用一套 id 约定：Text/Send/Chars/Hint/Bar/Notice。
+// cBusy/cSendReady 在派发请求被接受/回执前接管发送键，notice 仍由各自回执驱动。
+const C_MAX=4000;  // 派发正文软上限：native 侧另有守卫，这里只提前提醒
+// 发送键空闲态图标（纸飞机）；派发中整颗键只留文字。
+const C_PLANE_SVG='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12l16-7-6.3 16-2.9-6.4L4 12Z"/></svg>';
+function cGrow(prefix){
+  const ta=$(prefix+'Text');if(!ta)return;
+  ta.style.height='auto';
+  ta.style.height=Math.min(ta.scrollHeight,132)+'px';
+}
+function cValue(prefix,v){
+  const ta=$(prefix+'Text');if(!ta)return;
+  ta.value=v;cGrow(prefix);cSync(prefix);
+}
+function cSync(prefix){
+  const ta=$(prefix+'Text');if(!ta)return;
+  cGrow(prefix);
+  cNoticeDropOnEmpty(prefix);
+  const n=ta.value.trim().length,cc=$(prefix+'Chars');
+  cc.hidden=n===0;
+  if(n){cc.textContent=String(n);
+    cc.className='cchars'+(n>C_MAX?' over':(n>C_MAX*0.8?' warn':''));}
+  // 派发未回执：按钮保持「派发中…」，别让清空后的 sync 把它解禁。
+  const b=$(prefix+'Send');
+  if(b&&b.dataset.busy==='1')return;
+  cSendReady(prefix,!ta.disabled&&n>0);
+}
+function cSendReady(prefix,on,sendLabel){
+  const b=$(prefix+'Send');if(!b)return;
+  b.dataset.busy='0';
+  b.disabled=!on;
+  b.dataset.label=sendLabel||b.dataset.label||'发送';
+  b.innerHTML=b.dataset.label+C_PLANE_SVG;
+}
+function cBusy(prefix){
+  const b=$(prefix+'Send');if(!b)return;
+  b.dataset.busy='1';b.disabled=true;
+  b.innerHTML='派发中…';
+}
+function cNotice(prefix,text,kind){
+  const bar=$(prefix+'Bar'),el=$(prefix+'Notice');
+  el.textContent=text||'';
+  el.className='cnotice'+(kind?' '+kind:'');
+  bar.hidden=!text;
+}
+// notice 常驻判据：bad（拒绝原因，草稿可能已被别处重发顶掉）钉住到下一次
+// 输入/回执；其余态在输入清空时收起，不占行。
+function dchatNoticePin(){
+  const el=$('dchatNotice');return!!el&&el.classList.contains('bad')
+    &&!$('dchatBar').hidden;
+}
+function cNoticeDropOnEmpty(prefix){
+  const bar=$(prefix+'Bar');
+  if(bar&&!bar.hidden&&!$(prefix+'Notice').classList.contains('bad')
+     &&!$(prefix+'Text').value.trim())bar.hidden=true;
+}
 // ---------- 聊天页：打开即最新，旧记录上翻按页加载 ----------
 let CHAT=null,chatMsgs=[],chatIds=new Set(),chatTotal=0,chatHasMore=false,
     chatLoading=false,chatOpenedId='',chatAtBottom=true;
@@ -3123,13 +3242,26 @@ function renderChatFrame(){
   mpSyncChip('chat');mpRenderPanel('chat');
   const d=STATE.dispatch||{};
   const notice=(d.noticeId===chatOpenedId)?(d.notice||''):'';
-  $('chatNotice').hidden=!notice;$('chatNotice').textContent=notice;
+  // 派发在途的收场：Qt 处理完这一发（受理排队或守卫拒绝）后会推新状态，
+  // notice/草稿任一变化即视为下文已到。草稿非空＝被拒（正文回填可改可重发）；
+  // notice 文案变了＝受理或回执。两条路径都退出「派发中…」。
+  if(CHAT_PENDING&&((d.notice||'')!==CHAT_SENT_NOTICE
+                    ||d.draftId===chatOpenedId)){
+    if(d.draftId===chatOpenedId&&d.draftText)
+      cValue('chat',d.draftText);
+    CHAT_PENDING='';CHAT_SENT_NOTICE='';
+    cSendReady('chat',!$('chatText').disabled
+      &&$('chatText').value.trim().length>0);
+  }
+  cNotice('chat',notice,d.noticeKind||'');
   // 失败原因也落到那张卡上（页顶 notice 在长记录里容易被滚出视野）。
   applyAnswerFailure();
   // 重启按钮跟着 ZCode 派发通知走（对话区不热刷新，重启才能看到全文）。
   $('chatRestart').hidden=!(notice && d.noticeExe==='ZCode.exe');
   if(d.draftId===chatOpenedId&&d.draftText&&!$('chatText').value)
-    $('chatText').value=d.draftText;
+    cValue('chat',d.draftText);
+  cLabel('chat',chatTotal?'发送':'发首条');
+  cSync('chat');
   // 兜底：只要用户停在底部，每次状态推送都重新贴底——首帧定位若因布局
   // 晚落定而落空，这里最迟下一拍补上（高窗口/切换会话边界场景）。
   if(chatAtBottom){const l=$('chatList');
@@ -3154,16 +3286,36 @@ function sendChat(){
   const t=$('chatText').value.trim();
   if(!t||!chatOpenedId)return;
   const model=mpPicked('chat');
+  CHAT_PENDING=t;
+  CHAT_SENT_NOTICE=((STATE.dispatch||{}).notice)||'';
+  cBusy('chat');
+  cNotice('chat','正在派发，等回执…');
   postObj({cmd:'dispatch',id:chatOpenedId,text:t,model:model||undefined});
-  $('chatText').value='';
+  cValue('chat','');
   // 派发指令已接受：override 是一次性的，关面板并重置回「会话当前」。
   // 若被守卫拒绝，notice 会把原因写回本页（草稿留在 notice 提示里可复制）。
   mpReset('chat');mpSyncChip('chat');$('chatModelPanel').hidden=true;
 }
+// 派发在途正文：Qt 状态回流（notice/草稿）一到就退出在途态、恢复按钮。
+// CHAT_SENT_NOTICE 记住发出那一刻的 notice 全文，文案一变即代表这一发有了下文
+// （受理排队 / 守卫拒绝 / 回执落账后清空，三种都算收场）。
+let CHAT_PENDING='',CHAT_SENT_NOTICE='';
+function cLabel(prefix,label){
+  const b=$(prefix+'Send');if(!b)return;
+  if(b.dataset.busy==='1')return;  // 派发中不改文案
+  b.dataset.label=label;
+  $(prefix+'Hint').textContent=label==='发送'
+    ?'Enter 发送 · Shift+Enter 换行'
+    :'Enter 发首条 · Shift+Enter 换行';
+  cSendReady(prefix,!$(prefix+'Text').disabled
+    &&$(prefix+'Text').value.trim().length>0,label);
+}
 $('chatBack').onclick=()=>postObj({cmd:'chatBack'});
 $('chatSend').onclick=sendChat;
 $('chatText').addEventListener('keydown',e=>{
-  if(e.key==='Enter'){e.preventDefault();sendChat();}});
+  if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing&&e.keyCode!==229){
+    e.preventDefault();sendChat();}});
+$('chatText').addEventListener('input',()=>cSync('chat'));
 $('chatNew').onclick=()=>{const l=$('chatList');l.scrollTop=l.scrollHeight;
   chatAtBottom=true;$('chatNew').hidden=true;};
 $('chatList').addEventListener('scroll',()=>{
@@ -3196,7 +3348,7 @@ function adopt(s){
     if(chatOpenedId!==c.id){
       chatOpenedId=c.id;selected=c.id;
       chatMsgs=[];chatIds=new Set();chatLoading=false;
-      mpReset('chat');
+      mpReset('chat');cValue('chat','');
       CHAT=c;render();mergeChatPage(c,'init');
     }else{
       CHAT=c;render();mergeChatPage(c,'append');

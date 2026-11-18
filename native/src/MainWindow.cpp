@@ -443,8 +443,10 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
                 if (ZcodeDispatch::supports(exe)) {
                     dispatchNotice_ = QStringLiteral(
                         "ZCode 对话区要重启后才显示新消息，回复先看卡片");
+                    dispatchNoticeKind_ = QStringLiteral("good");
                 } else {
                     dispatchNotice_.clear();
+                    dispatchNoticeKind_.clear();
                 }
                 dispatchNoticeId_ = itemIdForSession(sid);
                 dispatchNoticeExe_ = exe;
@@ -456,6 +458,7 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
     connect(dispatch_, &SessionDispatch::failed, this,
             [this](const QString &dispatchId, const QString &reason) {
                 dispatchNotice_ = reason;
+                dispatchNoticeKind_ = QStringLiteral("bad");
                 dispatchNoticeId_ =
                     itemIdForSession(dispatchSessionById_.value(dispatchId));
                 // 失败通知也带宿主：ZCode 启动类失败可在卡片上直接重启重试。
@@ -518,6 +521,7 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
                     QStringLiteral("派发轮遇到%1，外部通道已代为拒绝；要它继续请回 "
                                    "ZCode 桌面处理")
                         .arg(what);
+                dispatchNoticeKind_ = QStringLiteral("bad");
                 dispatchNoticeId_ = itemIdForSession(sid);
                 dispatchNoticeExe_ = exe;
                 appendEvent(QStringLiteral("status"), QString(), QString(),
@@ -1112,6 +1116,7 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
                 // 确认…」也该撤（应答可能已被别处处理，ack 永远等不到）。
                 if (dispatchNoticeId_ == itemIdForSession(sid)) {
                     dispatchNotice_.clear();
+                    dispatchNoticeKind_.clear();
                     dispatchNoticeRequest_.clear();
                 }
             } else {
@@ -3322,6 +3327,7 @@ QJsonObject MainWindow::dispatchStateJson() const {
                        {QStringLiteral("noticeId"), dispatchNoticeId_},
                        {QStringLiteral("noticeExe"), dispatchNoticeExe_},
                        {QStringLiteral("noticeRequest"), dispatchNoticeRequest_},
+                       {QStringLiteral("noticeKind"), dispatchNoticeKind_},
                        {QStringLiteral("draftId"), dispatchDraftId_},
                        {QStringLiteral("draftText"), dispatchDraftText_},
                        {QStringLiteral("supported"), supportedDispatchExes()},
@@ -3577,6 +3583,7 @@ QString MainWindow::enqueueAnswer(const QString &workItemId, const QString &requ
     dispatchNotice_ = kind == QStringLiteral("approval")
                           ? QStringLiteral("授权应答已排队，等宿主确认…")
                           : QStringLiteral("应答已排队，等插件送 DSH…");
+    dispatchNoticeKind_ = QStringLiteral("good");
     dispatchNoticeId_ = workItemId;
     dispatchNoticeExe_ = item->agentExe;
     // 归属请求 id 必须在这里设：这是**唯一**设置提示文案的地方，而应答入口有三条
@@ -3674,6 +3681,7 @@ QString MainWindow::takeAnswerPending(const QString &exe, const QString &session
             }
             if (dispatchNoticeRequest_ == deadId) {
                 dispatchNotice_ = QStringLiteral("应答超时作废：插件没来取件");
+                dispatchNoticeKind_ = QStringLiteral("bad");
             }
             continue;
         }
@@ -3722,6 +3730,7 @@ void MainWindow::ackAnswer(const QString &answerId, bool ok, const QString &erro
             pendingRequests_.value(pa.sessionId).isEmpty();
         if (noticeGone) {
             dispatchNotice_.clear();
+            dispatchNoticeKind_.clear();
             dispatchNoticeRequest_.clear();
         }
     } else {
@@ -3735,6 +3744,7 @@ void MainWindow::ackAnswer(const QString &answerId, bool ok, const QString &erro
         if (voicePet_ != nullptr) {
             voicePet_->reportAnswerFailure(pa.id, error);
         }
+        dispatchNoticeKind_ = QStringLiteral("bad");
         dispatchNotice_ = error.isEmpty()
                               ? QStringLiteral("应答未生效，请重试")
                               : error;
@@ -3951,6 +3961,7 @@ QString MainWindow::dispatchToSession(const QString &agentExe,
     if (!dispatch_->dispatch(agentExe, sessionId, project, cleaned, &reason,
                              &dispatchId, modelOverride)) {
         dispatchNotice_ = reason;
+        dispatchNoticeKind_ = QStringLiteral("bad");
         dispatchNoticeId_ = itemIdForSession(sessionId);
         dispatchNoticeExe_ = agentExe;
         appendEvent(QStringLiteral("error"), QString(), QString(),
@@ -3965,6 +3976,7 @@ QString MainWindow::dispatchToSession(const QString &agentExe,
     dispatchReplyBySession_.remove(sessionId);
     dispatchNotice_ =
         QStringLiteral("已派往会话 %1，等回执…").arg(sessionId.left(8));
+    dispatchNoticeKind_ = QStringLiteral("good");
     dispatchNoticeId_ = itemIdForSession(sessionId);
     dispatchNoticeExe_ = agentExe;
     appendEvent(QStringLiteral("status"), QString(), QString(),
@@ -4487,10 +4499,12 @@ void MainWindow::handleWebAction(const QJsonObject &action) {
         if (ZcodeDispatch::restartDesktop(&error)) {
             dispatchNotice_ = QStringLiteral(
                 "ZCode 已重启；打开会话即可看到派发消息全文");
+            dispatchNoticeKind_ = QStringLiteral("good");
             appendEvent(QStringLiteral("status"), QString(), QString(),
                         QString::fromUtf8("已重启 ZCode（派发可见性）"), 0);
         } else {
             dispatchNotice_ = error;
+            dispatchNoticeKind_ = QStringLiteral("bad");
             appendEvent(QStringLiteral("error"), QString(), QString(),
                         QStringLiteral("重启 ZCode 失败：%1").arg(error), 0);
         }
@@ -4553,6 +4567,7 @@ void MainWindow::handleWebAction(const QJsonObject &action) {
                 dispatchReplyBySession_.remove(item->sessionId);
                 dispatchNotice_ = QStringLiteral("已派往会话 %1，等回执…")
                                       .arg(item->sessionId.left(8));
+                dispatchNoticeKind_ = QStringLiteral("good");
                 dispatchNoticeId_ = id;
                 dispatchNoticeExe_ = item->agentExe;
                 dispatchDraftId_.clear();
@@ -4564,6 +4579,7 @@ void MainWindow::handleWebAction(const QJsonObject &action) {
             if (!reason.isEmpty()) {
                 // 裁决 6：证明不了就不发；草稿留在页面输入框里别丢。
                 dispatchNotice_ = reason;
+                dispatchNoticeKind_ = QStringLiteral("bad");
                 dispatchNoticeId_ = id;
                 dispatchNoticeExe_ = item != nullptr ? item->agentExe : QString();
                 dispatchDraftId_ = id;
@@ -4582,6 +4598,7 @@ void MainWindow::handleWebAction(const QJsonObject &action) {
                 action.value(QStringLiteral("outcome")).toString());
             if (!why.isEmpty()) {
                 dispatchNotice_ = why;
+                dispatchNoticeKind_ = QStringLiteral("bad");
                 dispatchNoticeId_ = id;
                 // 归属到具体请求：聊天页把原因写在**那张卡**上（用户 2026-11-16
                 // 反馈「点了没反应」——页顶 notice 在长记录里滚出去就看不见了）。

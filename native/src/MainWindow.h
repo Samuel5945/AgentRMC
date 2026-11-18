@@ -148,6 +148,10 @@ private:
     // 按待办解析会话工作目录；没有（从派发页直接进会话）按 project/session 定位。
     // 存进 .agentrmc/inbox/<session>/，返回 PC 绝对路径供派发文本引用。
     QJsonObject lanUpload(const QJsonObject &meta, const QByteArray &data);
+    // 流式上传（大文件不限大小）：① 给临时路径 ② 收满后收尾改名。
+    QString lanUploadTarget(const QJsonObject &meta, const QString &filename);
+    QJsonObject lanUploadCommit(const QJsonObject &meta, const QString &tmpPath,
+                                const QString &filename);
     // 手机上翻「电脑文件」：列会话 inbox（默认 100 条、按时间倒序）。
     QString lanInboxList(const QJsonObject &meta);
     // 下载 inbox 里的一个文件：只认 basename + canonical 前缀校验，不许跳出 inbox。

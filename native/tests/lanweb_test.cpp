@@ -4,6 +4,7 @@
 #include <QCoreApplication>
 #include <QCryptographicHash>
 #include <QDir>
+#include <QElapsedTimer>
 #include <QFile>
 #include <QHostAddress>
 #include <QJsonArray>
@@ -521,6 +522,107 @@ int main(int argc, char **argv) {
                           resp);
                 },
                 next);
+    });
+    // 9l. 流式上传：target 拿文件名 → 字节边收边写盘 → commit 收尾。
+    // 这条是「附件不限大小」的地基：内存不随文件大小涨，所以这里验的是
+    // 「字节完整落盘」而不是体积上限。
+    seq.add([&](std::function<void()> next) {
+        static QByteArray streamGot;
+        static QString streamName;
+        // 注意：request() 是异步的，seq.add 的 lambda 会先返回。provider 里
+        // 引用的路径必须是 static（或堆），否则回调回来时局部对象已经析构——
+        // 第一版就这么 0xC0000409 的。
+        static QString tmpPath = QDir::tempPath() + "/armc-stream-test.part";
+        QFile::remove(tmpPath);
+        lan.setUploadStreamProviders(
+            [](const QJsonObject &meta, const QString &filename) {
+                Q_UNUSED(meta)
+                streamName = filename;
+                return tmpPath;
+            },
+            [&](const QJsonObject &meta, const QString &tmp,
+                const QString &filename) {
+                Q_UNUSED(meta)
+                QFile f(tmp);
+                if (f.open(QIODevice::ReadOnly)) {
+                    streamGot = f.readAll();
+                }
+                return QJsonObject{{QStringLiteral("ok"), true},
+                                   {QStringLiteral("code"), 200},
+                                   {QStringLiteral("path"), tmp},
+                                   {QStringLiteral("name"), filename},
+                                   {QStringLiteral("size"),
+                                    static_cast<double>(streamGot.size())}};
+            });
+        static const QByteArray payload(200 * 1024, 'S');
+        QByteArray req =
+            "POST /m/upload?session=sess-9&project=D%3A%2Fwork%2Fdemo HTTP/1.1\r\n";
+        req += "Host: 127.0.0.1\r\n";
+        req += "Content-Length: " + QByteArray::number(payload.size()) + "\r\n";
+        req += "X-AgentRMC-Filename: stream.bin\r\n";
+        req += cookieHeader(token);
+        req += "\r\n";
+        req += payload;
+        request(app, port, req,
+                [&](const QByteArray &resp) {
+                    check(resp.startsWith("HTTP/1.1 200"), "stream upload 200",
+                          resp);
+                    check(streamName == QStringLiteral("stream.bin"),
+                          "stream target 拿到文件名");
+                    check(streamGot.size() == payload.size(),
+                          "stream 落盘字节数与 Content-Length 一致",
+                          QByteArray::number(streamGot.size()));
+                    check(streamGot == payload, "stream 字节内容没被截断/串位");
+                    QFile::remove(tmpPath);
+                    // 用完立刻拆掉，别让后面的 413 用例误走流式分支。
+                    lan.setUploadStreamProviders(nullptr, nullptr);
+                },
+                next);
+    });
+    // 9m. 流式上传中途断连：.part 要删掉，不能留半成品。
+    // 这里刻意用 processEvents 同步驱动：异步 lambda 捕获栈上的 QTcpSocket
+    // 会在回调触发时悬垂（第一版就是这么段错误的）。
+    seq.add([&](std::function<void()> next) {
+        static QString tmpPath = QDir::tempPath() + "/armc-stream-abort.part";
+        QFile::remove(tmpPath);
+        lan.setUploadStreamProviders(
+            [](const QJsonObject &, const QString &) { return tmpPath; },
+            [](const QJsonObject &, const QString &, const QString &) {
+                return QJsonObject{{QStringLiteral("ok"), true}};
+            });
+        {
+            QTcpSocket probe;
+            probe.connectToHost(QHostAddress::LocalHost,
+                                static_cast<quint16>(lan.port()));
+            if (!probe.waitForConnected(2000)) {
+                check(false, "stream abort 用例连不上服务端");
+            } else {
+                // 声明 1MB 只发 4KB 就断：服务端应停在 streams_ 里等后续。
+                QByteArray head =
+                    "POST /m/upload?session=sess-9 HTTP/1.1\r\nHost: 127.0.0.1\r\n";
+                head += "Content-Length: 1048576\r\n";
+                head += "X-AgentRMC-Filename: half.bin\r\n";
+                head += cookieHeader(token);
+                head += "\r\n";
+                probe.write(head);
+                probe.write(QByteArray(4096, 'H'));
+                probe.flush();
+                probe.waitForBytesWritten(1000);
+                QElapsedTimer t;
+                t.start();
+                while (t.elapsed() < 400) {
+                    QCoreApplication::processEvents();
+                }
+                probe.abort();
+                while (t.elapsed() < 1200) {
+                    QCoreApplication::processEvents();
+                }
+                check(!QFileInfo::exists(tmpPath),
+                      "断连后 .part 被清掉，不留半成品");
+            }
+        }
+        lan.setUploadStreamProviders(nullptr, nullptr);
+        next();
     });
     // 10. cookie 鉴权读状态。
     seq.add([&](std::function<void()> next) {

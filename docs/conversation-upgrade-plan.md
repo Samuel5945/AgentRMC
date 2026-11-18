@@ -236,7 +236,8 @@ RequestQuestion(id, header, prompt, options[], multiple, secret,
 - **已实现（2026-11-14）**：
   - `LanWebServer`：`POST /m/upload?id=<待办id>`，body=文件原始字节，文件名走
     `X-AgentRMC-Filename` 头（percent 编码兼容中文）；CSRF + 设备令牌鉴权；
-    上传 body 限放宽到 **25MB**（`kMaxUploadBytes`，其余路由仍 64KB）。
+    上传 body 限：原 25MB → 100MB → **流式不限大小**（见下方「流式上传」条），
+    其余路由仍 64KB。
   - `MainWindow::lanUpload`：按待办 id 解析会话 → 文件名 sanitize（取 basename、
     去控制字符、限长保扩展名，杜绝 `../`）→ 落盘
     `<project>/.agentrmc/inbox/<session>/<时间戳>-<name>`（无项目退
@@ -269,8 +270,22 @@ RequestQuestion(id, header, prompt, options[], multiple, secret,
   - 测试：`lanweb_test` 115 checks（新增会话上下文上传 5 项）；
     `rc_probe/mobile_page_probe.mjs flow` 增 13 项附件断言 + `chatAtt` 截图场景；
     新增 `rc_probe/desktop_chat_attachments.mjs`（mock WebView2 通道，14 项）。
-- **反向：PC → 手机（2026-11-18 晚）**。会话聊天页顶栏加「电脑上的文件」
-  （文件夹图标）→ 上浮面板列 `<inbox>` 里最近 100 个文件（按时间倒序），
+- **流式上传：附件 = 局域网传文件，不限大小（2026-11-18 晚）**。
+  原来是「收全整个 body 再落盘」，上限只能卡在内存能扛的量（25MB→100MB）。
+  用户一句点破：「附件完全可以当做局域网传输功能并展示进度，就不用限制大小了」。
+  - 做法对齐 LocalSend 的核心思路（**不是**协议更高明）：`/m/upload` 解析完
+    header 就问目标临时路径（`uploadTargetProvider`），之后 **边收边写盘**，
+    收满 `Content-Length` 再 `uploadCommitProvider` 改名收尾。内存只有一次
+    socket 读取的几十 KB，与文件大小无关。
+  - 上限：流式 **8GB**（只是防误传）；没配 provider 时退回整包路径 64MB。
+  - `content-length` 从 `int` 改 `qint64`——不限大小后 >2GB 会溢出成负数。
+  - 断连/写盘失败都删 `.part`，不留半成品（`streamAbort`）。
+  - 下载（`/m/file`）同样放进来的字节**不走 base64**：`LanWebServer::Download`
+    直接返回 `QByteArray`，避免 100MB→133MB base64→266MB UTF-16 的膨胀。
+  - 进度：沿用 XHR `upload.onprogress`（per-file 进度条），流式不改前端契约。
+  - 后续可做（未做）：分片 + 3~6 路并发（能再提 1.5~2 倍并支持断点续传）、
+    TUS 协议、传输加密（当前是明文 HTTP + 令牌，LocalSend 用自签 TLS）。
+- **反向：PC → 手机（2026-11-18 晚）**。会话聊天页顶栏加「电脑上的文件」  （文件夹图标）→ 上浮面板列 `<inbox>` 里最近 100 个文件（按时间倒序），
   点行即下载（`<a download>`，同源跳转自动带设备令牌）。
   - 路由：`GET /m/files`（列）与 `GET /m/file`（下载），定位字段跟 `/m/upload`
     完全同一套（`id?/session/project`）——三条路由共用 `queryMeta` 与

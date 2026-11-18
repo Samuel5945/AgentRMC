@@ -3413,6 +3413,16 @@ void MainWindow::ensureLanServer() {
         [this](const QJsonObject &meta, const QByteArray &data) {
             return lanUpload(meta, data);
         });
+    // 流式上传优先：/m/upload 走边收边写盘，内存恒定、不限大小（LocalSend 同思路）。
+    // uploadHandler 仍保留，作为 provider 没配时的整包兜底。
+    lan_->setUploadStreamProviders(
+        [this](const QJsonObject &meta, const QString &filename) {
+            return lanUploadTarget(meta, filename);
+        },
+        [this](const QJsonObject &meta, const QString &tmpPath,
+               const QString &filename) {
+            return lanUploadCommit(meta, tmpPath, filename);
+        });
     lan_->setInboxListProvider(
         [this](const QJsonObject &meta) { return lanInboxList(meta); });
     lan_->setInboxFileProvider(
@@ -4041,6 +4051,26 @@ bool MainWindow::resolveInboxTarget(const QJsonObject &meta, QString *project,
     return true;
 }
 
+// 上传文件名清洗：只取 basename、去路径分隔符与控制字符、限长保扩展名。
+// 服务端不信任客户端文件名，杜绝 ../ 穿越。整包上传和流式上传共用这一份。
+QString sanitizeUploadName(const QString &raw) {
+    QString name = raw;
+    name.replace(QLatin1Char('\\'), QLatin1Char('/'));
+    const int slash = name.lastIndexOf(QLatin1Char('/'));
+    if (slash >= 0) {
+        name = name.mid(slash + 1);
+    }
+    name.remove(QRegularExpression(QStringLiteral("[\\x00-\\x1f]")));
+    name = name.trimmed();
+    if (name.isEmpty() || name == QLatin1String(".") || name == QLatin1String("..")) {
+        name = QStringLiteral("file");
+    }
+    if (name.size() > 120) {
+        name = name.right(120);
+    }
+    return name;
+}
+
 QString MainWindow::inboxDirFor(const QJsonObject &meta) const {
     QString project, session;
     if (!resolveInboxTarget(meta, &project, &session)) {
@@ -4070,20 +4100,7 @@ QJsonObject MainWindow::lanUpload(const QJsonObject &meta,
     }
     // 文件名 sanitize：只取 basename，去路径分隔符/控制字符，限长保扩展名。
     // 服务端不信任客户端文件名，杜绝 ../ 穿越。
-    QString name = filename;
-    name.replace(QLatin1Char('\\'), QLatin1Char('/'));
-    const int slash = name.lastIndexOf(QLatin1Char('/'));
-    if (slash >= 0) {
-        name = name.mid(slash + 1);
-    }
-    name.remove(QRegularExpression(QStringLiteral("[\\x00-\\x1f]")));
-    name = name.trimmed();
-    if (name.isEmpty() || name == QLatin1String(".") || name == QLatin1String("..")) {
-        name = QStringLiteral("file");
-    }
-    if (name.size() > 120) {
-        name = name.right(120);
-    }
+    const QString name = sanitizeUploadName(filename);
     // 落盘：会话工作目录下 .agentrmc/inbox/<session>/（agent 天然可达）；
     // 无项目退统一 uploads 目录。时间戳前缀防重名。
     QString dir;
@@ -4134,6 +4151,55 @@ QJsonObject MainWindow::lanUpload(const QJsonObject &meta,
                        {QStringLiteral("path"), abs},
                        {QStringLiteral("name"), name},
                        {QStringLiteral("size"), data.size()}};
+}
+
+// 流式上传①：header 阶段就要目标临时路径。算会话 inbox、建目录、定名，
+// 返回 "<dir>/<时间戳>-<安全名>.part"；空串＝定位不了（服务端回 400）。
+QString MainWindow::lanUploadTarget(const QJsonObject &meta,
+                                    const QString &filename) {
+    const QString dir = inboxDirFor(meta);
+    if (dir.isEmpty()) {
+        return QString();
+    }
+    QDir().mkpath(dir);
+    const QString stamp =
+        QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd-HHmmss-zzz"));
+    return dir + QLatin1Char('/') + stamp + QLatin1Char('-') +
+           sanitizeUploadName(filename) + QStringLiteral(".part");
+}
+
+// 流式上传②：字节收满了收尾——.part 改名成正式文件、记一条事件流。
+// 失败时返回 ok=false（服务端会顺手把 .part 删掉）。
+QJsonObject MainWindow::lanUploadCommit(const QJsonObject &meta,
+                                        const QString &tmpPath,
+                                        const QString &filename) {
+    const auto fail = [](const QString &why) {
+        return QJsonObject{{QStringLiteral("ok"), false},
+                           {QStringLiteral("error"), why}};
+    };
+    Q_UNUSED(filename)
+    if (!QFileInfo::exists(tmpPath)) {
+        return fail(QStringLiteral("临时文件不见了"));
+    }
+    QString finalPath = tmpPath;
+    finalPath.chop(5);  // 去掉 ".part"
+    if (!QFile::rename(tmpPath, finalPath)) {
+        return fail(QStringLiteral("改名失败"));
+    }
+    const QFileInfo fi(finalPath);
+    // 事件流按来源记（桌面 Ctrl+V 也走这条落盘器）。
+    const bool pasted =
+        meta.value(QStringLiteral("source")).toString() == QLatin1String("paste");
+    appendEvent(QStringLiteral("status"), QString(), QString(),
+                (pasted ? QStringLiteral("粘贴图片：%1")
+                        : QStringLiteral("上传文件：%1"))
+                    .arg(fi.fileName()),
+                0);
+    return QJsonObject{{QStringLiteral("ok"), true},
+                       {QStringLiteral("code"), 200},
+                       {QStringLiteral("path"), fi.absoluteFilePath()},
+                       {QStringLiteral("name"), fi.fileName()},
+                       {QStringLiteral("size"), static_cast<double>(fi.size())}};
 }
 
 // 手机「电脑文件」：列会话 inbox。空目录也回合法空列表——前端据此显示

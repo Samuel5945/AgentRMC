@@ -11,6 +11,7 @@
 
 #include <functional>
 
+class QFile;
 class QTcpServer;
 class QTcpSocket;
 
@@ -65,6 +66,16 @@ public:
     void setUploadHandler(
         std::function<QJsonObject(const QJsonObject &meta,
                                   const QByteArray &data)> handler);
+    // 流式上传（/m/upload）：大文件不再整个读进内存再落盘，而是「边收边写」——
+    // 内存只有一次 socket 读取的几十 KB，大小只受磁盘限制（LocalSend 同款思路）。
+    //   target：header 解析完就问目标临时路径，空串＝拒绝；
+    //   commit：收满 Content-Length 后收尾（改名/记账），返回 {ok,path,name,size}。
+    // 两个都设了才走流式；否则退回 uploadHandler 的整包路径（测试/兼容用）。
+    void setUploadStreamProviders(
+        std::function<QString(const QJsonObject &meta, const QString &filename)>
+            target,
+        std::function<QJsonObject(const QJsonObject &meta, const QString &tmpPath,
+                                  const QString &filename)> commit);
     // GET /m/files 的应答来源（JSON 字符串）：列会话 inbox，meta 同 /m/upload。
     void setInboxListProvider(std::function<QString(const QJsonObject &meta)> provider);
     // GET /m/file 的下载体。**直接给字节**，不要再走 base64 + JSON：那样
@@ -137,6 +148,23 @@ private:
         sessionTranscriptProvider_;
     std::function<QJsonObject(const QJsonObject &, const QByteArray &)>
         uploadHandler_;
+    std::function<QString(const QJsonObject &, const QString &)>
+        uploadTargetProvider_;
+    std::function<QJsonObject(const QJsonObject &, const QString &,
+                              const QString &)>
+        uploadCommitProvider_;
+    // 正在流式接收的上传：socket → 已写字节 / 总量 / 临时文件。
+    struct StreamUpload {
+        QFile *file = nullptr;
+        QString tmpPath;
+        QString filename;
+        QJsonObject meta;
+        qint64 total = 0;
+        qint64 written = 0;
+    };
+    QHash<QTcpSocket *, StreamUpload> streams_;
+    void streamFeed(QTcpSocket *socket, const QByteArray &chunk);
+    void streamAbort(QTcpSocket *socket);
     std::function<QString(const QJsonObject &)> inboxListProvider_;
     std::function<Download(const QJsonObject &)> inboxFileProvider_;
     std::function<QJsonObject(const QJsonObject &)> actionHandler_;

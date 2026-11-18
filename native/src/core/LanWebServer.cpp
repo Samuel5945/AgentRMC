@@ -19,9 +19,10 @@ namespace {
 
 constexpr int kMaxHeaderBytes = 16 * 1024;
 constexpr int kMaxBodyBytes = 64 * 1024;
-// 手机传文件单独放宽。局域网上传，服务端是「一次读完整个 body」的写法，
-// 所以上限直接等于峰值内存——100MB 既能盖住短视频和安装包，又不会把主窗拖垮。
-constexpr qint64 kMaxUploadBytes = 100 * 1024 * 1024;
+// 整包上传（没有流式 provider 时的兜底路径）会整个读进内存，所以卡在 64MB；
+// 真正的大文件走流式（边收边写盘），上限 8GB，内存恒定。
+constexpr qint64 kMaxUploadBytes = 64 * 1024 * 1024;
+constexpr qint64 kMaxStreamBytes = 8LL * 1024 * 1024 * 1024;
 constexpr int kStaleMs = 10000;
 constexpr int kPairFailLimit = 5;
 constexpr qint64 kPairLockMs = 15 * 60 * 1000;
@@ -185,6 +186,11 @@ void LanWebServer::stop() {
         socket->abort();
     }
     buffers_.clear();
+    const QList<QTcpSocket *> streaming = streams_.keys();
+    for (QTcpSocket *socket : streaming) {
+        streamAbort(socket);
+        socket->abort();
+    }
     const QList<QTcpSocket *> draining = drain_.keys();
     for (QTcpSocket *socket : draining) {
         socket->abort();
@@ -228,6 +234,14 @@ void LanWebServer::setThemeRoot(const QString &root) {
 void LanWebServer::setUploadHandler(
     std::function<QJsonObject(const QJsonObject &, const QByteArray &)> handler) {
     uploadHandler_ = std::move(handler);
+}
+
+void LanWebServer::setUploadStreamProviders(
+    std::function<QString(const QJsonObject &, const QString &)> target,
+    std::function<QJsonObject(const QJsonObject &, const QString &,
+                              const QString &)> commit) {
+    uploadTargetProvider_ = std::move(target);
+    uploadCommitProvider_ = std::move(commit);
 }
 
 void LanWebServer::setInboxListProvider(
@@ -355,6 +369,7 @@ void LanWebServer::onConnected() {
         connect(socket, &QTcpSocket::disconnected, this, [this, socket] {
             buffers_.remove(socket);
             drain_.remove(socket);
+            streamAbort(socket);  // 断连留下半截 .part 直接删，不占盘
         });
         connect(socket, &QTcpSocket::readyRead, this,
                 [this, socket] { onReadable(socket); });
@@ -367,7 +382,65 @@ void LanWebServer::onConnected() {
     }
 }
 
+// 把收到的字节写进临时文件；收满 Content-Length 后交给 commit 收尾。
+// 中途写盘失败 / 断连都会清掉 .part，不留半成品。
+void LanWebServer::streamFeed(QTcpSocket *socket, const QByteArray &chunk) {
+    auto it = streams_.find(socket);
+    if (it == streams_.end() || it->file == nullptr) {
+        return;
+    }
+    StreamUpload &st = *it;
+    if (!chunk.isEmpty()) {
+        const qint64 left = st.total - st.written;
+        const QByteArray part =
+            chunk.size() > left ? chunk.left(static_cast<int>(left)) : chunk;
+        if (st.file->write(part) != part.size()) {
+            streamAbort(socket);
+            finish(socket, "500 Internal Server Error");
+            return;
+        }
+        st.written += part.size();
+    }
+    if (st.written < st.total) {
+        return;  // 还没收满，等下一段
+    }
+    st.file->close();
+    const QJsonObject result =
+        uploadCommitProvider_(st.meta, st.tmpPath, st.filename);
+    const QString tmp = st.tmpPath;
+    delete st.file;
+    streams_.remove(socket);
+    if (!result.value(QStringLiteral("ok")).toBool()) {
+        QFile::remove(tmp);  // 收尾失败别把半成品留在 inbox 里
+        finish(socket, "500 Internal Server Error",
+               QJsonDocument(result).toJson(QJsonDocument::Compact),
+               "application/json");
+        return;
+    }
+    finish(socket, "200 OK",
+           QJsonDocument(result).toJson(QJsonDocument::Compact),
+           "application/json");
+}
+
+void LanWebServer::streamAbort(QTcpSocket *socket) {
+    auto it = streams_.find(socket);
+    if (it == streams_.end()) {
+        return;
+    }
+    if (it->file != nullptr) {
+        it->file->close();
+        delete it->file;
+    }
+    QFile::remove(it->tmpPath);
+    streams_.remove(socket);
+}
+
 void LanWebServer::onReadable(QTcpSocket *socket) {
+    // 流式上传在途：数据直接喂给文件，不进 buffers_（内存恒定）。
+    if (streams_.contains(socket)) {
+        streamFeed(socket, socket->readAll());
+        return;
+    }
     if (drain_.contains(socket)) {
         const QByteArray chunk = socket->readAll();
         drain_[socket] -= chunk.size();
@@ -404,18 +477,57 @@ void LanWebServer::onReadable(QTcpSocket *socket) {
     }
 
     if (method == "POST") {
-        int contentLength = -1;
+        // qint64：流式上传不限大小后，>2GB 用 int 会溢出成负数。
+        qint64 contentLength = -1;
         const QByteArray lengthText = headerValue(headerLines, "content-length");
         if (!lengthText.isEmpty()) {
-            contentLength = lengthText.toInt();
+            contentLength = lengthText.toLongLong();
         }
         if (contentLength < 0) {
             finish(socket, "400 Bad Request");
             return;
         }
-        // 上传路由单独放宽到 kMaxUploadBytes（100MB）；其余路由仍 64KB。
-        const qint64 bodyLimit =
-            (path == "/m/upload") ? kMaxUploadBytes : kMaxBodyBytes;
+        // 流式上传：/m/upload 且配了 target+commit，就边收边写盘。大文件不再
+        // 整个读进内存——内存只有一次 socket 读取的几十 KB，大小只受磁盘限制。
+        if (path == "/m/upload" && uploadTargetProvider_ && uploadCommitProvider_) {
+            QJsonObject meta = queryMeta(query);
+            const QString rawName = QUrl::fromPercentEncoding(
+                headerValue(headerLines, "x-agentrmc-filename"));
+            meta.insert(QStringLiteral("filename"), rawName);
+            const QString tmp = uploadTargetProvider_(meta, rawName);
+            if (tmp.isEmpty()) {
+                buffers_.remove(socket);
+                finish(socket, "400 Bad Request");
+                return;
+            }
+            auto *file = new QFile(tmp);
+            if (!file->open(QIODevice::WriteOnly)) {
+                delete file;
+                buffers_.remove(socket);
+                finish(socket, "500 Internal Server Error");
+                return;
+            }
+            // header 之后已经收到的那截先落进文件，剩下的等后续 readyRead。
+            const QByteArray head = buffer.mid(headerEnd + 4);
+            buffers_.remove(socket);
+            StreamUpload st;
+            st.file = file;
+            st.tmpPath = tmp;
+            st.filename = rawName;
+            st.meta = meta;
+            st.total = contentLength;
+            st.written = 0;
+            streams_.insert(socket, st);
+            streamFeed(socket, head);
+            return;
+        }
+        // 上传：配了流式 provider 就放到 8GB（内存不随大小涨），否则退回
+        // 整包 64MB 的兜底；其余路由仍 64KB。
+        const bool streaming =
+            path == "/m/upload" && uploadTargetProvider_ && uploadCommitProvider_;
+        const qint64 bodyLimit = streaming   ? kMaxStreamBytes
+                                 : path == "/m/upload" ? kMaxUploadBytes
+                                                       : kMaxBodyBytes;
         if (contentLength > bodyLimit) {
             // 排干再回 413（见 drain_ 注释）。声称超过 1MB 的 body 不陪跑：
             // 直接断开，这种客户端不是浏览器就是攻击。
@@ -438,7 +550,8 @@ void LanWebServer::onReadable(QTcpSocket *socket) {
         if (body.size() < contentLength) {
             return;  // 还没收全，等下一段
         }
-        route(socket, method, path, query, headerLines, body.left(contentLength));
+        route(socket, method, path, query, headerLines,
+              body.left(static_cast<int>(contentLength)));
         return;
     }
     if (method == "GET") {
@@ -861,6 +974,7 @@ void LanWebServer::finish(QTcpSocket *socket, const char *status,
 void LanWebServer::dropSocket(QTcpSocket *socket) {
     buffers_.remove(socket);
     drain_.remove(socket);
+    streamAbort(socket);
     socket->abort();
 }
 
@@ -2021,7 +2135,8 @@ const C_SPIN_SVG='<svg class="cspin" viewBox="0 0 24 24" fill="none" stroke="cur
 // ---------- 附件：多选队列 / 串行上传 / 进度 / 附件条 ----------
 // 手机这条是**真的把字节传上来**：PC 落盘进会话目录、回来绝对路径，发送时
 // 拼进派发正文（agent 按路径读）。桌面端相反——本机路径直接引用，不复制。
-const ATT_MAX=100*1024*1024;  // 与 /m/upload 的 kMaxUploadBytes 对齐
+// 流式上传：字节边收边写盘，内存不随大小涨，所以前端不再卡体积（8GB 兜底防误传）。
+const ATT_MAX=8*1024*1024*1024;
 const ATT_ICON='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3v5h5"/><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8l-5-5Z"/></svg>';
 const ATTS={};  // prefix -> [{id,name,size,path,url(图片预览 blob)}]
 function attList(p){return ATTS[p]||(ATTS[p]=[]);}
@@ -2131,8 +2246,8 @@ async function attUpload(files){
  $('chatUp').hidden=true;$('chatUpFill').style.width='0%';
  attRender('');
  if(okN&&!failN)cNotice('','已附上 '+okN+' 个文件'
-  +(skipN?('（'+skipN+' 个超过 100MB，没传）'):''),'good');
- else if(skipN&&!failN)cNotice('','文件超过 100MB，传不了','bad');
+  +(skipN?('（'+skipN+' 个超过 8GB，没传）'):''),'good');
+ else if(skipN&&!failN)cNotice('','文件超过 8GB，传不了','bad');
  attBusy=false;
 }
 // ---------- 电脑上的文件（会话 inbox）：列表 + 下载 ----------

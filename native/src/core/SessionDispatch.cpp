@@ -76,14 +76,15 @@ bool SessionDispatch::supportsPluginChannel(const QString &agentExe) {
     // OpenSquilla 走同款通道：技能目录里的 pet-bridge 轮询取件 → 网关
     // sessions.send 注入（durable admission）→ ack 回执。2026-11-08 探针
     // 全链活体验收：受理 turn_id / SQLite 读回 / 全库零泄漏。
-    // ZCode 走外挂 hook 的决策式 PermissionRequest（2026-11-15 真机探针三路
-    // 全通：allow 不弹窗 / deny 直达工具层 / 超时回落弹窗），hook 进程轮询
-    // 取件；approval-inline 开关文件控制，默认关。
+    // 这里只收「派发走桥插件取件」的宿主：ZCode 不在此列——它的派发走
+    // supportsZcodeChannel（自带 app-server 协议），2026-11-18 修复：曾把
+    // ZCode.exe 加进这条，dispatch() 插件分支在前，ZCode 派发被 DSH 的
+    // session-<uuid> 格式哨兵拦成「归属可疑，未发」。ZCode 的卡片代答
+    // （决策式 PermissionRequest，2026-11-15 真机探针三路全通）范围在
+    // supportsInlineAnswer，与派发通道无关。
     return agentExe.compare(QStringLiteral("DeepSeek Harness.exe"),
                             Qt::CaseInsensitive) == 0 ||
            agentExe.compare(QStringLiteral("OpenSquilla.exe"),
-                            Qt::CaseInsensitive) == 0 ||
-           agentExe.compare(QStringLiteral("ZCode.exe"),
                             Qt::CaseInsensitive) == 0;
 }
 
@@ -97,6 +98,12 @@ bool SessionDispatch::supportsInlineAnswer(const QString &agentExe) {
                          Qt::CaseInsensitive) == 0 ||
         agentExe.compare(QStringLiteral("WorkBuddyAI.exe"),
                          Qt::CaseInsensitive) == 0) {
+        return true;
+    }
+    // ZCode 的代答：外挂 hook 决策式 PermissionRequest（2026-11-15 真机探针
+    // 三路全通：allow 不弹窗 / deny 直达工具层 / 超时回落弹窗）；approval-inline
+    // 开关文件控制，默认关。派发不走这条——见 supportsPluginChannel 注释。
+    if (agentExe.compare(QStringLiteral("ZCode.exe"), Qt::CaseInsensitive) == 0) {
         return true;
     }
     return supportsPluginChannel(agentExe);
@@ -280,7 +287,8 @@ bool SessionDispatch::findSession(const QString &configHome,
 
 bool SessionDispatch::dispatch(const QString &agentExe, const QString &sessionId,
                                const QString &project, const QString &text,
-                               QString *reason, QString *dispatchIdOut) {
+                               QString *reason, QString *dispatchIdOut,
+                               const QJsonObject &modelOverride) {
     const auto refuse = [reason](const QString &why) {
         *reason = why;
         return false;
@@ -326,8 +334,10 @@ bool SessionDispatch::dispatch(const QString &agentExe, const QString &sessionId
     }
     if (supportsZcodeChannel(agentExe)) {
         // ZCode 通道：会话索引是共享 SQLite（只读），投递走自带 app-server 协议。
-        // 账号套餐模型外部实例拿不到供应商（凭据在桌面登录态里，用户裁决不破解），
-        // 直接拒。
+        // 模型规则（2026-11-18 探针定案）：外部实例注册表只有内置模板 + 个人
+        // 供应商（API key 在 provider_config.json 内联，CLI 自己读）；账号套餐
+        // 模型只活在桌面登录态里，不 override 就拒——选个人供应商模型可派，
+        // send 会把 override 写进会话库，turn 终态后由 ZcodeDispatch 恢复原值。
         QString directory;
         QJsonObject model;
         qint64 timeUpdated = 0;
@@ -339,14 +349,50 @@ bool SessionDispatch::dispatch(const QString &agentExe, const QString &sessionId
         if (pending_.contains(sessionId)) {
             return refuse(QStringLiteral("该会话已有派发在途，等回执后再派"));
         }
-        if (model.isEmpty()) {
+        // 模型门：override 合法性先验（不信任页面传值），再按会话当前模型
+        // 决定放行还是拒绝。reasoningLevel 保留会话原值，UI 不另设档位。
+        QJsonObject sendSelection;
+        QJsonObject restoreSelection;
+        if (!modelOverride.isEmpty()) {
+            const QString pid = modelOverride.value(QStringLiteral("providerId"))
+                                    .toString()
+                                    .trimmed();
+            const QString mid = modelOverride.value(QStringLiteral("modelId"))
+                                    .toString()
+                                    .trimmed();
+            if (pid.isEmpty() || mid.isEmpty()) {
+                return refuse(QStringLiteral(
+                    "派发模型选择不完整（缺 providerId 或 modelId），未发"));
+            }
+            if (!ZcodeDispatch::personalModelAllowed(pid, mid)) {
+                return refuse(QStringLiteral(
+                    "所选模型不在个人供应商清单（v2/provider_config.json），"
+                    "未发"));
+            }
+            QJsonObject options = model.value(QStringLiteral("options")).toObject();
+            if (!modelOverride.value(QStringLiteral("options")).toObject().isEmpty()) {
+                options = modelOverride.value(QStringLiteral("options")).toObject();
+            }
+            sendSelection = QJsonObject{
+                {QStringLiteral("providerId"), pid},
+                {QStringLiteral("modelId"), mid}};
+            if (!options.isEmpty()) {
+                sendSelection.insert(QStringLiteral("options"), options);
+            }
+            restoreSelection = model;
+        } else {
+            sendSelection = model;
+        }
+        if (sendSelection.isEmpty()) {
             return refuse(QStringLiteral("读不到该会话当前模型，拒绝盲发"));
         }
-        if (model.value(QStringLiteral("providerId")).toString()
+        if (sendSelection.value(QStringLiteral("providerId"))
+                .toString()
                 .startsWith(QStringLiteral("account:"))) {
             return refuse(
-                QStringLiteral("该会话用账号套餐模型，外部派发暂不支持（等 ZCode "
-                               "上游开放），可换个人供应商模型会话再派"));
+                QStringLiteral("该会话用账号套餐模型，外部实例注册表拿不到"
+                               "（凭据在桌面登录态，不破解）；在派发输入行选"
+                               "一个个人供应商模型再派"));
         }
         const qint64 idle = timeUpdated > 0
                                 ? QDateTime::currentMSecsSinceEpoch() - timeUpdated
@@ -387,7 +433,8 @@ bool SessionDispatch::dispatch(const QString &agentExe, const QString &sessionId
         job.dispatchId = p.dispatchId;
         job.sessionId = sessionId;
         job.text = text;
-        job.modelSelection = model;
+        job.modelSelection = sendSelection;
+        job.restoreSelection = restoreSelection;
         job.zcodeExe = zexe;
         connect(z, &ZcodeDispatch::sent, this,
                 [this, sid = sessionId](const QString &id) {

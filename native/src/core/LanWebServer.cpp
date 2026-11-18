@@ -1038,13 +1038,60 @@ QString LanWebServer::mobileHtml() const {
    color:var(--muted);font-size:14px;text-align:center;padding:24px;
    line-height:1.7;white-space:pre-line}
  /* 底部输入行：左右留白 + 安全区，防手机圆角/手势条裁切发送按钮。 */
- .chatfoot{flex:0 0 auto;display:flex;gap:8px;
+ .chatfoot{position:relative;display:flex;align-items:center;gap:8px;
    padding:8px 0 calc(12px + env(safe-area-inset-bottom))}
  .chatfoot input{flex:1;min-width:0;min-height:44px;font-size:15px;color:var(--text);
    background:var(--w6);border:1px solid var(--w14);border-radius:10px;
    padding:8px 12px;font-family:inherit}
  .chatfoot input:focus{outline:none;border-color:var(--accent);background:var(--w8)}
  .chatfoot .btn{flex:0 0 auto}
+ /* 模型选择（对齐 ZCode remote v4）：输入行灰底胶囊「选择模型 ⌄」/
+   「模型名 档位 ⌄」；上浮面板一级＝‹ 上一步灰条 + 供应商行（立方体图标+
+   名+API 徽标+当前 ✓）+ 底部「管理模型」，二级＝供应商头行 +「模型」分组
+   + 模型行 + 思考强度（绿蓝渐变滑杆，最左档＝跟随会话）。 */
+ .modelchip{flex:0 0 auto;max-width:46%;display:flex;align-items:center;gap:5px;
+   font-size:14px;color:var(--text);background:var(--w8);
+   border:none;border-radius:12px;padding:10px 12px;
+   font-family:inherit;overflow:hidden}
+ .modelchip b{font-weight:400;overflow:hidden;text-overflow:ellipsis;
+   white-space:nowrap}
+ .modelchip .lvl{flex:0 0 auto;color:var(--muted)}
+ .modelchip .caret{flex:0 0 auto;color:var(--muted);font-size:12px}
+ .mpanel{position:absolute;left:0;right:0;bottom:calc(100% + 8px);z-index:30;
+   background:var(--surface);border:1px solid var(--w14);border-radius:14px;
+   box-shadow:0 12px 32px rgba(15,23,42,.18);overflow:hidden}
+ .mpback{display:block;width:100%;text-align:left;background:var(--w8);
+   border:none;border-bottom:1px solid var(--w10);color:var(--text);
+   font-size:14px;padding:12px 14px;font-family:inherit}
+ .mplist{max-height:300px;overflow-y:auto;scrollbar-width:none}
+ .mplist::-webkit-scrollbar{display:none}
+ .mprow{width:100%;display:flex;align-items:center;gap:10px;padding:13px 14px;
+   background:none;border:none;border-bottom:1px solid var(--w6);
+   font-size:15px;color:var(--text);text-align:left;font-family:inherit}
+ .mprow:last-child{border-bottom:none}
+ .mprow .mpico{flex:0 0 auto;color:var(--muted);display:flex;align-items:center}
+ .mprow .mpname{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;
+   white-space:nowrap}
+ .badge{font-size:11px;color:var(--muted);background:var(--w8);
+   border-radius:6px;padding:2px 7px}
+ .mprow .check{flex:0 0 auto;color:var(--muted)}
+ .mprow .fwd{flex:0 0 auto;color:var(--muted)}
+ .mpsec{padding:10px 14px 2px;font-size:12px;color:var(--muted)}
+ .mpfoot{padding:12px 14px;border-top:1px solid var(--w10);
+   font-size:14px;color:var(--text)}
+ .mpfoot[hidden]{display:none}
+ .mpthought{padding:12px 14px;border-top:1px solid var(--w10)}
+ .mpthought[hidden]{display:none}
+ .mpthought .trow{display:flex;align-items:center;gap:6px;margin-bottom:8px;
+   font-size:13px;color:var(--muted)}
+ .mpthought .trow .tkey{flex:1}
+ .mpthought .trow b{color:var(--text);font-weight:600}
+ .mpthought input[type=range]{width:100%;height:14px;-webkit-appearance:none;
+   appearance:none;border-radius:8px;outline:none;
+   background:linear-gradient(90deg,#2ea043,#58a6ff)}
+ .mpthought input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;
+   width:22px;height:22px;border-radius:11px;background:var(--surface);
+   border:1px solid var(--w18);box-shadow:0 1px 4px rgba(15,23,42,.2)}
  .newpill{position:absolute;left:50%;transform:translateX(-50%);bottom:10px;
    border:1px solid var(--a64);background:var(--accent);color:var(--on-accent);
    font-size:13px;font-weight:600;border-radius:14px;padding:6px 14px}
@@ -1217,8 +1264,18 @@ QString LanWebServer::mobileHtml() const {
    <div class="chatfoot">
     <input id="chatText" type="text" placeholder="写一句任务，派到这个会话…" enterkeyhint="send">
     <input id="chatFile" type="file" hidden>
+    <button class="modelchip" id="chatModelChip" hidden><b id="chatModelLabel">选择模型</b><span class="lvl" id="chatModelLvl" hidden></span><span class="caret">⌄</span></button>
      <button class="btn" id="chatAttach" title="传文件">📎</button>
      <button class="btn primary" id="chatSend">派发</button>
+    <div class="mpanel" id="chatModelPanel" hidden>
+     <button class="mpback" id="chatMpBack">‹ 上一步</button>
+     <div class="mplist" id="chatMpList"></div>
+     <div class="mpthought" id="chatMpThought" hidden>
+      <div class="trow"><span class="tkey">思考强度</span><b id="chatMpTVal">跟随会话</b></div>
+      <input type="range" id="chatMpRange" min="0" max="5" value="0" step="1">
+     </div>
+     <div class="mpfoot" id="chatMpFoot">管理模型</div>
+    </div>
    </div>
    <div class="notice" id="chatNotice" hidden></div>
   </div>
@@ -1743,6 +1800,8 @@ function renderChatFrame(){
  $('chatText').disabled=!chatCanDispatch;
  $('chatSend').disabled=!chatCanDispatch;
  $('chatAttach').disabled=!chatCanDispatch;
+ syncModelChip();
+ mpRenderPanel();
  if(!chatCanDispatch){
   $('chatNotice').hidden=false;
   $('chatNotice').textContent='只读：该 Agent 的手机派发通道未开通；记录仍可查看。';
@@ -1757,9 +1816,129 @@ function renderChatFrame(){
  // 失败原因也落到那张卡上（页顶 notice 在长记录里容易被滚出视野）。
  applyAnswerFailure();
 }
+// —— 模型选择（对齐 ZCode remote v4）：胶囊「选择模型 ⌄」/「模型名 档位 ⌄」；
+// 一级面板＝‹ 上一步灰条（收起态隐藏）+ 供应商行（立方体图标+名+API 徽标，
+// 选中 ✓ 否则 ›）+ 底部「管理模型」；二级＝「模型」分组标签 + 模型行（选中 ✓）
+// + 思考强度滑杆（0＝跟随会话，1..5＝low/medium/high/xhigh/max）。
+// 目录来自 STATE.dispatch.models（个人供应商清单，native 只读
+// provider_config.json）；空目录 / 非 ZCode / 只读会话整块隐藏。
+// 派发成功后选择一次性作废，胶囊回「选择模型」。
+const MP_LVL_LABELS={low:'极低',medium:'低',high:'中',xhigh:'极高',max:'最高'};
+const MP_CUBE_SVG='<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><path d="M12 2.5 20.5 7v10L12 21.5 3.5 17V7L12 2.5Z"/><path d="M3.5 7 12 11.7 20.5 7"/><path d="M12 11.7V21.5"/></svg>';
+let mpOpen=false,mpLevel='providers',mpProvider=null;
+let mpSel=null; // {providerId,modelId,level?}；null=不切换
+function mpModels(){return ((STATE||{}).dispatch||{}).models||[];}
+function mpThoughts(){return ((STATE||{}).dispatch||{}).thoughtLevels||
+ ['low','medium','high','xhigh','max'];}
+function mpActive(){
+ if(!chatCanDispatch||mpModels().length===0)return false;
+ const exe=chatKind==='session'?chatExe:(chatMeta.agentExe||'');
+ return exe==='ZCode.exe';
+}
+function mpResetState(){mpOpen=false;mpLevel='providers';mpProvider=null;mpSel=null;}
+function syncModelChip(){
+ const chip=$('chatModelChip'),panel=$('chatModelPanel');
+ const on=mpActive();
+ chip.hidden=!on;
+ if(!on){panel.hidden=true;return;}
+ $('chatModelLabel').textContent=mpSel?mpSel.modelId:'选择模型';
+ const lvl=$('chatModelLvl');
+ lvl.hidden=!(mpSel&&mpSel.level);
+ if(mpSel&&mpSel.level)lvl.textContent=MP_LVL_LABELS[mpSel.level]||mpSel.level;
+ if(!mpOpen&&!panel.hidden)panel.hidden=true;
+}
+function mpSvgRow(iconHtml,text,tail,on,onclick){
+ const row=document.createElement('button');row.className='mprow';
+ const ico=document.createElement('span');ico.className='mpico';
+ ico.innerHTML=iconHtml||'';
+ const name=document.createElement('span');name.className='mpname';
+ name.textContent=text;
+ row.append(ico,name);
+ if(tail){const b=document.createElement('span');b.className='badge';
+  b.textContent=tail;row.append(b);}
+ const mark=document.createElement('span');
+ mark.className=on?'check':'fwd';
+ mark.textContent=on?'✓':'›';
+ row.append(mark);
+ row.onclick=onclick;
+ return row;
+}
+function mpTextRow(text,on,onclick){
+ const row=document.createElement('button');row.className='mprow';
+ const name=document.createElement('span');name.className='mpname';
+ name.textContent=text;
+ const mark=document.createElement('span');mark.className='check';
+ mark.textContent=on?'✓':'';
+ row.append(name,mark);
+ row.onclick=onclick;
+ return row;
+}
+function mpRenderPanel(){
+ const panel=$('chatModelPanel'),list=$('chatMpList'),
+       back=$('chatMpBack'),foot=$('chatMpFoot'),
+       thought=$('chatMpThought');
+ if(!mpOpen||!mpActive()){panel.hidden=true;return;}
+ panel.hidden=false;
+ back.hidden=mpLevel==='providers'&&!mpProvider;
+ list.replaceChildren();
+ thought.hidden=true;
+ if(mpLevel==='providers'){
+  foot.hidden=false;
+  list.append(mpTextRow('会话当前（不切换）',!mpSel,()=>{
+   mpSel=null;mpOpen=false;syncModelChip();panel.hidden=true;
+  }));
+  mpModels().forEach(p=>{
+   list.append(mpSvgRow(MP_CUBE_SVG,p.name||p.providerId,'API',
+    mpSel&&mpSel.providerId===p.providerId,
+    ()=>{mpProvider=p;mpLevel='models';mpRenderPanel();}));
+  });
+ }else{
+  foot.hidden=true;
+  const sec=document.createElement('div');sec.className='mpsec';
+  sec.textContent='模型';
+  list.append(sec);
+  (mpProvider&&mpProvider.models||[]).forEach(mid=>{
+   list.append(mpTextRow(mid,mpSel&&mpSel.providerId===mpProvider.providerId&&
+    mpSel.modelId===mid,
+    ()=>{
+     mpSel={providerId:mpProvider.providerId,modelId:mid,
+            level:mpSel?mpSel.level:null};
+     mpRenderPanel();syncModelChip();
+    }));
+  });
+  // 思考强度：选中模型后出现（0=跟随会话）
+  if(mpSel){
+   thought.hidden=false;
+   const lv=mpThoughts(),range=$('chatMpRange');
+   range.max=String(lv.length);
+   range.value=mpSel.level?String(lv.indexOf(mpSel.level)+1):'0';
+   $('chatMpTVal').textContent=mpSel.level
+    ?(MP_LVL_LABELS[mpSel.level]||mpSel.level):'跟随会话';
+  }
+ }
+}
+$('chatModelChip').onclick=()=>{
+ if(!mpActive())return;
+ mpOpen=!mpOpen;
+ if(mpOpen)mpRenderPanel();else $('chatModelPanel').hidden=true;
+};
+$('chatMpBack').onclick=()=>{mpLevel='providers';mpRenderPanel();};
+$('chatMpRange').addEventListener('input',()=>{
+ if(!mpSel)return;
+ const lv=mpThoughts(),i=+$('chatMpRange').value;
+ mpSel.level=i>0?lv[i-1]:null;
+ $('chatMpTVal').textContent=mpSel.level
+  ?(MP_LVL_LABELS[mpSel.level]||mpSel.level):'跟随会话';
+ syncModelChip();
+});
+function pickedModel(){
+ if(!mpSel)return null;
+ const model={providerId:mpSel.providerId,modelId:mpSel.modelId};
+ if(mpSel.level)model.options={reasoningLevel:mpSel.level};
+ return model;
+}
 function mergeChatPage(p,mode){
- chatTotal=p.total||0;
- const msgs=p.messages||[];
+ chatTotal=p.total||0; const msgs=p.messages||[];
  if(mode==='init'){
   chatMsgs=msgs.slice();chatIds=new Set(chatMsgs.map(msgKey));
   paintChat('init');
@@ -1805,6 +1984,7 @@ async function fetchTranscript(offset,mode){
 }
 function startChat(kind,id,meta){
  chatKind=kind;chatId=id;chatMsgs=[];chatIds=new Set();chatLoading=false;chatMeta={};
+ mpResetState();
  chatExe=meta&&meta.exe||'';chatSession=meta&&meta.session||'';
  chatProject=meta&&meta.project||'';chatAgentName=meta&&meta.agentName||'';
  chatCanDispatch=meta&&meta.canDispatch!==false;
@@ -1829,10 +2009,11 @@ async function sendChat(){
  $('chatText').blur();
  const btn=$('chatSend'),old=btn.textContent;
  btn.disabled=true;btn.textContent='派发中…';
+ const model=pickedModel();
  const res=chatKind==='session'
   ?await postResult({cmd:'dispatchSession',agent:chatExe,session:chatSession,
-     project:chatProject,text:t})
-  :await postResult({cmd:'dispatch',id:chatId,text:t});
+     project:chatProject,text:t,model:model||undefined})
+  :await postResult({cmd:'dispatch',id:chatId,text:t,model:model||undefined});
  btn.disabled=false;btn.textContent=old;
  if(!res.ok){
   const note=$('chatNotice');note.hidden=false;
@@ -1841,6 +2022,8 @@ async function sendChat(){
   return;
  }
  $('chatText').value='';
+ // 派发成功：模型选择是一次性的，关掉面板并重置，下一发默认回「会话当前」。
+ mpOpen=false;$('chatModelPanel').hidden=true;mpResetState();
  const note=$('chatNotice');note.hidden=false;
  note.textContent=chatKind==='session'
   ?'已派发。送达回执到了会进「待我处理」；这里继续看会话记录。'

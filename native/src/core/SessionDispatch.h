@@ -3,6 +3,7 @@
 #include <QElapsedTimer>
 #include <QHash>
 #include <QJsonArray>
+#include <QJsonObject>
 #include <QObject>
 #include <QProcess>
 #include <QString>
@@ -24,13 +25,17 @@ public:
     explicit SessionDispatch(QObject *parent = nullptr);
 
     static QString configHomeFor(const QString &agentExe);
-    // DSH 的插件通道：会话库是 zstd 多帧压缩 native 读不了，归属守卫在插件侧
-    // （活表 agents.get 命中才注入，拒绝走 ack 带原因）。
+    // 桥插件取件通道的派发范围（DSH / OpenSquilla）：dispatch() 里还要过会话
+    // id 格式哨兵。ZCode 不在这条——派发走 supportsZcodeChannel（自带
+    // app-server 协议）；它的卡片代答范围在 supportsInlineAnswer。历史上
+    // （35da13a）曾把 ZCode.exe 加进这条，插件分支在前把 ZCode 派发拦在
+    // DSH 哨兵上，2026-11-18 修复。
     static bool supportsPluginChannel(const QString &agentExe);
     // 内联应答（卡片上「允许/拒绝/选项」点了能送进宿主）的宿主范围。
     // 与 supportsPluginChannel 分开：那条判的是「能不能派发新消息」，还要过
     // 会话 id 格式哨兵；应答链路只靠 1.2s 轮询的应答件 + 会话 id 对号，
-    // WorkBuddy 这类只有 hook 代答、没有 injection 通道的宿主只该进这一条。
+    // WorkBuddy / ZCode 这类只有 hook 代答、没有 injection 通道的宿主只该进
+    // 这一条。
     static bool supportsInlineAnswer(const QString &agentExe);
     // ZCode 通道：自带 app-server 协议（个人供应商模型会话可用；账号套餐模型
     // 会话在 dispatch() 里拒绝，等上游开放）。
@@ -49,9 +54,15 @@ public:
                             QString *altTitle = nullptr);
 
     // 接受返回 true；拒绝返回 false 并给原因（调用方保留草稿）。
+    // modelOverride：ZCode 通道可选的模型覆盖 {providerId, modelId}——账号
+    // 套餐模型的会话必须带（外部实例注册表拿不到 account，2026-11-08 裁决
+    // 不破解凭据），个人供应商会话不带＝用会话当前模型（零切换）。override
+    // 由 ZcodeDispatch::personalModelAllowed 校验；reasoningLevel 保留会话
+    // 原值，send 会把 override 写进会话库，turn 终态后恢复原模型。
     bool dispatch(const QString &agentExe, const QString &sessionId,
                   const QString &project, const QString &text, QString *reason,
-                  QString *dispatchIdOut = nullptr);
+                  QString *dispatchIdOut = nullptr,
+                  const QJsonObject &modelOverride = QJsonObject());
 
     // —— 插件通道（DSH / OpenSquilla，AgentBridge 转发）——
     // 桥/插件轮询：取走该宿主（按 exe 过滤）尚未下发的派发（Pending 标记

@@ -3317,6 +3317,28 @@ QString MainWindow::workItemsJson() {
     return QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Compact));
 }
 
+QJsonObject MainWindow::dispatchStateJson() const {
+    return QJsonObject{{QStringLiteral("notice"), dispatchNotice_},
+                       {QStringLiteral("noticeId"), dispatchNoticeId_},
+                       {QStringLiteral("noticeExe"), dispatchNoticeExe_},
+                       {QStringLiteral("noticeRequest"), dispatchNoticeRequest_},
+                       {QStringLiteral("draftId"), dispatchDraftId_},
+                       {QStringLiteral("draftText"), dispatchDraftText_},
+                       {QStringLiteral("supported"), supportedDispatchExes()},
+                       // 个人供应商模型目录：ZCode 会话派发时选 override 模型
+                       // 用（账号套餐模型会话必须选，个人供应商可选切）。空目录
+                       // 时页面把选择入口整个藏掉。思考强度一律「跟随会话」，
+                       // 目录不占状态体积。
+                       {QStringLiteral("models"),
+                        ZcodeDispatch::personalProviderCatalog()},
+                       // 思考强度档位（remote v4 滑杆同款）：override 可带
+                       // options.reasoningLevel，滑杆最左＝跟随会话原值。
+                       {QStringLiteral("thoughtLevels"),
+                        QJsonArray{QStringLiteral("low"), QStringLiteral("medium"),
+                                   QStringLiteral("high"), QStringLiteral("xhigh"),
+                                   QStringLiteral("max")}}};
+}
+
 QString MainWindow::webShellState() {
     QJsonObject work;
     if (workItems_ != nullptr) {
@@ -3357,14 +3379,7 @@ QString MainWindow::webShellState() {
              {QStringLiteral("recording"), voiceRecording_},
              {QStringLiteral("maximized"), isMaximized() || isFullScreen()}}},
         {QStringLiteral("left"), leftShellState()},
-        {QStringLiteral("dispatch"),
-         QJsonObject{{QStringLiteral("notice"), dispatchNotice_},
-                     {QStringLiteral("noticeId"), dispatchNoticeId_},
-                     {QStringLiteral("noticeExe"), dispatchNoticeExe_},
-                     {QStringLiteral("noticeRequest"), dispatchNoticeRequest_},
-                     {QStringLiteral("draftId"), dispatchDraftId_},
-                     {QStringLiteral("draftText"), dispatchDraftText_},
-                     {QStringLiteral("supported"), supportedDispatchExes()}}},
+        {QStringLiteral("dispatch"), dispatchStateJson()},
         {QStringLiteral("chat"), chatState()},
     };
     return QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Compact));
@@ -3401,7 +3416,8 @@ void MainWindow::ensureLanServer() {
                 action.value(QStringLiteral("agent")).toString(),
                 action.value(QStringLiteral("session")).toString(),
                 action.value(QStringLiteral("project")).toString(),
-                action.value(QStringLiteral("text")).toString());
+                action.value(QStringLiteral("text")).toString(),
+                action.value(QStringLiteral("model")).toObject());
             if (!why.isEmpty()) {
                 return QJsonObject{{QStringLiteral("ok"), false},
                                    {QStringLiteral("code"), 409},
@@ -3452,14 +3468,7 @@ QString MainWindow::lanShellState() {
          QJsonDocument::fromJson(healthJson().toUtf8()).object()},
         // 手机页不再展示事件流：目录/聊天/派发都用独立路由，轮询体里别带它。
         {QStringLiteral("theme"), webThemeJson()},
-        {QStringLiteral("dispatch"),
-         QJsonObject{{QStringLiteral("notice"), dispatchNotice_},
-                     {QStringLiteral("noticeId"), dispatchNoticeId_},
-                     {QStringLiteral("noticeExe"), dispatchNoticeExe_},
-                     {QStringLiteral("noticeRequest"), dispatchNoticeRequest_},
-                     {QStringLiteral("draftId"), dispatchDraftId_},
-                     {QStringLiteral("draftText"), dispatchDraftText_},
-                     {QStringLiteral("supported"), supportedDispatchExes()}}},
+        {QStringLiteral("dispatch"), dispatchStateJson()},
         {QStringLiteral("meta"),
          QJsonObject{
              {QStringLiteral("version"), appVersion()},
@@ -3923,7 +3932,8 @@ QString MainWindow::lanSessionTranscript(const QString &agentExe,
 QString MainWindow::dispatchToSession(const QString &agentExe,
                                       const QString &sessionId,
                                       const QString &project,
-                                      const QString &text) {
+                                      const QString &text,
+                                      const QJsonObject &modelOverride) {
     if (dispatch_ == nullptr) {
         return QStringLiteral("派发通道还没就绪");
     }
@@ -3939,7 +3949,7 @@ QString MainWindow::dispatchToSession(const QString &agentExe,
     QString dispatchId;
     const QString cleaned = text.trimmed();
     if (!dispatch_->dispatch(agentExe, sessionId, project, cleaned, &reason,
-                             &dispatchId)) {
+                             &dispatchId, modelOverride)) {
         dispatchNotice_ = reason;
         dispatchNoticeId_ = itemIdForSession(sessionId);
         dispatchNoticeExe_ = agentExe;
@@ -4170,7 +4180,8 @@ void MainWindow::handleWebAction(const QJsonObject &action) {
             action.value(QStringLiteral("exe")).toString(),
             action.value(QStringLiteral("session")).toString(),
             action.value(QStringLiteral("project")).toString(),
-            action.value(QStringLiteral("text")).toString());
+            action.value(QStringLiteral("text")).toString(),
+            action.value(QStringLiteral("model")).toObject());
         if (workWeb_ != nullptr) {
             workWeb_->pushSessionResult(
                 QJsonObject{{QStringLiteral("ok"), why.isEmpty()},
@@ -4534,7 +4545,9 @@ void MainWindow::handleWebAction(const QJsonObject &action) {
                 reason = QStringLiteral("选中待办或派发文案为空");
             } else if (dispatch_->dispatch(item->agentExe, item->sessionId,
                                            item->project, text, &reason,
-                                           &dispatchId)) {
+                                           &dispatchId,
+                                           action.value(QStringLiteral("model"))
+                                               .toObject())) {
                 dispatchSessionById_.insert(dispatchId, item->sessionId);
                 // 新一轮派发：旧回复立刻作废，别让本轮 stop 拿到上一轮正文。
                 dispatchReplyBySession_.remove(item->sessionId);

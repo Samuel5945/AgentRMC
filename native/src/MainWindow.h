@@ -135,7 +135,8 @@ private:
     // 任意会话派发（不依赖待办 id）：走同一 SessionDispatch 通道，
     // 返回拒绝原因；空串＝已受理。
     QString dispatchToSession(const QString &agentExe, const QString &sessionId,
-                              const QString &project, const QString &text);
+                              const QString &project, const QString &text,
+                              const QJsonObject &modelOverride = QJsonObject());
     // 手机传文件落盘：按待办 id 找到会话工作目录，存进 .agentrmc/inbox/<session>/，
     // 返回 PC 绝对路径供派发文本引用（agent 按路径读）。
     QJsonObject lanUpload(const QString &id, const QString &filename,
@@ -245,6 +246,9 @@ private:
     bool cursorEnabled() const;
     void setCursorEnabled(bool on);
     QJsonArray supportedDispatchExes() const;
+    // 派发状态块（电脑外壳 / 手机页共用）：通知、草稿、能力清单 + 个人供应商
+    // 模型目录（ZCode override 派发用）。两处必须同一份，别各写各的漂移。
+    QJsonObject dispatchStateJson() const;
     QString itemIdForSession(const QString &sessionId) const;
     void setVoiceStatus(const QString &detail, const QString &color,
                         bool showTranscript);

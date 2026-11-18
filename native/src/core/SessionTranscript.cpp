@@ -26,8 +26,10 @@
 
 // 宿主自动生成的临时工作区：单任务会话本来没有真项目，WorkBuddy 会按
 // 「2026-11-12-21-07-51」这种时间戳建目录，Qoder Documents 工作区、远程控制
-// 沙箱、OpenSquilla 任务目录、VirtualDisplay 同理。拿这种目录名当项目名，会把
-// 同一批单任务拆成一串「按日期」的分组——目录页统一收进「未分类任务」。
+// 沙箱、OpenSquilla 任务目录、VirtualDisplay 同理；ZCode 桌面端的无项目任务
+// 也都落在 ~/.zcode/workspace/ 下（draft-<uuid> / <时间戳>-<uuid> / default）。
+// 拿这种目录名当项目名，会把同一批单任务拆成一串「按日期」的分组——目录页
+// 统一收进「未分类任务」（用户 2026-11-18：无工作区的任务折叠到未分类任务里）。
 bool SessionTranscript::generatedWorkspace(const QString &project) {
     const QString trimmed = project.trimmed();
     if (trimmed.isEmpty()) {
@@ -41,6 +43,7 @@ bool SessionTranscript::generatedWorkspace(const QString &project) {
         QStringLiteral("/appdata/roaming/com.qoder.app.stable/remote-control/"),
         QStringLiteral("/.qwenworkcn/workspace/"),
         QStringLiteral("/.opensquilla/tasks/"),
+        QStringLiteral("/.zcode/workspace/"),
         QStringLiteral("/virtualdisplay"),
     };
     for (const QString &dir : generatedDirs) {
@@ -49,7 +52,8 @@ bool SessionTranscript::generatedWorkspace(const QString &project) {
         }
     }
     if (p.endsWith(QStringLiteral("/workbuddy")) ||
-        p.endsWith(QStringLiteral("/workbuddy ai"))) {
+        p.endsWith(QStringLiteral("/workbuddy ai")) ||
+        p.endsWith(QStringLiteral("/.zcode/workspace"))) {
         return true;
     }
     // 目录名本身就是时间戳：2026-11-12-21-07-51 / 2026-11-12 / 20261112-210751。
@@ -677,6 +681,34 @@ QVector<SessionTranscript::SessionInfo> listJsonlSessions(const QString &home,
     return out;
 }
 
+// ZCode 桌面端把会话当「任务」管，归档/删除记在自己的任务索引里：
+// <home>/v2/tasks-index.sqlite 的 tasks 表（archived / deleted 列）。cli 库
+// session.time_archived 只是建了列，当前版本从不写（实测 243 条全 0）——只看它，
+// 桌面端归档掉的上百条会话永远算活跃，继续混在「正在进行的项目」的组里
+// （用户 2026-11-18 报的正是这个）。task_id 与 cli session.id 同一个命名空间，
+// 索引里对不上的行（纯桌面任务）不在 cli 列表里，自然不会误标。
+QSet<QString> zcodeDesktopArchivedIds(const QString &root) {
+    QSet<QString> out;
+    const QString dbPath = root + QStringLiteral("/v2/tasks-index.sqlite");
+    if (!QFileInfo::exists(dbPath)) {
+        return out;  // 没装桌面端 / 还没有任务索引
+    }
+    ReadOnlyDb db(dbPath);
+    if (!db.ok()) {
+        return out;
+    }
+    QSqlQuery q(db.db());
+    // 更老的索引可能没有 tasks 表或这两列：查询失败就当没有归档信息，退回目录判断。
+    if (q.exec(QStringLiteral(
+            "SELECT task_id FROM tasks WHERE archived=1 OR deleted=1"))) {
+        while (q.next()) {
+            out.insert(q.value(0).toString());
+        }
+    }
+    q.finish();
+    return out;
+}
+
 QVector<SessionTranscript::SessionInfo> listZcodeSessions(const QString &root,
                                                            int maxSessions) {
     QVector<SessionTranscript::SessionInfo> out;
@@ -716,6 +748,8 @@ QVector<SessionTranscript::SessionInfo> listZcodeSessions(const QString &root,
     }
     sql += QStringLiteral(" LIMIT ") + QString::number(maxSessions);
     QSqlQuery q(db.db());
+    // 桌面端的归档/删除标记在 v2 任务索引里（见 zcodeDesktopArchivedIds）。
+    const QSet<QString> desktopArchived = zcodeDesktopArchivedIds(root);
     // 归档/删除/子 Agent 的内部会话不进“派发”列表，避免用户选到不可用的树。
     if (q.exec(sql)) {
         while (q.next()) {
@@ -728,7 +762,8 @@ QVector<SessionTranscript::SessionInfo> listZcodeSessions(const QString &root,
             if (updated > 0) {
                 info.updatedAt = isoFromMs(updated);
             }
-            info.archived = archivedProject(info.project);
+            info.archived = archivedProject(info.project) ||
+                            desktopArchived.contains(id);
             out.append(info);
         }
     }

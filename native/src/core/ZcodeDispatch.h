@@ -25,7 +25,13 @@ public:
         QString dispatchId;
         QString sessionId;
         QString text;
-        QJsonObject modelSelection;  // 会话当前模型（rollout model_io 读出）
+        // 发送用的模型选择：无 override 时＝该会话当前值；带个人供应商
+        // override 时＝override（reasoningLevel 保留会话原值）。session/send
+        // 的 modelSelection 会写回会话库（runtime/model_selection）。
+        QJsonObject modelSelection;
+        // 覆盖了模型时要恢复的原值：turn 终态后 session/setModel 写回，别让
+        // 外部派发把桌面会话的模型偷偷换掉。空＝没 override，不恢复。
+        QJsonObject restoreSelection;
         QString zcodeExe;            // ZCode.exe 完整路径
     };
 
@@ -54,6 +60,16 @@ public:
     static bool sessionRecord(const QString &sessionId, QString *directory,
                               QJsonObject *modelSelection,
                               qint64 *timeUpdatedMs);
+    // 个人供应商目录（桌面端 ~/.zcode/v2/provider_config.json，只读）：
+    // [{providerId, name, models:[modelId…]}]。只收 standard-personal 组且
+    // enabled!==false 的规则——账号套餐供应商在桌面登录态里，外部实例注册表
+    // 拿不到（2026-11-08 裁决：不破解凭据，等上游开放），目录里不该出现。
+    // 文件不存在/解析失败返回空数组。
+    static QJsonArray personalProviderCatalog();
+    // override 校验：providerId 必须在目录里；modelId 在该供应商模型清单里
+    // （清单为空时只要求非空——规则可以不写 personalModelIds）。
+    static bool personalModelAllowed(const QString &providerId,
+                                     const QString &modelId);
 
     void start(const Job &job);
     bool busy() const { return process_ != nullptr; }
@@ -67,7 +83,8 @@ signals:
     void interactionSkipped(const QString &dispatchId, const QString &what);
 
 private:
-    enum class Stage { Spawn, Ready, Resume, Baseline, Send, Persist, Turn };
+    enum class Stage { Spawn, Ready, Resume, Baseline, Send, Persist, Turn,
+                       Restore };
     qint64 scaled(qint64 baseMs) const;
     QString stageName() const;
     void onReadyRead();
@@ -77,6 +94,10 @@ private:
     void tick();
     void fail(const QString &reason);
     void finishTurn(const QString &reply);
+    // turn 终态后恢复会话原模型（有 override 才走）：setModel 应答/超时都算
+    // 完成，别让恢复失败把已跑完的一整轮拖成失败。
+    void beginRestore(const QString &reply, const QString &failReason);
+    void finishRestore();
     void cleanup();
     static QString textOfMessage(const QJsonObject &message);
 
@@ -97,6 +118,10 @@ private:
     bool interactionNotified_ = false;
     bool sent_ = false;
     bool done_ = false;
+    // Restore 阶段的收尾动作：reply 非空＝正常收尾（finishTurn），否则带原因
+    // 走 fail（turn.failed 路径也要先把模型恢复回去再报错）。
+    QString restoreReply_;
+    QString restoreFailReason_;
     // 子进程 stderr 尾巴（封顶 4KiB）：app-server 的致命诊断写在这里
     // （[zcode-process-exception] / Protocol input closed 等），提前退出时
     // 拼进失败原因，别只留一句没法定位的「提前退出」。

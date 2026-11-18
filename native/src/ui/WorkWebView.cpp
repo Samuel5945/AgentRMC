@@ -980,6 +980,56 @@ QString WorkWebView::htmlFor(const QString &stateJson) const {
    padding:7px 10px;font-family:inherit}
  .chatfoot input::placeholder{color:var(--muted2)}
  .chatfoot input:focus{outline:none;border-color:var(--accent);background:var(--w8)}
+ /* 模型选择（对齐 ZCode remote v4）：胶囊「选择模型 ⌄」/「模型名 档位 ⌄」；
+   一级＝‹ 上一步 + 供应商行（立方体图标+名+API 徽标+✓/›）+ 底部「管理模型」，
+   二级＝「模型」分组 + 模型行 + 思考强度滑杆。与手机页同款。 */
+ .chatfoot{position:relative}
+ .modelchip{flex:0 0 auto;max-width:38%;display:flex;align-items:center;gap:5px;
+   font-size:var(--f12);color:var(--text);background:var(--w8);
+   border:none;border-radius:11px;padding:7px 10px;
+   font-family:inherit;cursor:default;overflow:hidden}
+ .modelchip b{font-weight:400;overflow:hidden;text-overflow:ellipsis;
+   white-space:nowrap}
+ .modelchip .lvl{flex:0 0 auto;color:var(--muted)}
+ .modelchip .caret{flex:0 0 auto;color:var(--muted);font-size:var(--f11)}
+ .mpanel{position:absolute;left:0;right:0;bottom:calc(100% + 8px);z-index:30;
+   background:var(--surface);border:1px solid var(--w14);border-radius:12px;
+   box-shadow:0 10px 28px rgba(15,23,42,.22);overflow:hidden}
+ .mpback{display:block;width:100%;text-align:left;background:var(--w8);
+   border:none;border-bottom:1px solid var(--w10);color:var(--text);
+   font-size:var(--f12);padding:9px 12px;font-family:inherit;cursor:default}
+ .mpback[hidden]{display:none}
+ .mplist{max-height:280px;overflow-y:auto;scrollbar-width:none}
+ .mplist::-webkit-scrollbar{display:none;width:0}
+ .mprow{width:100%;display:flex;align-items:center;gap:8px;padding:9px 12px;
+   background:none;border:none;border-bottom:1px solid var(--w6);
+   font-size:var(--f12);color:var(--text);text-align:left;
+   font-family:inherit;cursor:default}
+ .mprow:last-child{border-bottom:none}
+ .mprow:hover{background:var(--w6)}
+ .mprow .mpico{flex:0 0 auto;color:var(--muted);display:flex;align-items:center}
+ .mprow .mpname{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;
+   white-space:nowrap}
+ .badge{font-size:var(--f11);color:var(--muted);background:var(--w8);
+   border-radius:5px;padding:1px 6px}
+ .mprow .check{flex:0 0 auto;color:var(--muted)}
+ .mprow .fwd{flex:0 0 auto;color:var(--muted)}
+ .mpsec{padding:8px 12px 2px;font-size:var(--f11);color:var(--muted)}
+ .mpfoot{padding:9px 12px;border-top:1px solid var(--w10);
+   font-size:var(--f12);color:var(--text);cursor:default}
+ .mpfoot[hidden]{display:none}
+ .mpthought{padding:9px 12px;border-top:1px solid var(--w10)}
+ .mpthought[hidden]{display:none}
+ .mpthought .trow{display:flex;align-items:center;gap:5px;margin-bottom:6px;
+   font-size:var(--f11);color:var(--muted)}
+ .mpthought .trow .tkey{flex:1}
+ .mpthought .trow b{color:var(--text);font-weight:600}
+ .mpthought input[type=range]{width:100%;height:12px;-webkit-appearance:none;
+   appearance:none;border-radius:7px;outline:none;
+   background:linear-gradient(90deg,#2ea043,#58a6ff)}
+ .mpthought input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;
+   width:18px;height:18px;border-radius:9px;background:var(--surface);
+   border:1px solid var(--w18);box-shadow:0 1px 3px rgba(15,23,42,.25)}
  .newpill{position:absolute;left:50%;transform:translateX(-50%);bottom:10px;z-index:2;
    border:1px solid var(--a64);background:var(--accent);color:var(--on-accent);
    font-size:var(--f11);font-weight:600;border-radius:12px;padding:4px 12px;
@@ -1259,7 +1309,17 @@ QString WorkWebView::htmlFor(const QString &stateJson) const {
   </div>
   <div class="chatfoot">
     <input id="dchatText" placeholder="写一句任务，派到这个会话（Enter 发送）">
+    <button class="modelchip" id="dchatModelChip" hidden><b id="dchatModelLabel">选择模型</b><span class="lvl" id="dchatModelLvl" hidden></span><span class="caret">⌄</span></button>
     <button class="btn primary" id="dchatSend">派发</button>
+    <div class="mpanel" id="dchatModelPanel" hidden>
+     <button class="mpback" id="dchatMpBack">‹ 上一步</button>
+     <div class="mplist" id="dchatMpList"></div>
+     <div class="mpthought" id="dchatMpThought" hidden>
+      <div class="trow"><span class="tkey">思考强度</span><b id="dchatMpTVal">跟随会话</b></div>
+      <input type="range" id="dchatMpRange" min="0" max="5" value="0" step="1">
+     </div>
+     <div class="mpfoot" id="dchatMpFoot">管理模型</div>
+    </div>
   </div>
   <div class="notice" id="dchatNotice" hidden style="margin-top:6px"></div>
 </div>
@@ -1279,7 +1339,18 @@ QString WorkWebView::htmlFor(const QString &stateJson) const {
   </div>
   <div class="chatfoot">
     <input id="chatText" placeholder="派回这条会话的指令（Enter 发送，回执到了转进行中）">
+    <button class="modelchip" id="chatModelChip" hidden><b id="chatModelLabel">选择模型</b><span class="lvl" id="chatModelLvl" hidden></span><span class="caret">⌄</span></button>
     <button class="btn primary" id="chatSend">发送</button>
+    <div class="mpanel" id="chatModelPanel" hidden>
+     <button class="mpback" id="chatMpBack">‹ 上一步</button>
+     <div class="mplist" id="chatMpList"></div>
+     <div class="mpthought" id="chatMpThought" hidden>
+      <div class="trow"><span class="tkey">思考强度</span><b id="chatMpTVal">跟随会话</b></div>
+      <input type="range" id="chatMpRange" min="0" max="5" value="0" step="1">
+     </div>
+     <div class="mpfoot" id="chatMpFoot">管理模型</div>
+    </div>
+    </div>
   </div>
   <div class="notice" id="chatNotice" hidden style="margin-top:6px"></div>
   <button class="btn" id="chatRestart" hidden style="margin-top:6px;width:100%;
@@ -2313,6 +2384,7 @@ function openDSession(agent,row){
   dchatOpen=true;dchatKey=agent.exe+'|'+row.id;
   dchatMsgs=[];dchatIds=new Set();dchatTotal=0;dchatHasMore=false;dchatLoading=true;
   DCHAT_PENDING='';DCHAT_REFRESHING=false;
+  mpReset('dchat');mpSyncChip('dchat');
   $('dchatText').value='';$('dchatNotice').hidden=true;$('dchatNotice').textContent='';
   render();
   postObj({cmd:'sessionOpen',exe:agent.exe,session:row.id,offset:0,limit:50});
@@ -2332,6 +2404,7 @@ function renderDchatHeader(){
     :'这个 Agent 暂不支持手机/桌面派发，记录只读';
   $('dchatText').disabled=!DSCHAT.canDispatch;
   $('dchatSend').disabled=!DSCHAT.canDispatch;
+  mpSyncChip('dchat');mpRenderPanel('dchat');
   if(!DSCHAT.canDispatch){
     $('dchatNotice').hidden=false;
     $('dchatNotice').textContent='只读：该 Agent 的派发通道未开通；记录仍可查看。';
@@ -2381,14 +2454,145 @@ window.__setSessionChat=function(p){
   }
   renderDchatHeader();
 };
+// —— 模型选择（对齐 ZCode remote v4）：胶囊「选择模型 ⌄」/「模型名 档位 ⌄」；
+// 一级面板＝‹ 上一步 + 供应商行（立方体图标+名+API 徽标+✓/›）+ 底部「管理模型」，
+// 二级＝「模型」分组 + 模型行 + 思考强度滑杆（0＝跟随会话）。两个聊天面共用一套
+// 状态机，按前缀（'dchat' / 'chat'）区分。空目录 / 非 ZCode / 只读会话整块隐藏。
+const MP_LVL_LABELS={low:'极低',medium:'低',high:'中',xhigh:'极高',max:'最高'};
+const MP_CUBE_SVG='<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><path d="M12 2.5 20.5 7v10L12 21.5 3.5 17V7L12 2.5Z"/><path d="M3.5 7 12 11.7 20.5 7"/><path d="M12 11.7V21.5"/></svg>';
+const MP={};
+function mpCtx(prefix){
+  if(!MP[prefix])MP[prefix]={open:false,level:'providers',provider:null,sel:null};
+  return MP[prefix];
+}
+function mpModels(){return (STATE.dispatch||{}).models||[];}
+function mpThoughts(){return (STATE.dispatch||{}).thoughtLevels||
+  ['low','medium','high','xhigh','max'];}
+function mpReset(prefix){MP[prefix]={open:false,level:'providers',provider:null,sel:null};}
+function mpActive(prefix){
+  if(!mpModels().length)return false;
+  if(prefix==='dchat')return !!(dchatOpen&&DSCHAT&&DSCHAT.canDispatch&&
+    DSCHAT.agent&&DSCHAT.agent.exe==='ZCode.exe');
+  return !!(CHAT&&CHAT.agentExe==='ZCode.exe');
+}
+function mpSyncChip(prefix){
+  const $chip=$(prefix+'ModelChip'),$panel=$(prefix+'ModelPanel');
+  const on=mpActive(prefix);
+  $chip.hidden=!on;
+  if(!on){$panel.hidden=true;return;}
+  const sel=(MP[prefix]||{}).sel;
+  $(prefix+'ModelLabel').textContent=sel?sel.modelId:'选择模型';
+  const lvl=$(prefix+'ModelLvl');
+  lvl.hidden=!(sel&&sel.level);
+  if(sel&&sel.level)lvl.textContent=MP_LVL_LABELS[sel.level]||sel.level;
+}
+function mpSvgRow(iconHtml,text,tail,on,onclick){
+  const row=document.createElement('button');row.className='mprow';
+  const ico=document.createElement('span');ico.className='mpico';
+  ico.innerHTML=iconHtml||'';
+  const name=document.createElement('span');name.className='mpname';
+  name.textContent=text;
+  row.append(ico,name);
+  if(tail){const b=document.createElement('span');b.className='badge';
+    b.textContent=tail;row.append(b);}
+  const mark=document.createElement('span');
+  mark.className=on?'check':'fwd';
+  mark.textContent=on?'✓':'›';
+  row.append(mark);
+  row.onclick=onclick;
+  return row;
+}
+function mpTextRow(text,on,onclick){
+  const row=document.createElement('button');row.className='mprow';
+  const name=document.createElement('span');name.className='mpname';
+  name.textContent=text;
+  const mark=document.createElement('span');mark.className='check';
+  mark.textContent=on?'✓':'';
+  row.append(name,mark);
+  row.onclick=onclick;
+  return row;
+}
+function mpRenderPanel(prefix){
+  const ctx=MP[prefix],$panel=$(prefix+'ModelPanel');
+  if(!ctx||!ctx.open||!mpActive(prefix)){$panel.hidden=true;return;}
+  $panel.hidden=false;
+  $(prefix+'MpBack').hidden=ctx.level==='providers'&&!ctx.provider;
+  const list=$(prefix+'MpList'),
+        foot=$(prefix+'MpFoot'),thought=$(prefix+'MpThought');
+  list.replaceChildren();
+  thought.hidden=true;
+  if(ctx.level==='providers'){
+    foot.hidden=false;
+    list.append(mpTextRow('会话当前（不切换）',!ctx.sel,()=>{
+      ctx.sel=null;ctx.open=false;mpSyncChip(prefix);$panel.hidden=true;
+    }));
+    mpModels().forEach(p=>{
+      list.append(mpSvgRow(MP_CUBE_SVG,p.name||p.providerId,'API',
+        ctx.sel&&ctx.sel.providerId===p.providerId,
+        ()=>{ctx.provider=p;ctx.level='models';mpRenderPanel(prefix);}));
+    });
+  }else{
+    foot.hidden=true;
+    const sec=document.createElement('div');sec.className='mpsec';
+    sec.textContent='模型';
+    list.append(sec);
+    (ctx.provider&&ctx.provider.models||[]).forEach(mid=>{
+      list.append(mpTextRow(mid,ctx.sel&&ctx.sel.providerId===ctx.provider.providerId&&
+        ctx.sel.modelId===mid,
+        ()=>{
+          ctx.sel={providerId:ctx.provider.providerId,modelId:mid,
+                   level:ctx.sel?ctx.sel.level:null};
+          mpRenderPanel(prefix);mpSyncChip(prefix);
+        }));
+    });
+    if(ctx.sel){
+      thought.hidden=false;
+      const lv=mpThoughts(),range=$(prefix+'MpRange');
+      range.max=String(lv.length);
+      range.value=ctx.sel.level?String(lv.indexOf(ctx.sel.level)+1):'0';
+      $(prefix+'MpTVal').textContent=ctx.sel.level
+        ?(MP_LVL_LABELS[ctx.sel.level]||ctx.sel.level):'跟随会话';
+    }
+  }
+}
+function mpPicked(prefix){
+  const ctx=MP[prefix],sel=ctx&&ctx.sel;
+  if(!sel)return null;
+  const model={providerId:sel.providerId,modelId:sel.modelId};
+  if(sel.level)model.options={reasoningLevel:sel.level};
+  return model;
+}
+function mpToggle(prefix){
+  const ctx=mpCtx(prefix);
+  if(!mpActive(prefix))return;
+  ctx.open=!ctx.open;
+  if(ctx.open)mpRenderPanel(prefix);else $(prefix+'ModelPanel').hidden=true;
+}
+// 面板事件接线：两个聊天面共用一套生成器（id 按前缀区分）。
+['dchat','chat'].forEach(prefix=>{
+  $(prefix+'ModelChip').onclick=()=>mpToggle(prefix);
+  $(prefix+'MpBack').onclick=()=>{
+    const ctx=MP[prefix];ctx.level='providers';mpRenderPanel(prefix);
+  };
+  $(prefix+'MpRange').addEventListener('input',()=>{
+    const ctx=MP[prefix];
+    if(!ctx||!ctx.sel)return;
+    const lv=mpThoughts(),i=+$(prefix+'MpRange').value;
+    ctx.sel.level=i>0?lv[i-1]:null;
+    $(prefix+'MpTVal').textContent=ctx.sel.level
+      ?(MP_LVL_LABELS[ctx.sel.level]||ctx.sel.level):'跟随会话';
+    mpSyncChip(prefix);
+  });
+});
 function sendDchat(){
   if(!dchatOpen||!DSCHAT||!DSCHAT.canDispatch)return;
   const t=$('dchatText').value.trim();if(!t)return;
   DCHAT_PENDING=t;
   $('dchatSend').disabled=true;$('dchatSend').textContent='派发中…';
   const n=$('dchatNotice');n.hidden=false;n.textContent='正在派发，等回执…';
+  const model=mpPicked('dchat');
   postObj({cmd:'dispatchSession',exe:DSCHAT.agent.exe,session:DSCHAT.row.id,
-    project:DSCHAT.row.project||'',text:t});
+    project:DSCHAT.row.project||'',text:t,model:model||undefined});
 }
 window.__setDispatchResult=function(r){
   if(!dchatOpen||!DSCHAT)return;
@@ -2396,6 +2600,8 @@ window.__setDispatchResult=function(r){
   const n=$('dchatNotice');n.hidden=false;
   if(r&&r.ok){
     if($('dchatText').value===DCHAT_PENDING)$('dchatText').value='';
+    // 派发成功：override 是一次性的，关面板并重置回「会话当前」。
+    mpReset('dchat');mpSyncChip('dchat');$('dchatModelPanel').hidden=true;
     n.textContent='已派发。送达回执到了会进「待我处理」；这里继续看会话记录。';
   }else{
     n.textContent='没发出去：'+((r&&r.error)||'未知原因')+'（草稿已保留）';
@@ -2405,6 +2611,7 @@ window.__setDispatchResult=function(r){
 function closeDSession(){
   dchatOpen=false;DSCHAT=null;dchatMsgs=[];dchatIds=new Set();dchatKey='';
   $('dchatSend').disabled=false;$('dchatSend').textContent='派发';
+  mpReset('dchat');mpSyncChip('dchat');
   render();
 }
 function render(){
@@ -2913,6 +3120,7 @@ function renderChatFrame(){
   const st=$('chatStage');st.textContent=LABEL[CHAT.stage]||'';
   st.style.color=COLOR[CHAT.stage]||'var(--muted)';
   $('chatMeta').textContent=(CHAT.agentExe||'')+' · 共 '+chatTotal+' 条';
+  mpSyncChip('chat');mpRenderPanel('chat');
   const d=STATE.dispatch||{};
   const notice=(d.noticeId===chatOpenedId)?(d.notice||''):'';
   $('chatNotice').hidden=!notice;$('chatNotice').textContent=notice;
@@ -2945,8 +3153,12 @@ window.__setChatPage=function(p){
 function sendChat(){
   const t=$('chatText').value.trim();
   if(!t||!chatOpenedId)return;
-  postObj({cmd:'dispatch',id:chatOpenedId,text:t});
+  const model=mpPicked('chat');
+  postObj({cmd:'dispatch',id:chatOpenedId,text:t,model:model||undefined});
   $('chatText').value='';
+  // 派发指令已接受：override 是一次性的，关面板并重置回「会话当前」。
+  // 若被守卫拒绝，notice 会把原因写回本页（草稿留在 notice 提示里可复制）。
+  mpReset('chat');mpSyncChip('chat');$('chatModelPanel').hidden=true;
 }
 $('chatBack').onclick=()=>postObj({cmd:'chatBack'});
 $('chatSend').onclick=sendChat;
@@ -2984,12 +3196,14 @@ function adopt(s){
     if(chatOpenedId!==c.id){
       chatOpenedId=c.id;selected=c.id;
       chatMsgs=[];chatIds=new Set();chatLoading=false;
+      mpReset('chat');
       CHAT=c;render();mergeChatPage(c,'init');
     }else{
       CHAT=c;render();mergeChatPage(c,'append');
     }
   }else{
-    if(chatOpenedId){chatOpenedId='';CHAT=null;chatMsgs=[];chatIds=new Set();}
+    if(chatOpenedId){chatOpenedId='';CHAT=null;chatMsgs=[];chatIds=new Set();
+      mpReset('chat');mpSyncChip('chat');}
     render();
   }
 }

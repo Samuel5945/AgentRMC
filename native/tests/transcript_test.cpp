@@ -98,6 +98,14 @@ int main(int argc, char **argv) {
             QStringLiteral(
                 "C:/Users/x/AppData/Roaming/com.qoder.app.stable/remote-control/a"),
             QStringLiteral("C:/Users/x/.opensquilla/tasks/t1"),
+            // ZCode 桌面端的无项目任务工作区：三种命名都见过（本机 2026-11-18）。
+            QStringLiteral(
+                "C:\\Users\\x\\.zcode\\workspace\\draft-e8dee688-0aef-495f-"
+                "8469-72d0382bb317"),
+            QStringLiteral(
+                "C:/Users/x/.zcode/workspace/1794013923425-99fb64c5-393d-"
+                "4bee-86b0-8b3d3cda47bf"),
+            QStringLiteral("C:/Users/x/.zcode/workspace/default"),
         };
         for (const QString &dir : autoDirs) {
             check(SessionTranscript::generatedWorkspace(dir),
@@ -106,6 +114,8 @@ int main(int argc, char **argv) {
         const QStringList realDirs{
             QStringLiteral("D:/githubrepos/Agentrmc"),
             QStringLiteral("C:/Users/x/Documents/report-2026"),
+            // .zcode 下但不在 workspace/ 的路径不算：不能整个宿主目录一刀切。
+            QStringLiteral("C:/Users/x/.zcode/skills/demo"),
             QString(),
         };
         for (const QString &dir : realDirs) {
@@ -351,6 +361,10 @@ int main(int argc, char **argv) {
         q.addBindValue(sid);
         q.addBindValue(QStringLiteral("ZCode 会话标题"));
         q.exec();
+        // 桌面端索引要标记的两条：归档 / 删除。cli 库没有 directory 列，
+        // 项目为空不按目录判归档，archived 只能来自 v2 任务索引。
+        q.exec("INSERT INTO session VALUES('sess_arc','已归档任务')");
+        q.exec("INSERT INTO session VALUES('sess_del','已删除任务')");
         const QString zsid = sid;
         auto insMsg = [&](const QString &id, const QString &role, int seq,
                           const QJsonObject &extra = {}) {
@@ -429,6 +443,22 @@ int main(int argc, char **argv) {
         db.close();
     }
     QSqlDatabase::removeDatabase(QStringLiteral("setup_z"));
+    // 桌面端任务索引（v2/tasks-index.sqlite）：archived=1 / deleted=1 各标一条。
+    // 列名与真实库一致；cli 库的 time_archived 列在本 fixture 里根本没建。
+    {
+        QDir().mkpath(zRoot + QStringLiteral("/v2"));
+        QSqlDatabase db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"),
+                                                    QStringLiteral("setup_zv2"));
+        db.setDatabaseName(zRoot + QStringLiteral("/v2/tasks-index.sqlite"));
+        db.open();
+        QSqlQuery q(db);
+        q.exec("CREATE TABLE tasks(task_id TEXT, title TEXT, "
+               "archived INTEGER, deleted INTEGER)");
+        q.exec("INSERT INTO tasks VALUES('sess_arc','已归档任务',1,0)");
+        q.exec("INSERT INTO tasks VALUES('sess_del','已删除任务',0,1)");
+        db.close();
+    }
+    QSqlDatabase::removeDatabase(QStringLiteral("setup_zv2"));
     r = SessionTranscript::read(QStringLiteral("ZCode.exe"), sid, 50, 0, zRoot);
     check(r.supported, "zcode supported");
     check(r.title == QStringLiteral("ZCode 会话标题"), "zcode title");
@@ -460,13 +490,22 @@ int main(int argc, char **argv) {
     {
         const auto catalog =
             SessionTranscript::listSessions(QStringLiteral("ZCode.exe"), 10, zRoot);
-        check(catalog.size() == 1, "zcode session catalog count");
-        if (!catalog.isEmpty()) {
-            check(catalog.at(0).id == sid, "zcode catalog id");
-            check(catalog.at(0).title == QStringLiteral("ZCode 会话标题"),
-                  "zcode catalog title");
-            check(!catalog.at(0).archived, "zcode open project not archived");
+        check(catalog.size() == 3, "zcode session catalog count");
+        bool openArchived = true;
+        bool deskArchived = false;
+        bool deskDeleted = false;
+        for (const auto &info : catalog) {
+            if (info.id == sid) {
+                openArchived = info.archived;
+            } else if (info.id == QStringLiteral("sess_arc")) {
+                deskArchived = info.archived;
+            } else if (info.id == QStringLiteral("sess_del")) {
+                deskDeleted = info.archived;
+            }
         }
+        check(!openArchived, "zcode open project not archived");
+        check(deskArchived, "zcode desktop archived task marked archived");
+        check(deskDeleted, "zcode desktop deleted task marked archived");
     }
 
     // ---- OpenSquilla：transcript_entries 明文 ----

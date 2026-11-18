@@ -170,8 +170,16 @@ int main(int argc, char *argv[]) {
           SessionDispatch::supportsPluginChannel(
               QStringLiteral("DeepSeek Harness.exe")) &&
               !SessionDispatch::supportsPluginChannel(QStringLiteral("WorkBuddy.exe")) &&
+              !SessionDispatch::supportsPluginChannel(QStringLiteral("ZCode.exe")) &&
               SessionDispatch::configHomeFor(QStringLiteral("DeepSeek Harness.exe"))
                   .isEmpty());
+    // ZCode 回归（2026-11-18）：曾误入插件通道范围，dispatch() 插件分支在前，
+    // ZCode 派发（会话 id sess_<uuid>）被 DSH 的 session-<uuid> 哨兵拦成
+    // 「归属可疑」。代答范围不受影响。
+    check("zcode routing: answer yes, plugin-dispatch no",
+          SessionDispatch::supportsInlineAnswer(QStringLiteral("ZCode.exe")) &&
+              SessionDispatch::supportsZcodeChannel(QStringLiteral("ZCode.exe")) &&
+              !SessionDispatch::supportsPluginChannel(QStringLiteral("ZCode.exe")));
     {
         const QString dshSid =
             QStringLiteral("session-9c08421f-080c-4a79-9325-c23464226a62");
@@ -391,6 +399,26 @@ int main(int argc, char *argv[]) {
             QSqlDatabase::removeDatabase(QStringLiteral("test-db"));
         }
 
+        // 个人供应商目录 hermetic fixture：v2/provider_config.json（桌面端与
+        // CLI 共用的规则文件）。覆盖 group 过滤 / enabled 过滤 / 模型清单去重。
+        QDir().mkpath(dir.path() + QStringLiteral("/zc/v2"));
+        QFile provCfg(dir.path() + QStringLiteral("/zc/v2/provider_config.json"));
+        provCfg.open(QIODevice::WriteOnly);
+        provCfg.write(QStringLiteral(R"({
+ "config": {"providerConfigRules": {"providerRules": [
+  {"providerId": "prov-1", "providerName": "TestOne", "enabled": true,
+   "config": {"group": "standard-personal",
+              "personalModelIds": ["m1", "m2"], "modelOrder": ["m1"]}},
+  {"providerId": "prov-2", "providerName": "TestTwo",
+   "config": {"group": "standard-personal", "personalModelIds": []}},
+  {"providerId": "prov-3", "providerName": "Disabled", "enabled": false,
+   "config": {"group": "standard-personal", "personalModelIds": ["m3"]}},
+  {"providerId": "account:zai-start-plan", "providerName": "Account",
+   "config": {"group": "zai-family", "builtinModelIds": ["GLM-5.3-Flash"]}}
+ ]}}}
+)").toUtf8());
+        provCfg.close();
+
         const QString zs =
             QStringLiteral("11111111-2222-4333-8444-555555555555");
         const QString acctSid =
@@ -412,12 +440,55 @@ int main(int argc, char *argv[]) {
                   QStringLiteral("99999999-0000-4000-8000-000000000000"),
                   &zdir, &sel, &ztime));
 
+        // —— 个人供应商目录 + override 校验（2026-11-18 模型门软化）——
+        const QJsonArray catalog = ZcodeDispatch::personalProviderCatalog();
+        bool cat1 = false, cat2 = false, noDisabled = true, noAccount = true;
+        for (const QJsonValue &v : catalog) {
+            const QJsonObject p = v.toObject();
+            const QString pid = p.value(QStringLiteral("providerId")).toString();
+            if (pid == QStringLiteral("prov-1")) {
+                cat1 = p.value(QStringLiteral("name")).toString() ==
+                           QStringLiteral("TestOne") &&
+                       p.value(QStringLiteral("models")).toArray().size() == 2;
+            } else if (pid == QStringLiteral("prov-2")) {
+                cat2 = p.value(QStringLiteral("models")).toArray().isEmpty();
+            } else if (pid == QStringLiteral("prov-3")) {
+                noDisabled = false;
+            } else if (pid.startsWith(QStringLiteral("account:"))) {
+                noAccount = false;
+            }
+        }
+        check("zcode catalog: parse/filter/dedup provider rules",
+              cat1 && cat2 && noDisabled && noAccount && catalog.size() == 2);
+        check("zcode personalModelAllowed: hit / miss / empty-list / disabled",
+              ZcodeDispatch::personalModelAllowed(QStringLiteral("prov-1"),
+                                                  QStringLiteral("m1")) &&
+              !ZcodeDispatch::personalModelAllowed(QStringLiteral("prov-1"),
+                                                   QStringLiteral("m3")) &&
+              ZcodeDispatch::personalModelAllowed(QStringLiteral("prov-2"),
+                                                  QStringLiteral("any-model")) &&
+              !ZcodeDispatch::personalModelAllowed(QStringLiteral("prov-3"),
+                                                   QStringLiteral("m3")) &&
+              !ZcodeDispatch::personalModelAllowed(QStringLiteral("nope"),
+                                                   QStringLiteral("m1")) &&
+              !ZcodeDispatch::personalModelAllowed(QString(),
+                                                   QStringLiteral("m1")));
+
         SessionDispatch zd;
         check("zcode dispatch: unknown session refused (proof before send)",
               !zd.dispatch(QStringLiteral("ZCode.exe"),
                            QStringLiteral("99999999-0000-4000-8000-000000000000"),
                            QString(), QStringLiteral("task"), &reason) &&
                   reason.contains(QStringLiteral("证明不了")));
+        // 真机卡上的 id 是 sess_<uuid>（会话库 session.id 原样存前缀）：
+        // 必须落进 Zcode 通道按「不在会话库」拒，绝不能撞 DSH 的
+        // session-<uuid> 哨兵报「归属可疑」（2026-11-18 回归）。
+        check("zcode dispatch: sess_ id routes to zcode channel, not DSH sentinel",
+              !zd.dispatch(QStringLiteral("ZCode.exe"),
+                           QStringLiteral("sess_99999999-0000-4000-8000-000000000000"),
+                           QString(), QStringLiteral("task"), &reason) &&
+                  reason.contains(QStringLiteral("证明不了")) &&
+                  !reason.contains(QStringLiteral("归属可疑")));
         check("zcode dispatch: account-plan model refused",
               !zd.dispatch(QStringLiteral("ZCode.exe"), acctSid, QString(),
                            QStringLiteral("task"), &reason) &&
@@ -445,6 +516,42 @@ int main(int argc, char *argv[]) {
         check("zcode restart: missing exe refused without killing",
               !ZcodeDispatch::restartDesktop(&restartError) &&
                   restartError.contains(QStringLiteral("找不到")));
+
+        // —— override 派发（2026-11-18 模型门软化）——
+        // 账号套餐会话带合法 override：模型门放行（reasoningLevel 保留会话原
+        // 值），守卫走完拒在 exe 入口（AGENTRMC_ZCODE_EXE 指到不存在路径），
+        // 证明的是「门过了」而不是真 spawn。
+        SessionDispatch zo;
+        check("zcode override: account session + valid override passes gate",
+              !zo.dispatch(QStringLiteral("ZCode.exe"), acctSid, QString(),
+                           QStringLiteral("task"), &reason,
+                           nullptr,
+                           QJsonObject{{QStringLiteral("providerId"),
+                                        QStringLiteral("prov-1")},
+                                       {QStringLiteral("modelId"),
+                                        QStringLiteral("m1")}}) &&
+                  reason.contains(QStringLiteral("app-server 入口")));
+        check("zcode override: unknown model refused by catalog",
+              !zo.dispatch(QStringLiteral("ZCode.exe"), acctSid, QString(),
+                           QStringLiteral("task"), &reason,
+                           nullptr,
+                           QJsonObject{{QStringLiteral("providerId"),
+                                        QStringLiteral("prov-1")},
+                                       {QStringLiteral("modelId"),
+                                        QStringLiteral("nope")}}) &&
+                  reason.contains(QStringLiteral("个人供应商清单")));
+        check("zcode override: incomplete selection refused",
+              !zo.dispatch(QStringLiteral("ZCode.exe"), acctSid, QString(),
+                           QStringLiteral("task"), &reason,
+                           nullptr,
+                           QJsonObject{{QStringLiteral("modelId"),
+                                        QStringLiteral("m1")}}) &&
+                  reason.contains(QStringLiteral("不完整")));
+        // 个人供应商会话不带 override：会话当前值直接用（零切换），同样过门。
+        check("zcode override: personal session without override passes gate",
+              !zo.dispatch(QStringLiteral("ZCode.exe"), zs, QString(),
+                           QStringLiteral("task"), &reason) &&
+                  reason.contains(QStringLiteral("app-server 入口")));
         qunsetenv("AGENTRMC_ZCODE_EXE");
         qunsetenv("AGENTRMC_ZCODE_HOME");
     }
@@ -479,7 +586,8 @@ int main(int argc, char *argv[]) {
                                      bool *notTruncated, int *msgPolls,
                                      bool *authAnswered = nullptr,
                                      QString *failWhyOut = nullptr,
-                                     bool *providerEnvOk = nullptr) {
+                                     bool *providerEnvOk = nullptr,
+                                     QString *setModelSeen = nullptr) {
                 QTemporaryDir ztmp;
                 const QString root = ztmp.path();
                 const QString exe = root + QStringLiteral("/ZCode.exe");
@@ -551,6 +659,13 @@ process.stdin.on('data', (chunk) => {
       result(f.id, { sessionId: 'mock' }); continue;
     }
     if (f.method === 'session/send') { result(f.id, {}); continue; }
+    if (f.method === 'session/setModel') {
+      // override 派发的收尾恢复：记录参数供断言（应答成功/失败都算完成）。
+      fs.appendFileSync(path.join(dir, 'setmodel.jsonl'),
+                        JSON.stringify(f.params) + '\n');
+      result(f.id, {});
+      continue;
+    }
     if (f.method === 'session/messages') {
       msgPolls += 1;
       fs.writeFileSync(path.join(dir, 'msgpolls.txt'), String(msgPolls));
@@ -625,6 +740,12 @@ process.stdin.on('end', () => process.exit(0));
                 job.text = QStringLiteral("派发探针任务");
                 job.modelSelection = QJsonObject{{QStringLiteral("providerId"),
                                                   QStringLiteral("mock")}};
+                // 带 override 跑默认场景：turn 终态后必须把原模型 setModel
+                // 恢复回去（send 的 modelSelection 会写回会话库）。
+                job.restoreSelection = QJsonObject{
+                    {QStringLiteral("providerId"),
+                     QStringLiteral("mock-original")},
+                    {QStringLiteral("modelId"), QStringLiteral("m0")}};
                 job.zcodeExe = exe;
                 zd.start(job);
                 const bool finished = waitUntil(
@@ -649,6 +770,12 @@ process.stdin.on('end', () => process.exit(0));
                         envSeen.open(QIODevice::ReadOnly) &&
                         QString::fromUtf8(envSeen.readAll()) ==
                             providerDir + QStringLiteral("/zcode-builtin.json");
+                }
+                if (setModelSeen != nullptr) {
+                    QFile sm(cjsDir + QStringLiteral("/setmodel.jsonl"));
+                    *setModelSeen = sm.open(QIODevice::ReadOnly)
+                                        ? QString::fromUtf8(sm.readAll())
+                                        : QString();
                 }
                 QFile interactions(cjsDir + QStringLiteral("/interactions.jsonl"));
                 if (interactions.open(QIODevice::ReadOnly)) {
@@ -686,13 +813,19 @@ process.stdin.on('end', () => process.exit(0));
             bool timedOut = false, notTruncated = false;
             int msgPolls = 0;
             bool providerEnvOk = false;
+            QString setModelSeen;
             runMock(QStringLiteral("turn"), &turnOk, &denied, &declined, &skipped,
                     &timedOut, &notTruncated, &msgPolls, nullptr, nullptr,
-                    &providerEnvOk);
+                    &providerEnvOk, &setModelSeen);
             check("zcode mock: turn.completed carries the final reply",
                   turnOk && notTruncated);
             check("zcode mock: intermediate assistant text does not finish the turn",
                   turnOk && notTruncated && msgPolls >= 1);
+            // override 派发收尾：turn 完成后必须把原模型恢复回去（setModel 到位
+            // 且是 restoreSelection 的原值，不是发出去的 override）。
+            check("zcode mock: override dispatch restores original model",
+                  turnOk && setModelSeen.contains(QStringLiteral("mock-original")) &&
+                      setModelSeen.contains(QStringLiteral("m0")));
             // CLI 形态两个死路径找不到内置配置就 exit=1：spawn 必须注入
             // ZCODE_BUILTIN_PROVIDER_CONFIG_FILE 指向桌面端自带的那份。
             check("zcode mock: spawn injects builtin provider config env",

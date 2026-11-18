@@ -46,6 +46,10 @@ QJsonObject parseLine(const QByteArray &line) {
     return QJsonDocument::fromJson(line).object();
 }
 
+// Restore 阶段超时：setModel 是会话空闲时的秒级请求，10s 不回就是通道死了；
+// 收尾动作照常执行（回复/失败已定），恢复失败不影响派发结果。
+constexpr qint64 kRestoreTimeoutMs = 10000;
+
 }  // namespace
 
 ZcodeDispatch::ZcodeDispatch(QObject *parent) : QObject(parent) {
@@ -194,6 +198,78 @@ bool ZcodeDispatch::sessionRecord(const QString &sessionId, QString *directory,
     db.close();
     QSqlDatabase::removeDatabase(QStringLiteral("zcode-dispatch"));
     return ok;
+}
+
+QJsonArray ZcodeDispatch::personalProviderCatalog() {
+    // 桌面端把个人供应商规则放在 ~/.zcode/v2/provider_config.json（与 CLI
+    // 共用；API key 内联在 access 里由 CLI 自己读，这里只取 id/名/模型清单，
+    // 不碰 access 字段——凭据不出桌面进程边界，2026-11-08 裁决）。
+    const QString path =
+        zcodeHome() + QStringLiteral("/v2/provider_config.json");
+    QFile f(path);
+    if (!f.open(QIODevice::ReadOnly)) {
+        return {};
+    }
+    const QJsonObject root = QJsonDocument::fromJson(f.readAll()).object();
+    const QJsonArray rules = root.value(QStringLiteral("config"))
+                                 .toObject()
+                                 .value(QStringLiteral("providerConfigRules"))
+                                 .toObject()
+                                 .value(QStringLiteral("providerRules"))
+                                 .toArray();
+    QJsonArray out;
+    for (const QJsonValue &v : rules) {
+        const QJsonObject rule = v.toObject();
+        if (rule.value(QStringLiteral("enabled")).toBool(true) == false) {
+            continue;
+        }
+        const QJsonObject config = rule.value(QStringLiteral("config")).toObject();
+        // 账号组不进目录：外部实例注册表拿不到（见 supportsPluginChannel 注释），
+        // 列出来只会让用户选了再吃拒绝。
+        const QString group = config.value(QStringLiteral("group")).toString();
+        if (!group.isEmpty() && group != QStringLiteral("standard-personal")) {
+            continue;
+        }
+        QJsonArray models;
+        const QStringList modelKeys = {QStringLiteral("personalModelIds"),
+                                       QStringLiteral("modelOrder")};
+        for (const QString &key : modelKeys) {
+            for (const QJsonValue &m : config.value(key).toArray()) {
+                const QString id = m.toString();
+                if (!id.isEmpty() && !models.contains(id)) {
+                    models.append(id);
+                }
+            }
+        }
+        const QString providerId = rule.value(QStringLiteral("providerId")).toString();
+        if (providerId.isEmpty()) {
+            continue;
+        }
+        out.append(QJsonObject{
+            {QStringLiteral("providerId"), providerId},
+            {QStringLiteral("name"),
+             rule.value(QStringLiteral("providerName")).toString(providerId)},
+            {QStringLiteral("models"), models}});
+    }
+    return out;
+}
+
+bool ZcodeDispatch::personalModelAllowed(const QString &providerId,
+                                         const QString &modelId) {
+    if (providerId.isEmpty() || modelId.isEmpty()) {
+        return false;
+    }
+    const QJsonArray catalog = personalProviderCatalog();
+    for (const QJsonValue &v : catalog) {
+        const QJsonObject p = v.toObject();
+        if (p.value(QStringLiteral("providerId")).toString() != providerId) {
+            continue;
+        }
+        const QJsonArray models = p.value(QStringLiteral("models")).toArray();
+        // 清单为空＝规则没写模型列表：只要求 modelId 非空（上头已验）。
+        return models.isEmpty() || models.contains(modelId);
+    }
+    return false;
 }
 
 void ZcodeDispatch::start(const Job &job) {
@@ -493,7 +569,8 @@ void ZcodeDispatch::evaluate(const QJsonObject &response) {
                 continue;
             }
             if (type == QStringLiteral("turn.completed")) {
-                finishTurn(payload.value(QStringLiteral("response")).toString());
+                beginRestore(payload.value(QStringLiteral("response")).toString(),
+                             QString());
                 return;
             }
             if (type == QStringLiteral("turn.failed")) {
@@ -501,11 +578,20 @@ void ZcodeDispatch::evaluate(const QJsonObject &response) {
                                         .toObject()
                                         .value(QStringLiteral("message"))
                                         .toString();
-                fail(QStringLiteral("ZCode 轮次失败：%1（消息已送达）")
-                         .arg(why.isEmpty() ? QStringLiteral("未知原因") : why));
+                // turn.failed 也要先把模型恢复回去再报错：send 已经把 override
+                // 写进会话库，失败收尾不该留下被换过的模型。
+                beginRestore(
+                    QString(),
+                    QStringLiteral("ZCode 轮次失败：%1（消息已送达）")
+                        .arg(why.isEmpty() ? QStringLiteral("未知原因") : why));
                 return;
             }
         }
+        return;
+    }
+    case Stage::Restore: {
+        // setModel 应答到了（成功/失败都算）：收尾动作在 beginRestore 里已定。
+        finishRestore();
         return;
     }
     case Stage::Spawn:
@@ -563,7 +649,8 @@ void ZcodeDispatch::tick() {
         return;
     case Stage::Turn:
         if (elapsed > scaled(kTurnTimeoutMs)) {
-            finishTurn(QString());
+            // 超时收尾同样走恢复：override 已写进会话库，先恢复再报完成。
+            beginRestore(QString(), QString());
             return;
         }
         if (awaitingId_ < 0 && pollClock_.elapsed() >= scaled(kTurnPollMs)) {
@@ -571,6 +658,12 @@ void ZcodeDispatch::tick() {
                     QJsonObject{{QStringLiteral("sessionId"), job_.sessionId},
                                 {QStringLiteral("afterSeq"), baselineSeq_},
                                 {QStringLiteral("limit"), 200}});
+        }
+        return;
+    case Stage::Restore:
+        if (elapsed > scaled(kRestoreTimeoutMs)) {
+            // 恢复超时不拖累派发结果：回复/失败照常上报。
+            finishRestore();
         }
         return;
     }
@@ -599,6 +692,8 @@ QString ZcodeDispatch::stageName() const {
         return QStringLiteral("落库确认");
     case Stage::Turn:
         return QStringLiteral("等回复");
+    case Stage::Restore:
+        return QStringLiteral("恢复模型");
     }
     return QStringLiteral("?");
 }
@@ -621,6 +716,47 @@ void ZcodeDispatch::finishTurn(const QString &reply) {
     const QString id = job_.dispatchId;
     cleanup();
     emit turnFinished(id, reply);
+}
+
+void ZcodeDispatch::beginRestore(const QString &reply,
+                                 const QString &failReason) {
+    // 有 override（restoreSelection 非空且与发送值不同）才走恢复；否则按原
+    // 收尾直接上报。恢复用 session/setModel 把会话模型写回原值——send 的
+    // modelSelection 会落 runtime/model_selection，不恢复等于外部派发偷偷
+    // 换了桌面会话的模型。
+    //
+    // setModel 走供应商注册表解析（2026-11-18 实测：传对象时 Uue 查表），
+    // 独立实例注册表没有 account:/builtin: 套餐条目——原值是账号套餐时恢复
+    // 必败（等上游开放），直接跳过，别白白空转一轮 RPC；个人供应商原值正常
+    // 恢复。账号会话派发后模型停在所选个人供应商上，UI 有明示。
+    restoreReply_ = reply;
+    restoreFailReason_ = failReason;
+    const QString restorePid =
+        job_.restoreSelection.value(QStringLiteral("providerId")).toString();
+    if (job_.restoreSelection.isEmpty() ||
+        job_.restoreSelection == job_.modelSelection ||
+        restorePid.startsWith(QStringLiteral("account:")) ||
+        process_ == nullptr) {
+        finishRestore();
+        return;
+    }
+    stage_ = Stage::Restore;
+    stageClock_.restart();
+    pollClock_.restart();
+    request(QStringLiteral("session/setModel"),
+            QJsonObject{{QStringLiteral("sessionId"), job_.sessionId},
+                        {QStringLiteral("model"), job_.restoreSelection},
+                        {QStringLiteral("persistAsWorkspaceLastUsed"), false}});
+}
+
+void ZcodeDispatch::finishRestore() {
+    // 恢复失败不改变派发结果：整轮已经跑完，模型恢复失败顶多让桌面会话停在
+    // override 模型上，比把一轮成功报成失败强（恢复异常走超时兜底到这）。
+    if (!restoreFailReason_.isEmpty()) {
+        fail(restoreFailReason_);
+        return;
+    }
+    finishTurn(restoreReply_);
 }
 
 void ZcodeDispatch::cleanup() {

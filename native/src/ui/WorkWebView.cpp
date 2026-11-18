@@ -1054,13 +1054,16 @@ QString WorkWebView::htmlFor(const QString &stateJson) const {
     font-variant-numeric:tabular-nums}
   .cchars.warn{color:var(--pending)}
   .cchars.over{color:var(--danger)}
-  .csend{flex:0 0 auto;display:inline-flex;align-items:center;gap:5px;
-    border:none;border-radius:10px;padding:5px 12px;cursor:default;
-    font-family:inherit;font-size:var(--f11);font-weight:600;
+  /* 纯图标按钮（用户 2026-11-18：别写「派发」两个字）。固定 30×27，进行中
+     换成旋转环，切换时宽度不跳。文字只留在 title/aria-label 里。 */
+  .csend{flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;
+    border:none;border-radius:9px;width:30px;height:27px;padding:0;cursor:default;
     color:var(--on-accent);background:var(--accent);
     transition:background .12s ease,opacity .12s ease}
   .csend:hover{background:var(--accent-hover)}
   .csend svg{width:13px;height:13px;display:block;pointer-events:none}
+  .csend svg.cspin{animation:cspin .8s linear infinite}
+  @keyframes cspin{to{transform:rotate(360deg)}}
   .csend:disabled{background:var(--w10);color:var(--faint);cursor:default}
   @keyframes crise{from{opacity:0;transform:translateY(3px)}to{opacity:1;
     transform:none}}
@@ -1413,7 +1416,7 @@ QString WorkWebView::htmlFor(const QString &stateJson) const {
         <button class="modelchip" id="dchatModelChip" hidden><b id="dchatModelLabel">选择模型</b><span class="lvl" id="dchatModelLvl" hidden></span><span class="caret">⌄</span></button>
         <span class="chint" id="dchatHint">Enter 发送 · Shift+Enter 换行</span>
         <span class="cchars" id="dchatChars" hidden></span>
-        <button class="csend" id="dchatSend" data-label="派发">派发<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12l16-7-6.3 16-2.9-6.4L4 12Z"/></svg></button>
+        <button class="csend" id="dchatSend" data-label="派发" aria-label="派发" title="派发"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12l16-7-6.3 16-2.9-6.4L4 12Z"/></svg></button>
       </div>
     </div>
     <div class="mpanel" id="dchatModelPanel" hidden>
@@ -1455,7 +1458,7 @@ QString WorkWebView::htmlFor(const QString &stateJson) const {
         <button class="modelchip" id="chatModelChip" hidden><b id="chatModelLabel">选择模型</b><span class="lvl" id="chatModelLvl" hidden></span><span class="caret">⌄</span></button>
         <span class="chint" id="chatHint">Enter 发送 · Shift+Enter 换行</span>
         <span class="cchars" id="chatChars" hidden></span>
-        <button class="csend" id="chatSend" data-label="发送">发送<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12l16-7-6.3 16-2.9-6.4L4 12Z"/></svg></button>
+        <button class="csend" id="chatSend" data-label="发送" aria-label="发送" title="发送"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12l16-7-6.3 16-2.9-6.4L4 12Z"/></svg></button>
       </div>
     </div>
     <div class="mpanel" id="chatModelPanel" hidden>
@@ -3133,6 +3136,7 @@ document.addEventListener('keydown',e=>{
 const C_MAX=4000;  // 派发正文软上限：native 侧另有守卫，这里只提前提醒
 // 发送键空闲态图标（纸飞机）；派发中整颗键只留文字。
 const C_PLANE_SVG='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12l16-7-6.3 16-2.9-6.4L4 12Z"/></svg>';
+const C_SPIN_SVG='<svg class="cspin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 3a9 9 0 1 1-9 9"/></svg>';
 // ---------- 附件（桌面端）：本机路径直接引用，不复制文件 ----------
 // 📎 走 native 的系统文件对话框（WebView2 的 HTML5 拖拽拿不到本机路径），
 // 回推 __setFiles({plane,files:[{name,path,size}]})；这里只维护 chip 列表，
@@ -3276,12 +3280,16 @@ function cSendReady(prefix,on,sendLabel){
   b.dataset.busy='0';
   b.disabled=!on;
   b.dataset.label=sendLabel||b.dataset.label||'发送';
-  b.innerHTML=b.dataset.label+C_PLANE_SVG;
+  // 按钮只留图标（用户 2026-11-18：别写「派发」两个字），文字给 title/aria。
+  b.title=b.dataset.label;
+  b.setAttribute('aria-label',b.dataset.label);
+  b.innerHTML=C_PLANE_SVG;
 }
 function cBusy(prefix){
   const b=$(prefix+'Send');if(!b)return;
   b.dataset.busy='1';b.disabled=true;
-  b.innerHTML='派发中…';
+  // 进行中换成旋转环宁不写字——宽度固定，切换不跳。
+  b.innerHTML=C_SPIN_SVG;
 }
 // 解在途锁（只清标志，按钮状态交给下一次 cSync 按内容重算）。桌面两端都是
 // 异步回执：dchat 由 __setDispatchResult 复位，chat 由在途收场/看门狗复位。

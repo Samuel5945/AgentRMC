@@ -1180,11 +1180,12 @@ QString LanWebServer::mobileHtml() const {
  .cchars.warn{color:var(--pending)}
  .cchars.over{color:var(--danger)}
  .csend{flex:0 0 auto;margin-left:auto;display:inline-flex;align-items:center;
-   gap:5px;border:none;border-radius:11px;min-height:36px;padding:8px 16px;
-   cursor:pointer;font-family:inherit;font-size:14px;font-weight:600;
-   color:var(--on-accent);background:var(--accent);
+   justify-content:center;border:none;border-radius:11px;width:52px;min-height:36px;
+   padding:0;cursor:pointer;color:var(--on-accent);background:var(--accent);
    transition:background .12s ease,opacity .12s ease}
  .csend svg{width:15px;height:15px;display:block;pointer-events:none}
+ .csend svg.cspin{animation:cspin .8s linear infinite}
+ @keyframes cspin{to{transform:rotate(360deg)}}
  .csend:active{background:var(--accent-hover)}
  .csend:disabled{background:var(--w10);color:var(--faint)}
  @keyframes crise{from{opacity:0;transform:translateY(3px)}to{opacity:1;
@@ -1446,7 +1447,7 @@ QString LanWebServer::mobileHtml() const {
       <button class="modelchip" id="chatModelChip" hidden><b id="chatModelLabel">选择模型</b><span class="lvl" id="chatModelLvl" hidden></span><span class="caret">⌄</span></button>
       <button class="cicobtn" id="chatAttach" title="传文件" aria-label="传文件"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20.4 11.6 12 20a5 5 0 0 1-7-7l8.5-8.5a3.4 3.4 0 0 1 4.8 4.8L9.7 17.9a1.8 1.8 0 0 1-2.5-2.5l7.8-7.8"/></svg></button>
       <span class="cchars" id="chatChars" hidden></span>
-      <button class="csend" id="chatSend" data-label="派发">派发<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12l16-7-6.3 16-2.9-6.4L4 12Z"/></svg></button>
+      <button class="csend" id="chatSend" data-label="派发" aria-label="派发" title="派发"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12l16-7-6.3 16-2.9-6.4L4 12Z"/></svg></button>
      </div>
     </div>
     <div class="mpanel" id="chatModelPanel" hidden>
@@ -2017,6 +2018,7 @@ function paintChat(mode,prevH,prevTop){
 // 手机页只有会话聊天一个面，前缀传空串（id 即 chatText/chatSend/…）。
 const C_MAX=4000;  // 派发正文软上限：native 侧另有守卫，这里只提前提醒
 const C_PLANE_SVG='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12l16-7-6.3 16-2.9-6.4L4 12Z"/></svg>';
+const C_SPIN_SVG='<svg class="cspin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 3a9 9 0 1 1-9 9"/></svg>';
 // ---------- 附件：多选队列 / 串行上传 / 进度 / 附件条 ----------
 // 手机这条是**真的把字节传上来**：PC 落盘进会话目录、回来绝对路径，发送时
 // 拼进派发正文（agent 按路径读）。桌面端相反——本机路径直接引用，不复制。
@@ -2217,11 +2219,13 @@ function cSync(p){
 function cSendReady(p,on){
  const b=$(p+'chatSend');if(!b)return;
  b.dataset.busy='0';b.disabled=!on;
- b.innerHTML='派发'+C_PLANE_SVG;
+ // 只留图标（用户 2026-11-18），文字退到 title/aria-label。
+ b.title='派发';b.setAttribute('aria-label','派发');
+ b.innerHTML=C_PLANE_SVG;
 }
 function cBusy(p){
  const b=$(p+'chatSend');if(!b)return;
- b.dataset.busy='1';b.disabled=true;b.innerHTML='派发中…';
+ b.dataset.busy='1';b.disabled=true;b.innerHTML=C_SPIN_SVG;
 }
 // 解在途锁：只清标志，按钮状态交给下一次 cSync 按内容重算。手机这端
 // postResult 是同步等 HTTP 回执的，失败/成功都必须自己复位，否则

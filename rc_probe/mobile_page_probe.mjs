@@ -663,6 +663,13 @@ async function runFlow() {
   ok((await page.textContent('#chatNotice')).includes('只读'), '只读会话给出说明');
   await page.click('#chatBack');
 
+  // 美术主题（card.bg 半透明）下面板必须实心，同桌面那条断言。
+  const pcheck = await page.evaluate(() => {
+    applyTheme({ 'card.bg': 'rgba(8,12,20,55)', 'card.bg2': 'rgba(10,15,24,48)', text: '#171e2a' });
+    return getComputedStyle(document.documentElement).getPropertyValue('--panel').trim();
+  });
+  ok(/^rgb\(\s*\d+,\s*\d+,\s*\d+\s*\)$/.test(pcheck), '半透明主题下 --panel 合成成实色', pcheck);
+
   console.log(fails ? `\n${fails} 项失败` : '\n全部通过');
   await ctx.close();
   await browser.close();

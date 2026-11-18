@@ -1078,9 +1078,16 @@ QString WorkWebView::htmlFor(const QString &stateJson) const {
    white-space:nowrap}
  .modelchip .lvl{flex:0 0 auto;color:var(--muted)}
  .modelchip .caret{flex:0 0 auto;color:var(--muted);font-size:var(--f11)}
- .mpanel{position:absolute;left:0;right:0;bottom:calc(100% + 8px);z-index:30;
-   background:var(--surface);border:1px solid var(--w14);border-radius:12px;
-   box-shadow:0 10px 28px rgba(15,23,42,.22);overflow:hidden}
+  .mpanel{position:absolute;left:0;right:0;bottom:calc(100% + 8px);z-index:30;
+    /* 面板必须实心：主题的 card.bg 在美术主题下是 rgba(8,12,20,.22)，直接当
+       背景用会透出底下聊天气泡，字糊成一片（用户 2026-11-18 反馈）。--panel
+       由 applyTheme 把 card.bg 按 alpha 合成到不透明底上；blur 是 JS 那步
+       失败时的兜底，让下面的文字至少糊掉。 */
+    background:var(--panel,var(--surface));
+    backdrop-filter:blur(18px) saturate(1.4);
+    -webkit-backdrop-filter:blur(18px) saturate(1.4);
+    border:1px solid var(--w14);border-radius:12px;
+    box-shadow:0 10px 28px rgba(15,23,42,.22);overflow:hidden}
  .mpback{display:block;width:100%;text-align:left;background:var(--w8);
    border:none;border-bottom:1px solid var(--w10);color:var(--text);
    font-size:var(--f12);padding:9px 12px;font-family:inherit;cursor:default}
@@ -1596,6 +1603,40 @@ let DSCHAT=null,dchatOpen=false,dchatMsgs=[],dchatIds=new Set(),dchatTotal=0,
     DCHAT_REFRESHING=false;
 const $ = id => document.getElementById(id);
 // CSS 变量名 → token 名，和 style.qss 里的 @token@ 同名；缺项保持 :root 的兜底值。
+// 颜色解析/合成：只认 #rgb(a) 与 rgb(a)()，够了——主题 token 就这两种写法。
+function rgbaOf(v){
+  if(!v)return null;
+  const s=String(v).trim();
+  let m=/^#([0-9a-f]{3,8})$/i.exec(s);
+  if(m){
+    let h=m[1];
+    if(h.length===3||h.length===4)h=h.split('').map(c=>c+c).join('');
+    const p=i=>h.length>i?parseInt(h.substr(i,2),16):255;
+    return [p(0),p(1),p(2),h.length===8?p(6)/255:1];
+  }
+  m=/^rgba?\(([^)]+)\)$/i.exec(s);
+  if(m){
+    const p=m[1].split(',').map(x=>parseFloat(x));
+    if(p.length>=3)return [p[0],p[1],p[2],p.length>3?p[3]:1];
+  }
+  return null;
+}
+// 把半透明的卡片色合成到一个不透明底上，得到同色系但实心的面板色。
+// 底优先用主题 bg，其次 card.bg2；都半透明就按文字亮度猜明暗（浅字配深底）。
+function panelSolid(t){
+  const card=rgbaOf(t['card.bg']);
+  if(!card)return '';
+  if(card[3]>=0.999)return 'rgb('+(card[0]|0)+','+(card[1]|0)+','+(card[2]|0)+')';
+  let base=rgbaOf(t['bg'])||rgbaOf(t['card.bg2']);
+  if(!base||base[3]<0.999){
+    const txt=rgbaOf(t['text'])||[23,30,42,1];
+    const lum=txt[0]*0.299+txt[1]*0.587+txt[2]*0.114;
+    base=lum>140?[16,21,32,1]:[255,255,255,1];
+  }
+  const a=Math.max(0,Math.min(1,card[3]));
+  const mix=i=>Math.round(card[i]*a+base[i]*(1-a));
+  return 'rgb('+mix(0)+','+mix(1)+','+mix(2)+')';
+}
 const TOKENS = {'--bg':'bg','--surface':'card.bg','--surface2':'card.bg2',
   '--text':'text','--text-soft':'text.soft','--text-dim':'text.dim',
   '--muted':'muted','--muted2':'muted.2','--ghost':'ghost','--faint':'faint',
@@ -1607,6 +1648,11 @@ const TOKENS = {'--bg':'bg','--surface':'card.bg','--surface2':'card.bg2',
 function applyTheme(t){
   const s = document.documentElement.style;
   Object.keys(TOKENS).forEach(v=>{if(t[TOKENS[v]]) s.setProperty(v,t[TOKENS[v]]);});
+  // 上浮面板（模型列表/电脑文件）要用实色：美术主题的 card.bg 是半透明
+  // rgba(8,12,20,.22)，当背景用会透出底下的聊天气泡，字直接糊在一起
+  // （用户 2026-11-18 反馈"切换模型背景是透明的看不清"）。
+  const panel = panelSolid(t);
+  if(panel) s.setProperty('--panel', panel);
   // 字号倍率：和 ThemeManager::scaledPx 同一套算法（四舍五入到整像素、下限 7px），
   // 否则 QSS 缩了、这一页还是老尺寸，一眼看出不齐。
   const fs = t.fontScale || 1;

@@ -1202,8 +1202,14 @@ QString LanWebServer::mobileHtml() const {
    white-space:nowrap}
  .modelchip .lvl{flex:0 0 auto;color:var(--muted)}
  .modelchip .caret{flex:0 0 auto;color:var(--muted);font-size:12px}
+ /* 面板必须实心：美术主题的 card.bg 是 rgba(8,12,20,.22)，直接当背景会透出
+    底下聊天气泡（用户 2026-11-18 反馈"切换模型背景透明的看不清"）。--panel
+    由 applyTheme 合成；blur 是兜底。 */
  .mpanel{position:absolute;left:0;right:0;bottom:calc(100% + 8px);z-index:30;
-   background:var(--surface);border:1px solid var(--w14);border-radius:14px;
+   background:var(--panel,var(--surface));
+   backdrop-filter:blur(18px) saturate(1.4);
+   -webkit-backdrop-filter:blur(18px) saturate(1.4);
+   border:1px solid var(--w14);border-radius:14px;
    box-shadow:0 12px 32px rgba(15,23,42,.18);overflow:hidden}
  .mpback{display:block;width:100%;text-align:left;background:var(--w8);
    border:none;border-bottom:1px solid var(--w10);color:var(--text);
@@ -1477,6 +1483,40 @@ const GROUP_STATE=new Map();  // 项目折叠态：跨轮询/切换 Agent/进出
 const $=id=>document.getElementById(id);
 const COLOR={'needs-me':'var(--pending)','review':'var(--ok)','working':'var(--info)'};
 const LABEL={'needs-me':'等你处理','review':'待验收','working':'进行中'};
+// 颜色解析/合成：只认 #rgb(a) 与 rgb(a)()，主题 token 就这两种写法。
+function rgbaOf(v){
+ if(!v)return null;
+ const s=String(v).trim();
+ let m=/^#([0-9a-f]{3,8})$/i.exec(s);
+ if(m){
+  let h=m[1];
+  if(h.length===3||h.length===4)h=h.split('').map(c=>c+c).join('');
+  const p=i=>h.length>i?parseInt(h.substr(i,2),16):255;
+  return [p(0),p(1),p(2),h.length===8?p(6)/255:1];
+ }
+ m=/^rgba?\(([^)]+)\)$/i.exec(s);
+ if(m){
+  const p=m[1].split(',').map(x=>parseFloat(x));
+  if(p.length>=3)return [p[0],p[1],p[2],p.length>3?p[3]:1];
+ }
+ return null;
+}
+// 半透明卡片色合成到不透明底：上浮面板（模型/电脑文件）必须实心，否则
+// 透出底下聊天气泡就读不清了。
+function panelSolid(t){
+ const card=rgbaOf(t['card.bg']);
+ if(!card)return '';
+ if(card[3]>=0.999)return 'rgb('+(card[0]|0)+','+(card[1]|0)+','+(card[2]|0)+')';
+ let base=rgbaOf(t['bg'])||rgbaOf(t['card.bg2']);
+ if(!base||base[3]<0.999){
+  const txt=rgbaOf(t['text'])||[23,30,42,1];
+  const lum=txt[0]*0.299+txt[1]*0.587+txt[2]*0.114;
+  base=lum>140?[16,21,32,1]:[255,255,255,1];
+ }
+ const a=Math.max(0,Math.min(1,card[3]));
+ const mix=i=>Math.round(card[i]*a+base[i]*(1-a));
+ return 'rgb('+mix(0)+','+mix(1)+','+mix(2)+')';
+}
 const TOKENS={'--bg':'bg','--surface':'card.bg','--surface2':'card.bg2',
  '--text':'text','--text-soft':'text.soft','--text-dim':'text.dim',
  '--muted':'muted','--muted2':'muted.2','--ghost':'ghost','--faint':'faint',
@@ -1487,6 +1527,9 @@ const TOKENS={'--bg':'bg','--surface':'card.bg','--surface2':'card.bg2',
 function applyTheme(t){
  const s=document.documentElement.style;
  Object.keys(TOKENS).forEach(v=>{if(t[TOKENS[v]]) s.setProperty(v,t[TOKENS[v]]);});
+ // 上浮面板要实色底（主题 card.bg 可能是半透明，见 panelSolid 注释）。
+ const panel=panelSolid(t);
+ if(panel)s.setProperty('--panel',panel);
  const b=document.body.style;
  b.backgroundColor=t.bg||'var(--bg)';
  if(t.image){

@@ -197,6 +197,30 @@ await page.locator('#dchatSend').click();
 await page.waitForTimeout(220);
 check((await page.inputValue('#dchatText')) === '', '成功后输入框清空');
 
+// 美术主题（card.bg 可能是半透明 rgba）下面板必须实心——用户 2026-11-18 报的
+// 「切换模型背景是透明的看不清」就是这条。两种写法都要覆盖：
+//   rgba(...,0.216) → 合成成实色
+//   rgba(...,55)    → Qt 的 0-255 写法，CSS 会钳成 1，浏览器渲染就是实色
+const panelCheck = await page.evaluate(() => {
+  const s = document.documentElement;
+  const read = () => getComputedStyle(s).getPropertyValue('--panel').trim();
+  applyTheme({ 'card.bg': 'rgba(8,12,20,0.216)', 'card.bg2': 'rgba(10,15,24,0.188)', text: '#171e2a' });
+  const frac = read();
+  applyTheme({ 'card.bg': 'rgba(8,12,20,55)', 'card.bg2': 'rgba(10,15,24,48)', text: '#171e2a' });
+  const byte = read();
+  const box = document.querySelector('#dchatModelPanel');
+  const bg = box ? getComputedStyle(box).backgroundColor : '';
+  return { frac, byte, bg };
+});
+check(/^rgb\(\s*\d+,\s*\d+,\s*\d+\s*\)$/.test(panelCheck.frac),
+  '半透明小数 alpha → 面板色合成成实色', panelCheck.frac);
+check(panelCheck.frac !== 'rgb(8,12,20)',
+  '合成结果确实被提亮了（不是直接取原色）', panelCheck.frac);
+check(panelCheck.byte === 'rgb(8,12,20)',
+  '0-255 写法按浏览器语义当不透明原色', panelCheck.byte);
+check(/^rgb\(/.test(panelCheck.bg) && !/rgba/.test(panelCheck.bg),
+  '模型面板背景不含 alpha', panelCheck.bg);
+
 console.log(bad ? `\n${bad} 项失败` : '\nALL PASS desktop chat attachments');
 await browser.close();
 process.exit(bad ? 1 : 0);

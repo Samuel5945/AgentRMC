@@ -1338,11 +1338,14 @@ QString LanWebServer::mobileHtml() const {
  /* 聊天页：点卡片进入，打开即最新记录，旧记录上翻按页加载。
     Agent 回复平铺全文（长代码/长文不用气泡挤宽度），「我」的话保留右侧气泡。 */
  #pchat{padding:0 14px}
- .chathead{flex:0 0 auto;display:flex;align-items:center;gap:10px;padding:4px 0 8px}
+ .chathead{flex:0 0 auto;display:flex;align-items:center;gap:8px;padding:4px 0 8px}
  .chathead .btn{min-height:40px;padding:6px 12px;flex:0 0 auto}
  /* 返回键只留箭头图标（不写「待办/派发」文字），直接复用 .cicobtn：和右侧
-    文件按钮同规格 36x36 / 18px 图标 / 无边框透明底，一行里左右对称。
+    文件按钮同规格 18px 图标 / 无边框透明底，一行里左右对称。
+    顶栏这两颗把容器收窄到 28 宽（高仍 36 保触控），图标两侧留白 9→5，
+    箭头不显得悬空。只作用于 .chathead，输入区的附件按钮不受影响。
     语义放在 aria-label 里，renderChatFrame 只改 aria-label。 */
+ .chathead .cicobtn{width:28px}
  .chtitles{flex:1;min-width:0}
  .chtitles .name{font-weight:700;font-size:16px;overflow:hidden;
    text-overflow:ellipsis;white-space:nowrap}

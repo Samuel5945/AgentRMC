@@ -1061,6 +1061,14 @@ QString WorkWebView::htmlFor(const QString &stateJson) const {
   .cchars.over{color:var(--danger)}
   /* 纯图标圆形按钮（用户 2026-11-18：别写「派发」、要圆的）。宽=高 27，
      半径 50%，进行中换旋转环，切换时尺寸不跳。文字只留在 title/aria-label。 */
+  /* 用户气泡里的附件条：正文里的「请查看文件：路径」已摘掉，只留文件名。 */
+  .bubatts{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
+  .bubatt{display:inline-flex;align-items:center;gap:5px;max-width:260px;
+    padding:4px 9px;border-radius:8px;background:var(--w10);
+    border:1px solid var(--w14);font-size:var(--f11);color:var(--text-soft)}
+  .bubatt .ic{display:flex;color:var(--muted)}
+  .bubatt .ic svg{width:13px;height:13px;display:block}
+  .bubatt b{font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .csend{flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;
     border:none;border-radius:50%;width:27px;height:27px;padding:0;cursor:default;
     color:var(--on-accent);background:var(--accent);
@@ -3322,13 +3330,40 @@ function cNoticeDropOnEmpty(prefix){
 let CHAT=null,chatMsgs=[],chatIds=new Set(),chatTotal=0,chatHasMore=false,
     chatLoading=false,chatOpenedId='',chatAtBottom=true;
 function msgKey(m){return m.id||(m.at+'|'+m.role+'|'+(m.text||'').slice(0,80));}
+// 手机传上来的附件在正文里是「请查看文件：<PC 绝对路径>」——那是给 agent 按
+// 路径读文件用的，不该给人看（2026-11-18 用户：「我发的不是这个安全提示吗」，
+// 他指的就是这行字）。渲染时摘掉，换成文件名条；桌面上悬停能看全路径。
+const ATT_LINE_RE=/^请查看文件：(.+)$/gm;
+function splitAttLines(text){
+  const files=[];
+  const rest=(text||'').replace(ATT_LINE_RE,(m,p)=>{files.push(p.trim());return '';})
+    .replace(/\n{3,}/g,'\n\n').trim();
+  return {files:files,rest:rest};
+}
 function bubble(m){
+  const isUser=m.role==='user';
+  let text=m.text||'', attFiles=[];
+  if(isUser){const sp=splitAttLines(text);text=sp.rest;attFiles=sp.files;}
   const d=document.createElement('div');
-  d.className='bub '+(m.role==='user'?'user':'assistant');
+  d.className='bub '+(isUser?'user':'assistant');
   const who=document.createElement('span');who.className='who';
-  who.textContent=m.role==='user'?'我':'Agent';
-  const body=document.createElement('span');body.textContent=m.text||'';
-  d.append(who,body);
+  who.textContent=isUser?'我':'Agent';
+  d.append(who);
+  if(text){const body=document.createElement('span');body.textContent=text;d.append(body);}
+  if(attFiles.length){
+    const box=document.createElement('div');box.className='bubatts';
+    attFiles.forEach(p=>{
+      const name=p.split(/[\\/]/).pop()||'附件';
+      const row=document.createElement('span');row.className='bubatt';
+      row.title=p;                       // 悬停看完整路径，方便在电脑上定位
+      const ic=document.createElement('span');ic.className='ic';
+      ic.innerHTML=ATT_ICON;
+      const nm=document.createElement('b');nm.textContent=name;
+      row.append(ic,nm);
+      box.append(row);
+    });
+    d.append(box);
+  }
   if(m.at){const t=document.createElement('span');t.className='bt';
     t.textContent=hhmm(m.at);d.append(t);}
   return d;

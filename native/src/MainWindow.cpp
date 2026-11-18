@@ -403,6 +403,103 @@ QLabel *makeChip(const QString &label, const char *token) {
 // 建好了」——启动瞬间就把遗留卡判死，会把插件还没来得及重推的活请求一起清掉。
 constexpr qint64 kPluginWarmupMs = 5000;
 
+// ---- 最小 zip（store 模式，不压缩）----
+// 用途单一：Chrome 在 HTTP 明文下会把 .exe/.msi/.apk 拦成「无法安全地下载
+// 文件」（用户 2026-11-18 的截图就是它）。包一层 zip，浏览器只按外层扩展名
+// 判断，解压后拿到的还是原文件。
+quint32 crc32Of(const QByteArray &data) {
+    static quint32 table[256];
+    static bool ready = false;
+    if (!ready) {
+        for (quint32 i = 0; i < 256; ++i) {
+            quint32 c = i;
+            for (int k = 0; k < 8; ++k) {
+                c = (c & 1) ? (0xEDB88320u ^ (c >> 1)) : (c >> 1);
+            }
+            table[i] = c;
+        }
+        ready = true;
+    }
+    quint32 crc = 0xFFFFFFFFu;
+    const auto *p = reinterpret_cast<const uchar *>(data.constData());
+    for (int i = 0; i < data.size(); ++i) {
+        crc = table[(crc ^ p[i]) & 0xFF] ^ (crc >> 8);
+    }
+    return crc ^ 0xFFFFFFFFu;
+}
+
+void put16(QByteArray &b, quint16 v) {
+    b.append(static_cast<char>(v & 0xFF));
+    b.append(static_cast<char>((v >> 8) & 0xFF));
+}
+void put32(QByteArray &b, quint32 v) {
+    put16(b, static_cast<quint16>(v & 0xFFFF));
+    put16(b, static_cast<quint16>((v >> 16) & 0xFFFF));
+}
+
+QByteArray zipSingleStore(const QString &name, const QByteArray &data) {
+    const QByteArray fn = name.toUtf8();
+    const quint32 crc = crc32Of(data);
+    const quint32 size = static_cast<quint32>(data.size());
+    const quint16 dosTime = 0;
+    const quint16 dosDate = 0x21;  // 1980-01-01，zip 的最小合法日期
+    QByteArray out;
+    out.reserve(data.size() + fn.size() * 2 + 128);
+    put32(out, 0x04034b50);          // local file header
+    put16(out, 20);
+    put16(out, 0x0800);              // 文件名按 UTF-8
+    put16(out, 0);                   // store（不压缩）
+    put16(out, dosTime);
+    put16(out, dosDate);
+    put32(out, crc);
+    put32(out, size);
+    put32(out, size);
+    put16(out, static_cast<quint16>(fn.size()));
+    put16(out, 0);
+    out.append(fn);
+    out.append(data);
+    // 中央目录紧跟数据段之后（不是 local header 之后——这里踩过一次，
+    // 写完用 Python zipfile 解了一遍才验出来）。
+    const quint32 cdOffset = static_cast<quint32>(out.size());
+    put32(out, 0x02014b50);          // central directory
+    put16(out, 20);
+    put16(out, 20);
+    put16(out, 0x0800);
+    put16(out, 0);
+    put16(out, dosTime);
+    put16(out, dosDate);
+    put32(out, crc);
+    put32(out, size);
+    put32(out, size);
+    put16(out, static_cast<quint16>(fn.size()));
+    put16(out, 0);
+    put16(out, 0);
+    put16(out, 0);
+    put16(out, 0);
+    put32(out, 0);
+    put32(out, 0);  // local header 偏移：单文件就是 0（不是 cdOffset！）
+    out.append(fn);
+    const quint32 cdSize = static_cast<quint32>(out.size()) - cdOffset;
+    put32(out, 0x06054b50);          // EOCD
+    put16(out, 0);
+    put16(out, 0);
+    put16(out, 1);
+    put16(out, 1);
+    put32(out, cdSize);
+    put32(out, cdOffset);
+    put16(out, 0);
+    return out;
+}
+
+// Chrome/Edge 会拦的扩展名：这些打完包再给。
+bool riskyDownloadExt(const QString &suffix) {
+    static const QSet<QString> kRisky = {
+        QStringLiteral("exe"), QStringLiteral("msi"), QStringLiteral("apk"),
+        QStringLiteral("bat"), QStringLiteral("cmd"), QStringLiteral("ps1"),
+        QStringLiteral("vbs"), QStringLiteral("jar")};
+    return kRisky.contains(suffix.toLower());
+}
+
 }  // namespace
 
 MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
@@ -4455,7 +4552,7 @@ LanWebServer::Download MainWindow::lanInboxFile(const QJsonObject &meta) {
         return fail();
     }
     LanWebServer::Download out;
-    out.data = f.readAll();
+    const QByteArray data = f.readAll();
     f.close();
     const QString mime =
         QMimeDatabase()
@@ -4463,8 +4560,16 @@ LanWebServer::Download MainWindow::lanInboxFile(const QJsonObject &meta) {
             .name();
     out.ok = true;
     out.name = name;
+    out.data = data;
     out.contentType =
         mime.isEmpty() ? QByteArray("application/octet-stream") : mime.toUtf8();
+    // Chrome 在 HTTP 明文下拦 .exe/.msi/.apk：包层 zip 才能顺滑下载。
+    if (riskyDownloadExt(QFileInfo(name).suffix())) {
+        const QString inner = QFileInfo(name).fileName();
+        out.data = zipSingleStore(inner, data);
+        out.name = inner + QStringLiteral(".zip");
+        out.contentType = QByteArray("application/zip");
+    }
     return out;
 }
 

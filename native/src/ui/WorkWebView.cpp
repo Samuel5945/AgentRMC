@@ -3202,8 +3202,15 @@ function attAdd(p,files){
  attRender(p);
  if(list.length)cNotice(p,'已附上 '+list.length+' 个文件，发送时把路径交给 agent','good');
 }
+// 附件正文：**必须**带一条"先读再答、不许猜"的指令。只给路径时 agent 经常
+// 拿不到内容就开始编（2026-11-18 用户点出这个根因：我拿到路径没读图就猜了
+// 两轮）。路径本身还是必要的——宿主 CLI 只吃文本，读文件要它自己调 Read。
 function attText(p){
- return attList(p).map(a=>'请查看文件：'+a.path).join('\n');
+ const list=attList(p);
+ if(!list.length)return '';
+ const head='【附件】'+list.length+' 个文件已保存在本机。请先用 Read 工具逐个读取'
+  +'文件内容再回答；读不到或读取失败就直接说明，不要凭文件名或路径猜测内容。';
+ return head+'\n'+list.map(a=>'请查看文件：'+a.path).join('\n');
 }
 // 📎 / 粘贴 回调：native 弹完对话框或写完盘回推。
 window.__setFiles=function(o){
@@ -3333,10 +3340,11 @@ function msgKey(m){return m.id||(m.at+'|'+m.role+'|'+(m.text||'').slice(0,80));}
 // 手机传上来的附件在正文里是「请查看文件：<PC 绝对路径>」——那是给 agent 按
 // 路径读文件用的，不该给人看（2026-11-18 用户：「我发的不是这个安全提示吗」，
 // 他指的就是这行字）。渲染时摘掉，换成文件名条；桌面上悬停能看全路径。
-const ATT_LINE_RE=/^请查看文件：(.+)$/gm;
+// 两种行都摘：给 agent 的指令行（【附件】…）和路径行（请查看文件：…）。
+const ATT_LINE_RE=/^(?:请查看文件：(.+)|【附件】.*)$/gm;
 function splitAttLines(text){
   const files=[];
-  const rest=(text||'').replace(ATT_LINE_RE,(m,p)=>{files.push(p.trim());return '';})
+  const rest=(text||'').replace(ATT_LINE_RE,(m,p)=>{if(p&&p.trim())files.push(p.trim());return '';})
     .replace(/\n{3,}/g,'\n\n').trim();
   return {files:files,rest:rest};
 }

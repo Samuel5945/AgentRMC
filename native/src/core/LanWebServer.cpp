@@ -2162,7 +2162,8 @@ function msgKey(m){return m.id||(m.at+'|'+m.role+'|'+(m.text||'').slice(0,80));}
 // 手机上传的附件在正文里是「请查看文件：<PC 绝对路径>」——那是给 agent 按路径
 // 读文件用的，对用户没意义。渲染时把这行摘掉，换成缩略图/附件条
 // （2026-11-18 用户反馈：「不是局域网传输嘛，怎么是串路径」）。
-const ATT_LINE_RE=/^请查看文件：(.+)$/gm;
+// 两种行都摘：给 agent 的指令行（【附件】…）和路径行（请查看文件：…）。
+const ATT_LINE_RE=/^(?:请查看文件：(.+)|【附件】.*)$/gm;
 function toRelPath(p){
  if(!p)return '';
  let rel=p.replace(/\\/g,'').trim();
@@ -2175,7 +2176,7 @@ function toRelPath(p){
 }
 function splitAttLines(text){
  const files=[];
- const rest=(text||'').replace(ATT_LINE_RE,(m,p)=>{files.push(p.trim());return '';})
+ const rest=(text||'').replace(ATT_LINE_RE,(m,p)=>{if(p&&p.trim())files.push(p.trim());return '';})
   .replace(/\n{3,}/g,'\n\n').trim();
  return {files:files,rest:rest};
 }
@@ -2476,8 +2477,27 @@ function attClear(p){
 }
 // 附件 → 派发正文：每行一个「请查看文件：<PC 绝对路径>」。agent 读的是路径，
 // 所以正文可以完全由附件构成（只发文件不写字也成立）。
+// 附件正文：**必须**带一条"先读再答、不许猜"的指令。只给路径时 agent 经常
+// 拿不到内容就开始编（2026-11-18 用户点出这个根因：我拿到路径没读图就猜了
+// 两轮）。路径本身还是必要的——宿主 CLI 只吃文本，读文件要它自己调 Read。
 function attText(p){
- return attList(p).map(a=>'请查看文件：'+a.path).join('\n');
+ const list=attList(p);
+ if(!list.length)return '';
+ // 小文本文件上传时服务端已经把内容带回来了（a.text）：直接内联，agent 想
+ // "没读就编"都没有机会。图片/大文件只能给路径 + 强制 Read 的指令。
+ const inline=list.filter(a=>a.text);
+ const byPath=list.filter(a=>!a.text);
+ const parts=[];
+ if(inline.length){
+  parts.push('【附件】以下 '+inline.length+' 份文本内容已直接附在正文里，直接据此回答：');
+  inline.forEach(a=>parts.push('--- '+a.name+' ---\n'+a.text));
+ }
+ if(byPath.length){
+  parts.push('【附件】'+byPath.length+' 个文件已保存在本机。请先用 Read 工具逐个读取'
+   +'文件内容再回答；读不到或读取失败就直接说明，不要凭文件名或路径猜测内容。');
+  byPath.forEach(a=>parts.push('请查看文件：'+a.path));
+ }
+ return parts.join('\n');
 }
 // 上传定位：能拿待办 id 就带上；从派发页直接进会话没有待办 id，必须把
 // session/project/exe 一起带上——否则 native 侧按待办查不到，只能回 404
@@ -2615,6 +2635,7 @@ async function attUpload(files){
     ? await attUploadChunked(attMeta(chatKind==='session'?'':chatId),f,prog)
     : await attPost(url,f,prog);
    attList('').push({id:j.path,name:j.name||f.name,size:f.size,path:j.path,
+    text:j.text||'',   // 小文本文件服务端已把内容带回来，派发时直接内联
     url:/^image\//i.test(f.type)?URL.createObjectURL(f):''});
    okN++;
   }catch(e){failN++;cNotice('','上传失败 '+f.name+'：'+(e.message||e),'bad');}

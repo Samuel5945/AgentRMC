@@ -491,6 +491,36 @@ QByteArray zipSingleStore(const QString &name, const QByteArray &data) {
     return out;
 }
 
+// 小文本文件直接把内容带回去（≤16KB）：正文内联后 agent 一定能看到，不会
+// "没读就编"。二进制/大文件返回空，仍走路径 + Read 指令那条路。
+QString inlineTextOf(const QString &path, qint64 size) {
+    constexpr qint64 kLimit = 16 * 1024;
+    if (size <= 0 || size > kLimit) {
+        return QString();
+    }
+    static const QSet<QString> kTextExt = {
+        QStringLiteral("txt"),  QStringLiteral("md"),   QStringLiteral("json"),
+        QStringLiteral("log"),  QStringLiteral("csv"),  QStringLiteral("yml"),
+        QStringLiteral("yaml"), QStringLiteral("ini"),  QStringLiteral("toml"),
+        QStringLiteral("xml"),  QStringLiteral("html"), QStringLiteral("css"),
+        QStringLiteral("js"),   QStringLiteral("ts"),   QStringLiteral("py"),
+        QStringLiteral("cpp"),  QStringLiteral("h"),    QStringLiteral("c"),
+        QStringLiteral("java"), QStringLiteral("go"),   QStringLiteral("rs"),
+        QStringLiteral("sh"),   QStringLiteral("bat"),  QStringLiteral("ps1")};
+    if (!kTextExt.contains(QFileInfo(path).suffix().toLower())) {
+        return QString();
+    }
+    QFile f(path);
+    if (!f.open(QIODevice::ReadOnly)) {
+        return QString();
+    }
+    const QByteArray raw = f.read(kLimit);
+    if (raw.contains('\0')) {  // 二进制改后缀的，别当文本
+        return QString();
+    }
+    return QString::fromUtf8(raw);
+}
+
 // Chrome/Edge 会拦的扩展名：这些打完包再给。
 bool riskyDownloadExt(const QString &suffix) {
     static const QSet<QString> kRisky = {
@@ -4302,11 +4332,16 @@ QJsonObject MainWindow::lanUploadCommit(const QJsonObject &meta,
                         : QStringLiteral("上传文件：%1"))
                     .arg(fi.fileName()),
                 0);
-    return QJsonObject{{QStringLiteral("ok"), true},
-                       {QStringLiteral("code"), 200},
-                       {QStringLiteral("path"), fi.absoluteFilePath()},
-                       {QStringLiteral("name"), fi.fileName()},
-                       {QStringLiteral("size"), static_cast<double>(fi.size())}};
+    QJsonObject out{{QStringLiteral("ok"), true},
+                    {QStringLiteral("code"), 200},
+                    {QStringLiteral("path"), fi.absoluteFilePath()},
+                    {QStringLiteral("name"), fi.fileName()},
+                    {QStringLiteral("size"), static_cast<double>(fi.size())}};
+    const QString inlined = inlineTextOf(fi.absoluteFilePath(), fi.size());
+    if (!inlined.isEmpty()) {
+        out.insert(QStringLiteral("text"), inlined);
+    }
+    return out;
 }
 
 // 分片上传①：建会话。分片落 <inbox>/.parts/<uploadId>/<index>，done 时按序
@@ -4438,10 +4473,15 @@ QJsonObject MainWindow::lanChunkDone(const QString &uploadId) {
     chunkSessions_.erase(it);
     appendEvent(QStringLiteral("status"), QString(), QString(),
                 QStringLiteral("上传文件：%1").arg(s.name), 0);
-    return QJsonObject{{QStringLiteral("ok"), true},
+    QJsonObject result{{QStringLiteral("ok"), true},
                        {QStringLiteral("path"), s.finalPath},
                        {QStringLiteral("name"), s.name},
                        {QStringLiteral("size"), static_cast<double>(s.total)}};
+    const QString inlined = inlineTextOf(s.finalPath, s.total);
+    if (!inlined.isEmpty()) {
+        result.insert(QStringLiteral("text"), inlined);
+    }
+    return result;
 }
 
 void MainWindow::lanChunkAbort(const QString &uploadId) {

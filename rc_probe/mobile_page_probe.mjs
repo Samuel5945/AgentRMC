@@ -637,6 +637,10 @@ async function runFlow() {
   const sentAtt = posts.filter((p) => p.cmd === 'dispatchSession').pop();
   ok(sentAtt && sentAtt.text.includes('请查看文件：') && sentAtt.text.includes('notes.txt'),
     '发送时把附件路径拼进正文', JSON.stringify(sentAtt));
+  // 只给路径会让 agent 不读就编（2026-11-18 的根因），正文必须带强制指令。
+  ok(sentAtt && sentAtt.text.includes('请先用 Read 工具') &&
+     sentAtt.text.includes('不要凭文件名或路径猜测内容'),
+    '正文带「先读再答、不许猜」的指令', sentAtt && sentAtt.text.slice(0, 80));
   ok((await page.inputValue('#chatText')) === '', '附件路径不落回输入框');
   ok(await page.locator('#chatAtts .catt').count() === 0, '派发成功后附件条清空');
 

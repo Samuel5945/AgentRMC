@@ -1491,6 +1491,7 @@ QString WorkWebView::htmlFor(const QString &stateJson) const {
     <span class="stage" id="chatStage"></span>
     <span class="spacer"></span>
     <span class="time" id="chatMeta"></span>
+    <button class="tico" id="chatRefresh" title="重新读取这个会话的最新记录" aria-label="刷新记录"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20.5 12a8.5 8.5 0 1 1-2.5-6L21 9"/><path d="M21 3v6h-6"/></svg></button>
     <button class="tico" id="chatFiles" title="这个会话工作区里的产物与文件" aria-label="产物与文件"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7.5A2 2 0 0 1 5 5.5h4l2 2.5h8a2 2 0 0 1 2 2v7.5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/></svg></button>
   </div>
   <div class="chatwrap">
@@ -3808,6 +3809,13 @@ function cLabel(prefix,label){
     &&($(prefix+'Text').value.trim().length>0||attHas(prefix)),label);
 }
 $('chatBack').onclick=()=>postObj({cmd:'chatBack'});
+$('chatRefresh').onclick=()=>{
+  if(!chatOpenedId)return;
+  cNotice('chat','正在刷新记录…');
+  chatMsgs=[];chatIds=new Set();chatTotal=0;chatHasMore=false;
+  paintChat('init');
+  postObj({cmd:'chatRefresh',id:chatOpenedId});
+};
 $('chatSend').onclick=sendChat;
 $('chatAttach').onclick=()=>postObj({cmd:'pickFiles',plane:'chat'});
 $('chatText').addEventListener('keydown',e=>{

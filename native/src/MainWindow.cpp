@@ -5171,6 +5171,12 @@ void MainWindow::handleWebAction(const QJsonObject &action) {
         });
     } else if (cmd == QStringLiteral("chatBack")) {
         chatItemId_.clear();
+    } else if (cmd == QStringLiteral("chatRefresh")) {
+        // 待办会话页的「刷新」：与 dchat 同构（sessionOpen 重推）。清缓存后
+        // 前端 __setChatPage 走 fresh 全量重绘，半死的列表自愈。
+        if (workWeb_ != nullptr) {
+            workWeb_->pushChat(chatStateFor(id, 0, 50));
+        }
     } else if (cmd == QStringLiteral("chatOlder")) {
         // 上翻加载更旧的一页：单独推给页面（不进整份 state，避免重排列表）。
         if (workWeb_ != nullptr) {

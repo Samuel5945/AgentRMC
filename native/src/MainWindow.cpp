@@ -45,6 +45,7 @@
 #include <QCloseEvent>
 #include <QComboBox>
 #include <QCoreApplication>
+#include <QEventLoop>
 #include <QCheckBox>
 #include <QDir>
 #include <QDragEnterEvent>
@@ -4126,6 +4127,32 @@ QString MainWindow::dispatchToSession(const QString &agentExe,
     const QJsonArray supported = supportedDispatchExes();
     if (!supported.contains(QJsonValue(agentExe))) {
         return QStringLiteral("这个 Agent 暂不支持手机派发");
+    }
+    // 宿主没在跑时先把它拉起来——**这才是「网关没连上」的真正原因**：
+    // OpenSquilla 的网关是它自己的子服务，进程不在就没有网关，外部桥只会回
+    // 「网关没连上，未注入」（用户 2026-11-19 一句话点破）。
+    // 拉起沿用遥控器那套（AppLauncher），和 UI 派发的兜底同源。
+    if (!AgentWindow::processRunning(agentExe)) {
+        const QString appId = AppLauncher::appIdForExe(agentExe);
+        if (!appId.isEmpty()) {
+            QString launchErr;
+            if (AppLauncher::launch(appId, &launchErr)) {
+                // 冷启动：等进程出现（最多 3s），再给桥/网关 1.5s 重连。
+                for (int i = 0; i < 15; ++i) {
+                    QCoreApplication::processEvents(
+                        QEventLoop::ExcludeUserInputEvents);
+                    QThread::msleep(200);
+                    if (AgentWindow::processRunning(agentExe)) {
+                        break;
+                    }
+                }
+                for (int i = 0; i < 3; ++i) {
+                    QCoreApplication::processEvents(
+                        QEventLoop::ExcludeUserInputEvents);
+                    QThread::msleep(500);
+                }
+            }
+        }
     }
     QString reason;
     QString dispatchId;

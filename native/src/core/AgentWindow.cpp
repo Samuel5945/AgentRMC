@@ -6,6 +6,7 @@
 #include <windows.h>
 #include <tlhelp32.h>
 
+#include <QFileInfo>
 #include <QPair>
 #include <QVector>
 
@@ -389,6 +390,37 @@ BOOL CALLBACK countWindowsByImage(HWND hwnd, LPARAM lparam) {
         ++ctx->titled;
     }
     return TRUE;
+}
+
+bool processRunning(const QString &exe) {
+    if (exe.isEmpty()) {
+        return false;
+    }
+    QString key = QFileInfo(exe).completeBaseName().toLower();
+    key.remove(QLatin1Char(' '));
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snap == INVALID_HANDLE_VALUE) {
+        return false;
+    }
+    PROCESSENTRY32W pe{};
+    pe.dwSize = sizeof(pe);
+    bool found = false;
+    if (Process32FirstW(snap, &pe)) {
+        do {
+            QString name = QString::fromWCharArray(pe.szExeFile);
+            if (name.endsWith(QStringLiteral(".exe"), Qt::CaseInsensitive)) {
+                name.chop(4);
+            }
+            name = name.toLower();
+            name.remove(QLatin1Char(' '));
+            if (name == key) {
+                found = true;
+                break;
+            }
+        } while (Process32NextW(snap, &pe));
+    }
+    CloseHandle(snap);
+    return found;
 }
 
 QString diagnose(const QString &exe) {

@@ -65,6 +65,10 @@ void *mainWindowByTitle(const QString &title);
 // 目的是让「进程没开 / 窗口被隐藏 / 映像名对不上」在错误信息里就能分开。
 QString diagnose(const QString &exe);
 
+// 该 exe 的进程是否在跑（不看窗口）。桥派发型宿主（OpenSquilla）的网关是它自己
+// 的子服务，进程不在就没有网关，桥只会回「网关没连上」——所以派发前要先看这个。
+bool processRunning(const QString &exe);
+
 // 唤醒宿主主窗口：隐藏的 SW_SHOW 出来、最小化的 SW_RESTORE 还原，再抢前台。
 // 返回是否真的找到并显示了一个窗口——派发侧靠它决定「重试」还是「报错」。
 bool wake(const QString &exe);

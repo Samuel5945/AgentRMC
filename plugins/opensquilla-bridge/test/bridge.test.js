@@ -533,6 +533,18 @@ await check('长轮补卡：超时无活卡才用上报口径建卡；已有活�
   } finally { await stopBridge(handle); jsonGet = { items: [] }; }
 });
 
+await check('--relay 多行正文：空白压成一行，卡面不留大空白', async () => {
+  received.length = 0;
+  const handle = spawnBridge(BRIDGE, path.join(TMP, 'spool-fold'), ['--relay']);
+  try {
+    await waitFor(() => gatewayReady, '网关就绪');
+    inject('session.event.done', 's-fold', { message: '剧本标题\n\n　　一幕一景：深夜\n\n\n完' });
+    await waitFor(() => received.length >= 1, 'stop 通知');
+    assert.strictEqual(received[0].body.message, 'OpenSquilla：剧本标题 一幕一景：深夜 完',
+      '换行/全角空白该压成单空格，实际：' + JSON.stringify(received[0].body.message));
+  } finally { await stopBridge(handle); }
+});
+
 // ------------------------------------------------------------ B) 桥死了
 await check('离线落盘：done/turn-start 进 pending-events.jsonl，与 hooks 同格式', async () => {
   const dir = path.join(TMP, 'spool-b');

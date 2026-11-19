@@ -600,7 +600,10 @@ async function onFrame(frame) {
     return;
   }
 
-  const rawText = (p.message || p.text || "").toString().trim();
+  // 压成一行再截：模型长正文（剧本/报告类）换行多，原样进文案会在卡面/气泡
+  // 中间留出一大片空白（用户 2026-11-19 指出）；TTS 也不会再被空行断句。
+  // 与 DSH 侧 lib/text.js cleanText 同一口径。
+  const rawText = (p.message || p.text || "").toString().replace(/\s+/g, " ").trim();
   const reply = CFG.relay ? rawText.slice(0, 80) : "";
   let tpl = mapped.tpl;
   // stop 有回复正文：与 hooks 系同口径「宿主名：正文」，回复当主文案

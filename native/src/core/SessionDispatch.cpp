@@ -20,7 +20,10 @@ constexpr qint64 kActivityGuardMs = 10000;
 constexpr qint64 kReceiptTimeoutMs = 120000;
 // 插件通道的取件窗口：插件 ~1.5s 轮询一次，60s 没来取 = DSH 没开或插件过旧。
 // followup 是同步落账，ack 不该慢——慢了就是通道死了，不用等 LLM 的节奏。
-constexpr qint64 kPluginAckTimeoutMs = 60000;
+// 插件通道等取件的窗口。原来 60s：宿主半死（进程在、插件没加载）时用户要
+// 干等一分钟才知道失败。25s 足够覆盖冷启动（DSH 实测 1s 起进程 + 几秒
+// 加载插件），也让人更快得到「重启宿主」这个提示（2026-11-19）。
+constexpr qint64 kPluginAckTimeoutMs = 25000;
 
 }  // namespace
 
@@ -646,8 +649,8 @@ void SessionDispatch::poll() {
                                       "OpenSquilla 桥没来取件（OpenSquilla 没开或"
                                       "桥过旧），派发取消")
                                 : QStringLiteral(
-                                      "DSH 插件没来取件（DeepSeek Harness 没开或插件"
-                                      "过旧），派发取消"));
+                                      "DSH 插件没来取件——多半是 DeepSeek Harness "
+                                      "开着但插件没加载，关掉它重开一次再派"));
             }
             continue;
         }

@@ -1137,6 +1137,13 @@ QString WorkWebView::htmlFor(const QString &stateJson) const {
  .mprow .check{flex:0 0 auto;color:var(--muted)}
  .mprow .fwd{flex:0 0 auto;color:var(--muted)}
  .mpsec{padding:8px 12px 2px;font-size:var(--f11);color:var(--muted)}
+ /* 顶栏图标按钮（刷新 / 产物与文件）：文字按钮改成图标，布局与手机端
+   同构——meta 在左、右侧两个 28px 圆角图标，hover 提亮。 */
+ .tico{flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;
+   width:28px;height:28px;border:none;border-radius:8px;background:transparent;
+   color:var(--text-dim);cursor:default;padding:0;font-family:inherit}
+ .tico:hover{background:var(--w10);color:var(--text)}
+ .tico svg{width:17px;height:17px;display:block;pointer-events:none}
  /* 顶栏「产物与文件」入口 + 下拉面板（手机页面板的桌面版） */
  .fplink{flex:0 0 auto;cursor:default;color:var(--accent);font-size:var(--f11);
    white-space:nowrap}
@@ -1442,9 +1449,9 @@ QString WorkWebView::htmlFor(const QString &stateJson) const {
     <span class="name" id="dchatTitle"></span>
     <span class="stage" id="dchatStage"></span>
     <span class="spacer"></span>
-    <button class="ghost" id="dchatRefresh" title="重新读取这个会话的最新记录">刷新</button>
     <span class="time" id="dchatMeta"></span>
-    <span class="time fplink" id="dchatFiles" title="这个会话工作区里的产物与文件">产物与文件</span>
+    <button class="tico" id="dchatRefresh" title="重新读取这个会话的最新记录" aria-label="刷新记录"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20.5 12a8.5 8.5 0 1 1-2.5-6L21 9"/><path d="M21 3v6h-6"/></svg></button>
+    <button class="tico" id="dchatFiles" title="这个会话工作区里的产物与文件" aria-label="产物与文件"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7.5A2 2 0 0 1 5 5.5h4l2 2.5h8a2 2 0 0 1 2 2v7.5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/></svg></button>
   </div>
   <div class="chatwrap">
     <div class="chatfade top"></div>
@@ -1484,7 +1491,7 @@ QString WorkWebView::htmlFor(const QString &stateJson) const {
     <span class="stage" id="chatStage"></span>
     <span class="spacer"></span>
     <span class="time" id="chatMeta"></span>
-    <span class="time fplink" id="chatFiles" title="这个会话工作区里的产物与文件">产物与文件</span>
+    <button class="tico" id="chatFiles" title="这个会话工作区里的产物与文件" aria-label="产物与文件"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7.5A2 2 0 0 1 5 5.5h4l2 2.5h8a2 2 0 0 1 2 2v7.5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/></svg></button>
   </div>
   <div class="chatwrap">
     <div class="chatfade top"></div>

@@ -1443,47 +1443,7 @@ QString WorkWebView::htmlFor(const QString &stateJson) const {
     <button class="ghost" id="dspBatchCancel">取消</button>
   </div>
 </div>
-<div id="dchat" class="page" hidden>
-  <div class="chathead">
-    <button class="btn" id="dchatBack" title="回到派发列表" aria-label="回到派发列表"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5 8 12l7 7"/></svg></button>
-    <span class="name" id="dchatTitle"></span>
-    <span class="stage" id="dchatStage"></span>
-    <span class="spacer"></span>
-    <span class="time" id="dchatMeta"></span>
-    <button class="tico" id="dchatRefresh" title="重新读取这个会话的最新记录" aria-label="刷新记录"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20.5 12a8.5 8.5 0 1 1-2.5-6L21 9"/><path d="M21 3v6h-6"/></svg></button>
-    <button class="tico" id="dchatFiles" title="这个会话工作区里的产物与文件" aria-label="产物与文件"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7.5A2 2 0 0 1 5 5.5h4l2 2.5h8a2 2 0 0 1 2 2v7.5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/></svg></button>
-  </div>
-  <div class="chatwrap">
-    <div class="chatfade top"></div>
-    <div class="chatlist" id="dchatList"></div>
-    <div class="chatfade bottom"></div>
-  </div>
-  <div class="chatfoot">
-    <div class="cbar" id="dchatBar" hidden>
-      <div class="cnotice" id="dchatNotice"></div>
-    </div>
-    <div class="cbox">
-      <div class="catts" id="dchatAtts" hidden></div>
-      <textarea id="dchatText" rows="1" placeholder="写一句任务，派到这个会话…"></textarea>
-      <div class="crow">
-        <button class="cico" id="dchatAttach" title="附上本机文件（不复制，直接给路径）" aria-label="附上本机文件"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20.4 11.6 12 20a5 5 0 0 1-7-7l8.5-8.5a3.4 3.4 0 0 1 4.8 4.8L9.7 17.9a1.8 1.8 0 0 1-2.5-2.5l7.8-7.8"/></svg></button>
-        <button class="modelchip" id="dchatModelChip" hidden><b id="dchatModelLabel">选择模型</b><span class="lvl" id="dchatModelLvl" hidden></span><span class="caret">⌄</span></button>
-        <span class="chint" id="dchatHint">Enter 发送 · Shift+Enter 换行</span>
-        <span class="cchars" id="dchatChars" hidden></span>
-        <button class="csend" id="dchatSend" data-label="派发" aria-label="派发" title="派发"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12l16-7-6.3 16-2.9-6.4L4 12Z"/></svg></button>
-      </div>
-    </div>
-    <div class="mpanel" id="dchatModelPanel" hidden>
-     <button class="mpback" id="dchatMpBack">‹ 上一步</button>
-     <div class="mplist" id="dchatMpList"></div>
-     <div class="mpthought" id="dchatMpThought" hidden>
-      <div class="trow"><span class="tkey">思考强度</span><b id="dchatMpTVal">跟随会话</b></div>
-      <input type="range" id="dchatMpRange" min="0" max="5" value="0" step="1">
-     </div>
-     <div class="mpfoot" id="dchatMpFoot">管理模型</div>
-    </div>
-  </div>
-</div>
+<div id="dchat" class="page" hidden></div>
 <div id="chat" class="page" hidden>
   <div class="chathead">
     <button class="btn" id="chatBack" title="回到待办列表" aria-label="回到待办列表"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5 8 12l7 7"/></svg></button>
@@ -1528,6 +1488,7 @@ QString WorkWebView::htmlFor(const QString &stateJson) const {
     </div>
   </div>
 </div>
+<div id="chat" class="page" hidden></div>
 <div class="mpanel fppanel" id="fpPanel" hidden></div>
 <div id="empty" class="empty" hidden>
   <h3>没有需要你处理的事</h3>
@@ -1644,6 +1605,60 @@ let STATE = )HTML")
                          + jsEscape(stateJson)
                          + QString::fromUtf8(R"HTML(;
 let WORK = {items:[]}, WORKERS = [], EVENTS = [], now = Date.now();
+// —— 会话页壳（共用组件）：dchat / chat 两个会话面共用一套 DOM 模板。
+// 以前是两份手写 HTML，每给一个面加能力另一个面就要对齐一次（产物入口、
+// 刷新按钮、附件条……第三次踩了）。差异全部走参数：返回键文案、placeholder、
+// 发送键标签、新消息 pill、ZCode 重启按钮。绑定仍按 id 前缀进行，全不动。
+const CHAT_ICONS={
+ back:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5 8 12l7 7"/></svg>',
+ refresh:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20.5 12a8.5 8.5 0 1 1-2.5-6L21 9"/><path d="M21 3v6h-6"/></svg>',
+ folder:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7.5A2 2 0 0 1 5 5.5h4l2 2.5h8a2 2 0 0 1 2 2v7.5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/></svg>',
+ attach:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20.4 11.6 12 20a5 5 0 0 1-7-7l8.5-8.5a3.4 3.4 0 0 1 4.8 4.8L9.7 17.9a1.8 1.8 0 0 1-2.5-2.5l7.8-7.8"/></svg>',
+ send:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12l16-7-6.3 16-2.9-6.4L4 12Z"/></svg>'};
+function chatShellHtml(P,o){
+ o=o||{};
+ const back=o.backTitle||'返回';
+ return '<div class="chathead">'
+  +'<button class="btn" id="'+P+'Back" title="'+back+'" aria-label="'+back+'">'+CHAT_ICONS.back+'</button>'
+  +'<span class="name" id="'+P+'Title"></span>'
+  +'<span class="stage" id="'+P+'Stage"></span>'
+  +'<span class="spacer"></span>'
+  +'<span class="time" id="'+P+'Meta"></span>'
+  +'<button class="tico" id="'+P+'Refresh" title="重新读取这个会话的最新记录" aria-label="刷新记录">'+CHAT_ICONS.refresh+'</button>'
+  +'<button class="tico" id="'+P+'Files" title="这个会话工作区里的产物与文件" aria-label="产物与文件">'+CHAT_ICONS.folder+'</button>'
+  +'</div>'
+  +'<div class="chatwrap"><div class="chatfade top"></div><div class="chatlist" id="'+P+'List"></div>'
+  +'<div class="chatfade bottom"></div>'
+  +(o.newPill?'<button class="newpill" id="'+P+'New" hidden>有新消息 ↓</button>':'')
+  +'</div>'
+  +'<div class="chatfoot">'
+  +'<div class="cbar" id="'+P+'Bar" hidden><div class="cnotice" id="'+P+'Notice"></div>'
+  +(o.restart?'<span class="cbar-acts"><button class="crise" id="'+P+'Restart" hidden title="ZCode 对话区不热刷新：重启宿主后打开会话即可看到派发消息全文。会中断 ZCode 里正在跑的其它轮次">重启 ZCode</button></span>':'')
+  +'</div>'
+  +'<div class="cbox"><div class="catts" id="'+P+'Atts" hidden></div>'
+  +'<textarea id="'+P+'Text" rows="1" placeholder="'+(o.placeholder||'')+'"></textarea>'
+  +'<div class="crow">'
+  +'<button class="cico" id="'+P+'Attach" title="附上本机文件（不复制，直接给路径）" aria-label="附上本机文件">'+CHAT_ICONS.attach+'</button>'
+  +'<button class="modelchip" id="'+P+'ModelChip" hidden><b id="'+P+'ModelLabel">选择模型</b><span class="lvl" id="'+P+'ModelLvl" hidden></span><span class="caret">⌄</span></button>'
+  +'<span class="chint" id="'+P+'Hint">Enter 发送 · Shift+Enter 换行</span>'
+  +'<span class="cchars" id="'+P+'Chars" hidden></span>'
+  +'<button class="csend" id="'+P+'Send" data-label="'+(o.sendLabel||'发送')+'" aria-label="'+(o.sendLabel||'发送')+'" title="'+(o.sendLabel||'发送')+'">'+CHAT_ICONS.send+'</button>'
+  +'</div></div>'
+  +'<div class="mpanel" id="'+P+'ModelPanel" hidden>'
+  +'<button class="mpback" id="'+P+'MpBack">‹ 上一步</button>'
+  +'<div class="mplist" id="'+P+'MpList"></div>'
+  +'<div class="mpthought" id="'+P+'MpThought" hidden>'
+  +'<div class="trow"><span class="tkey">思考强度</span><b id="'+P+'MpTVal">跟随会话</b></div>'
+  +'<input type="range" id="'+P+'MpRange" min="0" max="5" value="0" step="1">'
+  +'</div>'
+  +'<div class="mpfoot" id="'+P+'MpFoot">管理模型</div>'
+  +'</div></div>';
+}
+document.getElementById('dchat').innerHTML=chatShellHtml('dchat',
+ {backTitle:'回到派发列表',placeholder:'写一句任务，派到这个会话…',sendLabel:'派发'});
+document.getElementById('chat').innerHTML=chatShellHtml('chat',
+ {backTitle:'回到待办列表',placeholder:'派回这条会话的指令，回执到了转进行中…',
+  sendLabel:'发送',newPill:true,restart:true});
 const COLOR = {'needs-me':'var(--pending)','review':'var(--ok)','working':'var(--info)'};
 // 事件按 kind 上色，和 Qt 侧 appendEvent 同一套：错误红、听写/系统命令绿、
 // 状态灰（muted token）、其余（按键等）用 text.dim。阶段色一样两边硬编码同值。

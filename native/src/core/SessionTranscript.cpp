@@ -248,6 +248,14 @@ SessionTranscript::Result readJsonl(const QString &home, const QString &sessionI
         }
         // 当前模型记在 assistant 行的 providerData 里（WorkBuddy/Qoder 都有，
         // 显示名在 requestModelName）。取最后一条有值的就是"现在在用的"。
+        // WorkBuddy 的 jsonl 没有标题字段：不补的话 chatStateFor 只能兜底
+        // 用待办标题（=Agent 名），待办会话页顶栏就看不到会话名
+        // （2026-11-19 用户截图：大标题是「WorkBuddy」）。DSH 分支同款：
+        // 取首条非空 user 消息。
+        if (full.title.isEmpty() && role == QLatin1String("user") &&
+            !text.trimmed().isEmpty()) {
+            full.title = text.trimmed().left(60);
+        }
         if (role == QLatin1String("assistant")) {
             const QJsonObject pd =
                 obj.value(QStringLiteral("providerData")).toObject();

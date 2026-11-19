@@ -2275,7 +2275,10 @@ function dspSession(agent,row,archived){
   }
   const t=document.createElement('div');t.className='t';
   const title=document.createElement('div');title.className='title';
-  title.textContent=row.title||('会话 '+String(row.id||'').slice(0,8));
+  title.textContent=row.title
+   // 没标题的会话别显示编号（没信息量）：用最近一条消息摘要（去「来源：」前缀）
+   ||String(row.message||'').replace(/^[^：]{1,24}：/,'').trim().slice(0,26)
+   ||('会话 '+String(row.id||'').slice(0,8));
   const sub=document.createElement('div');sub.className='sub';
   const upd=document.createElement('span');upd.className='u';
   upd.textContent='最近更新 · '+dspAgo(row.updated_at);

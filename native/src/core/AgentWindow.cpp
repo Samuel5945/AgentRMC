@@ -398,6 +398,21 @@ bool processRunning(const QString &exe) {
     }
     QString key = QFileInfo(exe).completeBaseName().toLower();
     key.remove(QLatin1Char(' '));
+    // 同一产品可能有多个映像名（WorkBuddy.exe / WorkBuddyAI.exe 共用一个
+    // 安装），会话记录里的名字未必等于当前进程的名字——组内任一在跑就算在跑，
+    // 否则会误判成「没启动」→ 去拉起一个装都没装的别名 → 报启动失败。
+    static const QVector<QStringList> kAliases = {
+        {QStringLiteral("workbuddy"), QStringLiteral("workbuddyai"),
+         QStringLiteral("codebuddy")},
+        {QStringLiteral("deepseekharness"), QStringLiteral("deepseek")},
+    };
+    QStringList wanted{key};
+    for (const QStringList &group : kAliases) {
+        if (group.contains(key)) {
+            wanted = group;
+            break;
+        }
+    }
     HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
     if (snap == INVALID_HANDLE_VALUE) {
         return false;
@@ -413,7 +428,7 @@ bool processRunning(const QString &exe) {
             }
             name = name.toLower();
             name.remove(QLatin1Char(' '));
-            if (name == key) {
+            if (wanted.contains(name)) {
                 found = true;
                 break;
             }

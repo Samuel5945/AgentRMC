@@ -4138,13 +4138,23 @@ QString MainWindow::dispatchToSession(const QString &agentExe,
             QString launchErr;
             if (AppLauncher::launch(appId, &launchErr)) {
                 // 冷启动：等进程出现（最多 3s），再给桥/网关 1.5s 重连。
+                bool up = false;
                 for (int i = 0; i < 15; ++i) {
                     QCoreApplication::processEvents(
                         QEventLoop::ExcludeUserInputEvents);
                     QThread::msleep(200);
                     if (AgentWindow::processRunning(agentExe)) {
+                        up = true;
                         break;
                     }
+                }
+                if (!up) {
+                    // 拉起了但进程没起来（应用自己启动即退：单实例锁残留、
+                    // 更新失败、配置坏）——直接说清楚，别让桥去回一句
+                    // 「网关没连上」把人带偏（2026-11-19 OpenSquilla 实测：
+                    // 点 exe 3 秒内 exit 0，无窗口无网关无日志）。
+                    return QStringLiteral("%1 启动失败（进程没起来），先在电脑上手动打开它")
+                        .arg(AgentWindow::displayName(agentExe));
                 }
                 for (int i = 0; i < 3; ++i) {
                     QCoreApplication::processEvents(

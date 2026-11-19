@@ -51,6 +51,7 @@
 #include <QEventLoop>
 #include <QCheckBox>
 #include <QDir>
+#include <functional>
 #include <QDirIterator>
 #include <QDragEnterEvent>
 #include <QDropEvent>
@@ -4622,33 +4623,39 @@ QJsonArray lanProjectArtifacts(const QString &project) {
     QVector<Item> items;
     QElapsedTimer budget;
     budget.start();
-    QDirIterator it(project, QDir::Files | QDir::NoSymLinks,
-                    QDirIterator::Subdirectories);
-    while (it.hasNext() && items.size() < 500 && budget.elapsed() < 800) {
-        const QString path = it.next();
-        const QString rel =
-            QDir::fromNativeSeparators(path.mid(project.size() + 1));
-        bool skip = false;
-        const QStringList segs = rel.split(QLatin1Char('/'));
-        for (const QString &seg : segs) {
-            if (kSkip.contains(seg, Qt::CaseInsensitive)) {
-                skip = true;
-                break;
+    // 自己递归而不是 QDirIterator：iterator 带 Subdirectories 会照样钻进
+    // node_modules/.git，800ms 预算全耗在巨库里，产物一个都扫不到
+    // （2026-11-19 用户实测「产物 0」就是它）。黑名单必须在**进目录前**跳。
+    std::function<void(const QString &, const QString &, int)> walk =
+        [&](const QString &dir, const QString &prefix, int depth) {
+            if (depth > 6 || items.size() >= 500 || budget.elapsed() > 800) {
+                return;
             }
-        }
-        if (skip || segs.size() > 6) {
-            continue;  // 太深的路径基本是依赖内部结构，不进产物
-        }
-        QFileInfo fi(path);
-        if (!shareableExt(fi.fileName())) {
-            continue;
-        }
-        const qint64 m = fi.lastModified().toMSecsSinceEpoch();
-        if (m < cutoff) {
-            continue;
-        }
-        items.append({rel, fi.size(), m});
-    }
+            const QFileInfoList infos =
+                QDir(dir).entryInfoList(QDir::Files | QDir::Dirs |
+                                            QDir::NoDotAndDotDot |
+                                            QDir::NoSymLinks,
+                                        QDir::Time);
+            for (const QFileInfo &fi : infos) {
+                if (budget.elapsed() > 800 || items.size() >= 500) {
+                    return;
+                }
+                const QString name = fi.fileName();
+                if (kSkip.contains(name, Qt::CaseInsensitive)) {
+                    continue;  // 进目录之前跳，不递归进去
+                }
+                if (fi.isDir()) {
+                    walk(fi.absoluteFilePath(), prefix + name + QLatin1Char('/'),
+                         depth + 1);
+                } else if (shareableExt(name)) {
+                    const qint64 m = fi.lastModified().toMSecsSinceEpoch();
+                    if (m >= cutoff) {
+                        items.append({prefix + name, fi.size(), m});
+                    }
+                }
+            }
+        };
+    walk(project, QString(), 0);
     std::sort(items.begin(), items.end(),
               [](const Item &a, const Item &b) { return a.mtime > b.mtime; });
     int n = 0;

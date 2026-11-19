@@ -254,7 +254,7 @@ SessionTranscript::Result readJsonl(const QString &home, const QString &sessionI
         // 取首条非空 user 消息。
         if (full.title.isEmpty() && role == QLatin1String("user") &&
             !text.trimmed().isEmpty()) {
-            full.title = text.trimmed().left(60);
+            full.title = text.trimmed().left(30);  // 顶栏展示宽度有限
         }
         if (role == QLatin1String("assistant")) {
             const QJsonObject pd =

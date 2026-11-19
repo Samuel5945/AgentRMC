@@ -959,6 +959,10 @@ QString WorkWebView::htmlFor(const QString &stateJson) const {
    align-items:center;justify-content:center;flex:0 0 auto}
  #chatBack svg,#dchatBack svg{width:15px;height:15px;display:block;pointer-events:none}
  .chathead .name{font-weight:700;font-size:var(--f13);overflow:hidden;
+   text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:0 1 auto}
+ /* stage 徽章与 meta（Agent·项目）不许被长标题挤掉：固定不收缩。 */
+ .chathead .stage{flex:0 0 auto}
+ .chathead .time{flex:0 0 auto;max-width:40%;overflow:hidden;
    text-overflow:ellipsis;white-space:nowrap}
  .chatwrap{flex:1 1 auto;min-height:0;position:relative;margin-top:8px}
  .chatlist{position:absolute;inset:0;overflow-y:auto;scrollbar-width:none;

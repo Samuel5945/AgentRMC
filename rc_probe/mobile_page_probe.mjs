@@ -180,7 +180,17 @@ function sessionTranscript(exe, session) {
       { id: 'sm2', role: 'assistant', at: iso(NOW - 650e3),
         text: '卡片层级已经拆好了，现在在收滑动阈值和批量动效。产物：'
           + 'rc_probe/mobile_shots/chatAtt-light.png 和 dist/AgentRMC-Setup.exe' },
-      { id: 'sm3', role: 'user', at: iso(NOW - 480e3), text: '继续，把交互再收一下。' }
+      { id: 'sm3', role: 'user', at: iso(NOW - 480e3), text: '继续，把交互再收一下。' },
+      // 系统信息行：工具调用耗时（不是对话气泡，灰色一行）
+      { id: 'sm3b', role: 'system', at: iso(NOW - 460e3),
+        text: '执行命令 5.7s · python build.py' },
+      // present_files 摆出来的产物 + 正文里写的中文相对路径：同一份文件两条来源，
+      // 卡片名要带扩展名、只出一张（2026-11-19 用户截图：卡片叫「凝蓝_OS8」，
+      // 下载下来是 file.txt）。
+      { id: 'sm4', role: 'assistant', at: iso(NOW - 400e3),
+        text: '**已产出**：`产物/OS8成品/凝蓝_OS8.hwt`（43.25 MB）\n\n这个包只有 `.hwt`，没生成释放器 APK。',
+        files: ['D:/githubrepos/Agentrmc/产物/OS8成品/凝蓝_OS8.hwt',
+                'D:/githubrepos/Agentrmc/产物/_hyperos4_inspect/os8_package_preview.jpg'] }
     ],
     requests: []
   };
@@ -600,7 +610,11 @@ async function runFlow() {
     '会话聊天页返回派发');
   ok((await page.textContent('#chatTitle')).includes('手机页多选'), '会话聊天页标题正确');
   ok((await page.textContent('#chatSub')).includes('WorkBuddy AI'), '会话聊天页显示 Agent');
-  ok(await page.locator('#chatList .bub').count() === 4, '会话聊天记录已加载');
+  ok(await page.locator('#chatList .bub').count() === 5, '会话聊天记录已加载');
+  // 系统信息行：工具调用耗时/后台任务，灰色一行，不算对话气泡
+  ok(await page.locator('#chatList .bubsys').count() === 1, '系统信息行渲染出来');
+  ok((await page.textContent('#chatList .bubsys')).includes('执行命令 5.7s'),
+    '系统信息行带耗时与命令摘要');
 
   posts.length = 0;
   await page.fill('#chatText', '拒绝这条派发');
@@ -667,6 +681,20 @@ async function runFlow() {
     '文件条指向工作区下载（scope=project）', bf);
   const bfTxt = await page.locator('.bubfile').first().textContent();
   ok(bfTxt.includes('下载到手机'), '文件条带「下载到手机」', bfTxt);
+
+  // present_files 的产物：正文里没有路径，也要有卡片（靠 messages[].files）。
+  const lastBub = page.locator('.bub.assistant').last();
+  const pfCard = lastBub.locator('.bubfile', { hasText: '凝蓝_OS8.hwt' });
+  ok(await pfCard.count() === 1, 'present_files 产物渲染成文件条');
+  const pfHref = await pfCard.getAttribute('href');
+  ok(pfHref && pfHref.includes('scope=project') && decodeURIComponent(pfHref).includes('凝蓝_OS8.hwt'),
+    'present_files 文件条指向工作区下载', pfHref);
+  // 正文里的中文相对路径：卡片名必须带扩展名，且不能跟 present_files 重复成两张。
+  const pfNames = await lastBub.locator('.bubfile b').allTextContents();
+  ok(pfNames.includes('凝蓝_OS8.hwt'), '文件条名字带扩展名（不是「凝蓝_OS8」）', pfNames);
+  ok(pfNames.filter((n) => n.startsWith('凝蓝_OS8')).length === 1, '同一产物只出一张卡片', pfNames);
+  ok(await lastBub.locator('.bubfile').count() === 2, '气泡里正好两张产物卡片（hwt + 预览图）',
+    pfNames);
 
   // 电脑文件面板：列出会话 inbox，行上带下载链接，× 能关。
   FILES.length = 0;

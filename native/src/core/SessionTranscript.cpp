@@ -212,6 +212,279 @@ SessionTranscript::Result slicePage(const FullCache &full, int limit, int offset
     return out;
 }
 
+// WorkBuddy/Qoder 的 present_files 工具结果：Agent 把产物「摆到」用户面前时，
+// 路径只在这条结果里（正文常常不再写一遍），于是聊天页既没有下载卡片、产物面板
+// 也只会按白名单另扫一遍。抽出来挂到下一条 assistant 消息上（2026-11-19 用户
+// 反馈：构建器新产出的凝蓝_OS8.hwt 没有卡片）。
+QStringList presentedFilesOf(const QByteArray &line) {
+    if (!line.contains("present_files")) {
+        return {};
+    }
+    const QJsonObject obj = QJsonDocument::fromJson(line).object();
+    const QJsonArray out = obj.value(QStringLiteral("output")).toArray();
+    for (const QJsonValue &v : out) {
+        QString text = v.toObject().value(QStringLiteral("text")).toString();
+        if (text.isEmpty()) {
+            text = v.toString();
+        }
+        if (!text.contains(QStringLiteral("\"files\""))) {
+            continue;
+        }
+        const QJsonArray files = QJsonDocument::fromJson(text.toUtf8())
+                                     .object()
+                                     .value(QStringLiteral("files"))
+                                     .toArray();
+        QStringList list;
+        for (const QJsonValue &fv : files) {
+            const QString p = fv.toString().trimmed();
+            if (!p.isEmpty() && !list.contains(p)) {
+                list.append(p);
+            }
+        }
+        if (!list.isEmpty()) {
+            return list;
+        }
+    }
+    return {};
+}
+
+// ---- 工具调用 → 一行「系统信息」 ----
+// Agent 闷头跑工具时，聊天页只停在上一条回复上，看起来「什么都没发生」。
+// 把**耗时长**的调用落成一行灰色小字（执行命令 35.3s · cd …），既有交代又不会
+// 淹没对话。阈值依据本机会话实测：工具调用耗时中位数 0.28s、p90 5.7s，
+// 2s 以下逐条刷出来反而更乱（2026-11-19 用户提「很长时间什么都不显示」）。
+constexpr qint64 kSysCallMinMs = 2000;
+// 每轮耗时（OpenSquilla 只有轮级时间戳，没有单次工具耗时）：10s 以下不值得占一行。
+constexpr qint64 kSysTurnMinMs = 10000;
+
+// 工具调用配对用的临时记录（jsonl / DSH 两个读取器共用）。
+struct ToolCallInfo {
+    QString name;
+    QString brief;
+    QString at;
+    double ts = 0;
+};
+
+QString humanDuration(qint64 ms) {
+    if (ms < 1000) {
+        return QStringLiteral("%1ms").arg(ms);
+    }
+    if (ms < 60000) {
+        return QStringLiteral("%1s").arg(static_cast<double>(ms) / 1000.0, 0, 'f', 1);
+    }
+    const qint64 s = ms / 1000;
+    return QStringLiteral("%1m%2s").arg(s / 60).arg(s % 60);
+}
+
+// 工具名 → 中文动词；认不出来的原样显示（别硬造）。
+// 三个宿主的命名各不相同：WorkBuddy/Qoder 是 Bash/Read/Edit，DSH 是
+// pwsh/read/write/edit，OpenSquilla 是 exec_command/read_file/edit_file。
+QString toolVerb(const QString &name) {
+    static const QHash<QString, QString> kVerbs{
+        {QStringLiteral("Bash"), QStringLiteral("执行命令")},
+        {QStringLiteral("Read"), QStringLiteral("读文件")},
+        {QStringLiteral("Write"), QStringLiteral("写文件")},
+        {QStringLiteral("Edit"), QStringLiteral("改文件")},
+        {QStringLiteral("Grep"), QStringLiteral("搜索")},
+        {QStringLiteral("Glob"), QStringLiteral("找文件")},
+        {QStringLiteral("ViewImage"), QStringLiteral("看图")},
+        {QStringLiteral("TaskCreate"), QStringLiteral("建任务")},
+        {QStringLiteral("TaskUpdate"), QStringLiteral("更新任务")},
+        {QStringLiteral("TaskOutput"), QStringLiteral("等任务")},
+        {QStringLiteral("AskUserQuestion"), QStringLiteral("问你")},
+        {QStringLiteral("present_files"), QStringLiteral("产出文件")},
+        {QStringLiteral("WebFetch"), QStringLiteral("抓网页")},
+        {QStringLiteral("WebSearch"), QStringLiteral("搜网页")},
+        // DSH
+        {QStringLiteral("pwsh"), QStringLiteral("执行命令")},
+        {QStringLiteral("read"), QStringLiteral("读文件")},
+        {QStringLiteral("write"), QStringLiteral("写文件")},
+        {QStringLiteral("edit"), QStringLiteral("改文件")},
+        {QStringLiteral("read_image"), QStringLiteral("看图")},
+        {QStringLiteral("grep"), QStringLiteral("搜索")},
+        {QStringLiteral("glob"), QStringLiteral("找文件")},
+        {QStringLiteral("skill"), QStringLiteral("加载技能")},
+        {QStringLiteral("agent_browser"), QStringLiteral("浏览器")},
+        {QStringLiteral("ask_user_question"), QStringLiteral("问你")},
+        {QStringLiteral("load_workspace_dependencies"), QStringLiteral("装依赖")},
+        // OpenSquilla
+        {QStringLiteral("exec_command"), QStringLiteral("执行命令")},
+        {QStringLiteral("read_file"), QStringLiteral("读文件")},
+        {QStringLiteral("write_file"), QStringLiteral("写文件")},
+        {QStringLiteral("edit_file"), QStringLiteral("改文件")},
+        {QStringLiteral("grep_search"), QStringLiteral("搜索")},
+        {QStringLiteral("list_dir"), QStringLiteral("列目录")},
+        {QStringLiteral("execute_code"), QStringLiteral("跑代码")},
+        {QStringLiteral("process"), QStringLiteral("等进程")},
+        {QStringLiteral("browser"), QStringLiteral("浏览器")},
+        {QStringLiteral("image"), QStringLiteral("看图")},
+        {QStringLiteral("request_user_input"), QStringLiteral("问你")},
+        {QStringLiteral("cron"), QStringLiteral("定时任务")},
+    };
+    return kVerbs.value(name, name);
+}
+
+QString clipLine(QString s, int max) {
+    s = s.simplified();
+    if (s.size() > max) {
+        s = s.left(max) + QStringLiteral("…");
+    }
+    return s;
+}
+
+// 工具参数两种记法都吃：WorkBuddy 存成「JSON 字符串」，Qoder 可能直接是对象。
+QJsonObject callArgs(const QJsonValue &v) {
+    if (v.isObject()) {
+        return v.toObject();
+    }
+    if (v.isString()) {
+        return QJsonDocument::fromJson(v.toString().toUtf8()).object();
+    }
+    return QJsonObject();
+}
+
+// 参数里挑一样最能说明「在干什么」的：命令首行、文件名、搜索词…
+QString toolCallBrief(const QString &name, const QJsonObject &args) {
+    if (args.isEmpty()) {
+        return QString();
+    }
+    auto str = [&args](const char *key) {
+        return args.value(QLatin1String(key)).toString();
+    };
+    if (name == QLatin1String("Bash") || name == QLatin1String("pwsh") ||
+        name == QLatin1String("exec_command")) {
+        // DSH 的命令工具还带一句人写的 description，比命令本身更好读。
+        const QString desc = str("description");
+        if (!desc.isEmpty()) {
+            return clipLine(desc, 60);
+        }
+        QString cmd = str("command").section(QLatin1Char('\n'), 0, 0).trimmed();
+        // 「cd "工作目录" && 真命令」里的 cd 段对「在干什么」没信息量，去掉；
+        // 开头是带引号的绝对路径 exe（"C:/Program Files/Python312/python.exe"）
+        // 也只留程序名。
+        static const QRegularExpression cdRe(QStringLiteral(
+            "^cd\\s+(?:\"[^\"]*\"|'[^']*'|[^&|]+?)\\s*(?:&&|;)\\s*"));
+        static const QRegularExpression exeRe(QStringLiteral(
+            "^\"[^\"]*[\\\\/]([^\"/\\\\]+)\"\\s*"));
+        cmd.remove(cdRe);
+        cmd.replace(exeRe, QStringLiteral("\\1 "));
+        return clipLine(cmd, 60);
+    }
+    if (name == QLatin1String("Read") || name == QLatin1String("Write") ||
+        name == QLatin1String("Edit") || name == QLatin1String("read") ||
+        name == QLatin1String("write") || name == QLatin1String("edit") ||
+        name == QLatin1String("read_file") || name == QLatin1String("write_file") ||
+        name == QLatin1String("edit_file")) {
+        QString p = str("file_path");
+        if (p.isEmpty()) {
+            p = str("path");
+        }
+        return p.isEmpty() ? QString() : QFileInfo(p).fileName();
+    }
+    if (name == QLatin1String("ViewImage") || name == QLatin1String("read_image") ||
+        name == QLatin1String("image")) {
+        QString p = str("image_path");
+        if (p.isEmpty()) {
+            p = str("path");
+        }
+        return p.isEmpty() ? QString() : QFileInfo(p).fileName();
+    }
+    if (name == QLatin1String("Grep") || name == QLatin1String("Glob") ||
+        name == QLatin1String("grep") || name == QLatin1String("glob") ||
+        name == QLatin1String("grep_search")) {
+        QString pat = str("pattern");
+        if (pat.isEmpty()) {
+            pat = str("query");
+        }
+        return clipLine(pat, 40);
+    }
+    if (name == QLatin1String("list_dir")) {
+        return QFileInfo(str("path")).fileName();
+    }
+    if (name == QLatin1String("skill")) {
+        return clipLine(str("name"), 40);
+    }
+    if (name == QLatin1String("present_files")) {
+        const int n = args.value(QStringLiteral("files")).toArray().size();
+        return n > 0 ? QStringLiteral("%1 个文件").arg(n) : QString();
+    }
+    if (name == QLatin1String("TaskCreate")) {
+        return clipLine(str("subject"), 40);
+    }
+    if (name == QLatin1String("TaskUpdate")) {
+        return clipLine(str("taskId"), 40);
+    }
+    if (name == QLatin1String("TaskOutput")) {
+        return clipLine(str("task_id"), 40);
+    }
+    if (name == QLatin1String("AskUserQuestion") ||
+        name == QLatin1String("ask_user_question") ||
+        name == QLatin1String("request_user_input")) {
+        const QJsonArray qs = args.value(QStringLiteral("questions")).toArray();
+        if (!qs.isEmpty()) {
+            return clipLine(qs.at(0).toObject()
+                                .value(QStringLiteral("question"))
+                                .toString(),
+                            40);
+        }
+        QString q = str("question");
+        if (q.isEmpty()) {
+            q = str("prompt");
+        }
+        return clipLine(q, 40);
+    }
+    return QString();
+}
+
+QString toolCallLine(const QString &name, const QString &brief, qint64 ms) {
+    QString line = toolVerb(name);
+    if (ms > 0) {
+        line += QLatin1Char(' ') + humanDuration(ms);
+    }
+    if (!brief.isEmpty()) {
+        line += QStringLiteral(" · ") + brief;
+    }
+    return line;
+}
+
+// 一行系统信息（role=system）：聊天页渲染成灰色小字，不是对话气泡。
+QJsonObject sysRow(const QString &text, const QString &at) {
+    return QJsonObject{{QStringLiteral("role"), QStringLiteral("system")},
+                       {QStringLiteral("text"), text},
+                       {QStringLiteral("at"), at}};
+}
+
+// <task-notification> 的状态/摘要 → 一行系统信息（不是用户气泡，也别丢）。
+QString taskNoteLine(const QString &raw) {
+    if (!raw.contains(QStringLiteral("<task-notification"))) {
+        return QString();
+    }
+    static const QRegularExpression statusRe(
+        QStringLiteral("<status>([^<]*)</status>"));
+    static const QRegularExpression summaryRe(
+        QStringLiteral("<summary>([\\s\\S]*?)</summary>"));
+    static const QRegularExpression prefixRe(
+        QStringLiteral("^Background command\\s*"));
+    const QString status = statusRe.match(raw).captured(1).trimmed();
+    QString head = QStringLiteral("后台任务完成");
+    if (status.contains(QStringLiteral("fail"), Qt::CaseInsensitive)) {
+        head = QStringLiteral("后台任务失败");
+    } else if (status.contains(QStringLiteral("cancel"), Qt::CaseInsensitive)) {
+        head = QStringLiteral("后台任务已取消");
+    }
+    QString summary = summaryRe.match(raw).captured(1);
+    summary.replace(QStringLiteral("&quot;"), QStringLiteral("\""));
+    summary.replace(QStringLiteral("&amp;"), QStringLiteral("&"));
+    summary.replace(QStringLiteral("&lt;"), QStringLiteral("<"));
+    summary.replace(QStringLiteral("&gt;"), QStringLiteral(">"));
+    summary.remove(prefixRe);
+    summary = clipLine(summary, 50);
+    if (summary.startsWith(QLatin1Char('"'))) {
+        summary = summary.mid(1);
+    }
+    return summary.isEmpty() ? head : head + QStringLiteral(" · ") + summary;
+}
+
 SessionTranscript::Result readJsonl(const QString &home, const QString &sessionId,
                                     int limit, int offset) {
     SessionTranscript::Result out;
@@ -235,15 +508,82 @@ SessionTranscript::Result readJsonl(const QString &home, const QString &sessionI
     }
     FullCache full;
     full.stamp = stamp;
+    QStringList pendingFiles;   // present_files 摆出来的产物，等下一句 assistant
+    int lastAsst = -1;
+    // 工具调用 → 结果配对（算耗时），见文件头 kSysCallMinMs。
+    QHash<QString, ToolCallInfo> calls;
+    QStringList callOrder;
     while (!f.atEnd()) {
         const QByteArray line = f.readLine();
-        QString role, text, at, id;
-        if (!SessionTranscript::messageOf(line, &role, &text, &at, &id)) {
+        const QJsonObject obj = QJsonDocument::fromJson(line).object();
+        if (obj.isEmpty()) {
             continue;
         }
-        const QJsonObject obj = QJsonDocument::fromJson(line).object();
         const QString sid = obj.value(QStringLiteral("sessionId")).toString();
         if (!sid.isEmpty() && sid != sessionId) {
+            continue;
+        }
+        const QString rowType = obj.value(QStringLiteral("type")).toString();
+        const QString rowAt =
+            normalizeTs(obj.value(QStringLiteral("timestamp")));
+        if (rowType == QLatin1String("function_call")) {
+            const QString callId = obj.value(QStringLiteral("callId")).toString();
+            const QString name = obj.value(QStringLiteral("name")).toString();
+            if (!callId.isEmpty() && !name.isEmpty()) {
+                ToolCallInfo pc;
+                pc.name = name;
+                pc.at = rowAt;
+                pc.ts = obj.value(QStringLiteral("timestamp")).toDouble();
+                pc.brief = toolCallBrief(
+                    name, callArgs(obj.value(QStringLiteral("arguments"))));
+                calls.insert(callId, pc);
+                callOrder.append(callId);
+            }
+            continue;
+        }
+        if (rowType == QLatin1String("function_call_result")) {
+            // present_files 的结果顺带把产物挂出来（正文不一定再写路径）。
+            for (const QString &p : presentedFilesOf(line)) {
+                if (!pendingFiles.contains(p)) {
+                    pendingFiles.append(p);
+                }
+            }
+            const QString callId = obj.value(QStringLiteral("callId")).toString();
+            auto hit = calls.find(callId);
+            if (hit != calls.end()) {
+                const double end = obj.value(QStringLiteral("timestamp")).toDouble();
+                const qint64 ms = (hit->ts > 0 && end > hit->ts)
+                                      ? static_cast<qint64>(end - hit->ts)
+                                      : 0;
+                if (ms >= kSysCallMinMs) {
+                    full.all.append(QJsonObject{
+                        {QStringLiteral("role"), QStringLiteral("system")},
+                        {QStringLiteral("text"),
+                         toolCallLine(hit->name, hit->brief, ms)},
+                        {QStringLiteral("at"), rowAt}});
+                }
+                calls.erase(hit);
+            }
+            continue;
+        }
+        if (rowType == QLatin1String("message")) {
+            // 后台任务完成通知（宿主写成 user 角色的 XML）→ 一行系统信息。
+            const QJsonObject msg = obj.value(QStringLiteral("message")).toObject();
+            QJsonValue content = msg.value(QStringLiteral("content"));
+            if (content.isUndefined() || content.isNull()) {
+                content = obj.value(QStringLiteral("content"));
+            }
+            const QString note = taskNoteLine(contentText(content));
+            if (!note.isEmpty()) {
+                full.all.append(QJsonObject{
+                    {QStringLiteral("role"), QStringLiteral("system")},
+                    {QStringLiteral("text"), note},
+                    {QStringLiteral("at"), rowAt}});
+                continue;
+            }
+        }
+        QString role, text, at, id;
+        if (!SessionTranscript::messageOf(line, &role, &text, &at, &id)) {
             continue;
         }
         // 当前模型记在 assistant 行的 providerData 里（WorkBuddy/Qoder 都有，
@@ -273,12 +613,48 @@ SessionTranscript::Result readJsonl(const QString &home, const QString &sessionI
                 full.model = m;
             }
         }
-        full.all.append(QJsonObject{
+        QJsonObject row{
             {QStringLiteral("id"), id},
             {QStringLiteral("role"), role},
             {QStringLiteral("text"), capText(text)},
             {QStringLiteral("at"), at},
-        });
+        };
+        if (role == QLatin1String("assistant") && !pendingFiles.isEmpty()) {
+            row.insert(QStringLiteral("files"),
+                       QJsonArray::fromStringList(pendingFiles));
+            pendingFiles.clear();
+        }
+        full.all.append(row);
+        if (role == QLatin1String("assistant")) {
+            lastAsst = full.all.size() - 1;
+        }
+    }
+    // 会话最后一条就是 present_files（后面没有正文了）：挂到最近一条 assistant 上，
+    // 别让产物在页面上凭空消失。
+    if (!pendingFiles.isEmpty() && lastAsst >= 0) {
+        QJsonObject row = full.all.at(lastAsst);
+        QJsonArray files = row.value(QStringLiteral("files")).toArray();
+        for (const QString &p : pendingFiles) {
+            files.append(p);
+        }
+        row.insert(QStringLiteral("files"), files);
+        full.all.replace(lastAsst, row);
+    }
+    // 还在跑的调用（会话最后一条就是它，没有结果行）：也要露一行，否则页面
+    // 停在上一条回复上，看起来像卡住。
+    for (const QString &callId : callOrder) {
+        const auto hit = calls.constFind(callId);
+        if (hit == calls.constEnd()) {
+            continue;
+        }
+        QString text = QStringLiteral("进行中 · ") + toolVerb(hit->name);
+        if (!hit->brief.isEmpty()) {
+            text += QStringLiteral(" · ") + hit->brief;
+        }
+        full.all.append(QJsonObject{
+            {QStringLiteral("role"), QStringLiteral("system")},
+            {QStringLiteral("text"), text},
+            {QStringLiteral("at"), hit->at}});
     }
     full.realTotal = full.all.size();
     cachePut(key, full);
@@ -559,6 +935,7 @@ SessionTranscript::Result readOsq(const QString &stateRoot, const QString &sessi
     q.addBindValue(sessionKey);
     q.addBindValue(qMin(total, kSqliteCap));
     QVector<QJsonObject> rev;
+    QVector<qint64> revMs;   // 与 rev 对齐：合并「本轮」行时按时间插
     if (q.exec()) {
         while (q.next()) {
             const QString role = q.value(1).toString();
@@ -576,11 +953,77 @@ SessionTranscript::Result readOsq(const QString &stateRoot, const QString &sessi
                 {QStringLiteral("text"), capText(text)},
                 {QStringLiteral("at"), normalizeTs(QJsonValue::fromVariant(q.value(3)))},
             });
+            revMs.append(q.value(3).toLongLong());
         }
     }
+    // 每轮耗时（agent_tasks）：OpenSquilla 的 tool_calls 不带耗时，但每一轮的
+    // 开始/结束都有记录——闷头跑几分钟时，页面至少能看到「本轮 3m25s · 完成」。
+    struct TurnRow {
+        qint64 at = 0;
+        QString text;
+    };
+    QVector<TurnRow> turns;
+    QSqlQuery tq(db.db());
+    tq.prepare(QStringLiteral(
+        "SELECT started_at, finished_at, status, COALESCE(error_message,'') "
+        "FROM agent_tasks WHERE session_key=? AND finished_at IS NOT NULL "
+        "ORDER BY finished_at"));
+    tq.addBindValue(sessionKey);
+    if (tq.exec()) {
+        while (tq.next()) {
+            const qint64 started = tq.value(0).toLongLong();
+            const qint64 finished = tq.value(1).toLongLong();
+            if (started <= 0 || finished <= started ||
+                finished - started < kSysTurnMinMs) {
+                continue;
+            }
+            const QString status = tq.value(2).toString();
+            QString text = QStringLiteral("本轮 ") + humanDuration(finished - started);
+            if (status == QStringLiteral("succeeded")) {
+                text += QStringLiteral(" · 完成");
+            } else if (status == QStringLiteral("failed")) {
+                text += QStringLiteral(" · 失败");
+            } else if (status == QStringLiteral("cancelled")) {
+                text += QStringLiteral(" · 已取消");
+            } else if (status == QStringLiteral("abandoned")) {
+                text += QStringLiteral(" · 中断");
+            }
+            const QString err = clipLine(tq.value(3).toString(), 40);
+            if (!err.isEmpty()) {
+                text += QStringLiteral("：") + err;
+            }
+            turns.append({finished, text});
+        }
+    }
+    tq.finish();
+    int ti = 0;
     for (int i = rev.size() - 1; i >= 0; --i) {
+        while (ti < turns.size() && turns.at(ti).at <= revMs.at(i)) {
+            full.all.append(sysRow(turns.at(ti).text, isoFromMs(turns.at(ti).at)));
+            ++ti;
+        }
         full.all.append(rev.at(i));
     }
+    while (ti < turns.size()) {
+        full.all.append(sysRow(turns.at(ti).text, isoFromMs(turns.at(ti).at)));
+        ++ti;
+    }
+    // 正在跑的那一轮：没有 finished_at，按「已跑了多久」露一行。
+    QSqlQuery runQ(db.db());
+    runQ.prepare(QStringLiteral(
+        "SELECT started_at FROM agent_tasks WHERE session_key=? "
+        "AND finished_at IS NULL ORDER BY started_at DESC LIMIT 1"));
+    runQ.addBindValue(sessionKey);
+    if (runQ.exec() && runQ.next()) {
+        const qint64 started = runQ.value(0).toLongLong();
+        const qint64 ms = QDateTime::currentMSecsSinceEpoch() - started;
+        if (started > 0 && ms >= kSysTurnMinMs) {
+            full.all.append(sysRow(
+                QStringLiteral("进行中 · 本轮已 ") + humanDuration(ms),
+                isoFromMs(started)));
+        }
+    }
+    runQ.finish();
     full.realTotal = qMin(total, kSqliteCap);
     cachePut(key, full);
     return slicePage(full, limit, offset);
@@ -1074,6 +1517,31 @@ QVector<SessionTranscript::SessionInfo> SessionTranscript::listSessions(
     return {};
 }
 
+// 宿主把「不是用户说的话」也记成 user 角色：后台任务完成通知、上下文摘要、
+// 本地命令回显/输出。这些渲染成「我」的气泡就是把 harness 的内部 XML 摊给
+// 用户看（2026-11-19 用户截图：`<task-notification>` 整段出现在「我」的气泡里），
+// 也不能拿去当会话标题。真用户文本的 `<user_query>` / `<选中文本>` 不在此列。
+bool harnessUserNoise(const QString &text) {
+    const QString t = text.trimmed();
+    if (!t.startsWith(QLatin1Char('<'))) {
+        return false;
+    }
+    static const QStringList kTags{
+        QStringLiteral("task-notification"),
+        QStringLiteral("conversation_history_summary"),
+        QStringLiteral("cb_summary"),
+        QStringLiteral("command-message"),
+        QStringLiteral("local-command-caveat"),
+        QStringLiteral("local-command-stdout"),
+    };
+    for (const QString &tag : kTags) {
+        if (t.startsWith(QLatin1Char('<') + tag)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 QString SessionTranscript::unwrap(const QString &raw) {
     static const QRegularExpression reminder(
         QStringLiteral("<system-reminder[\\s\\S]*?</system-reminder>"));
@@ -1112,6 +1580,9 @@ bool SessionTranscript::messageOf(const QByteArray &line, QString *role,
     const QString joined = unwrap(contentText(content));
     if (joined.isEmpty()) {
         return false;
+    }
+    if (isUser && harnessUserNoise(joined)) {
+        return false;  // 后台任务通知/摘要/本地命令回显，不是用户的话
     }
     *role = isUser ? QStringLiteral("user") : QStringLiteral("assistant");
     *text = joined;
@@ -1221,6 +1692,9 @@ SessionTranscript::Result readDsh(const QString &root, const QString &sessionId,
     FullCache full;
     full.stamp = stamp;
     QString firstUser;
+    // DSH 的 tool/call ↔ tool/result 配对（结果行的 callId 藏在 message 里）。
+    QHash<QString, ToolCallInfo> calls;
+    QStringList callOrder;
     const QList<QByteArray> lines = plain.split('\n');
     for (const QByteArray &rawLine : lines) {
         const QByteArray line = rawLine.trimmed();
@@ -1229,6 +1703,49 @@ SessionTranscript::Result readDsh(const QString &root, const QString &sessionId,
         }
         const QJsonObject obj = QJsonDocument::fromJson(line).object();
         const QString type = obj.value(QStringLiteral("type")).toString();
+        // 工具调用：耗时长的那次落一行系统信息（用户 2026-11-19：DSH 闷头跑
+        // 工具时页面什么都不显示）。
+        if (type == QStringLiteral("tool/call")) {
+            const QJsonObject data = obj.value(QStringLiteral("data")).toObject();
+            const QString callId = data.value(QStringLiteral("callId")).toString();
+            const QString name = data.value(QStringLiteral("name")).toString();
+            if (!callId.isEmpty() && !name.isEmpty()) {
+                ToolCallInfo info;
+                info.name = name;
+                info.at = normalizeTs(obj.value(QStringLiteral("time")));
+                info.ts = obj.value(QStringLiteral("time")).toDouble();
+                info.brief = toolCallBrief(
+                    name, callArgs(data.value(QStringLiteral("arguments"))));
+                calls.insert(callId, info);
+                callOrder.append(callId);
+            }
+            continue;
+        }
+        if (type == QStringLiteral("tool/result")) {
+            const QJsonObject data = obj.value(QStringLiteral("data")).toObject();
+            const QJsonObject msg = data.value(QStringLiteral("message")).toObject();
+            QString callId = msg.value(QStringLiteral("toolCallId")).toString();
+            if (callId.isEmpty()) {
+                callId = msg.value(QStringLiteral("source"))
+                             .toObject()
+                             .value(QStringLiteral("callId"))
+                             .toString();
+            }
+            auto hit = calls.find(callId);
+            if (hit != calls.end()) {
+                const double end = obj.value(QStringLiteral("time")).toDouble();
+                const qint64 ms = (hit->ts > 0 && end > hit->ts)
+                                      ? static_cast<qint64>(end - hit->ts)
+                                      : 0;
+                if (ms >= kSysCallMinMs) {
+                    full.all.append(sysRow(
+                        toolCallLine(hit->name, hit->brief, ms),
+                        normalizeTs(obj.value(QStringLiteral("time")))));
+                }
+                calls.erase(hit);
+            }
+            continue;
+        }
         // 标题取日志里最后一条 session/title（AI 异步生成，与投影缓存同源）。
         if (type == QStringLiteral("session/title")) {
             const QString t = obj.value(QStringLiteral("data"))
@@ -1294,6 +1811,18 @@ SessionTranscript::Result readDsh(const QString &root, const QString &sessionId,
         if (full.title.size() > 60) {
             full.title = full.title.left(60) + QStringLiteral("…");
         }
+    }
+    // 还在跑的工具调用（会话最后一条就是它）：也露一行，别让页面停在上一句上。
+    for (const QString &callId : callOrder) {
+        const auto hit = calls.constFind(callId);
+        if (hit == calls.constEnd()) {
+            continue;
+        }
+        QString text = QStringLiteral("进行中 · ") + toolVerb(hit->name);
+        if (!hit->brief.isEmpty()) {
+            text += QStringLiteral(" · ") + hit->brief;
+        }
+        full.all.append(sysRow(text, hit->at));
     }
     full.realTotal = full.all.size();
     cachePut(key, full);

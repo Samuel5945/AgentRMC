@@ -1368,6 +1368,12 @@ QString LanWebServer::mobileHtml() const {
    color:var(--text-soft)}
  .bub .who{display:block;font-weight:600;font-size:11px;color:var(--muted);
    margin-bottom:2px}
+ /* 系统信息行：工具调用耗时 / 后台任务完成。不是对话，别抢气泡的视觉重量。 */
+ .bubsys{flex:0 0 auto;align-self:stretch;display:flex;align-items:baseline;gap:8px;
+   padding:2px 2px 2px 8px;border-left:2px solid var(--w14);
+   font-size:12px;line-height:1.5;color:var(--muted)}
+ .bubsys .t{flex:1;min-width:0;word-break:break-word}
+ .bubsys .bt{flex:0 0 auto;color:var(--faint);font-size:11px}
  /* Agent 产出的文件条：气泡下方一行一个，右侧「下载到手机」。 */
  .bubfiles{display:flex;flex-direction:column;gap:6px;margin-top:8px;
    white-space:normal}
@@ -2186,8 +2192,10 @@ function msgKey(m){return m.id||(m.at+'|'+m.role+'|'+(m.text||'').slice(0,80));}
 const ATT_LINE_RE=/^(?:请查看文件：(.+)|【附件】.*)$/gm;
 function toRelPath(p){
  if(!p)return '';
- let rel=p.replace(/\\/g,'').trim();
- const root=(chatProject||'').replace(/\\/g,'').replace(/\/+$/,'');
+ // 正斜杠/反斜杠统一成 '/' 再比：present_files 给的是 d:/a/b.hwt，会话 project
+ // 是 D:\a，以前把反斜杠整个删掉去比，前斜杠路径一条都过不了（2026-11-19）。
+ let rel=String(p).replace(/\\/g,'/').trim();
+ const root=String(chatProject||'').replace(/\\/g,'/').replace(/\/+$/,'');
  if(/^[A-Za-z]:\//.test(rel)||rel[0]==='/'){
   if(!root||!rel.toLowerCase().startsWith(root.toLowerCase()+'/'))return '';
   rel=rel.slice(root.length+1);
@@ -2203,21 +2211,28 @@ function splitAttLines(text){
 // Agent 回复里提到的产物路径 → 气泡下方的文件条（带「下载到手机」）。
 // 只认产物类扩展名；绝对路径必须落在会话工作目录里（转成相对），相对路径
 // 直接当工作区相对路径。真正的校验在服务端（canonical + 白名单）。
+// hwt/hap/hsp：HarmonyOS 主题包/应用包/共享包，跟 apk 同级（2026-11-19 加）。
 const MSG_FILE_EXT=new Set(('png jpg jpeg gif webp bmp svg ico mp4 mov webm mkv '+
- 'mp3 wav m4a pdf md txt doc docx xls xlsx ppt pptx zip 7z rar exe msi apk').split(' '));
-const MSG_FILE_RE=/([A-Za-z]:[\\/][^\s"'<>|`\r\n]{0,180}?\.([A-Za-z0-9]{1,5}))|((?:[\w.\-]+\/){1,6}[\w.\-]{1,60}\.([A-Za-z0-9]{1,5}))/g;
+ 'mp3 wav m4a pdf md txt doc docx xls xlsx ppt pptx zip 7z rar exe msi apk '+
+ 'hwt hap hsp').split(' '));
+// 绝对路径（盘符开头，允许含空格，如 D:/HONOR Share/…）或「以空白/引号/括号
+// 为界」的相对路径。路径段不再限制 [\w.-]：中文目录名（产物/OS8成品/凝蓝.hwt）
+// 以前整个认不出来。
+const MSG_FILE_RE=/(?:^|[\s"'`（(【\[、，。：:])((?:[A-Za-z]:[\\/][^"'<>|`\r\n]{0,180}?)|(?:(?:[^\s"'<>|`\r\n\/]+\/){1,6}[^\s"'<>|`\r\n\/]{1,80}))\.([A-Za-z0-9]{1,5})/g;
 function msgFiles(text){
  if(!text||text.length<5)return [];
  const out=[],seen=new Set();
- const root=(chatProject||'').replace(/\\/g,'').replace(/\/+$/,'').toLowerCase();
+ const root=String(chatProject||'').replace(/\\/g,'/').replace(/\/+$/,'').toLowerCase();
  let m;
  MSG_FILE_RE.lastIndex=0;
  while((m=MSG_FILE_RE.exec(text))){
-  const ext=(m[2]||m[4]||'').toLowerCase();
+  const ext=(m[2]||'').toLowerCase();
   if(!MSG_FILE_EXT.has(ext))continue;
-  let p=(m[1]||m[3]||'').replace(/[，。；：、）】》,.;:)\]}]+$/,'');
-  if(!p)continue;
-  let rel=p.replace(/\\/g,'');
+  const base=(m[1]||'').replace(/[，。；：、）】》,.;:)\]}]+$/,'');
+  if(!base)continue;
+  // 正则把扩展名拆到 m[2]，路径要拼回去：少了 .hwt 卡片名会变成「凝蓝_OS8」，
+  // 下载的 rel 也少一段，浏览器只能存成 file.txt（2026-11-19 用户实测）。
+  let rel=(base+'.'+ext).replace(/\\/g,'/');
   if(/^[A-Za-z]:\//.test(rel)||rel[0]==='/'){
    const lower=rel.toLowerCase();
    if(!root||!lower.startsWith(root+'/'))continue;  // 不在工作区里，不给下
@@ -2231,6 +2246,15 @@ function msgFiles(text){
  return out;
 }
 function bubble(m){
+ // 系统信息行（工具调用/后台任务）：不是对话气泡，灰色一行，别占半屏。
+ if(m.role==='system'){
+  const s=document.createElement('div');s.className='bubsys';
+  const tx=document.createElement('span');tx.className='t';tx.textContent=m.text||'';
+  s.append(tx);
+  if(m.at){const t=document.createElement('span');t.className='bt';
+   t.textContent=hhmm(m.at);s.append(t);}
+  return s;
+ }
  const isUser=m.role==='user';
  // 手机传的附件：正文里那几行「请查看文件：<PC 路径>」是给 agent 读文件的，
  // 对用户没意义 —— 摘掉，换成缩略图/文件条（2026-11-18 用户反馈）。
@@ -2270,10 +2294,25 @@ function bubble(m){
   d.append(box);
  }
  if(!isUser){
-  const files=msgFiles(text);
+  // 两条来源合一起，present_files 在前（那是 agent 主动"摆出来"的主产物，
+  // 顺序也是它给的），正文里提到的路径补在后面：
+  // ① present_files 工具结果里的文件（正文不一定再写一遍）；
+  // ② 正文里写出来的路径。
+  const files=[],seen=new Set();
+  (m.files||[]).forEach(p=>{
+   const rel=toRelPath(p);
+   if(!rel||seen.has(rel))return;
+   seen.add(rel);
+   files.push({rel:rel,name:rel.split('/').pop()});
+  });
+  msgFiles(text).forEach(f=>{
+   if(!f.rel||seen.has(f.rel))return;
+   seen.add(f.rel);
+   files.push(f);
+  });
   if(files.length){
    const box=document.createElement('div');box.className='bubfiles';
-   files.forEach(f=>{
+   files.slice(0,8).forEach(f=>{
     const a=document.createElement('a');
     a.className='bubfile';
     a.href=fpUrl(null,f.rel);

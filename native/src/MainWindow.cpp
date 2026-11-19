@@ -4673,10 +4673,11 @@ QJsonArray lanProjectArtifacts(const QString &project) {
     static const QStringList kSkip = {
         QStringLiteral("node_modules"), QStringLiteral(".git"),
         QStringLiteral(".agentrmc"),    QStringLiteral(".workbuddy"),
-        QStringLiteral(".agents"),      QStringLiteral("build"),
-        QStringLiteral(".vs"),          QStringLiteral(".vscode"),
-        QStringLiteral("coverage"),     QStringLiteral("tmp_t"),
-        QStringLiteral("tmp_test"),     QStringLiteral("__pycache__")};
+        QStringLiteral(".workbuddy-ai"), QStringLiteral(".agents"),
+        QStringLiteral("build"),        QStringLiteral(".vs"),
+        QStringLiteral(".vscode"),      QStringLiteral("coverage"),
+        QStringLiteral("tmp_t"),        QStringLiteral("tmp_test"),
+        QStringLiteral("__pycache__")};
     const qint64 cutoff =
         QDateTime::currentDateTime().addSecs(-24 * 3600).toMSecsSinceEpoch();
     struct Item {
@@ -4781,6 +4782,9 @@ QString MainWindow::lanInboxList(const QJsonObject &meta) {
 // canonical 前缀校验兜住符号链接——不许读 inbox 以外任何东西。
 // 手机能下载的文件扩展名白名单。工作区里有 .env / 私钥 / 源码，不能因为
 // 「能给 agent 写文件」就把整个目录放开。只放产物类：媒体、文档、压缩包、安装包。
+// HarmonyOS 的 hwt（主题包）/ hap（应用包）/ hsp（共享包）都是 zip 壳的产物，
+// 跟 apk 同级；缺了 hwt 会让「凝蓝_OS8.hwt」这类主题成品在产物面板里消失
+// （2026-11-19 用户实测）。
 bool shareableExt(const QString &path) {
     static const QSet<QString> kOk = {
         QStringLiteral("png"),  QStringLiteral("jpg"),  QStringLiteral("jpeg"),
@@ -4792,7 +4796,8 @@ bool shareableExt(const QString &path) {
         QStringLiteral("doc"),  QStringLiteral("docx"), QStringLiteral("xls"),
         QStringLiteral("xlsx"), QStringLiteral("ppt"),  QStringLiteral("pptx"),
         QStringLiteral("zip"),  QStringLiteral("7z"),   QStringLiteral("rar"),
-        QStringLiteral("exe"),  QStringLiteral("msi"),  QStringLiteral("apk")};
+        QStringLiteral("exe"),  QStringLiteral("msi"),  QStringLiteral("apk"),
+        QStringLiteral("hwt"),  QStringLiteral("hap"),  QStringLiteral("hsp")};
     const QString ext = QFileInfo(path).suffix().toLower();
     return !ext.isEmpty() && kOk.contains(ext);
 }
@@ -4855,7 +4860,10 @@ LanWebServer::Download MainWindow::lanInboxFile(const QJsonObject &meta) {
             .mimeTypeForFile(canonFile, QMimeDatabase::MatchExtension)
             .name();
     out.ok = true;
-    out.name = name;
+    // 只给 basename：projectScope 的 name 是「产物/OS8成品/凝蓝_OS8.hwt」这种
+    // 相对路径，原样塞进 Content-Disposition 会让浏览器把斜杠当路径处理，
+    // 下载下来可能变成 file.txt。
+    out.name = QFileInfo(name).fileName();
     out.data = data;
     out.contentType =
         mime.isEmpty() ? QByteArray("application/octet-stream") : mime.toUtf8();

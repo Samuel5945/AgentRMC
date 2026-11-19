@@ -981,6 +981,12 @@ QString WorkWebView::htmlFor(const QString &stateJson) const {
  .bub .who{display:block;font-weight:600;font-size:var(--f10);color:var(--muted);
    margin-bottom:2px}
  .bub .bt{display:block;font-size:var(--f10);color:var(--muted2);margin-top:4px}
+ /* 系统信息行：工具调用耗时 / 后台任务完成。灰色一行，别抢对话气泡的重量。 */
+ .bubsys{flex:0 0 auto;align-self:stretch;display:flex;align-items:baseline;gap:8px;
+   margin:2px 0;padding:2px 4px 2px 9px;border-left:2px solid var(--w14);
+   font-size:var(--f11);line-height:1.5;color:var(--muted)}
+ .bubsys .t{flex:1;min-width:0;word-break:break-word}
+ .bubsys .bt{flex:0 0 auto;margin:0;font-size:var(--f10);color:var(--faint)}
  .reqcard{flex:0 0 auto;align-self:stretch;margin:6px 0;padding:10px 12px;
    border-radius:10px;background:var(--w8);border:1px solid var(--a64)}
  .reqbtn{display:block;width:100%;text-align:left;margin:4px 0;padding:8px 10px;
@@ -3531,6 +3537,15 @@ function splitAttLines(text){
   return {files:files,rest:rest};
 }
 function bubble(m){
+  // 系统信息行（工具调用耗时 / 后台任务完成）：灰色一行，不是对话气泡。
+  if(m.role==='system'){
+    const s=document.createElement('div');s.className='bubsys';
+    const tx=document.createElement('span');tx.className='t';tx.textContent=m.text||'';
+    s.append(tx);
+    if(m.at){const t=document.createElement('span');t.className='bt';
+      t.textContent=hhmm(m.at);s.append(t);}
+    return s;
+  }
   const isUser=m.role==='user';
   let text=m.text||'', attFiles=[];
   if(isUser){const sp=splitAttLines(text);text=sp.rest;attFiles=sp.files;}

@@ -140,6 +140,28 @@ int main(int argc, char **argv) {
         }
         return (r.supported && r.total > 0) ? 0 : 1;
     }
+    // --chat <exe> <session-id>：对真实会话冒烟，顺带打印每条的 files
+    // （present_files 摆出来的产物，聊天页用它画下载卡片）。
+    if (argc >= 4 && QByteArray(argv[1]) == "--chat") {
+        const QString exe = QString::fromUtf8(argv[2]);
+        const QString sid = QString::fromUtf8(argv[3]);
+        const auto r = SessionTranscript::read(exe, sid, 8, 0);
+        std::printf("supported=%d total=%d error=%s\n", r.supported, r.total,
+                    r.error.toUtf8().constData());
+        for (const QJsonValue &m : r.messages) {
+            const QJsonObject o = m.toObject();
+            const QJsonArray files = o.value(QStringLiteral("files")).toArray();
+            std::printf("[%s] files=%d %s\n",
+                        o.value(QStringLiteral("role")).toString().toUtf8().constData(),
+                        static_cast<int>(files.size()),
+                        o.value(QStringLiteral("text")).toString().left(50)
+                            .toUtf8().constData());
+            for (const QJsonValue &f : files) {
+                std::printf("    -> %s\n", f.toString().toUtf8().constData());
+            }
+        }
+        return r.supported ? 0 : 1;
+    }
     // --catalog <exe>：装机后对真实宿主会话目录冒烟（不写库）。
     if (argc >= 3 && QByteArray(argv[1]) == "--catalog") {
         const QString exe = QString::fromUtf8(argv[2]);
@@ -247,6 +269,279 @@ int main(int argc, char **argv) {
             }
         }
         check(!sawSub, "subagent jsonl not listed");
+    }
+
+    // ---- present_files 摆出来的产物要挂到 assistant 消息上 ----
+    {
+        // 正文只写「这个包只有 .hwt」、路径只在工具结果里时，聊天页以前既没有
+        // 下载卡片、产物面板也扫不到（2026-11-19 凝蓝_OS8.hwt）。
+        const QString sid4 = QStringLiteral("cccccccc-dddd-4eee-8fff-000000000000");
+        const QJsonObject presented{
+            {QStringLiteral("type"), QStringLiteral("function_call_result")},
+            {QStringLiteral("name"), QStringLiteral("present_files")},
+            {QStringLiteral("output"),
+             QJsonArray{QJsonObject{
+                 {QStringLiteral("type"), QStringLiteral("input_text")},
+                 {QStringLiteral("text"),
+                  QString::fromUtf8(QJsonDocument(QJsonObject{
+                      {QStringLiteral("files"),
+                       QJsonArray{QStringLiteral("d:/w/产物/OS8成品/凝蓝_OS8.hwt"),
+                                  QStringLiteral("d:/w/产物/预览.jpg")}}})
+                                        .toJson(QJsonDocument::Compact))}}}}};
+        writeLines(wbHome + QStringLiteral("/projects/slug-d/") + sid4 +
+                       QStringLiteral(".jsonl"),
+                   {QStringLiteral(R"({"type":"message","cwd":"D:/w"})"),
+                    wbLine("u1", "user", QStringLiteral("做个主题包"),
+                           base + 7000, sid4),
+                    QString::fromUtf8(
+                        QJsonDocument(presented).toJson(QJsonDocument::Compact)),
+                    wbLine("a1", "assistant", QStringLiteral("这个包只有 .hwt"),
+                           base + 8000, sid4)});
+        const auto rr = SessionTranscript::read(QStringLiteral("WorkBuddyAI.exe"),
+                                                sid4, 50, 0, wbHome);
+        bool attached = false;
+        for (const QJsonValue &v : rr.messages) {
+            const QJsonObject o = v.toObject();
+            if (o.value(QStringLiteral("role")).toString() !=
+                QStringLiteral("assistant")) {
+                continue;
+            }
+            const QJsonArray files = o.value(QStringLiteral("files")).toArray();
+            if (files.size() == 2 &&
+                files.at(0).toString().endsWith(QStringLiteral("凝蓝_OS8.hwt"))) {
+                attached = true;
+            }
+        }
+        check(attached, "present_files attached to assistant message");
+    }
+
+    // ---- 宿主注入的 user 行（后台任务通知）不能当用户气泡 ----
+    {
+        // WorkBuddy 把「后台命令跑完了」写成 user 角色的一坨 XML；以前原样渲染成
+        // 「我」的气泡（2026-11-19 用户截图）。摘要/本地命令回显同理。
+        const QString sid5 = QStringLiteral("dddddddd-eeee-4fff-8000-111111111111");
+        writeLines(wbHome + QStringLiteral("/projects/slug-e/") + sid5 +
+                       QStringLiteral(".jsonl"),
+                   {QStringLiteral(R"({"type":"message","cwd":"D:/x"})"),
+                    wbLine("n1", "user",
+                           QStringLiteral("<task-notification>\n<task-id>67jRnr</task-id>\n"
+                                          "<status>completed</status>\n</task-notification>"),
+                           base + 10000, sid5),
+                    wbLine("n2", "user",
+                           QStringLiteral("<cb_summary>Summary of the conversation</cb_summary>"),
+                           base + 11000, sid5),
+                    wbLine("u1", "user", QStringLiteral("把主题包再核一遍"),
+                           base + 12000, sid5),
+                    wbLine("a1", "assistant", QStringLiteral("核完了，全绿"),
+                           base + 13000, sid5)});
+        const auto rr = SessionTranscript::read(QStringLiteral("WorkBuddyAI.exe"),
+                                                sid5, 50, 0, wbHome);
+        // 通知变成一行系统信息（不再当「我」的气泡）；cb_summary 直接丢掉。
+        check(rr.messages.size() == 3, "harness user rows filtered");
+        if (rr.messages.size() == 3) {
+            check(rr.messages.at(0).toObject().value(QStringLiteral("role")).toString() ==
+                      QStringLiteral("system"),
+                  "task notification becomes a system row");
+            const QJsonObject first = rr.messages.at(1).toObject();
+            check(first.value(QStringLiteral("role")).toString() ==
+                      QStringLiteral("user") &&
+                      first.value(QStringLiteral("text")).toString() ==
+                          QStringLiteral("把主题包再核一遍"),
+                  "first bubble is the real user text");
+        }
+        check(!rr.title.contains(QStringLiteral("task-notification")),
+              "title not taken from harness row");
+    }
+
+    // ---- 长耗时工具调用 / 后台任务 → 一行系统信息 ----
+    {
+        // Agent 闷头跑工具时页面不能「什么都不显示」：≥2s 的调用落一行
+        // 「执行命令 5.0s · …」，快的调用不刷屏，还在跑的那条标「进行中」。
+        const QString sid6 = QStringLiteral("eeeeeeee-ffff-4000-8111-222222222222");
+        auto call = [&sid6](const QString &id, const QString &name,
+                            const QJsonObject &args, qint64 ts) {
+            return QString::fromUtf8(
+                QJsonDocument(QJsonObject{
+                    {QStringLiteral("type"), QStringLiteral("function_call")},
+                    {QStringLiteral("callId"), id},
+                    {QStringLiteral("name"), name},
+                    {QStringLiteral("arguments"), args},
+                    {QStringLiteral("timestamp"), static_cast<double>(ts)},
+                    {QStringLiteral("sessionId"), sid6}})
+                    .toJson(QJsonDocument::Compact));
+        };
+        auto result = [&sid6](const QString &id, qint64 ts) {
+            return QString::fromUtf8(
+                QJsonDocument(QJsonObject{
+                    {QStringLiteral("type"),
+                     QStringLiteral("function_call_result")},
+                    {QStringLiteral("callId"), id},
+                    {QStringLiteral("status"), QStringLiteral("completed")},
+                    {QStringLiteral("timestamp"), static_cast<double>(ts)},
+                    {QStringLiteral("sessionId"), sid6}})
+                    .toJson(QJsonDocument::Compact));
+        };
+        writeLines(wbHome + QStringLiteral("/projects/slug-f/") + sid6 +
+                       QStringLiteral(".jsonl"),
+                   {QStringLiteral(R"({"type":"message","cwd":"D:/x"})"),
+                    wbLine("u1", "user", QStringLiteral("重新构建一版"),
+                           base + 14000, sid6),
+                    call(QStringLiteral("c1"), QStringLiteral("Bash"),
+                         QJsonObject{{QStringLiteral("command"),
+                                      QStringLiteral("python build.py\n--fast")}},
+                         base + 15000),
+                    result(QStringLiteral("c1"), base + 20000),  // 5.0s
+                    call(QStringLiteral("c2"), QStringLiteral("Read"),
+                         QJsonObject{{QStringLiteral("file_path"),
+                                      QStringLiteral("D:/x/a.md")}},
+                         base + 21000),
+                    result(QStringLiteral("c2"), base + 21100),  // 0.1s，不露
+                    wbLine("a1", "assistant", QStringLiteral("这版构建好了"),
+                           base + 22000, sid6),
+                    call(QStringLiteral("c3"), QStringLiteral("Bash"),
+                         QJsonObject{{QStringLiteral("command"),
+                                      QStringLiteral("python build.py --slow")}},
+                         base + 23000),  // 没有结果 → 还在跑
+                    QString::fromUtf8(
+                        QJsonDocument(QJsonObject{
+                            {QStringLiteral("type"), QStringLiteral("message")},
+                            {QStringLiteral("role"), QStringLiteral("user")},
+                            {QStringLiteral("sessionId"), sid6},
+                            {QStringLiteral("timestamp"),
+                             static_cast<double>(base + 24000)},
+                            {QStringLiteral("content"),
+                             QJsonArray{QJsonObject{
+                                 {QStringLiteral("type"),
+                                  QStringLiteral("input_text")},
+                                 {QStringLiteral("text"),
+                                  QStringLiteral("<task-notification>\n<status>completed"
+                                                 "</status>\n<summary>Background command "
+                                                 "&quot;python build.py&quot;</summary>"
+                                                 "\n</task-notification>")}}}}})
+                                .toJson(QJsonDocument::Compact))});
+        const auto rr = SessionTranscript::read(QStringLiteral("WorkBuddyAI.exe"),
+                                                sid6, 50, 0, wbHome);
+        int sysRows = 0;
+        bool longCall = false, running = false, note = false;
+        for (const QJsonValue &v : rr.messages) {
+            const QJsonObject o = v.toObject();
+            if (o.value(QStringLiteral("role")).toString() !=
+                QStringLiteral("system")) {
+                continue;
+            }
+            ++sysRows;
+            const QString t = o.value(QStringLiteral("text")).toString();
+            if (t.startsWith(QStringLiteral("执行命令 5.0s")) &&
+                t.contains(QStringLiteral("python build.py"))) {
+                longCall = true;
+            }
+            if (t.startsWith(QStringLiteral("进行中 · 执行命令"))) {
+                running = true;
+            }
+            if (t.startsWith(QStringLiteral("后台任务完成"))) {
+                note = true;
+            }
+            check(!t.contains(QStringLiteral("a.md")), "fast call not shown as system row");
+        }
+        check(longCall, "slow tool call becomes a system row");
+        check(running, "in-flight tool call shown as running");
+        check(note, "task notification becomes a system row");
+        check(sysRows == 3, "only 3 system rows (slow + running + note)");
+        // 气泡本体不能少
+        bool sawAssistant = false;
+        for (const QJsonValue &v : rr.messages) {
+            if (v.toObject().value(QStringLiteral("role")).toString() ==
+                QStringLiteral("assistant")) {
+                sawAssistant = true;
+            }
+        }
+        check(sawAssistant, "assistant bubble kept alongside system rows");
+    }
+
+    // ---- OpenSquilla：每轮耗时 → 一行系统信息 ----
+    {
+        const QString tRoot = temp.filePath("osq-turns");
+        QDir().mkpath(tRoot);
+        const QString key = QStringLiteral("agent:main:cli:turns1");
+        const qint64 t0 = 1794569000000LL;
+        {
+            QSqlDatabase db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"),
+                                                        QStringLiteral("setup_ot"));
+            db.setDatabaseName(tRoot + QStringLiteral("/sessions.db"));
+            db.open();
+            QSqlQuery q(db);
+            q.exec("CREATE TABLE transcript_entries(id INTEGER PRIMARY KEY, "
+                   "session_key TEXT, role TEXT, content TEXT, created_at INTEGER)");
+            q.exec("CREATE TABLE agent_tasks(task_id TEXT, session_key TEXT, "
+                   "status TEXT, started_at INTEGER, finished_at INTEGER, "
+                   "error_message TEXT)");
+            auto entry = [&](int id, const QString &role, const QString &text,
+                             qint64 ms) {
+                QSqlQuery i(db);
+                i.prepare("INSERT INTO transcript_entries VALUES(?,?,?,?,?)");
+                i.addBindValue(id);
+                i.addBindValue(key);
+                i.addBindValue(role);
+                i.addBindValue(text);
+                i.addBindValue(ms);
+                i.exec();
+            };
+            entry(1, "user", QStringLiteral("OSQ 长轮"), t0);
+            entry(2, "assistant", QStringLiteral("OSQ 答完"), t0 + 5000);
+            auto task = [&](const QString &id, const QString &status,
+                            qint64 started, qint64 finished, const QString &err) {
+                QSqlQuery i(db);
+                i.prepare("INSERT INTO agent_tasks VALUES(?,?,?,?,?,?)");
+                i.addBindValue(id);
+                i.addBindValue(key);
+                i.addBindValue(status);
+                i.addBindValue(started);
+                i.addBindValue(finished);
+                i.addBindValue(err);
+                i.exec();
+            };
+            // 2m5s 的一轮要露一行；5s 的短轮不露。
+            task(QStringLiteral("t1"), QStringLiteral("succeeded"), t0,
+                 t0 + 125000, QString());
+            task(QStringLiteral("t2"), QStringLiteral("succeeded"), t0 + 126000,
+                 t0 + 131000, QString());
+            db.close();
+        }
+        QSqlDatabase::removeDatabase(QStringLiteral("setup_ot"));
+        const auto rr = SessionTranscript::read(QStringLiteral("OpenSquilla.exe"),
+                                                key, 50, 0, tRoot);
+        check(rr.messages.size() == 3, "osq turn row added");
+        if (rr.messages.size() == 3) {
+            const QJsonObject last = rr.messages.at(2).toObject();
+            const QString t = last.value(QStringLiteral("text")).toString();
+            check(last.value(QStringLiteral("role")).toString() ==
+                      QStringLiteral("system") &&
+                      t.startsWith(QStringLiteral("本轮 2m5s")) &&
+                      t.contains(QStringLiteral("完成")),
+                  "osq turn row text");
+        }
+    }
+
+    // ---- DSH：工具调用耗时 → 一行系统信息 ----
+    {
+        // 夹具是 zstd 压好的（vendored libzstd 只编解压子集，测试里压不了），
+        // 生成脚本见 tests/fixtures/dsh/make_fixture.py。
+        const auto rr = SessionTranscript::read(
+            QStringLiteral("DeepSeek Harness.exe"),
+            QStringLiteral("session-abc123"), 50, 0,
+            QStringLiteral(FIXTURE_DIR) + QStringLiteral("/dsh"));
+        check(rr.messages.size() == 3, "dsh tool row added");
+        if (rr.messages.size() == 3) {
+            const QJsonObject sys = rr.messages.at(1).toObject();
+            check(sys.value(QStringLiteral("role")).toString() ==
+                      QStringLiteral("system") &&
+                      sys.value(QStringLiteral("text")).toString() ==
+                          QStringLiteral("执行命令 5.0s · 构建前端"),
+                  "dsh tool row text");
+            check(rr.messages.at(2).toObject().value(QStringLiteral("text"))
+                      .toString() == QStringLiteral("构建好了"),
+                  "dsh assistant bubble kept");
+        }
     }
 
     // ---- 宿主临时目录（日期目录）里会话还在 → 不算已归档 ----

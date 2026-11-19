@@ -1735,6 +1735,7 @@ QString LanWebServer::mobileHtml() const {
    <div class="chathead">
     <button class="cicobtn" id="chatBack" aria-label="返回待办"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5 8 12l7 7"/></svg></button>
     <div class="chtitles"><div class="name" id="chatTitle"></div><div class="where" id="chatSub"></div></div>
+    <button class="cicobtn" id="chatRefresh" title="刷新记录" aria-label="刷新记录"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20.5 12a8.5 8.5 0 1 1-2.5-6L21 9"/><path d="M21 3v6h-6"/></svg></button>
     <button class="cicobtn" id="chatFiles" title="产物与文件" aria-label="产物与文件"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7.5A2 2 0 0 1 5 5.5h4l2 2.5h8a2 2 0 0 1 2 2v7.5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/></svg></button>
    </div>
    <div class="chatwrap">
@@ -2761,6 +2762,12 @@ $('chatFiles').onclick=()=>{
  mpOpen=false;$('chatModelPanel').hidden=true;
  $('chatFilePanel').hidden=false;
  fpLoad();
+};
+$('chatRefresh').onclick=()=>{
+ if(!chatId)return;
+ cNotice('','正在刷新记录…');
+ chatMsgs=[];chatIds=new Set();chatTotal=0;chatHasMore=false;
+ fetchTranscript(0,'init');
 };
 $('chatFileClose').onclick=fpClose;
 function cGrow(p){

@@ -104,6 +104,7 @@ pnpm add "link:D:\githubrepos\Agentrmc\plugins\deepseek-harness"
 | `notifyQuestion` | `true` | 等选方案时出声 + 拉前台 |
 | `notifyTurnStart` | `true` | 新对话开始时告诉原生端归档旧「待验收」 |
 | `notifyStop` | `true` | 一轮结束念最终回复 |
+| `notifyProgress` | `true` | 回合内活动回声：把「已开工 / 调用 X / 生成回复中 · 已运行时长」刷进已有卡（RMC 长思考轮不再只剩「静默 N 分」）；无卡不动、永不出声 |
 | `speakFinalReply` | `true` | 念正文；`false` 时只念「做完了」 |
 | `registerTools` | `true` | 注册四个 `pet_*` 工具 |
 | `registerSkill` | `true` | 注册 `agentrmc-pet` skill |

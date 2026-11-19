@@ -419,6 +419,39 @@ Task/WorkItem 的**会话归属**与**可验证投递**，这两块得自己补�
   `agent:main:cli:344fb256` 经用户裁决于 2026-11-08 删除（`sessions.delete`，
   sessions/transcript/ingress 级联零残留）。
 
+#### 回合内活动回声 progress（2026-11-19，OpenSquilla / DSH 两线同修）
+
+用户反馈：长思考轮里宿主界面一直有思考流，RMC 只剩「静默 N 分」什么都不显。
+接法：桥/插件把进行中事件翻译成 `/notify event=progress`（带 session_id/project）：
+
+- OpenSquilla 桥：`thinking_start/thinking`→思考中、`tool_use_start`→调用 X…、
+  `text_delta`→写回复中；delta 类事件不凭空建账（回合后的孤立 delta 不复活活动），
+  建账只由结构性事件触发；done/审批/方案收摊；免打扰不刷；瞬时态不落补投。
+- DSH 插件：`agent/inbox/claimed`→已开工、`tool/call`→调用 X…（ask_user_question
+  除外）、`agent/assistant-stream` start→生成回复中、turn-stopping/disposed 收摊；
+  asar 里虽有 `agent/pre-step` 字样但插件总线未验，不赌死通道；思考间隔靠
+  「已开工 · 已 N 分」续命兼底。配置开关 `notifyProgress`（默认开）。
+- 节流两线同款：换文案最少 8s，无新动静每 45s 续一次命（带已运行时长），
+  sweep 10s tick（DSH 侧 unref，插件老坑）。
+- 原生端语义（WorkItems/MainWindow）：`upsert` 新增 `echoOnly` 入参（桥的 progress
+  传 true）——只刷已存在的 working 卡：无卡不建（裁决 2 延伸，随手聊天不长
+  待办）、不碰 needs-me（人要做的文案不被「思考中」顶掉，等位计时照走）；
+  静默——不出声不冒泡不抢前台不记事件流。默认口径不变：Agent 主动
+  `/work-items/update`（MCP）报 progress 仍可建卡、可把 blocked 推进回 working。
+  测试种子改用 MCP report（voice 回执会被 stop lineage 规则提前结案，不适合
+  当链起点），新增回声不建卡/不顶 needs-me 断言；桥 23/23；DSH 46/46。
+- 长轮补卡（桥侧判，原生零改动）：回合跑过 120s（`--progress-create-after-ms`），
+  桥先 GET /work-items 查账——该会话确实没活卡才用上报口径长一张 working 卡
+  （已有卡不插）；直接在宿主里开聊的长思考轮也不再只剩静默。DSH 同款。
+  另：派发受理（sessions.send 拿到 turn_id）当场建活动账，盖住新建会话立刻
+  派发时 turn_committed 与订阅的竞态窗口（实测踩过：牺牲会话首轮回声零输出）。
+- 顺手修的两个 HEAD 遗留坑（都被本批测试抓出）：① onmessage「任何入站帧
+  清零探针计数」在有第二个周期 RPC（pushModels）后让半开检测永停在 1/3
+  不自愈——改成只有服务器主动推的 event 帧才清零；② 审批用例断言被
+  answerInline 的 /requests 推送顶歪下标——按 url 过滤后断言（桥行为本就
+  正确，两次审批 event_id a1/a2 都透传）。另：假原生端对 GET 空体请求补
+  204 守卫，不再把测试进程 JSON.parse('') 炸死。
+
 已定的设计约束：
 
 - 宿主若支持 API／插件命令：新建或指定会话，发送带 `dispatchId`，回执关联到工单。

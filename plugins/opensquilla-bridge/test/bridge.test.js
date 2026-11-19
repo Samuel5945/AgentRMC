@@ -208,6 +208,7 @@ function inject(eventName, sessionKey, extra = {}) {
 // ------------------------------------------------------- 假 AgentBridge
 const received = [];
 const acks = [];
+let jsonGet = { items: [] };   // GET /work-items 的应答（长轮补卡前查账用）
 let pendingItems = [];   // /dispatch/pending 一次性吐完（模拟 take-once）
 let pendingGets = 0;
 const fakeBridge = http.createServer((req, res) => {
@@ -218,6 +219,19 @@ const fakeBridge = http.createServer((req, res) => {
     res.statusCode = 200;
     res.setHeader('Content-Type', 'application/json');
     res.end(JSON.stringify(items));
+    return;
+  }
+  if (req.method === 'GET' && req.url.startsWith('/work-items')) {
+    res.statusCode = 200;
+    res.setHeader('Content-Type', 'application/json');
+    res.end(JSON.stringify(jsonGet));
+    return;
+  }
+  if (req.method === 'GET') {
+    // 其它 GET（如内联应答轮询 /request-answer/pending）：空体请求没有
+    // data 事件，走 POST 分支会把 '' 交给 JSON.parse 把测试进程炸掉。
+    res.statusCode = 204;
+    res.end();
     return;
   }
   let body = '';
@@ -326,9 +340,13 @@ await check('同会话两次审批（approval_id 不同）都提醒，event_id �
     inject('session.event.approval_required', 's-appr', { approval_id: 'a1' });
     await waitFor(() => received.length >= 1, '审批1');
     inject('session.event.approval_required', 's-appr', { approval_id: 'a2' });
-    await waitFor(() => received.length >= 2, '审批2');
-    assert.strictEqual(received[1].body.event, 'permission');
-    assert.strictEqual(received[1].body.event_id, 'a2');
+    // answerInline 默认开后 /requests 推送也在 received 里：只按 /notify 断言。
+    await waitFor(() => received.filter((r) => r.url === '/notify').length >= 2, '审批2');
+    const perms = received.filter((r) => r.url === '/notify');
+    assert.strictEqual(perms.length, 2, '两次审批都要提醒');
+    assert.strictEqual(perms[0].body.event, 'permission');
+    assert.strictEqual(perms[1].body.event, 'permission');
+    assert.strictEqual(perms[1].body.event_id, 'a2');
   } finally { await stopBridge(handle); }
 });
 
@@ -448,6 +466,71 @@ await check('文案：默认宿主名开头；{session} 泛标题回落项目目
     await waitFor(() => received.length >= 1, '自定义 stop');
     assert.strictEqual(received[0].body.message, '「Agentrmc」跑完了');
   } finally { await stopBridge(custom); }
+});
+
+await check('活动回声：thinking/tool_use → progress 刷卡带 session；--no-progress 全关', async () => {
+  received.length = 0;
+  const handle = spawnBridge(BRIDGE, path.join(TMP, 'spool-act'), [
+    '--progress-label-ms', '10', '--progress-refresh-ms', '600000',
+  ]);
+  try {
+    await waitFor(() => gatewayReady, '网关就绪');
+    inject('session.event.turn_committed', 's-act');
+    await sleep(120);
+    inject('session.event.thinking_start', 's-act');
+    await waitFor(() => received.some((r) => r.body.event === 'progress'), 'thinking progress');
+    const first = received.find((r) => r.body.event === 'progress');
+    assert.strictEqual(first.body.session_id, 's-act');
+    assert.ok(first.body.message.includes('思考中'), first.body.message);
+    inject('session.event.tool_use_start', 's-act', { tool_name: 'exec_command' });
+    await waitFor(() => received.filter((r) => r.body.event === 'progress').length >= 2,
+      'tool progress');
+    const last = received.filter((r) => r.body.event === 'progress').pop();
+    assert.ok(last.body.message.includes('调用 exec_command'), last.body.message);
+    // 回合结束：活动收摊，后续 delta 不再刷
+    inject('session.event.done', 's-act');
+    await sleep(120);
+    const before = received.length;
+    inject('session.event.text_delta', 's-act');
+    await sleep(400);
+    assert.strictEqual(received.length, before, 'done 之后的孤立 delta 不该长新活动');
+  } finally { await stopBridge(handle); }
+  received.length = 0;
+  const off = spawnBridge(BRIDGE, path.join(TMP, 'spool-act2'), ['--no-progress']);
+  try {
+    await waitFor(() => gatewayReady, '网关就绪');
+    inject('session.event.thinking_start', 's-off');
+    await sleep(400);
+    assert.ok(!received.some((r) => r.body.event === 'progress'), '--no-progress 不该发 progress');
+  } finally { await stopBridge(off); }
+});
+
+await check('长轮补卡：超时无活卡才用上报口径建卡；已有活卡不插', async () => {
+  received.length = 0;
+  jsonGet = { items: [] };
+  const handle = spawnBridge(BRIDGE, path.join(TMP, 'spool-create'), [
+    '--progress-label-ms', '10', '--progress-refresh-ms', '600000',
+    '--progress-create-after-ms', '300',
+  ]);
+  try {
+    await waitFor(() => gatewayReady, '网关就绪');
+    inject('session.event.turn_committed', 's-late');
+    await sleep(400);
+    inject('session.event.thinking_start', 's-late');
+    await waitFor(() => received.some((r) => r.url === '/work-items/update'), '补卡上报');
+    const up = received.find((r) => r.url === '/work-items/update');
+    assert.strictEqual(up.body.stage, 'progress');
+    assert.strictEqual(up.body.session_id, 's-late');
+    // 已有活卡：不重复插，但回声照发
+    jsonGet = { items: [{ session_id: 's-late', done: false, stage: 'working' }] };
+    const before = received.filter((r) => r.url === '/work-items/update').length;
+    inject('session.event.tool_use_start', 's-late', { tool_name: 'exec_command' });
+    await waitFor(() => received.some((r) => r.url === '/notify' && r.body.event === 'progress'
+      && r.body.message.includes('调用 exec_command')), '工具回声');
+    await sleep(250);
+    assert.strictEqual(received.filter((r) => r.url === '/work-items/update').length,
+      before, '已有活卡不该再插一张');
+  } finally { await stopBridge(handle); jsonGet = { items: [] }; }
 });
 
 // ------------------------------------------------------------ B) 桥死了

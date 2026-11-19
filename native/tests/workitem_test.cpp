@@ -110,30 +110,49 @@ int main(int argc, char *argv[]) {
               lifecycle.attentionCount() == 1);
 
     WorkItemStore progress(dir.path() + "/progress.json");
-    const WorkItem p1 = progress.upsert(
-        "hook", "WorkBuddyAI.exe", "s10", "D:/repo", "progress",
-        "WorkBuddy AI", "正在跑测试", "WorkBuddyAI.exe", "");
+    // 种子用 MCP 主动上报的 working 卡（voice 回执会被 stop 的 lineage 规则
+    // 提前结案，不适合当这条链的起点）。
+    const WorkItem pSeed = progress.report(
+        "WorkBuddyAI.exe", "WorkBuddyAI.exe", "s10", "D:/repo", "progress",
+        "WorkBuddy AI", "写发布说明");
     const WorkItem p2 = progress.upsert(
         "hook", "WorkBuddyAI.exe", "s10", "D:/repo", "progress",
-        "WorkBuddy AI", "正在打包", "WorkBuddyAI.exe", "");
-    check("progress updates one working item per session",
-          p1.id == p2.id && p2.stage == "working" &&
+        "WorkBuddy AI", "正在打包", "WorkBuddyAI.exe", "", true);
+    check("hook progress refreshes the live working item",
+          p2.id == pSeed.id && p2.stage == "working" &&
               p2.message == "正在打包" && progress.items().size() == 1);
+
+    const WorkItem pOrphan = progress.upsert(
+        "hook", "WorkBuddyAI.exe", "s10b", "D:/repo", "progress",
+        "WorkBuddy AI", "随手聊天的回声", "WorkBuddyAI.exe", "", true);
+    check("hook progress with no live card creates nothing",
+          pOrphan.id.isEmpty() && progress.items().size() == 1);
 
     const WorkItem pstop = progress.upsert(
         "hook", "WorkBuddyAI.exe", "s10", "D:/repo", "stop", "WorkBuddy AI",
         "WorkBuddy AI：完成", "WorkBuddyAI.exe", "");
     check("stop closes the progress item as review",
-          pstop.id == p1.id && pstop.stage == "review" &&
+          pstop.id == pSeed.id && pstop.stage == "review" &&
               progress.attentionCount() == 1);
+
+    const WorkItem pNeed = progress.upsert(
+        "hook", "WorkBuddyAI.exe", "s10c", "D:/repo", "permission",
+        "WorkBuddy AI", "等你确认 Bash", "WorkBuddyAI.exe", "");
+    const WorkItem pVsNeed = progress.upsert(
+        "hook", "WorkBuddyAI.exe", "s10c", "D:/repo", "progress",
+        "WorkBuddy AI", "思考中", "WorkBuddyAI.exe", "", true);
+    check("progress does not overwrite the needs-me card",
+          pVsNeed.id.isEmpty() && pNeed.stage == "needs-me" &&
+              pNeed.message == "等你确认 Bash" && progress.items().size() == 2);
 
     WorkItemStore reviews(dir.path() + "/reviews.json");
     const WorkItem oldReview = reviews.upsert(
         "hook", "WorkBuddyAI.exe", "s11", "D:/repo", "stop", "WorkBuddy AI",
         "old review", "WorkBuddyAI.exe", "");
-    const WorkItem next = reviews.upsert(
-        "hook", "WorkBuddyAI.exe", "s11", "D:/repo", "progress",
-        "WorkBuddy AI", "new turn", "WorkBuddyAI.exe", "");
+    // 主动上报（mcp）的 progress 仍可建卡并归档旧验收；事件回声（hook）无卡不建。
+    const WorkItem next = reviews.report(
+        "WorkBuddyAI.exe", "WorkBuddyAI.exe", "s11", "D:/repo", "progress",
+        "WorkBuddy AI", "new turn");
     check("new activity archives the session's old review",
           oldReview.stage == "review" && next.stage == "working" &&
               reviews.attentionCount() == 0);

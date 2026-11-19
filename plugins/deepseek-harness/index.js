@@ -47,6 +47,9 @@ const DEFAULTS = {
   notifyQuestion: true,
   notifyTurnStart: true,
   notifyStop: true,
+  // 回合内活动回声（progress）：长思考轮里把「思考中/调用工具/生成回复」刷进
+  // 已有卡，RMC 不再只剩「静默 N 分」；无卡不动、永不出声。--/配置可关。
+  notifyProgress: true,
   // 一轮结束时把最终回复念出来（取不到就退回通用文案）。
   speakFinalReply: true,
   // 注册 pet_* 工具与 agentrmc-pet skill。
@@ -127,6 +130,7 @@ function normalizeConfig(raw) {
     notifyQuestion: asBool(input.notifyQuestion, DEFAULTS.notifyQuestion),
     notifyTurnStart: asBool(input.notifyTurnStart, DEFAULTS.notifyTurnStart),
     notifyStop: asBool(input.notifyStop, DEFAULTS.notifyStop),
+    notifyProgress: asBool(input.notifyProgress, DEFAULTS.notifyProgress),
     speakFinalReply: asBool(input.speakFinalReply, DEFAULTS.speakFinalReply),
     registerTools: asBool(input.registerTools, DEFAULTS.registerTools),
     registerSkill: asBool(input.registerSkill, DEFAULTS.registerSkill),
@@ -306,6 +310,66 @@ export function apply(ctx, rawConfig) {
   const liveStreams = new Map(); // agentId -> { attemptId, parts: Map<index, text> }
   const lastReply = new Map(); // agentId -> 本轮最后一段正文
   const lastTurnStarted = new Map(); // agentId -> 已上报过的 turn
+
+  // —— 回合内活动回声（2026-11-19，与 OpenSquilla 桥同款）——
+  // 长思考轮里 DSH 界面有流，RMC 只剩「静默 N 分」。进行中的活动翻译成
+  // progress：有卡刷文案 + 重置静默计时，无卡原生端静默丢（裁决 2 延伸），
+  // 永不出声。换文案最少 8s，没新动静每 45s 续一次命（带已运行时长）。
+  const PROGRESS_LABEL_MS = 8000;
+  const PROGRESS_REFRESH_MS = 45000;
+  // 长轮补卡门槛：跑过这个时长还查不到该会话的活卡（直接在 DSH 里开聊的
+  // 长思考轮），用主动上报口径长一张 working 卡；短对话碰不到，裁决 2 不变。
+  const PROGRESS_CREATE_AFTER_MS = 120000;
+  const turnActivity = new Map(); // agentId -> {label, startedAt, lastSentAt, dirty, project}
+  function activityDur(ms) {
+    const s = Math.max(0, Math.round(ms / 1000));
+    if (s < 60) return s + ' 秒';
+    const m = Math.floor(s / 60);
+    if (m < 60) return m + ' 分 ' + (s % 60) + ' 秒';
+    return Math.floor(m / 60) + ' 小时 ' + (m % 60) + ' 分';
+  }
+  function maybeSendProgress(id) {
+    const a = turnActivity.get(id);
+    if (!a || !config.notifyProgress) return;
+    const now = Date.now();
+    const gap = a.dirty ? PROGRESS_LABEL_MS : PROGRESS_REFRESH_MS;
+    if (now - a.lastSentAt < gap) return;
+    a.dirty = false;
+    a.lastSentAt = now;
+    const text = config.agentName + '：' + a.label + ' · 已 ' + activityDur(now - a.startedAt);
+    // progress 是瞬时态：bridge.notify 失败内部自会落盘/告警，不挡会话。
+    send({ event: 'progress', message: text, sessionId: id, project: a.project || '' });
+    if (now - a.startedAt >= PROGRESS_CREATE_AFTER_MS && now - (a.checkedAt || 0) > 60000) {
+      // 长轮补卡前先查账（bridge 侧判，原生零改动）：有活卡就不插——回声会
+      // 刷它自己那条链；确实什么都没有才用 /work-items/update 建一张 working。
+      a.checkedAt = now;
+      (async () => {
+        try {
+          const res = await callBridge('/work-items');
+          const j = JSON.parse((res && res.body) || '{}');
+          if ((j.items || []).some((x) => x.session_id === id && !x.done)) return;
+          await callBridge('/work-items/update', {
+            stage: 'progress', title: config.agentName, agent_exe: config.raiseExe || '',
+            raise: config.raiseExe || '', session_id: id, project: a.project || '', message: text,
+          });
+        } catch { /* 查不到账就不补，别拿猜测刷库 */ }
+      })();
+    }
+  }
+  function setActivity(id, label, project) {
+    if (!id) return;
+    const now = Date.now();
+    const a = turnActivity.get(id);
+    if (a && a.label === label) return; // 重复 delta：续命交给 sweep
+    if (a) {
+      a.label = label;
+      a.dirty = true;
+      if (project) a.project = project;
+    } else {
+      turnActivity.set(id, { label, startedAt: now, lastSentAt: now, dirty: true, project: project || '' });
+    }
+    maybeSendProgress(id);
+  }
 
   // —— B1：待答请求跟踪（只读展示用）——
   // 授权（approval/asked→decided）与提问（ask_user_question→tool/result/reply）的
@@ -709,6 +773,16 @@ export function apply(ctx, rawConfig) {
           }
           // B1：先跟踪待答请求（与通知开关无关，展示始终可用），再发通知。
           trackRequest(session, type, data);
+          // 活动回声：每次工具调用翻一页；ask_user_question 走提问提醒不刷它。
+          if ((type === 'tool/call' || type === 'tool/ptc-dispatch') &&
+              data.name !== 'ask_user_question') {
+            setActivity(sessionIdOf(session),
+              '调用 ' + (data.name || '工具') + '…', projectFor(session));
+          } else if (type === 'approval/asked') {
+            // 等确认期间活动收摊；确认后的下一个工具事件会重建。
+            const sid = sessionIdOf(session);
+            if (sid) turnActivity.delete(sid);
+          }
           if (type === 'approval/asked') {
             if (!config.notifyApproval) return;
             const toolName = String(data.toolName || '').trim();
@@ -761,6 +835,9 @@ export function apply(ctx, rawConfig) {
           if (!agent || !agent.id) return;
           if (lastTurnStarted.get(agent.id) === turn) return; // 同一轮多条消息只报一次
           lastTurnStarted.set(agent.id, turn);
+          // 新一轮开工：活动账本重置（不依提醒开关，progress 自己的账）。
+          turnActivity.set(agent.id, { label: '已开工', startedAt: Date.now(),
+            lastSentAt: Date.now(), dirty: false, project: projectOf(agent) });
           if (!config.notifyTurnStart) return;
           send({
             event: 'turn-start',
@@ -785,6 +862,7 @@ export function apply(ctx, rawConfig) {
           if (!agent || !agent.id || !frame) return;
           if (frame.type === 'start') {
             liveStreams.set(agent.id, { attemptId: frame.attemptId, parts: new Map() });
+            setActivity(String(agent.id), '生成回复中', projectOf(agent));
             return;
           }
           const live = liveStreams.get(agent.id);
@@ -831,7 +909,9 @@ export function apply(ctx, rawConfig) {
       (payload) => {
         try {
           const agent = payload && payload.agent;
-          if (!agent || !agent.id || !config.notifyStop) return;
+          if (!agent || !agent.id) return;
+          turnActivity.delete(agent.id); // 本轮结束，活动收摊
+          if (!config.notifyStop) return;
           const raw = lastReply.get(agent.id) || '';
           lastReply.delete(agent.id);
           const ask = config.speakFinalReply ? trailingQuestion(raw) : '';
@@ -873,6 +953,7 @@ export function apply(ctx, rawConfig) {
         liveStreams.delete(agent.id);
         lastReply.delete(agent.id);
         lastTurnStarted.delete(agent.id);
+        turnActivity.delete(agent.id);
         if (pendingRequests.delete(agent.id)) {
           sessionsById.delete(agent.id);
           bridge.post('/requests', { exe: config.raiseExe || '',
@@ -883,6 +964,16 @@ export function apply(ctx, rawConfig) {
       },
       { global: true },
     );
+
+    // 长轮没新事件也要有人报「还在跑」：sweep 按 refresh 间隔续命。
+    const activityTimer = setInterval(() => {
+      for (const id of [...turnActivity.keys()]) maybeSendProgress(id);
+    }, 10000);
+    // 不撑住宿主/测试进程的事件循环（插件老坑：定时器忘 unref 测进程不退）。
+    if (typeof activityTimer.unref === 'function') activityTimer.unref();
+    if (typeof ctx.effect === 'function') {
+      ctx.effect(() => () => clearInterval(activityTimer), 'agentrmc-bridge activity sweep');
+    }
   }
 
   // —— 工具：与原版 MCP server 的四个工具一一对应 ——

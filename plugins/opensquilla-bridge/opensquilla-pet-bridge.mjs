@@ -84,6 +84,14 @@ const CFG = {
   msgStop: opt("msg-stop", "OpenSquilla：这轮跑完了，回来看看"),
   msgPermission: opt("msg-permission", "OpenSquilla：有个操作在等你确认"),
   msgPlan: opt("msg-plan", "OpenSquilla：「{session}」方案出来了，等你选一个"),
+  // 回合内活动回声（progress）：长思考轮别再让 RMC「静默」；--no-progress 关。
+  // 换文案最少间隔 / 无新动静续命间隔（测试可调小）。
+  progressLabelMs: Number(opt("progress-label-ms", "8000")),
+  progressRefreshMs: Number(opt("progress-refresh-ms", "45000")),
+  // 长轮无卡补卡门槛：回合跑过这个时长还没刷出过任何卡（随手聊天没活卡），
+  // 改用主动上报口径长一张 working 卡（2026-11-19：直接开聊的长思考轮也得有
+  // 东西可看）；短对话碰不到门槛，裁决 2 不变。
+  progressCreateAfterMs: Number(opt("progress-create-after-ms", "120000")),
   pauseFile: opt(
     "pause-file",
     `${process.env.TEMP || process.env.TMP || "."}\\opensquilla-pet-bridge.pause`,
@@ -418,6 +426,110 @@ function renderTemplate(tpl, sessionKey, replyText) {
   return replyText ? `${out} 回复：${replyText}` : out;
 }
 
+// 回合内活动回声（2026-11-19）：OpenSquilla 长思考轮里 WebChat 一直有思考流/
+// 工具流，RMC 此前只剩「静默 N 分」。把进行中的活动翻译成 progress 推原生端：
+// 有卡就刷文案 + 重置静默计时，无卡原生端直接丢（裁决 2 的延伸：不为随手
+// 聊天长待办），progress 永不出声。频率守卫：换文案最少 progressLabelMs，
+// 没新动静每 progressRefreshMs 续一次命（带已运行时长，长轮也在动）。
+const turnActivity = new Map(); // session key -> {label, startedAt, lastSentAt, dirty}
+
+function activityDur(ms) {
+  const s = Math.max(0, Math.round(ms / 1000));
+  if (s < 60) return `${s} 秒`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m} 分 ${s % 60} 秒`;
+  return `${Math.floor(m / 60)} 小时 ${m % 60} 分`;
+}
+
+function maybeSendProgress(key) {
+  const a = turnActivity.get(key);
+  if (!a || !gatewayUp || flag("no-progress")) return;
+  if (existsSync(CFG.pauseFile)) return; // 免打扰：不出声也不刷文案
+  const now = Date.now();
+  const gap = a.dirty ? CFG.progressLabelMs : CFG.progressRefreshMs;
+  if (now - a.lastSentAt < gap) return;
+  a.dirty = false;
+  a.lastSentAt = now;
+  const text = `OpenSquilla：${a.label} · 已 ${activityDur(now - a.startedAt)}`;
+  // progress 是瞬时态：发不出去就丢，不落补投队列（补投一条过期的反而误导）。
+  if (now - a.startedAt >= CFG.progressCreateAfterMs && now - (a.checkedAt || 0) > 60000) {
+    // 长轮补卡前先查账（bridge 侧判，原生零改动）：该会话已有活卡（working/
+    // needs-me/review）就不插新东西——回声会刷它自己那条链；确实什么都
+    // 没有才用主动上报口径长一张 working 卡，别让 30 分钟的思考轮只留静默。
+    a.checkedAt = now;
+    fetch(`${CFG.bridge}/work-items`, { signal: AbortSignal.timeout(5000) })
+      .then((r) => (r.ok ? r.json() : { items: [] }))
+      .then((j) => {
+        if ((j.items || []).some((x) => x.session_id === key && !x.done)) return;
+        return fetch(`${CFG.bridge}/work-items/update`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json; charset=utf-8" },
+          body: JSON.stringify({
+            stage: "progress", title: "OpenSquilla", agent_exe: "OpenSquilla.exe",
+            raise: CFG.raise || "", session_id: key,
+            project: sessionProjects.get(key) || "", message: text,
+          }),
+          signal: AbortSignal.timeout(5000),
+        });
+      })
+      .then(() => log(`PROGRESS-CHECK sess=${key} elapsed=${activityDur(now - a.startedAt)}`))
+      .catch(() => {});
+  }
+  notifyPet("progress", text, key)
+    .then(() => log(`PROGRESS sess=${key} msg=${text}`))
+    .catch(() => {});
+}
+
+function setActivity(key, label, create) {
+  const now = Date.now();
+  const a = turnActivity.get(key);
+  if (a && a.label === label) return; // 重复 delta：计时交给 sweep 续命
+  if (a) {
+    a.label = label;
+    a.dirty = true;
+  } else {
+    // delta 类事件（thinking/text_delta）不凭空建账：回合结束后的孤立 delta
+    // 不该把活动复活；建账只由结构性事件（思考开始/工具开始/开工）触发。
+    if (!create) return;
+    turnActivity.set(key, { label, startedAt: now, lastSentAt: now, dirty: true });
+  }
+  maybeSendProgress(key);
+}
+
+function clearActivity(key) {
+  turnActivity.delete(key);
+}
+
+// 事件流里的进行中信号 → 活动文案；回合结束/要人动手时收摊。
+function trackActivity(evName, sessionKey, p) {
+  const key = String(sessionKey || "");
+  if (!key || key === "?" || flag("no-progress")) return;
+  if (!CFG.includeCron && key.startsWith("cron:")) return;
+  if (evName === "session.event.thinking_start") {
+    setActivity(key, "思考中", true);
+  } else if (evName === "session.event.thinking") {
+    setActivity(key, "思考中", false);
+  } else if (evName === "session.event.tool_use_start") {
+    setActivity(key, `调用 ${p.tool_name || p.name || "工具"}…`, true);
+  } else if (evName === "session.event.text_delta") {
+    setActivity(key, "写回复中", false);
+  } else if (evName === "session.event.turn_committed") {
+    if (!turnActivity.has(key)) {
+      turnActivity.set(key, { label: "已开工", startedAt: Date.now(), lastSentAt: Date.now(), dirty: false });
+    }
+  } else if (evName === "session.event.done" || evName === "chat.done" ||
+             evName === "task.succeeded" || evName === "session.event.error" ||
+             evName === "session.event.approval_required" ||
+             evName === "session.event.plan_presentation") {
+    clearActivity(key);
+  }
+}
+
+// 没新事件的长轮也要有人报「还在跑」：sweep 按 refresh 间隔续命。
+setInterval(() => {
+  for (const key of [...turnActivity.keys()]) maybeSendProgress(key);
+}, 10000);
+
 function eventKind(evName) {
   if (evName === "session.event.done" || evName === "chat.done" || evName === "task.succeeded") {
     return { kind: "stop", tpl: CFG.msgStop };
@@ -453,6 +565,9 @@ async function onFrame(frame) {
   // 事件名在 frame.event 顶层；个别版本会塞进 payload.event。
   const evName = p.event || name;
   const sessionKey = p.session_key || p.key || "?";
+  // 回合内活动回声：先于开关/去重记账（done/审批/方案要把活动收摊，
+  // 哪怕提醒本身被免打扰吞了，活动账也得翻篇）。
+  trackActivity(evName, sessionKey, p);
   // 内联应答账本：先于 notify 的去重/免打扰记账——静音只压出声，
   // 不能吞掉可答卡片（免打扰时人也能在手机上批审批/答澄清）。
   if (CFG.answerInline) trackSessionEvent(evName, sessionKey, p);
@@ -524,7 +639,11 @@ function connect() {
     const raw = typeof ev.data === "string" ? ev.data : ev.data.toString();
     let f;
     try { f = JSON.parse(raw); } catch { return; }
-    probeFailures = 0; // 任何入站帧都证明链路活着，探针计数清零
+    // 服务器**主动推送**才算链路活着的证据，探针计数清零。自己发起的
+    // RPC 应答（res 帧）不算：模型目录上线后 models.list 应答正常而
+    // sessions.list 卡死时，「任何入站帧清零」会让半开探针永远停在
+    // 1/3，强制重连永不自愈（2026-11-19 实测回归，桥测试抓到）。
+    if (f.type === "event") probeFailures = 0;
 
     if (f.type === "event" && f.event === "connect.challenge") {
       ws.send(JSON.stringify({
@@ -663,6 +782,10 @@ async function pollDispatches() {
             }, CFG.sendTimeoutMs);
             if (!accepted || !(accepted.turn_id || accepted.task_id)) {
               error = "送达未知：网关受理应答缺 turn_id，未确认（可能已受理）";
+            } else if (!turnActivity.has(sessionId)) {
+              // 受理即开工：活动账兕底建一笔。新建会话立刻派发的场景里，
+              // 订阅与 turn_committed 有竞态可能漏收——没账就永远刷不出 progress。
+              turnActivity.set(sessionId, { label: "已开工", startedAt: Date.now(), lastSentAt: Date.now(), dirty: false });
             }
           } catch (e) {
             const msg = (e && e.message) || String(e);

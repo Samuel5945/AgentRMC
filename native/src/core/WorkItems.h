@@ -49,11 +49,17 @@ public:
     // 认领老工单时，会话身份优先于宿主身份：来件带 session_id 就只认同一个
     // session；不带才退回按宿主＋项目认，且同宿主只有一个候选时才认领——
     // 并行开两个会话时，「按宿主名猜」会把 A 的进度写到 B 的卡上。
+    // echoOnly：桥事件自动回应的专用口径（2026-11-19，长思考轮 RMC 不再
+    // 「静默」）——progress 只刷已存在的 working 卡：无卡不建（裁决 2 延伸，
+    // 不为随手聊天长待办）、不碰 needs-me（人要做的文案不被「思考中」顶掉，
+    // 等位计时照走），对不上就安静返回空。默认 false：Agent 主动上报等
+    // 既有语义不变（可建卡、可把 blocked/needs-me 推进回 working）。
     WorkItem upsert(const QString &source, const QString &agentExe,
                     const QString &sessionId, const QString &project,
                     const QString &kind, const QString &title,
                     const QString &message, const QString &raiseExe,
-                    const QString &eventId = QString());
+                    const QString &eventId = QString(),
+                    bool echoOnly = false);
 
     const QVector<WorkItem> &items() const { return items_; }
     int attentionCount() const;

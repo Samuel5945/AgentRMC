@@ -159,7 +159,7 @@ WorkItem WorkItemStore::upsert(const QString &source, const QString &agentExe,
                                const QString &project, const QString &kind,
                                const QString &title, const QString &message,
                                const QString &raiseExe,
-                               const QString &eventId) {
+                               const QString &eventId, bool echoOnly) {
     const QDateTime now = QDateTime::currentDateTimeUtc();
     const QString stage = stageForKind(kind);
 
@@ -214,6 +214,11 @@ WorkItem WorkItemStore::upsert(const QString &source, const QString &agentExe,
         int boundCandidates = 0;
         for (WorkItem &item : items_) {
             if (item.done || item.updatedAt < cutoff) {
+                continue;
+            }
+            // 活动回应只刷「进行中」卡：needs-me 上写的是人要做什么，
+            // 不能被「思考中」这类回应顶掉，等位计时也照常走。
+            if (echoOnly && item.stage != QStringLiteral("working")) {
                 continue;
             }
             if (item.stage != QStringLiteral("working") &&
@@ -295,6 +300,13 @@ WorkItem WorkItemStore::upsert(const QString &source, const QString &agentExe,
             save();
             return *target;
         }
+    }
+
+    // 回应式活动刷新的守卫都在调用方给的 echoOnly 里：无卡可刷就什么都不长
+    //（随手聊天不能每轮长一条待办——裁决 2 的延伸，2026-11-19 修「长思考轮
+    // RMC 什么都不显示」）；默认口径不变，Agent 主动上报仍可建卡。
+    if (echoOnly) {
+        return WorkItem{};
     }
 
     // 没有可合并的工单：先算 dedupe key；如果是重复 stop，上面的 dedupe

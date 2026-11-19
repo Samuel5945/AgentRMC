@@ -114,6 +114,9 @@ schtasks /Create /F /TN OpenSquillaPetBridgeWatchdog /SC MINUTE /MO 5 /TR "wscri
 | `--refresh <ms>` / `--call-timeout <ms>` / `--hello-timeout <ms>` | 探针周期 / 单次调用超时 / 握手限时，默认 30000 / 15000 / 20000 |
 | `--selftest` | 只发一条测试通知就退出 |
 | `--no-dispatch` | 关掉定向派发取件（只保留事件提醒） |
+| `--no-progress` | 关掉回合内活动回声（长思考轮不再刷「思考中/调用工具…」） |
+| `--progress-label-ms` / `--progress-refresh-ms` | 活动刷文案的换文案最少间隔 / 无新动静续命间隔，默认 8000 / 45000 |
+| `--progress-create-after-ms` | 长轮补卡门槛：回合跑过这个时长还没活卡，查账后长一张 working，默认 120000 |
 
 免打扰：`New-Item "$env:TEMP\opensquilla-pet-bridge.pause"`，恢复就删掉它。
 
@@ -150,6 +153,16 @@ ack ok:false），再 `sessions.send {key, message, client_message_id, _source}`
 全链）。实测坑：**桌面网关的 state home 跟配置走**（`%APPDATA%\@opensquilla\
 desktop-electron\opensquilla\state`，会话库是 SQLite `sessions.db`）；
 `~/.opensquilla` 是另一个实例的家，去那里读回会假阴性。
+
+## 回合内活动回声（2026-11-19）
+
+长思考轮里 WebChat 一直有思考流，RMC 此前只剩「静默 N 分」。桥把网关的
+`thinking_start/thinking`、`tool_use_start`、`text_delta` 翻译成
+`event=progress` 推 `/notify`：有卡就刷文案（「OpenSquilla：思考中 · 已 3 分
+12 秒」）并重置静默计时；回声无卡不动（不为随手聊天长待办），但回合跑过
+120s 桥会查一次账：确实没活卡就用主动上报口径长一张 working 卡，之后的回声
+在它上滚；needs-me 卡永远不顶。progress 从不出声不冒泡、不落补投队列。
+done/审批/方案到达时活动账收摊；免打扰时不刷。
 
 ## 已知边界
 

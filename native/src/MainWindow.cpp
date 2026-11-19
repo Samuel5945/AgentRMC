@@ -3175,8 +3175,15 @@ void MainWindow::handleNotify(const QString &kind, const QString &title,
             }
         }
         workItems_->upsert(QStringLiteral("hook"), raiseExe, sessionId, project,
-                           kind, title, cardMessage, raiseExe, eventId);
+                           kind, title, cardMessage, raiseExe, eventId,
+                           kind == QStringLiteral("progress"));
         refreshWorkItems();
+        if (kind == QStringLiteral("progress")) {
+            // 活动回声：只刷卡片文案与静默计时——不出声、不冒泡、不抢前台，
+            // 也不记事件流（每几十秒一条会把事件流刷屏）。没卡可刷时 upsert
+            // 已按 source 拒建，这里同样安静返回。
+            return;
+        }
     }
     if (replay) {
         // 离线补投只落工单，不补喊/抢前台，避免启动时一次念一串旧提醒。

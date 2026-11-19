@@ -2978,6 +2978,22 @@ async function fetchTranscript(offset,mode){
   }
  }catch(e){/* 网络抖一下，下一轮再试 */}
 }
+// 视图栈：手机的系统返回键/侧边手势在网页里就是 history.back()。单页应用
+// 不压栈的话，它会直接把页面退掉回到浏览器主页（2026-11-19 用户反馈）。
+// 这里只给「列表 → 会话聊天」压一层，返回键就变成「回到上一级」。
+const VIEW_LIST='list', VIEW_CHAT='chat';
+try{history.replaceState({v:VIEW_LIST},'');}catch(_){}
+function pushChatView(){
+ try{
+  if(!(history.state&&history.state.v===VIEW_CHAT))history.pushState({v:VIEW_CHAT},'');
+ }catch(_){}
+}
+window.addEventListener('popstate',e=>{
+ const v=(e.state&&e.state.v)||VIEW_LIST;
+ // 栈已经回到 list，这里只负责关掉聊天页——**不要**再调 history.back()，
+ // 否则会连退两级直接离开页面。
+ if(v!==VIEW_CHAT&&chatId)closeChat();
+});
 function startChat(kind,id,meta){
  chatKind=kind;chatId=id;chatMsgs=[];chatIds=new Set();chatLoading=false;chatMeta={};
  mpResetState();
@@ -2985,6 +3001,7 @@ function startChat(kind,id,meta){
  chatProject=meta&&meta.project||'';chatAgentName=meta&&meta.agentName||'';
  chatCanDispatch=meta&&meta.canDispatch!==false;
  cValue('','');cNotice('','');attClear('');fpClose();
+ pushChatView();
  render();fetchTranscript(0,'init');
 }
 function openChat(id){startChat('work',id,{});}
@@ -3030,7 +3047,11 @@ async function sendChat(){
  toast('已派发');
  load();fetchTranscript(0,'append');
 }
-$('chatBack').onclick=closeChat;
+$('chatBack').onclick=()=>{
+ // 栈里压着 chat 就让系统返回（和手势返回走同一条路），否则直接关。
+ if(history.state&&history.state.v===VIEW_CHAT)history.back();
+ else closeChat();
+};
 $('chatSend').onclick=sendChat;
 $('chatAttach').onclick=()=>$('chatFile').click();
 $('chatFile').onchange=()=>{

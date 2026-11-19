@@ -678,7 +678,15 @@ async function runFlow() {
   await page.click('#chatFileClose');
   ok(await page.locator('#chatFilePanel').evaluate((el) => el.hidden), '× 能关掉文件面板');
 
-  await page.click('#chatBack');
+  // 系统返回键 / 侧边手势在网页里就是 history.back()：必须回到上一级（列表），
+  // 而不是把整个页面退掉回浏览器主页（2026-11-19 用户反馈）。
+  ok(await page.evaluate(() => history.state && history.state.v === 'chat'),
+    '进入会话时压了视图栈');
+  await page.evaluate(() => history.back());
+  await page.waitForTimeout(400);
+  ok(await page.locator('#pchat').evaluate((el) => el.hidden),
+    '系统返回回到上一级（列表）');
+
   await page.locator('#agentChips .chip').nth(1).click();
   await page.waitForTimeout(120);
   ok(await page.locator('#sessList .sescard.readonly').count() === 1, '不支持派发的 Agent 标为只读');

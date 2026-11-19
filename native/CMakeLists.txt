@@ -422,6 +422,13 @@ add_executable(AgentRMCDispatchTest
     src/core/ZcodeDispatch.h
     src/core/AgentWindow.cpp
     src/core/AgentWindow.h
+    # UiDispatch 在「宿主没起来」时会走 AppLauncher::launch 拉起宿主，
+    # 目标里不带这个源文件就 LNK2019（2026-11-19 实测）；AppLauncher 的
+    # 拼音首字母匹配又依赖 PinyinInitials，一并带上。
+    src/core/AppLauncher.cpp
+    src/core/AppLauncher.h
+    src/core/PinyinInitials.cpp
+    src/core/PinyinInitials.h
 )
 target_include_directories(AgentRMCDispatchTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(AgentRMCDispatchTest PRIVATE Qt6::Core Qt6::Sql shell32 ole32

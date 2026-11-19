@@ -2030,7 +2030,16 @@ void MainWindow::refreshWorkItems() {
         } else if (item.stage == QStringLiteral("working")) {
             if (item.staleWorking(now)) {
                 // 半小时没有任何事件：不能说它还在跑，也不能说它做完了。
-                stage = QString::fromUtf8("状态待确认");
+                // 把「静默多久」写出来——「状态待确认」看不出是刚静默还是
+                // 挂了半天，用户只会觉得卡死（2026-11-19 反馈）。
+                const qint64 quiet = item.updatedAt.secsTo(now) / 60;
+                stage = quiet < 60
+                            ? QString::fromUtf8("静默 %1 分").arg(quiet)
+                            : quiet < 60 * 24
+                                  ? QString::fromUtf8("静默 %1 小时")
+                                        .arg(quiet / 60)
+                                  : QString::fromUtf8("静默 %1 天")
+                                        .arg(quiet / (60 * 24));
                 color = ThemeManager::instance().color(QStringLiteral("muted"));
             } else {
                 stage = QString::fromUtf8("进行中");

@@ -1997,8 +1997,17 @@ function waitText(it){if(!it.attention_since) return '';
  return ' · 等 '+Math.floor(m/1440)+' 天';}
 function isStale(it){return it.stage==='working'&&it.updated_at&&
  (Date.now()-Date.parse(it.updated_at))>1800000;}
+// 静默时长写进标签：与桌面端同款文案（「静默 32 分」比「状态待确认」有用）。
+function staleText(it){
+ const t=Date.parse(it.updated_at||'');
+ if(isNaN(t)) return '状态待确认';
+ const m=Math.floor((Date.now()-t)/60000);
+ if(m<60) return '静默 '+m+' 分';
+ if(m<1440) return '静默 '+Math.floor(m/60)+' 小时';
+ return '静默 '+Math.floor(m/1440)+' 天';
+}
 function stageColor(it){return isStale(it)?'var(--muted)':(COLOR[it.stage]||'var(--muted)');}
-function stageLabel(it){return isStale(it)?'状态待确认':(LABEL[it.stage]||'待办');}
+function stageLabel(it){return isStale(it)?staleText(it):(LABEL[it.stage]||'待办');}
 function rank(s){return s==='needs-me'?0:s==='review'?1:s==='working'?2:3;}
 function sortedItems(){
  const items=((STATE||{}).work||{}).items||[];

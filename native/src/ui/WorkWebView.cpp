@@ -1732,6 +1732,16 @@ function waitText(it){if(!it.attention_since) return '';
   return ' · 等 '+Math.floor(m/1440)+' 天';}
 function isStale(it){return it.stage==='working' && it.updated_at &&
   (now-Date.parse(it.updated_at))>1800000;}
+// 静默时长：把「30 分钟没动静」直接写进标签，用户不用猜「状态待确认」是
+// 在等谁。超一天给「静默 N 天」，读得出量级。
+function staleText(it){
+  const t=Date.parse(it.updated_at||'');
+  if(isNaN(t)) return '状态待确认';
+  const m=Math.floor((now-t)/60000);
+  if(m<60) return '静默 '+m+' 分';
+  if(m<1440) return '静默 '+Math.floor(m/60)+' 小时';
+  return '静默 '+Math.floor(m/1440)+' 天';
+}
 // ISO(UTC) → 本地 HH:mm：updated_at/last_event_at 是带 Z 的 UTC 串，直接
 // slice(11,16) 抠出来的是 UTC 钟点（本机 UTC+8，17:40 的活会显示成 09:40，
 // 被当成早上没动的旧账）。排序和「等 X 分」用的是绝对时刻，不受影响。
@@ -1763,7 +1773,7 @@ function sorted(){
 function stageColor(it){
   return isStale(it)?'var(--muted)':(COLOR[it.stage]||'var(--muted)');}
 function stageLabel(it){
-  return isStale(it)?'状态待确认':(LABEL[it.stage]||'待办');}
+  return isStale(it)?staleText(it):(LABEL[it.stage]||'待办');}
 function renderTabs(){
   const el=$('tabs');
   // 只建一次，之后原地改状态：5 秒一次的刷新若在按下/松开之间重建 DOM，

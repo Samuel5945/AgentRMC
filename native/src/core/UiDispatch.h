@@ -45,6 +45,9 @@ private:
     int stage_ = 0;
     int tries_ = 0;
     int wakeTries_ = 0;  // 宿主主窗被隐藏时的唤醒重试次数
+    // 宿主根本没起来时的启动重试：复用「遥控器 → AppLauncher」那套启动能力，
+    // 冷启动 Electron 要好几秒，所以按轮询等窗口出现而不是一次就放弃。
+    int launchTries_ = 0;
     bool scrolled_ = false;
     int expandTries_ = 0;
     QString savedClipboard_;

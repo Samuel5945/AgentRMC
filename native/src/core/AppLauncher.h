@@ -54,6 +54,11 @@ public:
     static AppTarget resolve(const AppEntry &entry);
     static bool launch(const QString &id, QString *error = nullptr);
 
+    // exe 名 → 应用 id 的桥：AgentWindow 只认 exe，遥控器/AppLauncher 只认
+    // appId，派发时要用「遥控器那套启动能力」把宿主拉起来，就得先对上号。
+    // 先比自定义应用的路径 basename，再比内置表的 id 与开始菜单名（去空格）。
+    static QString appIdForExe(const QString &exe);
+
     static AppVoiceMatch matchVoice(const QString &text);
     static AppLaunchResult runVoice(const QString &text);
 

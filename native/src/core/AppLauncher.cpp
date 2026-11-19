@@ -607,6 +607,37 @@ AppTarget AppLauncher::resolve(const QString &id) {
     return entry != nullptr ? resolve(*entry) : AppTarget{};
 }
 
+QString AppLauncher::appIdForExe(const QString &exe) {
+    if (exe.isEmpty()) {
+        return QString();
+    }
+    QString base = QFileInfo(exe).completeBaseName();
+    const QString key = base.toLower();
+    const QVector<AppEntry> &all = catalog();
+    // 自定义应用先看：用户自己加的 exe 最可能就是他要的那个。
+    for (const AppEntry &e : all) {
+        if (e.customPath.isEmpty()) {
+            continue;
+        }
+        if (QFileInfo(e.customPath).completeBaseName().toLower() == key) {
+            return e.id;
+        }
+    }
+    for (const AppEntry &e : all) {
+        if (e.id.toLower() == key) {
+            return e.id;
+        }
+        for (const QString &shortcut : e.shortcuts) {
+            QString flat = shortcut.toLower();
+            flat.remove(QLatin1Char(' '));
+            if (flat == key) {
+                return e.id;
+            }
+        }
+    }
+    return QString();
+}
+
 bool AppLauncher::launch(const QString &id, QString *error) {
     const AppEntry *entry = findApp(id);
     if (entry == nullptr) {

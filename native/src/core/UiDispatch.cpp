@@ -1,6 +1,7 @@
 #include "core/UiDispatch.h"
 
 #include "core/AgentWindow.h"
+#include "core/AppLauncher.h"
 
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -229,6 +230,7 @@ void UiDispatch::start(const Job &job) {
     stage_ = 0;
     tries_ = 0;
     wakeTries_ = 0;
+    launchTries_ = 0;
     scrolled_ = false;
     expandTries_ = 0;
     busy_ = true;
@@ -275,6 +277,27 @@ void UiDispatch::step() {
             ++wakeTries_;
             QTimer::singleShot(800, this, [this] { step(); });
             return;
+        }
+        // 窗口叫不出来：宿主多半压根没启动。这里复用**遥控器那套启动能力**
+        // （按键映射「启动应用」→ AppLauncher::launch），别为同一件事再做第二套
+        // 实现——用户 2026-11-19 就是问「遥控器不就有启动快捷键吗，怎么不统一」。
+        // 冷启动 Electron 要几秒，按轮询等窗口出现（最多 8 轮 ≈ 12s）。
+        if (launchTries_ < 8) {
+            const QString appId = AppLauncher::appIdForExe(job_.exe);
+            if (!appId.isEmpty()) {
+                if (launchTries_ == 0) {
+                    QString err;
+                    if (!AppLauncher::launch(appId, &err)) {
+                        finishFail(QStringLiteral("启动 %1 失败：%2")
+                                       .arg(AgentWindow::displayName(job_.exe), err),
+                                   false);
+                        return;
+                    }
+                }
+                ++launchTries_;
+                QTimer::singleShot(1500, this, [this] { step(); });
+                return;
+            }
         }
         // 报错带诊断：枚举到几扇该进程的窗口、其中几扇可见。有了这两个数，
         // 「进程没开」「窗口被隐藏」「映像名对不上」一眼能分开——2026-11-19

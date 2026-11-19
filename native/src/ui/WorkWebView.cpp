@@ -3695,7 +3695,9 @@ function renderChatFrame(){
   $('chatTitle').textContent=CHAT.sessionTitle||CHAT.title||'会话';
   const st=$('chatStage');st.textContent=LABEL[CHAT.stage]||'';
   st.style.color=COLOR[CHAT.stage]||'var(--muted)';
-  $('chatMeta').textContent=CHAT.agentExe||'';
+  // 顶栏 meta 与派发页同款：Agent 名 · 项目名（dspHasProject 过滤临时工作区）。
+  $('chatMeta').textContent=(CHAT.agentName||CHAT.agentExe||'')
+    +(dspHasProject(CHAT.project)?' · '+dspProjectName(CHAT.project):'');
   mpSyncChip('chat');mpRenderPanel('chat');
   const d=STATE.dispatch||{};
   const notice=(d.noticeId===chatOpenedId)?(d.notice||''):'';

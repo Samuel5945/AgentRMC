@@ -3999,6 +3999,10 @@ QJsonObject MainWindow::chatStateFor(const QString &id, int offset, int limit) {
         {QStringLiteral("id"), item->id},
         {QStringLiteral("title"), item->title},
         {QStringLiteral("agentExe"), item->agentExe},
+        // 待办会话页顶栏要跟派发页同款格式（Agent 名 · 项目名），
+        // agentName 由 native 归一（AgentWindow::displayName）。
+        {QStringLiteral("agentName"),
+         AgentWindow::displayName(item->agentExe)},
         {QStringLiteral("sessionId"), item->sessionId},
         {QStringLiteral("stage"), item->stage},
         // 手机页顶栏副标题用：待办标题往往只是宿主名（WorkBuddy），

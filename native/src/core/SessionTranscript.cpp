@@ -519,6 +519,17 @@ SessionTranscript::Result readOsq(const QString &stateRoot, const QString &sessi
         }
     }
     titleQ.finish();
+    // 会话当前模型（胶囊「会话当前 · xxx」用）：model_override 是桥/页面切过的值，
+    // 优先读它；没切过就读网关记账的 model。
+    QSqlQuery mq(db.db());
+    mq.prepare(QStringLiteral(
+        "SELECT COALESCE(NULLIF(model_override,''),NULLIF(model,'')) "
+        "FROM sessions WHERE session_key=?"));
+    mq.addBindValue(sessionKey);
+    if (mq.exec() && mq.next()) {
+        full.model = mq.value(0).toString();
+    }
+    mq.finish();
     if (full.title.isEmpty()) {
         QSqlQuery fu(db.db());
         fu.prepare(QStringLiteral(

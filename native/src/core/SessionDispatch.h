@@ -9,6 +9,8 @@
 #include <QString>
 #include <QTimer>
 
+#include <functional>
+
 class ZcodeDispatch;
 
 // 第 3 批定向派发路由：把指令派回待办绑定的那条会话，并拿「确实到了」的回执。
@@ -74,6 +76,12 @@ public:
     // 别把无效回执当成功。
     bool pluginAck(const QString &dispatchId, bool ok, const QString &error);
 
+    // OpenSquilla 可选模型目录读数（MainWindow 把桥 POST /models 的账接进来）：
+    // dispatch() 选模型时拿它预检，目录没推来就不拦（桥取件后自己反查拒）。
+    void setOsqModelsProvider(std::function<QJsonArray()> provider) {
+        osqModelsProvider_ = std::move(provider);
+    }
+
 signals:
     void receipt(const QString &dispatchId, const QString &agentExe,
                  const QString &sessionId, const QString &project,
@@ -106,11 +114,15 @@ private:
         QProcess *process = nullptr;
         Channel channel = Channel::Cli;
         bool pluginHanded = false;  // Plugin 通道：已下发给插件，等 ack
+        // 插件通道（OpenSquilla）的选模型 override：{providerId?,modelId}，
+        // 取件时原样带给桥，由桥拿网关目录反查后 sessions.patch。空对象=不切。
+        QJsonObject modelOverride;
     };
 
     void poll();
 
     QTimer *timer_ = nullptr;
+    std::function<QJsonArray()> osqModelsProvider_;
     QHash<QString, Pending> pending_;  // key = sessionId（同会话串行）
     // UI 通道依赖前台焦点：全局串行，一次只跑一条。
     class UiDispatch *ui_ = nullptr;

@@ -1109,7 +1109,11 @@ QString WorkWebView::htmlFor(const QString &stateJson) const {
  .modelchip b{font-weight:400;overflow:hidden;text-overflow:ellipsis;
    white-space:nowrap}
  .modelchip .lvl{flex:0 0 auto;color:var(--muted)}
- .modelchip .caret{flex:0 0 auto;color:var(--muted);font-size:var(--f11)}
+ /* 展形箭头：「⌄」这个字符在 YaHei 里基线沉底，跟文字排一行看起来掉到
+    胶囊下沿（用户 2026-11-19）。改内联 SVG，靠 flex 居中，与发送/附件图标同风格。 */
+ .modelchip .caret{flex:0 0 auto;color:var(--muted);display:inline-flex;
+   align-items:center}
+ .modelchip .caret svg{width:11px;height:11px;display:block}
   .mpanel{position:absolute;left:0;right:0;bottom:calc(100% + 8px);z-index:30;
     /* 面板必须实心：主题的 card.bg 在美术主题下是半透明，直接当背景用会透出
        底下聊天气泡，字糊成一片（用户 2026-11-18 反馈）。
@@ -1574,7 +1578,8 @@ const CHAT_ICONS={
  refresh:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20.5 12a8.5 8.5 0 1 1-2.5-6L21 9"/><path d="M21 3v6h-6"/></svg>',
  folder:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7.5A2 2 0 0 1 5 5.5h4l2 2.5h8a2 2 0 0 1 2 2v7.5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/></svg>',
  attach:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20.4 11.6 12 20a5 5 0 0 1-7-7l8.5-8.5a3.4 3.4 0 0 1 4.8 4.8L9.7 17.9a1.8 1.8 0 0 1-2.5-2.5l7.8-7.8"/></svg>',
- send:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12l16-7-6.3 16-2.9-6.4L4 12Z"/></svg>'};
+ send:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12l16-7-6.3 16-2.9-6.4L4 12Z"/></svg>',
+ caret:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>'};
 function chatShellHtml(P,o){
  o=o||{};
  const back=o.backTitle||'返回';
@@ -1599,7 +1604,7 @@ function chatShellHtml(P,o){
   +'<textarea id="'+P+'Text" rows="1" placeholder="'+(o.placeholder||'')+'"></textarea>'
   +'<div class="crow">'
   +'<button class="cico" id="'+P+'Attach" title="附上本机文件（不复制，直接给路径）" aria-label="附上本机文件">'+CHAT_ICONS.attach+'</button>'
-  +'<button class="modelchip" id="'+P+'ModelChip" hidden><b id="'+P+'ModelLabel">选择模型</b><span class="lvl" id="'+P+'ModelLvl" hidden></span><span class="caret">⌄</span></button>'
+  +'<button class="modelchip" id="'+P+'ModelChip" hidden><b id="'+P+'ModelLabel">选择模型</b><span class="lvl" id="'+P+'ModelLvl" hidden></span><span class="caret">'+CHAT_ICONS.caret+'</span></button>'
   +'<span class="chint" id="'+P+'Hint">Enter 发送 · Shift+Enter 换行</span>'
   +'<span class="cchars" id="'+P+'Chars" hidden></span>'
   +'<button class="csend" id="'+P+'Send" data-label="'+(o.sendLabel||'发送')+'" aria-label="'+(o.sendLabel||'发送')+'" title="'+(o.sendLabel||'发送')+'">'+CHAT_ICONS.send+'</button>'
@@ -2680,8 +2685,25 @@ function mpCtx(prefix){
   return MP[prefix];
 }
 function mpModels(){return (STATE.dispatch||{}).models||[];}
-function mpThoughts(){return (STATE.dispatch||{}).thoughtLevels||
-  ['low','medium','high','xhigh','max'];}
+// 会话当前宿主：模型目录按它分流。ZCode 读个人供应商目录（models），
+// OpenSquilla 读桥从网关 models.list 推来的账（osqModels）——混用会把
+// 套餐模型列进 ZCode 会话（选了必被拒），反之亦然。
+function mpExe(prefix){
+  if(prefix==='dchat')return (DSCHAT&&DSCHAT.agent&&DSCHAT.agent.exe)||'';
+  return (CHAT&&CHAT.agentExe)||'';
+}
+function mpListFor(prefix){
+  const d=STATE.dispatch||{};
+  return mpExe(prefix)==='OpenSquilla.exe'?(d.osqModels||[]):(d.models||[]);
+}
+function mpThoughts(prefix){
+  // 思考强度只有 ZCode 通道吃 options.reasoningLevel；OpenSquilla 的档位
+  // 是另一套值域（minimal/…/adaptive），网关 patch 又不校验（实测瞎写也
+  // 收），宁可不给也不假答应——滑杆藏掉，一律跟随会话。
+  if(prefix!==undefined&&mpExe(prefix)==='OpenSquilla.exe')return [];
+  return (STATE.dispatch||{}).thoughtLevels||
+    ['low','medium','high','xhigh','max'];
+}
 function mpReset(prefix){MP[prefix]={open:false,level:'providers',provider:null,sel:null};}
 // 胶囊只要有会话就显示——用户要看的是"这条会话在用什么模型"，跟能不能在这里
 // 切模型是两件事：非 ZCode（或没配个人供应商目录）时只报当前模型，不列可选。
@@ -2689,11 +2711,11 @@ function mpActive(prefix){
   if(prefix==='dchat')return !!(dchatOpen&&DSCHAT&&DSCHAT.canDispatch&&DSCHAT.agent);
   return !!(CHAT&&CHAT.agentExe);
 }
-// 有没有可切换的模型目录（只有 ZCode 的个人供应商走这条路）。
+// 有没有可切换的模型目录：ZCode 个人供应商 / OpenSquilla 网关目录（桥在线才有）。
 function mpSwitchable(prefix){
-  if(!mpModels().length)return false;
-  if(prefix==='dchat')return !!(DSCHAT&&DSCHAT.agent&&DSCHAT.agent.exe==='ZCode.exe');
-  return !!(CHAT&&CHAT.agentExe==='ZCode.exe');
+  if(!mpListFor(prefix).length)return false;
+  const e=mpExe(prefix);
+  return e==='ZCode.exe'||e==='OpenSquilla.exe';
 }
 // 当前会话在用的模型（宿主记的显示名）。读不到就空，胶囊退回「选择模型」。
 function mpCurModel(prefix){
@@ -2757,8 +2779,9 @@ function mpRenderPanel(prefix){
       ctx.sel=null;ctx.open=false;mpSyncChip(prefix);$panel.hidden=true;
     }));
     if(!switchable)return;
-    mpModels().forEach(p=>{
-      list.append(mpSvgRow(MP_CUBE_SVG,p.name||p.providerId,'API',
+    mpListFor(prefix).forEach(p=>{
+      list.append(mpSvgRow(MP_CUBE_SVG,p.name||p.providerId,
+        mpExe(prefix)==='OpenSquilla.exe'?'网关':'API',
         ctx.sel&&ctx.sel.providerId===p.providerId,
         ()=>{ctx.provider=p;ctx.level='models';mpRenderPanel(prefix);}));
     });
@@ -2776,9 +2799,9 @@ function mpRenderPanel(prefix){
           mpRenderPanel(prefix);mpSyncChip(prefix);
         }));
     });
-    if(ctx.sel){
+    if(ctx.sel&&mpThoughts(prefix).length){
       thought.hidden=false;
-      const lv=mpThoughts(),range=$(prefix+'MpRange');
+      const lv=mpThoughts(prefix),range=$(prefix+'MpRange');
       range.max=String(lv.length);
       range.value=ctx.sel.level?String(lv.indexOf(ctx.sel.level)+1):'0';
       $(prefix+'MpTVal').textContent=ctx.sel.level
@@ -2809,7 +2832,7 @@ function mpToggle(prefix){
   $(prefix+'MpRange').addEventListener('input',()=>{
     const ctx=MP[prefix];
     if(!ctx||!ctx.sel)return;
-    const lv=mpThoughts(),i=+$(prefix+'MpRange').value;
+    const lv=mpThoughts(prefix),i=+$(prefix+'MpRange').value;
     ctx.sel.level=i>0?lv[i-1]:null;
     $(prefix+'MpTVal').textContent=ctx.sel.level
       ?(MP_LVL_LABELS[ctx.sel.level]||ctx.sel.level):'跟随会话';

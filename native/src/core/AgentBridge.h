@@ -91,6 +91,10 @@ public:
     // POST /requests 的处理器：DSH 插件推送某会话当前待答请求（B1 只读展示）
     // {"exe","session_id","project","requests":[{kind,id,toolName?,reason?,questions?}]}。
     void setRequestsHandler(std::function<void(const QJsonObject &)> handler);
+    // POST /models 的处理器：外部桥（OpenSquilla）推宿主可切换的模型目录
+    // {"exe","providers":[{providerId,name,models:[..]}]}。回 204；
+    // 没 handler 也回 204，别让桥以为失败反复重试。
+    void setModelsHandler(std::function<void(const QJsonObject &)> handler);
     // GET /request-answer/pending?exe=<映像名>&session=<会话> 的应答来源（B2）：
     // 插件轮询取走手机/桌面下发的应答件，返回 JSON 数组文本（可空数组）。
     // session 可空：不按会话过滤（DSH 老用法）；bridge 系并发 hook 必带。
@@ -149,6 +153,7 @@ private:
     std::function<QString(const QString &exe)> dispatchPendingProvider_;
     std::function<bool(const QJsonObject &)> dispatchAckHandler_;
     std::function<void(const QJsonObject &)> requestsHandler_;
+    std::function<void(const QJsonObject &)> modelsHandler_;
     std::function<QString(const QString &exe, const QString &session)>
         answerPendingProvider_;
     std::function<bool(const QJsonObject &)> answerAckHandler_;

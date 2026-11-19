@@ -1258,6 +1258,32 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
                 payload.value(QStringLiteral("ok")).toBool(),
                 payload.value(QStringLiteral("error")).toString());
         });
+        // OpenSquilla 外部桥推来的可切换模型目录（models.list 只有桥能读）。
+        // 存内存账：dispatchStateJson 据此给页面列菜单，dispatch() 据此预检
+        // override（目录没新鲜推来就不拦，交给桥侧反查拒）。
+        bridge->setModelsHandler([this](const QJsonObject &payload) {
+            const QString exe = payload.value(QStringLiteral("exe")).toString();
+            if (exe.compare(QStringLiteral("OpenSquilla.exe"), Qt::CaseInsensitive) !=
+                0) {
+                return;
+            }
+            const QJsonArray providers =
+                payload.value(QStringLiteral("providers")).toArray();
+            if (providers.isEmpty()) {
+                return;
+            }
+            osqModels_ = providers;
+            osqModelsAt_ = QDateTime::currentDateTimeUtc();
+            // 目录到了不空手：桥只推不改 state，这里催一次刷新让聊天页/手机页
+            // 胶囊看见新目录（5 秒整窗周期太慢）。
+            if (workWeb_ != nullptr) {
+                workWeb_->refresh();
+            }
+        });
+        // 派发口的模型预检读同一份账。
+        if (dispatch_ != nullptr) {
+            dispatch_->setOsqModelsProvider([this] { return osqModelsFresh(); });
+        }
         // B1：DSH 插件推送会话当前待答请求，存内存账供聊天页展示。
         // 插件 1.2s 轮询应答件 = 在线心跳：每次推送都刷新该 exe 的在线表
         // （answerable 据此标，掉线 5s 内自动退回只读）。
@@ -3498,6 +3524,18 @@ QString MainWindow::workItemsJson() {
     return QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Compact));
 }
 
+// OpenSquilla 目录只在桥还活着时端出去：桥每 30s 一拍（目录没变不重推），
+// 两分钟没动静就是桥/网关已断，给页面一份过期菜单比不给更坏（选了必被拒）。
+QJsonArray MainWindow::osqModelsFresh() const {
+    if (osqModels_.isEmpty() || !osqModelsAt_.isValid()) {
+        return {};
+    }
+    if (osqModelsAt_.secsTo(QDateTime::currentDateTimeUtc()) > 120) {
+        return {};
+    }
+    return osqModels_;
+}
+
 QJsonObject MainWindow::dispatchStateJson() const {
     return QJsonObject{{QStringLiteral("notice"), dispatchNotice_},
                        {QStringLiteral("noticeId"), dispatchNoticeId_},
@@ -3513,6 +3551,11 @@ QJsonObject MainWindow::dispatchStateJson() const {
                        // 目录不占状态体积。
                        {QStringLiteral("models"),
                         ZcodeDispatch::personalProviderCatalog()},
+                       // OpenSquilla 的目录另一个字段：网关 models.list 只有外部桥
+                       // 能读（要 operator 连接），桥 POST /models 推来的账存这里，
+                       // 页面按当前会话的 exe 取哪份。两宿主共用一条 models 会把
+                       // ZCode 会话列出 OpenSquilla 的套餐模型（选了必被拒）。
+                       {QStringLiteral("osqModels"), osqModelsFresh()},
                        // 思考强度档位（remote v4 滑杆同款）：override 可带
                        // options.reasoningLevel，滑杆最左＝跟随会话原值。
                        {QStringLiteral("thoughtLevels"),

@@ -96,6 +96,11 @@ void AgentBridge::setRequestsHandler(
     requestsHandler_ = std::move(handler);
 }
 
+void AgentBridge::setModelsHandler(
+    std::function<void(const QJsonObject &)> handler) {
+    modelsHandler_ = std::move(handler);
+}
+
 void AgentBridge::setAnswerPendingProvider(
     std::function<QString(const QString &exe, const QString &session)>
         provider) {
@@ -240,10 +245,12 @@ void AgentBridge::onReadable(QTcpSocket *socket) {
     const bool isCommand = requestLine.startsWith("POST /command ");
     const bool isDispatchAck = requestLine.startsWith("POST /dispatch/ack ");
     const bool isRequests = requestLine.startsWith("POST /requests ");
+    const bool isModels = requestLine.startsWith("POST /models ");
     const bool isAnswerAck = requestLine.startsWith("POST /request-answer/ack ");
     const bool isCursor = requestLine.startsWith("POST /cursor/");
     if (!isNotify && !isSpeak && !isAck && !isUpdate && !isCommand &&
-        !isDispatchAck && !isRequests && !isAnswerAck && !isCursor) {
+        !isDispatchAck && !isRequests && !isModels && !isAnswerAck &&
+        !isCursor) {
         finish(socket, "404 Not Found");
         return;
     }
@@ -286,6 +293,15 @@ void AgentBridge::onReadable(QTcpSocket *socket) {
         // 别让插件以为失败反复重试。
         if (requestsHandler_) {
             requestsHandler_(obj);
+        }
+        finish(socket, "204 No Content");
+        return;
+    }
+    if (isModels) {
+        // 外部桥（OpenSquilla）推宿主可切换的模型目录。无 handler 也回 204
+        //（桥按 204 记「已推」，404 会每 30s 重试刷日志，老原生端靠它静默）。
+        if (modelsHandler_) {
+            modelsHandler_(obj);
         }
         finish(socket, "204 No Content");
         return;

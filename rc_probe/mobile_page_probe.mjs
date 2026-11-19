@@ -691,6 +691,23 @@ async function runFlow() {
   await page.click('#chatFileClose');
   ok(await page.locator('#chatFilePanel').evaluate((el) => el.hidden), '× 能关掉文件面板');
 
+  // 展形箭头居中（用户 2026-11-19 报「⌄ 太靠下」）：量 caret 与模型名的中心偏差。
+  const caretGeo = await page.evaluate(() => {
+    const chip = document.querySelector('#chatModelChip');
+    if (!chip || chip.hidden) return null;
+    const svg = chip.querySelector('.caret svg');
+    const k = svg && svg.getBoundingClientRect();
+    const label = chip.querySelector('b').getBoundingClientRect();
+    return { hasSvg: !!svg, text: chip.querySelector('.caret').textContent.trim(),
+      caretMid: k ? k.top + k.height / 2 : null, labelMid: label.top + label.height / 2 };
+  });
+  ok(caretGeo && caretGeo.hasSvg && caretGeo.text === '',
+    '手机页 caret 是 SVG、没留「⌄」字符', JSON.stringify(caretGeo));
+  if (caretGeo && caretGeo.caretMid !== null) {
+    ok(Math.abs(caretGeo.caretMid - caretGeo.labelMid) <= 2,
+      '手机页箭头与模型名垂直居中', { c: caretGeo.caretMid, l: caretGeo.labelMid });
+  }
+
   // 系统返回键 / 侧边手势在网页里就是 history.back()：必须回到上一级（列表），
   // 而不是把整个页面退掉回浏览器主页（2026-11-19 用户反馈）。
   ok(await page.evaluate(() => history.state && history.state.v === 'chat'),

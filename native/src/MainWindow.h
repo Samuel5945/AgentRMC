@@ -285,6 +285,8 @@ private:
     // 派发状态块（电脑外壳 / 手机页共用）：通知、草稿、能力清单 + 个人供应商
     // 模型目录（ZCode override 派发用）。两处必须同一份，别各写各的漂移。
     QJsonObject dispatchStateJson() const;
+    // OpenSquilla 选模型目录（桥 POST /models 推来的账，2 分钟内新鲜才给）。
+    QJsonArray osqModelsFresh() const;
     QString itemIdForSession(const QString &sessionId) const;
     void setVoiceStatus(const QString &detail, const QString &color,
                         bool showTranscript);
@@ -322,6 +324,11 @@ private:
     // B2：插件推送心跳（exe 小写 → 最近一次 /requests 推送时刻）。15s 内到过账
     // 视为插件在线，聊天页的提问卡才给点选应答。
     QHash<QString, QDateTime> pluginSeenAt_;
+    // OpenSquilla 外部桥推来的可切换模型目录（[{providerId,name,models}]）
+    // 与最后一次推送时刻。网关的 models.list 只有桥能读（要 operator 连接），
+    // native 不自己连网关；聊天页/手机页的「选模型」据此给 OpenSquilla 列目录。
+    QJsonArray osqModels_;
+    QDateTime osqModelsAt_;
     // B2：手机/桌面下发的应答件（answer_id → {sessionId,kind,id,answers,outcome,exe}）。
     // 插件 1.2s 轮询取件 → 远程面/Web UI 应答 → ack 落账。内存账，超时未取作废。
     struct PendingAnswer {

@@ -1510,7 +1510,9 @@ QString LanWebServer::mobileHtml() const {
  .modelchip b{font-weight:400;overflow:hidden;text-overflow:ellipsis;
    white-space:nowrap}
  .modelchip .lvl{flex:0 0 auto;color:var(--muted)}
- .modelchip .caret{flex:0 0 auto;color:var(--muted);font-size:12px}
+ .modelchip .caret{flex:0 0 auto;color:var(--muted);display:inline-flex;
+   align-items:center}
+ .modelchip .caret svg{width:12px;height:12px;display:block}
  /* 面板必须实心：美术主题的 card.bg 是半透明，直接当背景会透出底下聊天气泡
     （用户 2026-11-18 反馈"切换模型背景透明的看不清"）。实色由 applyTheme 算
     完直接写内联样式；这里只是首帧兜底。别加 backdrop-filter、也别用
@@ -1758,7 +1760,7 @@ QString LanWebServer::mobileHtml() const {
      </div>
      <textarea id="chatText" rows="1" placeholder="写一句任务，派到这个会话…" enterkeyhint="send"></textarea>
      <div class="crow">
-      <button class="modelchip" id="chatModelChip" hidden><b id="chatModelLabel">选择模型</b><span class="lvl" id="chatModelLvl" hidden></span><span class="caret">⌄</span></button>
+      <button class="modelchip" id="chatModelChip" hidden><b id="chatModelLabel">选择模型</b><span class="lvl" id="chatModelLvl" hidden></span><span class="caret"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg></span></button>
       <button class="cicobtn" id="chatAttach" title="传文件" aria-label="传文件"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20.4 11.6 12 20a5 5 0 0 1-7-7l8.5-8.5a3.4 3.4 0 0 1 4.8 4.8L9.7 17.9a1.8 1.8 0 0 1-2.5-2.5l7.8-7.8"/></svg></button>
       <span class="cchars" id="chatChars" hidden></span>
       <button class="csend" id="chatSend" data-label="派发" aria-label="派发" title="派发"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12l16-7-6.3 16-2.9-6.4L4 12Z"/></svg></button>
@@ -2876,19 +2878,33 @@ const MP_CUBE_SVG='<svg width="18" height="18" viewBox="0 0 24 24" fill="none" s
 let mpOpen=false,mpLevel='providers',mpProvider=null;
 let mpSel=null; // {providerId,modelId,level?}；null=不切换
 function mpModels(){return ((STATE||{}).dispatch||{}).models||[];}
-function mpThoughts(){return ((STATE||{}).dispatch||{}).thoughtLevels||
- ['low','medium','high','xhigh','max'];}
+// 会话当前宿主：模型目录按它分流（与桌面端同款口径）——ZCode 读个人
+// 供应商目录，OpenSquilla 读桥从网关 models.list 推来的 osqModels。
+function mpExeNow(){
+ return chatKind==='session'?chatExe:(chatMeta.agentExe||'');
+}
+function mpListFor(){
+ const d=((STATE||{}).dispatch)||{};
+ return mpExeNow()==='OpenSquilla.exe'?(d.osqModels||[]):(d.models||[]);
+}
+function mpThoughts(){
+ // 思考强度只有 ZCode 通道吃；OpenSquilla 档位值域不同且网关不校验
+ //（实测瞎写也收），不给假答应——滑杆藏掉，一律跟随会话。
+ if(mpExeNow()==='OpenSquilla.exe')return [];
+ return ((STATE||{}).dispatch||{}).thoughtLevels||
+ ['low','medium','high','xhigh','max'];
+}
 function mpActive(){
  // 只要有会话就显示胶囊：用户要看的是「这条会话在用什么模型」，跟能不能在
  // 这里切模型是两件事。非 ZCode 时只报当前模型，不列可选。
  if(!chatCanDispatch)return false;
  return !!(chatKind==='session'?chatExe:chatMeta.agentExe);
 }
-// 有没有可切换的模型目录（只有 ZCode 的个人供应商走这条路）。
+// 有没有可切换的模型目录：ZCode 个人供应商 / OpenSquilla 网关目录（桥在线才有）。
 function mpSwitchable(){
- if(mpModels().length===0)return false;
- const exe=chatKind==='session'?chatExe:(chatMeta.agentExe||'');
- return exe==='ZCode.exe';
+ if(mpListFor().length===0)return false;
+ const e=mpExeNow();
+ return e==='ZCode.exe'||e==='OpenSquilla.exe';
 }
 function mpResetState(){mpOpen=false;mpLevel='providers';mpProvider=null;mpSel=null;}
 function syncModelChip(){
@@ -2947,8 +2963,9 @@ function mpRenderPanel(){
    mpSel=null;mpOpen=false;syncModelChip();panel.hidden=true;
   }));
   if(!switchable)return;
-  mpModels().forEach(p=>{
-   list.append(mpSvgRow(MP_CUBE_SVG,p.name||p.providerId,'API',
+  mpListFor().forEach(p=>{
+   list.append(mpSvgRow(MP_CUBE_SVG,p.name||p.providerId,
+    mpExeNow()==='OpenSquilla.exe'?'网关':'API',
     mpSel&&mpSel.providerId===p.providerId,
     ()=>{mpProvider=p;mpLevel='models';mpRenderPanel();}));
   });

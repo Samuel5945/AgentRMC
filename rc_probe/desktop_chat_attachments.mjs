@@ -288,6 +288,55 @@ check(/^rgb\(/.test(panelCheck.bg) && !/rgba/.test(panelCheck.bg),
 check(/^rgb\(/.test(panelCheck.inline) && !/rgba/.test(panelCheck.inline),
   '实色被直接写进面板内联样式（不依赖 CSS 变量）', panelCheck.inline);
 
+// —— 选模型按宿主分流（纯函数层，不碰 DOM）：OpenSquilla 读 osqModels、
+// 给「网关」徒标、藏思考滑杆；ZCode 读 models、给「API」、滑杆在。
+const mpCheck = await page.evaluate(() => {
+  const d = { dispatch: {
+    models: [{ providerId: 'prov-1', name: 'TestOne', models: ['m1'] }],
+    osqModels: [{ providerId: 'tokenrhythm', name: 'tokenrhythm', models: ['glm-5.1', 'kimi-k2.6'] }],
+  } };
+  window.__savedState = STATE; STATE = d;  // 探针环境直改模块变量
+  window.__savedExe = DSCHAT.agent.exe; DSCHAT.agent.exe = 'OpenSquilla.exe';
+  const osq = { switchable: mpSwitchable('dchat'), list: mpListFor('dchat').map((p) => p.providerId),
+    thoughts: mpThoughts('dchat').length };
+  mpReset('dchat'); const ctx = mpCtx('dchat'); ctx.open = true; ctx.level = 'providers';
+  mpRenderPanel('dchat');
+  const osqBadge = document.querySelector('#dchatModelPanel .badge');
+  const osqBadgeText = osqBadge ? osqBadge.textContent : '';
+  DSCHAT.agent.exe = 'ZCode.exe';
+  const zcode = { switchable: mpSwitchable('dchat'), list: mpListFor('dchat').map((p) => p.providerId),
+    thoughts: mpThoughts('dchat').length };
+  mpReset('dchat'); DSCHAT.agent.exe = window.__savedExe; STATE = window.__savedState;
+  return { osq, osqBadgeText, zcode };
+});
+check(mpCheck.osq.switchable && mpCheck.osq.list.join() === 'tokenrhythm' && mpCheck.osq.thoughts === 0,
+  'OpenSquilla 读 osqModels 且藏思考滑杆', mpCheck.osq);
+check(mpCheck.osqBadgeText === '网关', 'OpenSquilla 供应商行徒标＝网关', mpCheck.osqBadgeText);
+check(mpCheck.zcode.switchable && mpCheck.zcode.list.join() === 'prov-1' && mpCheck.zcode.thoughts === 5,
+  'ZCode 路径不串：仍读个人供应商目录 + 滑杆在', mpCheck.zcode);
+
+// 展形箭头垂直居中：原来用「⌄」字符（YaHei 基线沉底），用户 2026-11-19 报
+// 「箭头太靠下」。量 caret 的中心跟胶囊内容中心的偏差，≤2px 才算真居中。
+const caretGeo = await page.evaluate(() => {
+  const chip = document.querySelector('#dchatModelChip');
+  const caret = chip && chip.querySelector('.caret svg');
+  if (!chip || !caret || chip.hidden) return null;
+  const c = chip.getBoundingClientRect(), k = caret.getBoundingClientRect();
+  const label = chip.querySelector('b').getBoundingClientRect();
+  return {
+    chipMid: c.top + c.height / 2, caretMid: k.top + k.height / 2,
+    labelMid: label.top + label.height / 2,
+    caretH: k.height, charCaret: chip.querySelector('.caret').textContent.trim(),
+  };
+});
+check(caretGeo !== null, '模型胶囊可见且 caret 是 SVG（不再是「⌄」字符）', caretGeo);
+if (caretGeo) {
+  check(caretGeo.charCaret === '', 'caret 里没留文本字符', JSON.stringify(caretGeo.charCaret));
+  check(Math.abs(caretGeo.caretMid - caretGeo.labelMid) <= 2,
+    '箭头与模型名垂直居中对齐', { caretMid: caretGeo.caretMid, labelMid: caretGeo.labelMid });
+  check(caretGeo.caretH >= 9 && caretGeo.caretH <= 16, '箭头尺寸在胶囊内合理', caretGeo.caretH);
+}
+
 console.log(bad ? `\n${bad} 项失败` : '\nALL PASS desktop chat attachments');
 await browser.close();
 process.exit(bad ? 1 : 0);

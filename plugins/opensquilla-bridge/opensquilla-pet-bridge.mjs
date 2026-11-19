@@ -335,6 +335,67 @@ function forceReconnect(reason) {
   connect();
 }
 
+// 模型目录（RMC 聊天页/手机页的「选模型」数据源）：拉网关 models.list，
+// 按 provider 分组推原生 POST /models；目录没变不重推（sig 比一比）。
+// 网关不校验模型存在性（2026-11-19 探针实测），所以派发带 override 时也
+// 拿这份目录反查：modelsCatalog() 兼作校验用的账本，60s TTL 重拉。
+let modelsCache = { at: 0, list: [] };
+let modelsSig = "";
+let modelsWarnAt = 0;
+const modelsWarn = (msg) => {
+  const now = Date.now();
+  if (now - modelsWarnAt > 60000) { modelsWarnAt = now; log(msg); }
+};
+async function modelsCatalog(force = false) {
+  if (!force && modelsCache.list.length && Date.now() - modelsCache.at < 60000) {
+    return modelsCache.list;
+  }
+  let res;
+  try {
+    res = await call("models.list", { scope: "active", cacheOnly: true });
+  } catch {
+    res = await call("models.list", { scope: "active" });
+  }
+  const list = Array.isArray(res) ? res : (res?.models || []);
+  if (list.length) modelsCache = { at: Date.now(), list };
+  return modelsCache.list;
+}
+async function pushModels() {
+  if (flag("no-models")) return;
+  try {
+    const list = await modelsCatalog();
+    if (!list.length) return;
+    const byProv = new Map();
+    for (const m of list) {
+      if (!m || !m.id || !m.provider) continue;
+      if (!byProv.has(m.provider)) byProv.set(m.provider, []);
+      const arr = byProv.get(m.provider);
+      if (!arr.includes(m.id)) arr.push(m.id);
+    }
+    const providers = [...byProv.entries()].map(([providerId, models]) => ({
+      providerId, name: providerId, models,
+    }));
+    const sig = providers.map((p) => `${p.providerId}:${p.models.join(",")}`).join("|");
+    if (sig === modelsSig) return;
+    const res = await fetch(`${CFG.bridge}/models`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json; charset=utf-8" },
+      body: JSON.stringify({ exe: "OpenSquilla.exe", providers }),
+      signal: AbortSignal.timeout(5000),
+    });
+    // 老原生端没有这条路由（404）：安静跳过，不刷日志。
+    if (res.status !== 204 && res.status !== 404) {
+      throw new Error(`bridge returned ${res.status}`);
+    }
+    if (res.status === 204) {
+      modelsSig = sig;
+      log(`MODELS ${providers.length} providers / ${list.length} models`);
+    }
+  } catch (e) {
+    modelsWarn("push models failed: " + e.message);
+  }
+}
+
 // 会话标题缓存：done/plan 事件的模板里用 {session}，比念整段回复友好。
 const sessionTitles = new Map();
 // 会话工作区缓存：sessions.list 的 workspace/workspaceLabel，/notify 带 project。
@@ -482,8 +543,9 @@ function connect() {
       log(`connected ${CFG.gateway} (protocol ${f.protocol ?? "?"})`);
       reconnectDelay = 1000;
       refreshSessions();
+      pushModels();
       if (refreshTimer) clearInterval(refreshTimer);
-      refreshTimer = setInterval(refreshSessions, CFG.refreshMs);
+      refreshTimer = setInterval(() => { refreshSessions(); pushModels(); }, CFG.refreshMs);
       return;
     }
     if (f.type === "res" && pending.has(f.id)) {
@@ -555,6 +617,33 @@ async function pollDispatches() {
           error = isUncertain(msg)
             ? `会话 ${sessionId.slice(0, 24)}… 归属未确认：${msg}（未注入）`
             : `会话 ${sessionId.slice(0, 24)}… 不在活表（resolve 拒绝），未注入`;
+        }
+        if (!error) {
+          // 选模型 override（RMC 聊天页/手机页带的 model:{providerId,modelId}）：
+          // 网关 sessions.patch 不校验模型存在性（2026-11-19 探针实测：瞎写的
+          // 模型名也接受），所以这里先拿网关心中的目录反查——查不到就拒，
+          // 绝不把一个不存在的模型写进会话。provider 以目录里配的为准，
+          // 不信页面传来的 providerId。
+          const wantModel = String(item?.model?.modelId || "").trim();
+          if (!error && wantModel) {
+            try {
+              const cat = await modelsCatalog();
+              const hit = cat.find((m) => m.id === wantModel);
+              if (!hit) {
+                error = `模型 ${wantModel} 不在 OpenSquilla 网关的模型目录，未注入`;
+              } else {
+                await call("sessions.patch", {
+                  key: sessionId, provider: hit.provider, model: hit.id,
+                });
+                log(`MODEL ${sessionId} -> ${hit.provider}/${hit.id}`);
+              }
+            } catch (e) {
+              const msg = (e && e.message) || String(e);
+              error = isUncertain(msg)
+                ? `切模型不确定：${msg}（未注入，先去会话里确认再重派）`
+                : "sessions.patch 被拒：" + msg;
+            }
+          }
         }
         if (!error) {
           // 幂等标识由 dispatch_id 派生：同一件重取/重试都带同一个

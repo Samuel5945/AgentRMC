@@ -33,6 +33,9 @@ QString answerProviderExe = QStringLiteral("<unset>");
 QString answerProviderSession = QStringLiteral("<unset>");
 QJsonObject lastAnswerAck;
 bool answerAckGot = false;
+// OpenSquilla 外部桥：/models 路由把网关模型目录原样交给 handler。
+QJsonObject lastModels;
+bool modelsGot = false;
 // 默认走真端口；本机装着 AgentRMC 时端口被占，测试可以指一个空闲端口跑。
 quint16 testPort = AgentBridge::kPort;
 
@@ -162,6 +165,10 @@ int main(int argc, char **argv) {
     bridge.setRequestsHandler([](const QJsonObject &payload) {
         lastRequests = payload;
         requestsGot = true;
+    });
+    bridge.setModelsHandler([](const QJsonObject &payload) {
+        lastModels = payload;
+        modelsGot = true;
     });
     bridge.setAnswerPendingProvider([](const QString &exe, const QString &session) {
         answerProviderExe = exe;
@@ -350,6 +357,19 @@ request(app,
         }
     },
     [&] {
+request(app,
+    withLength("POST /models HTTP/1.1\r\n",
+        R"({"exe":"OpenSquilla.exe","providers":[{"providerId":"tokenrhythm","name":"tokenrhythm","models":["glm-5.1","kimi-k2.6"]}]})"),
+    [&](const QByteArray &resp) {
+        expectStatus("HTTP/1.1 204", resp);
+        if (!modelsGot ||
+            lastModels.value("providers").toArray().size() != 1 ||
+            lastModels.value("providers").toArray().at(0).toObject()
+                    .value("models").toArray().size() != 2) {
+            fail("models handler payload", resp);
+        }
+    },
+    [&] {
 runCommandTests(app, bridge, [] {
                                                                                             // 正面通过标记：原来只在失败时打印，空输出分不清「全过」和「没跑完」。
                                                                                             std::printf(ok ? "ALL PASS bridge\n" : "FAIL bridge\n");
@@ -364,6 +384,7 @@ runCommandTests(app, bridge, [] {
                                                             });
                                                 });
                                     });
+                        });
                         });
             });
 

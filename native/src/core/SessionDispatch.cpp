@@ -315,6 +315,26 @@ bool SessionDispatch::dispatch(const QString &agentExe, const QString &sessionId
             return refuse(
                 QStringLiteral("DSH 会话 id 应为 session-<uuid>，这张卡的归属可疑，未发"));
         }
+        // OpenSquilla 的选模型：native 不连网关，目录读数来自桥推的 /models
+        // 账（osqModelsProvider）。账本没推来（桥旧版/没连上）时不拦——
+        // 桥侧取件后拿网关目录反查，查不到会拒带原因；账本有就要命中，
+        // 拦在派发口比等桥拒回来早一步给用户准信。
+        if (osq && !modelOverride.isEmpty() && osqModelsProvider_) {
+            const QJsonArray cat = osqModelsProvider_();
+            const QString mid =
+                modelOverride.value(QStringLiteral("modelId")).toString().trimmed();
+            bool hit = mid.isEmpty();
+            for (const QJsonValue &v : cat) {
+                const QJsonArray ms = v.toObject().value(QStringLiteral("models")).toArray();
+                for (const QJsonValue &m : ms) {
+                    if (m.toString() == mid) { hit = true; break; }
+                }
+                if (hit) break;
+            }
+            if (!hit) {
+                return refuse(QStringLiteral("所选模型 %1 不在 OpenSquilla 目录（桥未推/已下线），未发").arg(mid));
+            }
+        }
         if (pending_.contains(sessionId)) {
             return refuse(QStringLiteral("该会话已有派发在途，等回执后再派"));
         }
@@ -325,6 +345,9 @@ bool SessionDispatch::dispatch(const QString &agentExe, const QString &sessionId
         p.project = project;
         p.text = text;
         p.channel = Channel::Plugin;
+        if (osq) {
+            p.modelOverride = modelOverride;
+        }
         p.clock.start();
         if (dispatchIdOut != nullptr) {
             *dispatchIdOut = p.dispatchId;
@@ -592,6 +615,9 @@ QJsonArray SessionDispatch::takePluginDispatches(const QString &agentExe) {
         o.insert(QStringLiteral("session_id"), it->sessionId);
         o.insert(QStringLiteral("project"), it->project);
         o.insert(QStringLiteral("text"), it->text);
+        if (!it->modelOverride.isEmpty()) {
+            o.insert(QStringLiteral("model"), it->modelOverride);
+        }
         out.append(o);
     }
     return out;

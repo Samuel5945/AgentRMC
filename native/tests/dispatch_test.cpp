@@ -300,6 +300,60 @@ int main(int argc, char *argv[]) {
         mix.pluginAck(dshRid, true, QString());
     }
 
+    // —— OpenSquilla 选模型（2026-11-19）：取件带 model，native 按桥目录预检 ——
+    {
+        SessionDispatch md;
+        md.setOsqModelsProvider([] {
+            return QJsonArray{QJsonObject{
+                {QStringLiteral("providerId"), QStringLiteral("tokenrhythm")},
+                {QStringLiteral("models"),
+                 QJsonArray{QStringLiteral("glm-5.1")}}}};
+        });
+        const QString sid = QStringLiteral("agent:main:webchat:mdl00001");
+        QString rid;
+        check("osq model: catalog hit accepted",
+              md.dispatch(QStringLiteral("OpenSquilla.exe"), sid, QString(),
+                          QStringLiteral("换模型派"), &reason, &rid,
+                          QJsonObject{{QStringLiteral("providerId"),
+                                       QStringLiteral("tokenrhythm")},
+                                      {QStringLiteral("modelId"),
+                                       QStringLiteral("glm-5.1")}}));
+        const QJsonArray taken =
+            md.takePluginDispatches(QStringLiteral("OpenSquilla.exe"));
+        check("osq model: take carries model.modelId for the bridge",
+              taken.size() == 1 &&
+                  taken.at(0).toObject()
+                      .value(QStringLiteral("model"))
+                      .toObject()
+                      .value(QStringLiteral("modelId"))
+                      .toString() == QStringLiteral("glm-5.1"));
+        // 目录外的模型在派发口就拒（网关 patch 不校验，拦不住会静默切错）。
+        check("osq model: catalog miss refused at dispatch",
+              !md.dispatch(QStringLiteral("OpenSquilla.exe"),
+                           QStringLiteral("agent:main:webchat:mdl00002"),
+                           QString(), QStringLiteral("瞎选"), &reason,
+                           nullptr,
+                           QJsonObject{{QStringLiteral("modelId"),
+                                        QStringLiteral("nope-xyz")}}) &&
+                  reason.contains(QStringLiteral("不在 OpenSquilla 目录")));
+        // 不带 model 照常能派（零切换）。
+        check("osq model: no override still dispatches",
+              md.dispatch(QStringLiteral("OpenSquilla.exe"),
+                          QStringLiteral("agent:main:webchat:mdl00003"),
+                          QString(), QStringLiteral("不切"), &reason));
+        // DSH 取件不受影响：不带 model 键。
+        const QString dshSid =
+            QStringLiteral("session-11111111-2222-4333-8444-555555555555");
+        check("dsh channel ignores osq catalog",
+              md.dispatch(QStringLiteral("DeepSeek Harness.exe"), dshSid,
+                          QString(), QStringLiteral("DSH"), &reason));
+        const QJsonArray dshTaken =
+            md.takePluginDispatches(QStringLiteral("DeepSeek Harness.exe"));
+        check("dsh take has no model key",
+              dshTaken.size() == 1 &&
+                  !dshTaken.at(0).toObject().contains(QStringLiteral("model")));
+    }
+
     // —— ZCode 通道：app-server 协议（2026-11-08 探针定案）——
     // 会话索引 = ~/.zcode/cli/db/db.sqlite（只读）；守卫全在 native：会话缺失 /
     // 账号套餐模型 / 活动门。测试用 AGENTRMC_ZCODE_HOME 指到临时目录，自建

@@ -612,19 +612,33 @@ QString AppLauncher::appIdForExe(const QString &exe) {
         return QString();
     }
     QString base = QFileInfo(exe).completeBaseName();
-    const QString key = base.toLower();
+    // key 统一去空格：「DeepSeek Harness.exe」的 basename 带空格，而开始菜单名
+    // 也带空格、id 又不带——不归一化就永远对不上（2026-11-19 用户问
+    // 「OpenSquilla/DSH 这些不能自动拉起？」，DSH 就是栽在这）。
+    QString key = base.toLower();
+    key.remove(QLatin1Char(' '));
     const QVector<AppEntry> &all = catalog();
     // 自定义应用先看：用户自己加的 exe 最可能就是他要的那个。
     for (const AppEntry &e : all) {
         if (e.customPath.isEmpty()) {
             continue;
         }
-        if (QFileInfo(e.customPath).completeBaseName().toLower() == key) {
+        QString cbase = QFileInfo(e.customPath).completeBaseName().toLower();
+        cbase.remove(QLatin1Char(' '));
+        if (!cbase.isEmpty() && cbase == key) {
             return e.id;
         }
     }
     for (const AppEntry &e : all) {
-        if (e.id.toLower() == key) {
+        QString id = e.id.toLower();
+        id.remove(QLatin1Char(' '));
+        if (id == key) {
+            return e.id;
+        }
+        // 显示名也认（「DeepSeek Harness」→ deepseek），别名兜最后。
+        QString name = e.name.toLower();
+        name.remove(QLatin1Char(' '));
+        if (name == key) {
             return e.id;
         }
         for (const QString &shortcut : e.shortcuts) {

@@ -45,6 +45,9 @@
 #include <QCloseEvent>
 #include <QComboBox>
 #include <QCoreApplication>
+#include <QElapsedTimer>
+#include <QHostAddress>
+#include <QTcpSocket>
 #include <QEventLoop>
 #include <QCheckBox>
 #include <QDir>
@@ -529,6 +532,37 @@ bool riskyDownloadExt(const QString &suffix) {
         QStringLiteral("bat"), QStringLiteral("cmd"), QStringLiteral("ps1"),
         QStringLiteral("vbs"), QStringLiteral("jar")};
     return kRisky.contains(suffix.toLower());
+}
+
+// 宿主自带的本地网关端口。OpenSquilla 的网关是它自己的子服务（:18791），
+// 进程起来 ≠ 能接活：冷启动实测要 22 秒才监听，桥取件时若 gatewayUp 还是
+// false 就回「网关没连上，未注入」。派发前必须等到端口真的可连。
+quint16 gatewayPortFor(const QString &exe) {
+    if (exe.compare(QStringLiteral("OpenSquilla.exe"), Qt::CaseInsensitive) == 0) {
+        return 18791;
+    }
+    return 0;
+}
+
+// 轮询等端口可连。用 processEvents 保界面响应，别让主窗假死几十秒。
+bool waitPortOpen(quint16 port, int timeoutMs) {
+    if (port == 0) {
+        return true;
+    }
+    QElapsedTimer timer;
+    timer.start();
+    while (timer.elapsed() < timeoutMs) {
+        QTcpSocket probe;
+        probe.connectToHost(QHostAddress::LocalHost, port);
+        const bool ok = probe.waitForConnected(400);
+        probe.abort();
+        if (ok) {
+            return true;
+        }
+        QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+        QThread::msleep(350);
+    }
+    return false;
 }
 
 }  // namespace
@@ -4139,27 +4173,27 @@ QString MainWindow::dispatchToSession(const QString &agentExe,
             if (AppLauncher::launch(appId, &launchErr)) {
                 // 冷启动：等进程出现（最多 3s），再给桥/网关 1.5s 重连。
                 bool up = false;
-                for (int i = 0; i < 15; ++i) {
+                for (int i = 0; i < 30; ++i) {  // 进程最多等 9s
                     QCoreApplication::processEvents(
                         QEventLoop::ExcludeUserInputEvents);
-                    QThread::msleep(200);
+                    QThread::msleep(300);
                     if (AgentWindow::processRunning(agentExe)) {
                         up = true;
                         break;
                     }
                 }
                 if (!up) {
-                    // 拉起了但进程没起来（应用自己启动即退：单实例锁残留、
-                    // 更新失败、配置坏）——直接说清楚，别让桥去回一句
-                    // 「网关没连上」把人带偏（2026-11-19 OpenSquilla 实测：
-                    // 点 exe 3 秒内 exit 0，无窗口无网关无日志）。
                     return QStringLiteral("%1 启动失败（进程没起来），先在电脑上手动打开它")
                         .arg(AgentWindow::displayName(agentExe));
                 }
-                for (int i = 0; i < 3; ++i) {
-                    QCoreApplication::processEvents(
-                        QEventLoop::ExcludeUserInputEvents);
-                    QThread::msleep(500);
+                // 进程起来了还得等它自己的网关就绪（OpenSquilla 冷启动约 22s）。
+                // 桥取件时网关没通只会回「网关没连上」，所以这里必须等端口。
+                const quint16 gw = gatewayPortFor(agentExe);
+                if (gw != 0 && !waitPortOpen(gw, 40000)) {
+                    return QStringLiteral("%1 已启动，但网关（:%2）没就绪；"
+                                          "等它加载完再派发一次")
+                        .arg(AgentWindow::displayName(agentExe))
+                        .arg(gw);
                 }
             }
         }

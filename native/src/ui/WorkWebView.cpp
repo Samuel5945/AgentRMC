@@ -1444,50 +1444,6 @@ QString WorkWebView::htmlFor(const QString &stateJson) const {
   </div>
 </div>
 <div id="dchat" class="page" hidden></div>
-<div id="chat" class="page" hidden>
-  <div class="chathead">
-    <button class="btn" id="chatBack" title="回到待办列表" aria-label="回到待办列表"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5 8 12l7 7"/></svg></button>
-    <span class="name" id="chatTitle"></span>
-    <span class="stage" id="chatStage"></span>
-    <span class="spacer"></span>
-    <span class="time" id="chatMeta"></span>
-    <button class="tico" id="chatRefresh" title="重新读取这个会话的最新记录" aria-label="刷新记录"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20.5 12a8.5 8.5 0 1 1-2.5-6L21 9"/><path d="M21 3v6h-6"/></svg></button>
-    <button class="tico" id="chatFiles" title="这个会话工作区里的产物与文件" aria-label="产物与文件"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7.5A2 2 0 0 1 5 5.5h4l2 2.5h8a2 2 0 0 1 2 2v7.5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/></svg></button>
-  </div>
-  <div class="chatwrap">
-    <div class="chatfade top"></div>
-    <div class="chatlist" id="chatList"></div>
-    <div class="chatfade bottom"></div>
-    <button class="newpill" id="chatNew" hidden>有新消息 ↓</button>
-  </div>
-  <div class="chatfoot">
-    <div class="cbar" id="chatBar" hidden>
-      <div class="cnotice" id="chatNotice"></div>
-      <span class="cbar-acts"><button class="crise" id="chatRestart" hidden
-        title="ZCode 对话区不热刷新：重启宿主后打开会话即可看到派发消息全文。会中断 ZCode 里正在跑的其它轮次">重启 ZCode</button></span>
-    </div>
-    <div class="cbox">
-      <div class="catts" id="chatAtts" hidden></div>
-      <textarea id="chatText" rows="1" placeholder="派回这条会话的指令，回执到了转进行中…"></textarea>
-      <div class="crow">
-        <button class="cico" id="chatAttach" title="附上本机文件（不复制，直接给路径）" aria-label="附上本机文件"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20.4 11.6 12 20a5 5 0 0 1-7-7l8.5-8.5a3.4 3.4 0 0 1 4.8 4.8L9.7 17.9a1.8 1.8 0 0 1-2.5-2.5l7.8-7.8"/></svg></button>
-        <button class="modelchip" id="chatModelChip" hidden><b id="chatModelLabel">选择模型</b><span class="lvl" id="chatModelLvl" hidden></span><span class="caret">⌄</span></button>
-        <span class="chint" id="chatHint">Enter 发送 · Shift+Enter 换行</span>
-        <span class="cchars" id="chatChars" hidden></span>
-        <button class="csend" id="chatSend" data-label="发送" aria-label="发送" title="发送"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12l16-7-6.3 16-2.9-6.4L4 12Z"/></svg></button>
-      </div>
-    </div>
-    <div class="mpanel" id="chatModelPanel" hidden>
-     <button class="mpback" id="chatMpBack">‹ 上一步</button>
-     <div class="mplist" id="chatMpList"></div>
-     <div class="mpthought" id="chatMpThought" hidden>
-      <div class="trow"><span class="tkey">思考强度</span><b id="chatMpTVal">跟随会话</b></div>
-      <input type="range" id="chatMpRange" min="0" max="5" value="0" step="1">
-     </div>
-     <div class="mpfoot" id="chatMpFoot">管理模型</div>
-    </div>
-  </div>
-</div>
 <div id="chat" class="page" hidden></div>
 <div class="mpanel fppanel" id="fpPanel" hidden></div>
 <div id="empty" class="empty" hidden>

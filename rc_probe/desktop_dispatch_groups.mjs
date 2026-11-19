@@ -186,7 +186,7 @@ for (const g of groups) {
   check(dels.size <= 1, `组「${g.name}」不混归档/未归档`, g.rows);
 }
 check(/1 个项目/.test(summary), '摘要项目数=1（只有 Agentrmc 有活跃会话）', summary);
-check(/3 个未分类任务/.test(summary), '摘要未分类任务=3（只数活跃的）', summary);
+check(!/未分类任务/.test(summary), '摘要不再报未分类任务条数（用户 2026-11-19）', summary);
 check(/4 个活跃会话/.test(summary), '摘要活跃会话=4（归档不计入主线）', summary);
 check(!/已归档/.test(summary), '摘要不混归档计数（交给区头）', summary);
 

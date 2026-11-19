@@ -2539,11 +2539,12 @@ function renderDispatch(){
   $('dspRefresh').hidden=DSP_CLEAN;
   $('dspBatch').hidden=!DSP_CLEAN;
   // 摘要只报活跃面：归档数量交给底部「已归档」区头，主线不混着算。
+  // 未分类任务的条数不进摘要（用户 2026-11-19）：上面对齐数字后它只会
+  // 把行挤成两行，组头本来也带数量，摘要里重复。
   const liveCount=rows.filter(r=>!r.archived).length;
   $('dspSummary').textContent=DSP_CLEAN
     ?(agent.name+' · 选择要删除的归档会话 · '+deletable.length+' 条可删')
     :(agent.name+' · '+active.length+' 个项目'
-      +(uncLive.length?' · '+uncLive.length+' 个未分类任务':'')
       +' · '+liveCount+' 个活跃会话');
   const keep=list.scrollTop;list.replaceChildren();list.hidden=false;
   $('dspEmpty').hidden=true;

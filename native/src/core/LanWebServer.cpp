@@ -3458,9 +3458,10 @@ allGroups.forEach(g=>{
 const uncLive=unclassified.filter(r=>!r.archived);
 const uncDead=unclassified.filter(r=>!!r.archived);
 // 摘要只报活跃面：归档数量交给底部「已归档」区头。
+// 未分类任务的条数不进摘要（用户 2026-11-19）：数字叠三个把行挤成
+// 两行，组头本来也带数量，摘要里重复。
 const liveCount=rows.filter(r=>!r.archived).length;
 $('dispatchCount').textContent=agent.name+' · '+active.length+' 个项目'
- +(uncLive.length?' · '+uncLive.length+' 个未分类任务':'')
  +' · '+liveCount+' 个活跃会话';
 // 默认只展开最近的一个活跃项目，其余收起；项目再多也不会铺成一条长墙。
 active.forEach((g,i)=>list.append(

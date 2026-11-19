@@ -1345,7 +1345,10 @@ QString LanWebServer::mobileHtml() const {
     顶栏这两颗把容器收窄到 28 宽（高仍 36 保触控），图标两侧留白 9→5，
     箭头不显得悬空。只作用于 .chathead，输入区的附件按钮不受影响。
     语义放在 aria-label 里，renderChatFrame 只改 aria-label。 */
- .chathead .cicobtn{width:28px}
+ /* 顶栏图标统一 32×32 / SVG 16：原来只盖了宽度，高度还是 36 的默认值，
+    刷新/文件夹变成 28×36 的竖长条（2026-11-19 用户指出偏大）。 */
+ .chathead .cicobtn{width:32px;height:32px;border-radius:9px}
+ .chathead .cicobtn svg{width:16px;height:16px}
  .chtitles{flex:1;min-width:0}
  .chtitles .name{font-weight:700;font-size:16px;overflow:hidden;
    text-overflow:ellipsis;white-space:nowrap}
@@ -2831,14 +2834,13 @@ function renderChatFrame(){
  // 副标题只放跟大标题不重复的东西：待办页大标题往往就是宿主名/会话名，
  // 再写一遍 WorkBuddy.exe 加「共 N 条」是纯噪声——这里只留项目名。
  // 派发页多一个 Agent 名（大标题是会话标题，不会重复）。
+ // 副标题两面同构：Agent 名 · 项目名（有谁放谁）。以前 work 面不报 Agent
+ // 名，跟派发面的顶栏对不上（2026-11-19 用户指出）。
  const bits=[];
- if(chatKind==='session'){
-  const who=chatAgentName||chatMeta.agentName||'';
-  if(who)bits.push(who);
-  if(chatProject)bits.push(projectName(chatProject));
- } else if(chatMeta.project){
-  bits.push(projectName(chatMeta.project));
- }
+ const who=chatAgentName||chatMeta.agentName||'';
+ if(who)bits.push(who);
+ const proj=chatProject||chatMeta.project||'';
+ if(proj)bits.push(projectName(proj));
  $('chatSub').textContent=bits.join(' · ');
  $('chatSub').hidden=!bits.length;
  $('chatText').placeholder=chatCanDispatch

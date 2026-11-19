@@ -543,6 +543,91 @@ int main(int argc, char **argv) {
               QStringLiteral("OSQ 问"),
           "osq chronological");
 
+    // ---- OpenSquilla 会话目录标题：通道占位名「WebChat」不能吞掉真标题 ----
+    // 宿主把每个 webchat 会话的 display_name 都写成「WebChat」，真标题在
+    // derived_title；两个都没时退首条用户正文（带运行时时间头 / JSON 包壳），
+    // 全没有才给短 id（用户 2026-11-19 报：派发页整屏都叫 WebChat）。
+    {
+        QSqlDatabase db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"),
+                                                   QStringLiteral("setup_o_cat"));
+        db.setDatabaseName(oRoot + QStringLiteral("/sessions.db"));
+        check(db.open(), "osq catalog: writer opens db");
+        QSqlQuery ddl(db);
+        check(ddl.exec("CREATE TABLE sessions(session_key TEXT PRIMARY KEY, "
+                       "display_name TEXT, derived_title TEXT, subject TEXT, "
+                       "label TEXT, updated_at INTEGER, workspace_id TEXT)"),
+              "osq catalog: sessions ddl");
+        check(ddl.exec("CREATE TABLE project_workspaces(workspace_id TEXT, "
+                       "path TEXT, removed_at INTEGER)"),
+              "osq catalog: workspaces ddl");
+        const qint64 nowMs = 1795070016446LL;
+        auto sess = [&](const QString &key, const QString &dn, const QString &dt,
+                        int idx) {
+            QSqlQuery i(db);
+            i.prepare("INSERT INTO sessions VALUES(?,?,?,?,?,?,?)");
+            i.addBindValue(key);
+            i.addBindValue(dn.isNull() ? QVariant() : QVariant(dn));
+            i.addBindValue(dt.isNull() ? QVariant() : QVariant(dt));
+            i.addBindValue(QVariant());
+            i.addBindValue(QVariant());
+            i.addBindValue(nowMs - idx);
+            i.addBindValue(QStringLiteral("w") + QString::number(idx));
+            check(i.exec(), "osq catalog: session insert");
+        };
+        sess(QStringLiteral("agent:main:webchat:aaaaaaaa"),
+             QStringLiteral("WebChat"), QStringLiteral("真实AI标题"), 1);
+        sess(QStringLiteral("agent:main:webchat:bbbbbbbb"),
+             QStringLiteral("WebChat"), QString(), 2);
+        sess(QStringLiteral("agent:main:webchat:cccccccc"),
+             QStringLiteral("WebChat"), QString(), 3);
+        sess(QStringLiteral("agent:main:cli:dddddddd"), QString(), QString(), 4);
+        auto user = [&](const QString &key, int id, const QString &text) {
+            QSqlQuery i(db);
+            i.prepare("INSERT INTO transcript_entries VALUES(?,?,?,?,?)");
+            i.addBindValue(id);
+            i.addBindValue(key);
+            i.addBindValue(QStringLiteral("user"));
+            i.addBindValue(text);
+            i.addBindValue(1794569091LL + id);
+            i.exec();
+        };
+        user(QStringLiteral("agent:main:webchat:bbbbbbbb"), 101,
+             QStringLiteral("[2026-11-19T14:20+08:00 Thu Asia/Shanghai]\n帮我打包"));
+        user(QStringLiteral("agent:main:webchat:cccccccc"), 102,
+             QStringLiteral(R"({"text":"研究MotionHarness优化技能"})"));
+        db.close();
+        QSqlDatabase::removeDatabase(QStringLiteral("setup_o_cat"));
+        const auto cat = SessionTranscript::listSessions(
+            QStringLiteral("OpenSquilla.exe"), 50, oRoot);
+        QHash<QString, QString> byId;
+        for (const auto &row : cat) {
+            byId.insert(row.id, row.title);
+        }
+        check(byId.value(QStringLiteral("agent:main:webchat:aaaaaaaa")) ==
+                  QStringLiteral("真实AI标题"),
+              "osq catalog: placeholder WebChat yields to derived_title");
+        check(byId.value(QStringLiteral("agent:main:webchat:bbbbbbbb")) ==
+                  QStringLiteral("帮我打包"),
+              "osq catalog: runtime header stripped from first user");
+        check(byId.value(QStringLiteral("agent:main:webchat:cccccccc")) ==
+                  QStringLiteral("研究MotionHarness优化技能"),
+              "osq catalog: JSON content unwrapped");
+        check(byId.value(QStringLiteral("agent:main:cli:dddddddd")) ==
+                  QStringLiteral("会话 dddddddd"),
+              "osq catalog: empty falls back to short id");
+        // 聊天页头部同源：read 也要解出真标题而不是 WebChat。
+        const auto rt = SessionTranscript::read(
+            QStringLiteral("OpenSquilla.exe"),
+            QStringLiteral("agent:main:webchat:aaaaaaaa"), 50, 0, oRoot);
+        check(rt.title == QStringLiteral("真实AI标题"),
+              "osq read title skips placeholder");
+        const auto rt2 = SessionTranscript::read(
+            QStringLiteral("OpenSquilla.exe"),
+            QStringLiteral("agent:main:webchat:bbbbbbbb"), 50, 0, oRoot);
+        check(rt2.title == QStringLiteral("帮我打包"),
+              "osq read title falls back to first user");
+    }
+
     // ---- OpenSquilla WAL：新提交只在 -wal 里、主库还没 checkpoint 时也要看到 ----
     // 宿主库是 WAL：新行先落 sessions.db-wal，主库 mtime/size 一动不动。缓存 stamp
     // 只看主库的话，对话页永远停在上一份快照，点刷新也无效（2026-11-17 实测：

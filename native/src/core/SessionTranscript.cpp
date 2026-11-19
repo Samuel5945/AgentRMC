@@ -465,6 +465,11 @@ SessionTranscript::Result readZcode(const QString &root, const QString &sessionI
     return slicePage(full, limit, offset);
 }
 
+// 下面三个 helper 定义在会话目录段，但 readOsq（聊天页标题）也要用，先声明。
+QString shortTitleOf(const QString &text, const QString &sessionId);
+bool isGenericOsqTitle(const QString &text);
+QString normalizeOsqUserText(const QString &raw);
+
 SessionTranscript::Result readOsq(const QString &stateRoot, const QString &sessionKey,
                                   int limit, int offset) {
     SessionTranscript::Result out;
@@ -488,6 +493,38 @@ SessionTranscript::Result readOsq(const QString &stateRoot, const QString &sessi
     }
     FullCache full;
     full.stamp = stamp;
+    // 会话标题：聊天页头部原来一直是通道占位名（「WebChat」），和派发页同源
+    // 一起修（2026-11-19）。取不到就当没有，退首条用户正文。
+    QSqlQuery titleQ(db.db());
+    titleQ.prepare(QStringLiteral(
+        "SELECT display_name, derived_title, "
+        "COALESCE(NULLIF(subject,''),NULLIF(label,''),'') "
+        "FROM sessions WHERE session_key=?"));
+    titleQ.addBindValue(sessionKey);
+    if (titleQ.exec() && titleQ.next()) {
+        for (int col = 0; col < 3; ++col) {
+            const QString cand = titleQ.value(col).toString();
+            if (!cand.isEmpty() && !isGenericOsqTitle(cand)) {
+                full.title = shortTitleOf(cand, sessionKey.section(QLatin1Char(':'), -1));
+                break;
+            }
+        }
+    }
+    titleQ.finish();
+    if (full.title.isEmpty()) {
+        QSqlQuery fu(db.db());
+        fu.prepare(QStringLiteral(
+            "SELECT content FROM transcript_entries "
+            "WHERE session_key=? AND role='user' ORDER BY id LIMIT 1"));
+        fu.addBindValue(sessionKey);
+        if (fu.exec() && fu.next()) {
+            const QString t = normalizeOsqUserText(fu.value(0).toString());
+            if (!t.isEmpty()) {
+                full.title = shortTitleOf(t, sessionKey.section(QLatin1Char(':'), -1));
+            }
+        }
+        fu.finish();
+    }
     QSqlQuery countQ(db.db());
     countQ.prepare(QStringLiteral(
         "SELECT COUNT(*) FROM transcript_entries WHERE session_key=?"));
@@ -565,6 +602,36 @@ bool archivedProject(const QString &project) {
         return false;  // 未分类另算
     }
     return !QFileInfo::exists(project);
+}
+
+// OpenSquilla 的 display_name 常是宿主写死的通道通名：webchat 会话一律叫
+// 「WebChat」，派发页整屏同名卡根本分不出哪条是哪条（用户 2026-11-19 报）。
+// 通名不算标题——放行 derived_title / 首条用户正文。
+bool isGenericOsqTitle(const QString &text) {
+    static const QSet<QString> kGeneric = {
+        QStringLiteral("webchat"), QStringLiteral("clisession"),
+        QStringLiteral("chat"), QStringLiteral("session"),
+        QStringLiteral("conversation")};
+    QString s = text.simplified().toLower();
+    s.remove(QLatin1Char(' ')).remove(QLatin1Char('-')).remove(QLatin1Char('_'));
+    return kGeneric.contains(s);
+}
+
+// 首条用户正文当标题用前的归一：正文可能是 {"text":"…"} 的 JSON，也可能带
+// 「[2026-11-19T14:20+08:00 Thu Asia/Shanghai]」这种运行时时间头（实测都有）。
+QString normalizeOsqUserText(const QString &raw) {
+    QString s = raw.trimmed();
+    if (s.startsWith(QLatin1Char('{'))) {
+        const QString t =
+            QJsonDocument::fromJson(raw.toUtf8()).object().value(QStringLiteral("text")).toString();
+        if (!t.trimmed().isEmpty()) {
+            s = t;
+        }
+    }
+    static const QRegularExpression runtimeHeader(
+        QStringLiteral("^\\[\\d{4}-\\d{2}-\\d{2}[^\\]]*\\]\\s*"));
+    s.remove(runtimeHeader);
+    return s.simplified();
 }
 
 QString shortTitleOf(const QString &text, const QString &sessionId) {
@@ -826,29 +893,78 @@ QVector<SessionTranscript::SessionInfo> listOsqSessions(const QString &stateRoot
     // 项目以宿主自己的工作区表为准（execution_workspace 只是任务沙箱目录，
     // 拿来分组会把每个任务当项目）。removed_at 是 OpenSquilla 的归档标记。
     if (q.exec(QStringLiteral(
-            "SELECT s.session_key, "
-            "COALESCE(NULLIF(s.display_name,''),NULLIF(s.derived_title,''),"
-            "NULLIF(s.subject,''),NULLIF(s.label,''),''), "
+            "SELECT s.session_key, s.display_name, s.derived_title, "
+            "COALESCE(NULLIF(s.subject,''),NULLIF(s.label,''),''), "
             "COALESCE(p.path,''), COALESCE(p.removed_at,0), s.updated_at "
             "FROM sessions s LEFT JOIN project_workspaces p "
             "ON p.workspace_id=s.workspace_id "
             "ORDER BY s.updated_at DESC LIMIT ") +
                QString::number(maxSessions))) {
+        // 没解出标题的行先记下，整批退查首条用户正文——200 条相关子查询
+        // 在没索引的表上是逐条全扫，一次 IN 批量查只扫一遍。
+        QVector<int> fallbackIdx;
+        QStringList fallbackKeys;
         while (q.next()) {
             const QString key = q.value(0).toString();
             SessionTranscript::SessionInfo info;
             info.id = key;
-            QString title = q.value(1).toString();
-            if (title.isEmpty()) {
-                // agent:main:webchat:ct2q066i → 会话 ct2q066i（别把 agent:ma 当标题）。
-                title = QStringLiteral("会话 ") + key.section(QLatin1Char(':'), -1);
+            QString title;
+            for (int col = 1; col <= 3; ++col) {
+                const QString cand = q.value(col).toString();
+                // 「WebChat」这类通道通名不算标题（2026-11-19 派发页整屏同名）。
+                if (!cand.isEmpty() && !isGenericOsqTitle(cand)) {
+                    title = cand;
+                    break;
+                }
             }
-            info.title = shortTitleOf(title, key);
-            info.project = q.value(2).toString();
-            info.updatedAt = isoFromMs(q.value(4).toLongLong());
+            info.title = title;
+            if (title.isEmpty()) {
+                fallbackIdx.append(out.size());
+                fallbackKeys.append(key);
+            }
+            info.project = q.value(4).toString();
+            info.updatedAt = isoFromMs(q.value(6).toLongLong());
             info.archived =
-                q.value(3).toLongLong() > 0 || archivedProject(info.project);
+                q.value(5).toLongLong() > 0 || archivedProject(info.project);
             out.append(info);
+        }
+        if (!fallbackKeys.isEmpty()) {
+            QStringList marks;
+            for (int i = 0; i < fallbackKeys.size(); ++i) {
+                marks << QStringLiteral("?");
+            }
+            QSqlQuery f(db.db());
+            f.prepare(QStringLiteral(
+                "SELECT session_key, content FROM transcript_entries "
+                "WHERE role='user' AND session_key IN (") +
+                marks.join(QLatin1Char(',')) + QStringLiteral(") ORDER BY id"));
+            for (const QString &k : fallbackKeys) {
+                f.addBindValue(k);
+            }
+            QHash<QString, QString> firstUser;
+            if (f.exec()) {
+                while (f.next()) {
+                    const QString k = f.value(0).toString();
+                    const QString c = f.value(1).toString();
+                    // 按 id 升序，第一条非空就是它。
+                    if (!c.trimmed().isEmpty() && !firstUser.contains(k)) {
+                        firstUser.insert(k, c);
+                    }
+                }
+            }
+            f.finish();
+            for (int i = 0; i < fallbackIdx.size(); ++i) {
+                QString t = normalizeOsqUserText(firstUser.value(fallbackKeys.at(i)));
+                if (t.isEmpty()) {
+                    // agent:main:webchat:ct2q066i → 会话 ct2q066i（别把 agent:ma 当标题）。
+                    t = QStringLiteral("会话 ") +
+                        fallbackKeys.at(i).section(QLatin1Char(':'), -1);
+                }
+                out[fallbackIdx.at(i)].title = t;
+            }
+        }
+        for (SessionTranscript::SessionInfo &info : out) {
+            info.title = shortTitleOf(info.title, info.id);
         }
     }
     q.finish();

@@ -269,6 +269,10 @@ function startServer() {
             { name: '会议记录.md', size: 2048, mtime: iso(NOW) },
             { name: '截图一.png', size: 40960, mtime: iso(NOW - 60e3) },
           ],
+          artifacts: [
+            { rel: 'dist/AgentRMC-Setup.exe', name: 'AgentRMC-Setup.exe',
+              size: 36619313, mtime: iso(NOW - 30e3) },
+          ],
         }));
       }
       if (url.pathname === '/m/file') {
@@ -668,12 +672,20 @@ async function runFlow() {
   FILES.length = 0;
   await page.click('#chatFiles');
   await page.waitForSelector('#chatFilePanel:not([hidden]) .frow');
-  ok(await page.locator('#chatFilePanel .frow').count() === 2, '电脑文件面板列出 inbox');
-  ok((await page.textContent('#chatFileCount')).includes('文件 2'),
-    '面板报文件数（产物 · 文件）');
-  const fhref = await page.locator('#chatFilePanel .frow').first().getAttribute('href');
+  ok(await page.locator('#chatFilePanel .frow').count() === 3, '面板列出产物 + inbox');
+  const fc = await page.textContent('#chatFileCount');
+  ok(fc.includes('产物 1') && fc.includes('文件 2'), '面板报文件数（产物 · 文件）', fc);
+  // 产物行：第一行是 rel 路径的位置换成时间戳（用户 2026-11-19：上级目录没用）。
+  const aHref = await page.locator('#chatFilePanel .frow').first().getAttribute('href');
+  ok(aHref.includes('scope=project') && aHref.includes('rel='),
+    '产物行指向工作区下载', aHref);
+  const aDir = await page.locator('#chatFilePanel .frow').first().locator('.fdir').textContent();
+  ok(aDir && !aDir.includes('/') && /\d/.test(aDir), '产物行第二行是时间戳不是路径', aDir);
+  const fhref = await page.locator('#chatFilePanel .frow').nth(1).getAttribute('href');
   ok(fhref.includes('/m/file?') && fhref.includes('name=') && fhref.includes('session=sess-8f31c2a9'),
     '文件行指向下载路由且带会话上下文', fhref);
+  const fDir = await page.locator('#chatFilePanel .frow').nth(1).locator('.fdir').textContent();
+  ok(fDir && /\d/.test(fDir), 'inbox 行也带时间戳', fDir);
   ok(FILES.length === 1 && FILES[0].req.includes('session=sess-8f31c2a9'),
     '列表请求带会话上下文', JSON.stringify(FILES));
   await page.click('#chatFileClose');

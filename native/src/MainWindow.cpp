@@ -69,6 +69,7 @@
 #include <QCursor>
 #include <QDesktopServices>
 #include <QGuiApplication>
+#include <QProcess>
 #include <QJsonArray>
 #include <QMessageBox>
 #include <QJsonDocument>
@@ -4672,10 +4673,15 @@ QJsonArray lanProjectArtifacts(const QString &project) {
         if (n++ >= 30) {
             break;
         }
+        // path/dir：桌面「产物与文件」面板要左键打开、右键跳目录，得给本机
+        // 绝对路径（手机页只读 rel/name，多余字段无副作用）。
+        const QString abs = QDir(project).filePath(item.rel);
         arr.append(QJsonObject{
             {QStringLiteral("rel"), item.rel},
             {QStringLiteral("name"), QFileInfo(item.rel).fileName()},
             {QStringLiteral("size"), static_cast<double>(item.size)},
+            {QStringLiteral("path"), abs},
+            {QStringLiteral("dir"), QFileInfo(abs).absolutePath()},
             {QStringLiteral("mtime"),
              QDateTime::fromMSecsSinceEpoch(item.mtime)
                  .toUTC()
@@ -4701,6 +4707,8 @@ QString MainWindow::lanInboxList(const QJsonObject &meta) {
         arr.append(QJsonObject{
             {QStringLiteral("name"), fi.fileName()},
             {QStringLiteral("size"), static_cast<double>(fi.size())},
+            {QStringLiteral("path"), fi.absoluteFilePath()},
+            {QStringLiteral("dir"), fi.absolutePath()},
             {QStringLiteral("mtime"),
              fi.lastModified().toUTC().toString(Qt::ISODate)}});
     }
@@ -4972,6 +4980,66 @@ void MainWindow::handleWebAction(const QJsonObject &action) {
                     {QStringLiteral("error"),
                      res.value(QStringLiteral("error")).toString()}});
             }
+        }
+        return;
+    }
+    // 桌面聊天页「产物与文件」面板：数据不进 5 秒整窗 state，问了才给。
+    // 响应走专用回推 __setFilePanel（pushFiles 的附件语义不串用）。
+    if (cmd == QStringLiteral("filesList")) {
+        const QString resp =
+            lanInboxList(action.value(QStringLiteral("meta")).toObject());
+        if (workWeb_ != nullptr) {
+            QJsonObject obj = resp.isEmpty()
+                                  ? QJsonObject()
+                                  : QJsonDocument::fromJson(resp.toUtf8()).object();
+            obj.insert(QStringLiteral("ok"), resp.isEmpty() ? false : true);
+            obj.insert(QStringLiteral("plane"),
+                       action.value(QStringLiteral("plane")).toString());
+            workWeb_->pushFilePanel(QString::fromUtf8(
+                QJsonDocument(obj).toJson(QJsonDocument::Compact)));
+        }
+        return;
+    }
+    // 面板行左键＝本机打开、右键＝资源管理器定位。桌面是同机信任面（与
+    // pickFiles 同级），但只认绝对存在的文件/目录，不拼不猜。
+    if (cmd == QStringLiteral("openFile") ||
+        cmd == QStringLiteral("revealFile")) {
+        const QString path = QDir::fromNativeSeparators(
+            action.value(QStringLiteral("path")).toString().trimmed());
+        const QFileInfo fi(path);
+        const QString why = [&] {
+            if (path.isEmpty() || !fi.isAbsolute()) {
+                return QStringLiteral("路径无效");
+            }
+            if (cmd == QStringLiteral("openFile")) {
+                if (!fi.exists()) {
+                    return QStringLiteral("文件已经不在了");
+                }
+                return QDesktopServices::openUrl(
+                           QUrl::fromLocalFile(fi.absoluteFilePath()))
+                           ? QString()
+                           : QStringLiteral("本机没有能打开它的默认程序");
+            }
+            // 资源管理器：/select 只在目标存在时高亮；目录直接进目录。
+            if (!fi.exists()) {
+                return QStringLiteral("文件已经不在了");
+            }
+            const QString native = QDir::toNativeSeparators(fi.absoluteFilePath());
+            if (fi.isDir()) {
+                QProcess::startDetached(QStringLiteral("explorer.exe"), {native});
+                return QString();
+            }
+            QProcess::startDetached(QStringLiteral("explorer.exe"),
+                                    {QStringLiteral("/select,"), native});
+            return QString();
+        }();
+        if (!why.isEmpty() && workWeb_ != nullptr) {
+            const QJsonObject err{{QStringLiteral("error"), why},
+                                  {QStringLiteral("op"), cmd},
+                                  {QStringLiteral("plane"),
+                                   action.value(QStringLiteral("plane")).toString()}};
+            workWeb_->pushFilePanel(QString::fromUtf8(
+                QJsonDocument(err).toJson(QJsonDocument::Compact)));
         }
         return;
     }

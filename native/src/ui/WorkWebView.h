@@ -45,6 +45,9 @@ public:
     // 📎 选文件的结果：{plane:"dchat|chat", files:[{name,path,size}]}，页面
     // 据此生成附件条（本机路径直接引用，不复制）。
     void pushFiles(const QJsonObject &payload);
+    // 桌面聊天页「产物与文件」面板的响应：/m/files 同款 JSON 载荷
+    // （{ok,files,artifacts} 或 {error,op}），页面挂 window.__setFilePanel。
+    void pushFilePanel(const QString &rawJson);
     void pushDeleteResult(const QJsonObject &result);
     // WebView2 的边界是物理像素：跨屏换 DPI 时主窗拿原生消息催一次重喂。
     void syncBounds();

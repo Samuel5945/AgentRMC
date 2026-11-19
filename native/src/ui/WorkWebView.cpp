@@ -571,6 +571,18 @@ void WorkWebView::pushFiles(const QJsonObject &payload) {
                                nullptr);
 }
 
+void WorkWebView::pushFilePanel(const QString &rawJson) {
+    if (!documentReady_ || d_->webview == nullptr) {
+        return;
+    }
+    // 载荷是 native 自己序列化的 JSON，直接当脚本参数递给页面，不再过
+    // 一遍 QJsonObject（手机同款字段序与紧凑度）。
+    const QString script = QStringLiteral("window.__setFilePanel(")
+                           + jsEscape(rawJson) + QStringLiteral(");");
+    d_->webview->ExecuteScript(reinterpret_cast<LPCWSTR>(script.utf16()),
+                               nullptr);
+}
+
 void WorkWebView::pushDeleteResult(const QJsonObject &result) {
     if (!documentReady_ || d_->webview == nullptr) {
         return;
@@ -1125,6 +1137,27 @@ QString WorkWebView::htmlFor(const QString &stateJson) const {
  .mprow .check{flex:0 0 auto;color:var(--muted)}
  .mprow .fwd{flex:0 0 auto;color:var(--muted)}
  .mpsec{padding:8px 12px 2px;font-size:var(--f11);color:var(--muted)}
+ /* 顶栏「产物与文件」入口 + 下拉面板（手机页面板的桌面版） */
+ .fplink{flex:0 0 auto;cursor:default;color:var(--accent);font-size:var(--f11);
+   white-space:nowrap}
+ .fplink:hover{text-decoration:underline}
+ .fppanel{position:fixed;left:auto;bottom:auto;right:auto;z-index:60;
+   width:min(430px,92vw);max-height:360px;overflow-y:auto;scrollbar-width:none}
+ .fppanel::-webkit-scrollbar{display:none;width:0}
+ .fphead{display:flex;align-items:center;gap:8px;padding:9px 12px;
+   border-bottom:1px solid var(--w14)}
+ .fphead b{font-size:var(--f13)}
+ .fphead .fpcnt{flex:1;min-width:0;color:var(--muted);font-size:var(--f11);
+   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+ .fphead .fpx{border:0;background:transparent;color:var(--muted);font-size:16px;
+   padding:0 2px;font-family:inherit;cursor:default}
+ .frow{cursor:default}
+ .frow .mpname b{font-weight:600;display:block;overflow:hidden;
+   text-overflow:ellipsis;white-space:nowrap}
+ .fdir{display:block;font-size:var(--f10);color:var(--muted);font-weight:400;
+   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+ .fsize{flex:0 0 auto;font-size:var(--f11);color:var(--muted2)}
+ .fempty{padding:10px 12px;color:var(--muted);font-size:var(--f12)}
  .mpfoot{padding:9px 12px;border-top:1px solid var(--w10);
    font-size:var(--f12);color:var(--text);cursor:default}
  .mpfoot[hidden]{display:none}
@@ -1411,6 +1444,7 @@ QString WorkWebView::htmlFor(const QString &stateJson) const {
     <span class="spacer"></span>
     <button class="ghost" id="dchatRefresh" title="重新读取这个会话的最新记录">刷新</button>
     <span class="time" id="dchatMeta"></span>
+    <span class="time fplink" id="dchatFiles" title="这个会话工作区里的产物与文件">产物与文件</span>
   </div>
   <div class="chatwrap">
     <div class="chatfade top"></div>
@@ -1450,6 +1484,7 @@ QString WorkWebView::htmlFor(const QString &stateJson) const {
     <span class="stage" id="chatStage"></span>
     <span class="spacer"></span>
     <span class="time" id="chatMeta"></span>
+    <span class="time fplink" id="chatFiles" title="这个会话工作区里的产物与文件">产物与文件</span>
   </div>
   <div class="chatwrap">
     <div class="chatfade top"></div>
@@ -1485,6 +1520,7 @@ QString WorkWebView::htmlFor(const QString &stateJson) const {
     </div>
   </div>
 </div>
+<div class="mpanel fppanel" id="fpPanel" hidden></div>
 <div id="empty" class="empty" hidden>
   <h3>没有需要你处理的事</h3>
   <p>Agent 等你确认、或任务做完时，这里会自动出现一条。
@@ -2585,8 +2621,9 @@ function renderDchatHeader(){
   $('dchatStage').style.color=COLOR[row.stage]||'';
   $('dchatMeta').textContent=(agent.name||agent.exe||'')
     // 宿主自动生成的临时工作区（日期目录）不当项目名露出来，按单任务处理。
-    +(dspHasProject(row.project)&&!row.generated?' · '+dspProjectName(row.project):'')
-    +' · 共 '+dchatTotal+' 条';
+    +(dspHasProject(row.project)&&!row.generated?' · '+dspProjectName(row.project):'');
+  // 顶栏不再报「共 N 条」：条数没信息量，位置让给「产物与文件」入口
+  //（用户 2026-11-19）；计数移到面板头部，与手机页同口径。
   $('dchatText').placeholder=DSCHAT.canDispatch
     ?'写一句任务，派到这个会话…'
     :'这个 Agent 暂不支持手机/桌面派发，记录只读';
@@ -2773,7 +2810,8 @@ function mpToggle(prefix){
   const ctx=mpCtx(prefix);
   if(!mpActive(prefix))return;
   ctx.open=!ctx.open;
-  if(ctx.open)mpRenderPanel(prefix);else $(prefix+'ModelPanel').hidden=true;
+  if(ctx.open){fpClose();mpRenderPanel(prefix);}
+  else $(prefix+'ModelPanel').hidden=true;
 }
 // 面板事件接线：两个聊天面共用一套生成器（id 按前缀区分）。
 ['dchat','chat'].forEach(prefix=>{
@@ -2825,6 +2863,7 @@ function closeDSession(){
   cSendReady('dchat',true);
   attClear('dchat');
   mpReset('dchat');mpSyncChip('dchat');
+  if(FP.open&&FP.plane==='dchat')fpClose();
   render();
 }
 function render(){
@@ -2839,6 +2878,8 @@ function render(){
   $('work').hidden=!workView||chatOn;
   $('dispatch').hidden=!dispatchView||dchatOn;
   $('dchat').hidden=!dchatOn;
+  // 面板跟着宿主页面走：聊天页被状态刷新关掉，上浮的文件面板不能独活。
+  if(FP.open&&!(FP.plane==='dchat'?dchatOn:chatOn))fpClose();
   // 底部提示/批量条只属于待办列表：聊天页有自己的输入行，不再叠一条提示。
   $('foot').hidden=!workView||chatOn;
   $('events').hidden=activeTab!==2;
@@ -3228,6 +3269,127 @@ window.__setFiles=function(o){
   if(o.error){cNotice(o.plane,'没存下来：'+o.error,'bad');return;}
   attAdd(o.plane,o.files||[]);
 };
+// ---------- 顶栏「产物与文件」面板（桌面）----------
+// 手机页同名面板的桌面版：数据不进 5 秒整窗 state，问了才给（cmd=filesList
+// → native lanInboxList → 回推 __setFilePanel）。行为按桌面习惯反过来：
+// 左键＝本机打开（QDesktopServices），右键＝资源管理器里选中它；
+// 手机上的「点行下载」在桌面上没意义——文件本来就在本机。
+let FP={open:false,plane:'',data:null,err:''};
+function fpFmt(n){return attFmt(n);}
+function fpTime(iso){
+ const t=Date.parse(iso||'');if(isNaN(t))return '';
+ const d=new Date(t),n=new Date();
+ const hm=String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0');
+ if(d.toDateString()===n.toDateString())return hm;
+ n.setDate(n.getDate()-1);
+ if(d.toDateString()===n.toDateString())return '昨天 '+hm;
+ return (d.getMonth()+1)+'-'+String(d.getDate()).padStart(2,'0')+' '+hm;
+}
+function fpMeta(plane){
+  if(plane==='dchat'&&DSCHAT)
+    return {session:DSCHAT.row.id,project:DSCHAT.row.project||'',
+      exe:DSCHAT.agent.exe};
+  if(plane==='chat'&&CHAT)
+    return {id:chatOpenedId,exe:CHAT.agentExe||''};
+  return null;
+}
+function fpClose(){FP.open=false;FP.err='';$('fpPanel').hidden=true;}
+function fpOpen(plane,anchor){
+  if(FP.open&&FP.plane===plane){fpClose();return;}
+  FP.plane=plane;FP.open=true;FP.err='';
+  // 与模型面板互斥：两边都上浮在页面里，叠一块谁都读不了。
+  ['dchat','chat'].forEach(p=>{if(MP[p])MP[p].open=false;$(p+'ModelPanel').hidden=true;});
+  const panel=$('fpPanel');
+  panel.innerHTML='';
+  const ld=document.createElement('div');ld.className='fempty';
+  ld.textContent='正在读产物与文件…';panel.append(ld);
+  panel.hidden=false;
+  const r=anchor.getBoundingClientRect();
+  const w=Math.min(430,window.innerWidth*0.92);
+  panel.style.width=w+'px';
+  panel.style.top=(r.bottom+6)+'px';
+  panel.style.left=Math.max(8,Math.min(r.right-w,window.innerWidth-w-8))+'px';
+  postObj({cmd:'filesList',plane,meta:fpMeta(plane)||{}});
+}
+function fpRow(f,kind){
+  const row=document.createElement('div');row.className='mprow frow';
+  row.title=(f.path||f.rel||f.name||'')+'\n左键打开 · 右键在文件夹里显示';
+  const ic=document.createElement('span');ic.className='mpico';
+  ic.innerHTML=ATT_ICON;
+  const wrap=document.createElement('span');wrap.className='mpname';
+  const nm=document.createElement('b');nm.textContent=f.name||'';
+  const dir=document.createElement('i');dir.className='fdir';
+  dir.textContent=fpTime(f.mtime);
+  wrap.append(nm,dir);
+  const sz=document.createElement('span');sz.className='fsize';
+  sz.textContent=fpFmt(f.size||0);
+  row.append(ic,wrap,sz);
+  const open=()=>{
+    if(!f.path){fpFlash('这条没有本机路径，打不开');return;}
+    postObj({cmd:'openFile',plane:FP.plane,path:f.path});
+  };
+  row.addEventListener('click',open);
+  row.addEventListener('contextmenu',e=>{
+    e.preventDefault();
+    if(!f.path){fpFlash('这条没有本机路径');return;}
+    postObj({cmd:'revealFile',plane:FP.plane,path:f.path});
+  });
+  return row;
+}
+function fpFlash(msg){FP.err=msg;fpRender(FP.data);}
+function fpRender(j){
+  FP.data=j;
+  const panel=$('fpPanel');panel.innerHTML='';
+  const head=document.createElement('div');head.className='fphead';
+  const t=document.createElement('b');t.textContent='产物与文件';
+  const cnt=document.createElement('span');cnt.className='fpcnt';
+  const files=(j&&j.files)||[],arts=(j&&j.artifacts)||[];
+  cnt.textContent=FP.err||
+    ('产物 '+arts.length)+(files.length?(' · 文件 '+files.length):'');
+  if(FP.err)cnt.style.color='var(--danger)';
+  const x=document.createElement('button');x.className='fpx';x.textContent='×';
+  x.setAttribute('aria-label','关闭');x.onclick=fpClose;
+  head.append(t,cnt,x);panel.append(head);
+  if(j&&j.error&&!j.op){
+    const e=document.createElement('div');e.className='fempty';
+    e.textContent=j.error;panel.append(e);return;
+  }
+  if(!arts.length&&!files.length){
+    const e=document.createElement('div');e.className='fempty';
+    e.textContent='这个会话的最近 24 小时没有产物，也没有传上来的文件。';
+    panel.append(e);return;
+  }
+  if(arts.length){
+    const sec=document.createElement('div');sec.className='mpsec';
+    sec.textContent='产物 · 最近 24 小时（工作区）';panel.append(sec);
+    arts.forEach(f=>panel.append(fpRow(f,'art')));
+  }
+  if(files.length){
+    const sec=document.createElement('div');sec.className='mpsec';
+    sec.textContent='传到/粘到电脑的（inbox）';panel.append(sec);
+    files.forEach(f=>panel.append(fpRow(f,'file')));
+  }
+}
+window.__setFilePanel=function(o){
+  if(!o)return;
+  if(o.op){  // openFile/revealFile 的失败回执：面板原位报一句，不另弹窗
+    if(FP.open){FP.err=o.error||'操作失败';fpRender(FP.data);}
+    return;
+  }
+  if(!FP.open||o.plane!==FP.plane)return;
+  FP.err='';
+  if(o.ok===false){fpRender({error:'定位不到这个会话的文件目录'});return;}
+  fpRender(o);
+};
+$('dchatFiles').onclick=e=>fpOpen('dchat',e.currentTarget);
+$('chatFiles').onclick=e=>fpOpen('chat',e.currentTarget);
+document.addEventListener('mousedown',e=>{
+  if(!FP.open)return;
+  const panel=$('fpPanel');
+  if(panel.contains(e.target)||e.target.closest('.fplink'))return;
+  fpClose();
+});
+window.addEventListener('resize',()=>{if(FP.open)fpClose();});
 // ---------- 粘贴图片（桌面端）----------
 // 剪贴板里的图只有 blob、没有本机路径，所以走「页面读 blob → base64 →
 // WebMessage → native 落进会话 inbox → 回推路径当附件」。和手机上传同一套
@@ -3554,7 +3716,7 @@ function renderChatFrame(){
   $('chatTitle').textContent=CHAT.sessionTitle||CHAT.title||'会话';
   const st=$('chatStage');st.textContent=LABEL[CHAT.stage]||'';
   st.style.color=COLOR[CHAT.stage]||'var(--muted)';
-  $('chatMeta').textContent=(CHAT.agentExe||'')+' · 共 '+chatTotal+' 条';
+  $('chatMeta').textContent=CHAT.agentExe||'';
   mpSyncChip('chat');mpRenderPanel('chat');
   const d=STATE.dispatch||{};
   const notice=(d.noticeId===chatOpenedId)?(d.notice||''):'';

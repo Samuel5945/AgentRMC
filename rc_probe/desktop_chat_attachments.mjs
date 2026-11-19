@@ -118,6 +118,32 @@ await page.addInitScript(({ catalog, chat }) => {
         const r = window.__nextResult;
         setTimeout(() => window.__setDispatchResult && window.__setDispatchResult(r), 0);
       }
+      // 「产物与文件」面板：native 回 /m/files 同款载荷；open/reveal 默认
+      // 成功（不回执），用例改成 failOp 时回错。
+      if (msg.cmd === 'filesList') {
+        window.__lastFilesList = msg;
+        setTimeout(() => window.__setFilePanel && window.__setFilePanel({
+          ok: true,
+          plane: msg.plane,
+          artifacts: [
+            { rel: 'dist/AgentRMC-Setup.exe', name: 'AgentRMC-Setup.exe',
+              size: 36619313, path: 'D:/repo/dist/AgentRMC-Setup.exe',
+              dir: 'D:/repo/dist', mtime: new Date(Date.now() - 30e3).toISOString() },
+          ],
+          files: [
+            { name: '截图.png', size: 4096, path: 'D:/repo/.agentrmc/inbox/s1/截图.png',
+              dir: 'D:/repo/.agentrmc/inbox/s1', mtime: new Date(Date.now() - 90e3).toISOString() },
+          ],
+        }), 0);
+      }
+      if (msg.cmd === 'openFile' || msg.cmd === 'revealFile') {
+        window.__lastOp = msg;
+        if (window.__failOp === msg.cmd) {
+          setTimeout(() => window.__setFilePanel && window.__setFilePanel({
+            error: msg.cmd === 'openFile' ? '本机没有能打开它的默认程序' : '文件已经不在了',
+            op: msg.cmd, plane: msg.plane }), 0);
+        }
+      }
     },
   };
 }, { catalog: CATALOG, chat: CHAT });
@@ -196,6 +222,37 @@ await page.evaluate(() => { window.__nextResult = { ok: true }; });
 await page.locator('#dchatSend').click();
 await page.waitForTimeout(220);
 check((await page.inputValue('#dchatText')) === '', '成功后输入框清空');
+
+// ---------- 顶栏「产物与文件」面板 ----------
+await page.evaluate(() => { window.__posted.length = 0; });
+await page.locator('#dchatFiles').click();
+const fl = await page.evaluate(() => window.__lastFilesList);
+check(fl && fl.cmd === 'filesList' && fl.plane === 'dchat' && fl.meta.session === 's1',
+  '点入口拉产物与文件（带会话上下文）', fl);
+await page.waitForSelector('#fpPanel:not([hidden]) .frow', { timeout: 8000 });
+check((await page.locator('#fpPanel .frow').count()) === 2, '面板列出产物 + inbox');
+check((await page.textContent('#fpPanel')).includes('产物 1'), '面板头报产物数');
+const meta = await page.evaluate(() => [...document.querySelectorAll('#fpPanel .fdir')].map(e => e.textContent));
+check(meta.length === 2 && meta.every(t => t && !t.includes('/')), '行第二行是时间戳不是 rel 路径', meta);
+await page.screenshot({ path: path.join(SHOTS, 'fp_panel.png') });
+// 左键 = 本机打开
+await page.locator('#fpPanel .frow').first().click();
+const op = await page.evaluate(() => window.__lastOp);
+check(op && op.cmd === 'openFile' && op.plane === 'dchat' && op.path.includes('AgentRMC-Setup.exe'),
+  '左键发 openFile 带本机绝对路径', op);
+// 右键 = 资源管理器定位（用 dispatchEvent：Playwright 的右键不弹页内菜单语义）
+await page.locator('#fpPanel .frow').first().dispatchEvent('contextmenu');
+const rOp = await page.evaluate(() => window.__lastOp);
+check(rOp && rOp.cmd === 'revealFile', '右键发 revealFile', rOp);
+// 失败回执在面板原位报文案，不另弹窗
+await page.evaluate(() => { window.__failOp = 'openFile'; });
+await page.locator('#fpPanel .frow').first().click();
+await page.waitForFunction(() => document.querySelector('#fpPanel .fpcnt').textContent.includes('默认程序'), null, { timeout: 8000 });
+check(true, 'openFile 失败回显在面板头部');
+// 点外面关掉
+await page.locator('#dchatTitle').click();
+check(await page.evaluate(() => document.querySelector('#fpPanel').hidden), '点外面收起面板');
+await page.evaluate(() => { window.__failOp = null; });
 
 // 美术主题（card.bg 可能是半透明 rgba）下面板必须实心——用户 2026-11-18 报的
 // 「切换模型背景是透明的看不清 / 怎么是紫色」就是这条。覆盖三种写法：

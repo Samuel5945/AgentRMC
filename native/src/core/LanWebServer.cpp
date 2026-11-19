@@ -2678,6 +2678,18 @@ function fpUrl(name,rel){
  else if(name)q+='&name='+encodeURIComponent(name);
  return '/m/'+((name||rel)?'file':'files')+q;
 }
+// 产物行第二行原来放 rel 路径（「dist/AgentRMC-Setup.exe」）——上级目录对
+// 认文件没用，名字里已经带得出（用户 2026-11-19）；换成修改时间，今天
+// 只给时分、昨天/更早给日期，扫一眼就知道哪个是刚出炉的。
+function fpTime(iso){
+ const t=Date.parse(iso||'');if(isNaN(t))return '';
+ const d=new Date(t),n=new Date();
+ const hm=String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0');
+ if(d.toDateString()===n.toDateString())return hm;
+ n.setDate(n.getDate()-1);
+ if(d.toDateString()===n.toDateString())return '昨天 '+hm;
+ return (d.getMonth()+1)+'-'+String(d.getDate()).padStart(2,'0')+' '+hm;
+}
 function fpClose(){$('chatFilePanel').hidden=true;fpOpen=false;}
 async function fpLoad(){
  const list=$('chatFileList');if(!list)return;
@@ -2710,7 +2722,7 @@ async function fpLoad(){
     const wrap=document.createElement('span');wrap.className='mpname';
     const nm=document.createElement('b');nm.textContent=f.name||'';
     const dir=document.createElement('i');dir.className='fdir';
-    dir.textContent=f.rel||'';
+    dir.textContent=fpTime(f.mtime);
     wrap.append(nm,dir);
     const sz=document.createElement('span');sz.className='fsize';
     sz.textContent=attFmt(f.size||0);
@@ -2726,11 +2738,14 @@ async function fpLoad(){
     a.href=fpUrl(f.name);a.download=f.name||'';
     const ic=document.createElement('span');ic.className='mpico';
     ic.innerHTML=FP_ICON;
-    const nm=document.createElement('span');nm.className='mpname';
-    nm.textContent=f.name||'';
+    const wrap=document.createElement('span');wrap.className='mpname';
+    const nm=document.createElement('b');nm.textContent=f.name||'';
+    const dir=document.createElement('i');dir.className='fdir';
+    dir.textContent=fpTime(f.mtime);
+    wrap.append(nm,dir);
     const sz=document.createElement('span');sz.className='fsize';
     sz.textContent=attFmt(f.size||0);
-    a.append(ic,nm,sz);list.append(a);
+    a.append(ic,wrap,sz);list.append(a);
    });
   }
  }catch(e){

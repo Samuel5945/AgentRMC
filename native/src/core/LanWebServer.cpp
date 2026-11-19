@@ -2766,13 +2766,19 @@ function renderChatFrame(){
  const title=chatMeta.sessionTitle||chatMeta.title||
   (chatKind==='session'?'会话 '+String(chatSession||'').slice(0,8):'会话');
  $('chatTitle').textContent=title;
- const who=chatKind==='session'?(chatAgentName||chatMeta.agentName||''):
-  (chatMeta.agentExe||'');
+ // 副标题只放跟大标题不重复的东西：待办页大标题往往就是宿主名/会话名，
+ // 再写一遍 WorkBuddy.exe 加「共 N 条」是纯噪声——这里只留项目名。
+ // 派发页多一个 Agent 名（大标题是会话标题，不会重复）。
  const bits=[];
- if(who)bits.push(who);
- if(chatKind==='session'&&chatProject)bits.push(projectName(chatProject));
- bits.push('共 '+chatTotal+' 条');
+ if(chatKind==='session'){
+  const who=chatAgentName||chatMeta.agentName||'';
+  if(who)bits.push(who);
+  if(chatProject)bits.push(projectName(chatProject));
+ } else if(chatMeta.project){
+  bits.push(projectName(chatMeta.project));
+ }
  $('chatSub').textContent=bits.join(' · ');
+ $('chatSub').hidden=!bits.length;
  $('chatText').placeholder=chatCanDispatch
   ?(chatKind==='session'?'写一句任务，派到这个会话…':'派回这条会话…')
   :'这个 Agent 暂不支持手机派发，记录只读';

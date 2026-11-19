@@ -54,6 +54,17 @@ void raise(const QString &exeName);
 // 隐藏窗口 rect 可能是 0，此时退回第一个匹配到的。找不到返回 nullptr。
 void *mainWindowAny(const QString &exe);
 
+// 按「窗口标题 == 产品显示名」找主窗，给映像名对不上的情况兜底：
+// WorkBuddy.exe / WorkBuddyAI.exe 是同一产品的两个映像名，会话记录里的
+// agentExe 未必等于当前进程的映像名；对不上时按 exe 永远找不到窗口，
+// 遥控派发就会误报「宿主窗口被隐藏」（2026-11-19 手机端撞到）。
+// 只认 Chromium 的窗口类（Chrome_WidgetWin_*），避免误命中浏览器标签页。
+void *mainWindowByTitle(const QString &title);
+
+// 诊断串（给报错用）：「N 扇窗口、M 扇可见、K 扇有标题」或「没启动」。
+// 目的是让「进程没开 / 窗口被隐藏 / 映像名对不上」在错误信息里就能分开。
+QString diagnose(const QString &exe);
+
 // 唤醒宿主主窗口：隐藏的 SW_SHOW 出来、最小化的 SW_RESTORE 还原，再抢前台。
 // 返回是否真的找到并显示了一个窗口——派发侧靠它决定「重试」还是「报错」。
 bool wake(const QString &exe);

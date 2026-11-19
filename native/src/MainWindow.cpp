@@ -3516,6 +3516,18 @@ QString MainWindow::webShellState() {
         {QStringLiteral("left"), leftShellState()},
         {QStringLiteral("dispatch"), dispatchStateJson()},
         {QStringLiteral("chat"), chatState()},
+        // 宿主窗口诊断：遥控派发报「找不到宿主窗口」时，先看这几个数就知道是
+        // 没启动、被隐藏、还是映像名对不上（2026-11-19 排查用，留着成本很低）。
+        {QStringLiteral("winDiag"),
+         QJsonObject{{QStringLiteral("WorkBuddy.exe"),
+                      AgentWindow::diagnose(QStringLiteral("WorkBuddy.exe"))},
+                     {QStringLiteral("WorkBuddyAI.exe"),
+                      AgentWindow::diagnose(QStringLiteral("WorkBuddyAI.exe"))},
+                     {QStringLiteral("byTitle"),
+                      AgentWindow::mainWindowByTitle(QStringLiteral("WorkBuddy"))
+                              != nullptr
+                          ? QStringLiteral("found")
+                          : QStringLiteral("null")}}},
     };
     return QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Compact));
 }
@@ -3942,6 +3954,9 @@ QJsonObject MainWindow::chatStateFor(const QString &id, int offset, int limit) {
         {QStringLiteral("agentExe"), item->agentExe},
         {QStringLiteral("sessionId"), item->sessionId},
         {QStringLiteral("stage"), item->stage},
+        // 手机页顶栏副标题用：待办标题往往只是宿主名（WorkBuddy），
+        // 补个项目工作目录才知道这条会话是哪个仓库的。
+        {QStringLiteral("project"), item->project},
         {QStringLiteral("supported"), r.supported},
         {QStringLiteral("error"), r.error},
         {QStringLiteral("sessionTitle"), r.title},

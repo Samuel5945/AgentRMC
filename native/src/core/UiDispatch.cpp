@@ -261,6 +261,13 @@ void UiDispatch::step() {
     }
     HWND hwnd = static_cast<HWND>(AgentWindow::mainWindow(job_.exe));
     if (hwnd == nullptr) {
+        // 映像名兜底：同一宿主可能有 WorkBuddy.exe / WorkBuddyAI.exe 两个名字，
+        // 会话记录里的 agentExe 和实际进程映像不一定一致。按标题再找一次，
+        // 否则会误报「宿主窗口被隐藏」（进程明明在跑、主窗也可见）。
+        hwnd = static_cast<HWND>(
+            AgentWindow::mainWindowByTitle(AgentWindow::displayName(job_.exe)));
+    }
+    if (hwnd == nullptr) {
         // 宿主被收进托盘/隐藏时 mainWindow 命中不了（它要求 IsWindowVisible），
         // 但窗口还在 EnumWindows 列表里——先主动叫出来再重试，别一上来就报错：
         // 遥控场景下用户本来就是"不在电脑前"，不该让他手动去点宿主。
@@ -269,8 +276,12 @@ void UiDispatch::step() {
             QTimer::singleShot(800, this, [this] { step(); });
             return;
         }
-        finishFail(QStringLiteral("宿主窗口被隐藏了（%1），先把它打开再派发")
-                       .arg(job_.exe),
+        // 报错带诊断：枚举到几扇该进程的窗口、其中几扇可见。有了这两个数，
+        // 「进程没开」「窗口被隐藏」「映像名对不上」一眼能分开——2026-11-19
+        // 就是凭一句"被隐藏"分不清才来回折腾。
+        finishFail(QStringLiteral("找不到宿主窗口（%1，%2），先把 %3 打开再派发")
+                       .arg(job_.exe, AgentWindow::diagnose(job_.exe),
+                            AgentWindow::displayName(job_.exe)),
                    false);
         return;
     }

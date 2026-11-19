@@ -29,7 +29,11 @@ bool matchesImage(HWND hwnd, const wchar_t *exe) {
     }
     const wchar_t *name = wcsrchr(path, L'\\');
     name = name != nullptr ? name + 1 : path;
-    return _wcsicmp(name, exe) == 0;
+    // 调用方可能传完整路径（会话记录/hook 上报的形态不统一）：只比 basename，
+    // 否则永远匹配不上，表现就是「宿主明明在跑却说窗口被隐藏」。
+    const wchar_t *want = wcsrchr(exe, L'\\');
+    want = want != nullptr ? want + 1 : exe;
+    return _wcsicmp(name, want) == 0;
 }
 
 struct FindAgentWindowCtx {
@@ -333,6 +337,86 @@ void *mainWindow(const QString &exe) {
     return ctx.best;
 }
 
+// 按窗口标题找主窗：**映像名兜底**。
+// 现实里同一个宿主会有两个 exe 名（WorkBuddy.exe / WorkBuddyAI.exe，
+// 见 knownExes 注释），而会话记录里的 agentExe 和实际进程映像不一定是同一个；
+// 一旦对不上，mainWindow 就永远是 nullptr，遥控派发直接报「宿主窗口被隐藏」
+// ——2026-11-19 用户在手机上撞到的就是这个（进程 10 个、主窗 938×786 明明可见）。
+// 标题是稳的：Electron 主窗标题就是产品名。用「标题精确等于 + Chromium 窗口类」
+// 双条件，避免误命中浏览器标签页。
+BOOL CALLBACK findWindowByTitle(HWND hwnd, LPARAM lparam) {
+    auto *ctx = reinterpret_cast<LargestWindowCtx *>(lparam);
+    wchar_t cls[64] = {};
+    GetClassNameW(hwnd, cls, 64);
+    if (wcsncmp(cls, L"Chrome_WidgetWin_", 17) != 0) {
+        return TRUE;
+    }
+    wchar_t title[256] = {};
+    GetWindowTextW(hwnd, title, 256);
+    if (_wcsicmp(title, ctx->exe) != 0) {  // ctx->exe 这里装的是标题
+        return TRUE;
+    }
+    RECT r{};
+    GetWindowRect(hwnd, &r);
+    LONG area = (r.right - r.left) * (r.bottom - r.top);
+    if (area <= 0) {
+        area = 1;
+    }
+    if (ctx->best == nullptr || area > ctx->bestArea) {
+        ctx->best = hwnd;
+        ctx->bestArea = area;
+    }
+    return TRUE;
+}
+
+struct DiagCtx {
+    const wchar_t *exe;
+    int total = 0;
+    int visible = 0;
+    int titled = 0;
+};
+
+BOOL CALLBACK countWindowsByImage(HWND hwnd, LPARAM lparam) {
+    auto *ctx = reinterpret_cast<DiagCtx *>(lparam);
+    if (!matchesImage(hwnd, ctx->exe)) {
+        return TRUE;
+    }
+    ++ctx->total;
+    if (IsWindowVisible(hwnd)) {
+        ++ctx->visible;
+    }
+    if (GetWindowTextLengthW(hwnd) > 0) {
+        ++ctx->titled;
+    }
+    return TRUE;
+}
+
+QString diagnose(const QString &exe) {
+    if (exe.isEmpty()) {
+        return QStringLiteral("exe 名为空");
+    }
+    const std::wstring image = exe.toStdWString();
+    DiagCtx ctx{image.c_str()};
+    EnumWindows(countWindowsByImage, reinterpret_cast<LPARAM>(&ctx));
+    if (ctx.total == 0) {
+        return QStringLiteral("该进程没有窗口，多半没启动");
+    }
+    return QStringLiteral("%1 扇窗口、%2 扇可见、%3 扇有标题")
+        .arg(ctx.total)
+        .arg(ctx.visible)
+        .arg(ctx.titled);
+}
+
+void *mainWindowByTitle(const QString &title) {
+    if (title.isEmpty()) {
+        return nullptr;
+    }
+    const std::wstring t = title.toStdWString();
+    LargestWindowCtx ctx{t.c_str(), nullptr, 0};
+    EnumWindows(findWindowByTitle, reinterpret_cast<LPARAM>(&ctx));
+    return ctx.best;
+}
+
 void *mainWindowAny(const QString &exe) {
     if (exe.isEmpty()) {
         return nullptr;
@@ -345,6 +429,10 @@ void *mainWindowAny(const QString &exe) {
 
 bool wake(const QString &exe) {
     HWND hwnd = static_cast<HWND>(mainWindowAny(exe));
+    if (hwnd == nullptr) {
+        // 映像名对不上时的兜底（见 mainWindowByTitle 注释）。
+        hwnd = static_cast<HWND>(mainWindowByTitle(displayName(exe)));
+    }
     if (hwnd == nullptr) {
         return false;
     }

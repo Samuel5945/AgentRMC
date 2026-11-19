@@ -1519,6 +1519,11 @@ QString LanWebServer::mobileHtml() const {
  .mpback{display:block;width:100%;text-align:left;background:var(--w8);
    border:none;border-bottom:1px solid var(--w10);color:var(--text);
    font-size:14px;padding:12px 14px;font-family:inherit}
+ .fpsec{padding:8px 14px 4px;font-size:11px;font-weight:600;color:var(--muted);
+   letter-spacing:.02em}
+ .fdir{display:block;font-size:10px;color:var(--muted);font-weight:400;
+   overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-style:normal;
+   margin-top:1px}
  .mplist{max-height:300px;overflow-y:auto;scrollbar-width:none}
  .mplist::-webkit-scrollbar{display:none}
  .mprow{width:100%;display:flex;align-items:center;gap:10px;padding:13px 14px;
@@ -1730,7 +1735,7 @@ QString LanWebServer::mobileHtml() const {
    <div class="chathead">
     <button class="cicobtn" id="chatBack" aria-label="返回待办"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5 8 12l7 7"/></svg></button>
     <div class="chtitles"><div class="name" id="chatTitle"></div><div class="where" id="chatSub"></div></div>
-    <button class="cicobtn" id="chatFiles" title="电脑上的文件" aria-label="电脑上的文件"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7.5A2 2 0 0 1 5 5.5h4l2 2.5h8a2 2 0 0 1 2 2v7.5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/></svg></button>
+    <button class="cicobtn" id="chatFiles" title="产物与文件" aria-label="产物与文件"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7.5A2 2 0 0 1 5 5.5h4l2 2.5h8a2 2 0 0 1 2 2v7.5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/></svg></button>
    </div>
    <div class="chatwrap">
     <div class="chatlist" id="chatList"></div>
@@ -1765,7 +1770,7 @@ QString LanWebServer::mobileHtml() const {
      <div class="mpfoot" id="chatMpFoot">管理模型</div>
     </div>
     <div class="mpanel" id="chatFilePanel" hidden>
-     <div class="fphead"><b>电脑上的文件</b><span id="chatFileCount"></span><button class="fpx" id="chatFileClose" aria-label="关闭">×</button></div>
+     <div class="fphead"><b>产物与文件</b><span id="chatFileCount"></span><button class="fpx" id="chatFileClose" aria-label="关闭">×</button></div>
      <div class="mplist" id="chatFileList"></div>
      <div class="mpfoot">点文件名下载到手机</div>
     </div>
@@ -2669,30 +2674,56 @@ async function fpLoad(){
  const list=$('chatFileList');if(!list)return;
  list.replaceChildren();
  const ld=document.createElement('div');ld.className='fempty';
- ld.textContent='正在读电脑上的文件…';list.append(ld);
+ ld.textContent='正在读产物与文件…';list.append(ld);
  try{
   const r=await fetch(fpUrl(''),{cache:'no-store'});
   if(r.status===401){showPair();return;}
   const j=await r.json();
   const files=(j&&j.files)||[];
+  const arts=(j&&j.artifacts)||[];
   list.replaceChildren();
-  $('chatFileCount').textContent=files.length?String(files.length):'';
-  if(!files.length){
+  $('chatFileCount').textContent=
+   ('产物 '+arts.length)+(files.length?(' · 文件 '+files.length):'');
+  if(!arts.length&&!files.length){
    const e=document.createElement('div');e.className='fempty';
-   e.textContent='这个会话还没有文件。\n手机传上来的、电脑上粘的图都会落在这里。';
+   e.textContent='还没有产物，也没有传上来的文件。';
    list.append(e);return;
   }
-  files.forEach(f=>{
-   const a=document.createElement('a');a.className='mprow frow';
-   a.href=fpUrl(f.name);a.download=f.name||'';
-   const ic=document.createElement('span');ic.className='mpico';
-   ic.innerHTML=FP_ICON;
-   const nm=document.createElement('span');nm.className='mpname';
-   nm.textContent=f.name||'';
-   const sz=document.createElement('span');sz.className='fsize';
-   sz.textContent=attFmt(f.size||0);
-   a.append(ic,nm,sz);list.append(a);
-  });
+  // 产物区在上：agent 刚生成的（安装包/截图/文档），下载走工作区相对路径。
+  if(arts.length){
+   const sec=document.createElement('div');sec.className='fpsec';
+   sec.textContent='产物 · 最近 24 小时';list.append(sec);
+   arts.forEach(f=>{
+    const a=document.createElement('a');a.className='mprow frow';
+    a.href=fpUrl(null,f.rel);a.download=f.name||'';
+    const ic=document.createElement('span');ic.className='mpico';
+    ic.innerHTML=FP_ICON;
+    const wrap=document.createElement('span');wrap.className='mpname';
+    const nm=document.createElement('b');nm.textContent=f.name||'';
+    const dir=document.createElement('i');dir.className='fdir';
+    dir.textContent=f.rel||'';
+    wrap.append(nm,dir);
+    const sz=document.createElement('span');sz.className='fsize';
+    sz.textContent=attFmt(f.size||0);
+    a.append(ic,wrap,sz);list.append(a);
+   });
+  }
+  // inbox 区在下：手机传上来的、电脑粘的图（粘图下载没意义，但留着）。
+  if(files.length){
+   const sec=document.createElement('div');sec.className='fpsec';
+   sec.textContent='传到电脑的（inbox）';list.append(sec);
+   files.forEach(f=>{
+    const a=document.createElement('a');a.className='mprow frow';
+    a.href=fpUrl(f.name);a.download=f.name||'';
+    const ic=document.createElement('span');ic.className='mpico';
+    ic.innerHTML=FP_ICON;
+    const nm=document.createElement('span');nm.className='mpname';
+    nm.textContent=f.name||'';
+    const sz=document.createElement('span');sz.className='fsize';
+    sz.textContent=attFmt(f.size||0);
+    a.append(ic,nm,sz);list.append(a);
+   });
+  }
  }catch(e){
   list.replaceChildren();
   const er=document.createElement('div');er.className='fempty';

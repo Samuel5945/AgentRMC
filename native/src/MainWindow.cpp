@@ -51,6 +51,7 @@
 #include <QEventLoop>
 #include <QCheckBox>
 #include <QDir>
+#include <QDirIterator>
 #include <QDragEnterEvent>
 #include <QDropEvent>
 #include <QFile>
@@ -4592,6 +4593,81 @@ void MainWindow::lanChunkAbort(const QString &uploadId) {
 
 // 手机「电脑文件」：列会话 inbox。空目录也回合法空列表——前端据此显示
 // 「还没有文件」，不要用 404 把整个面板当错误处理。
+// 前置声明：shareableExt 定义在 lanInboxList 之后（同一 TU 内共用白名单）。
+bool shareableExt(const QString &path);
+
+// 工作区产物：agent 刚生成的文件（安装包 / 截图 / 文档），给手机端「产物」区。
+// 规则：project 下递归，跳过依赖与版本库等黑名单目录；只要白名单扩展名、
+// 最近 24h 内修改的；按修改时间倒序最多 30 个。扫描有 800ms 预算，超了就用
+// 已收集的（大仓库不至于把主窗卡住）。
+QJsonArray lanProjectArtifacts(const QString &project) {
+    QJsonArray arr;
+    if (project.isEmpty() || !QDir(project).exists()) {
+        return arr;
+    }
+    static const QStringList kSkip = {
+        QStringLiteral("node_modules"), QStringLiteral(".git"),
+        QStringLiteral(".agentrmc"),    QStringLiteral(".workbuddy"),
+        QStringLiteral(".agents"),      QStringLiteral("build"),
+        QStringLiteral(".vs"),          QStringLiteral(".vscode"),
+        QStringLiteral("coverage"),     QStringLiteral("tmp_t"),
+        QStringLiteral("tmp_test"),     QStringLiteral("__pycache__")};
+    const qint64 cutoff =
+        QDateTime::currentDateTime().addSecs(-24 * 3600).toMSecsSinceEpoch();
+    struct Item {
+        QString rel;
+        qint64 size = 0;
+        qint64 mtime = 0;
+    };
+    QVector<Item> items;
+    QElapsedTimer budget;
+    budget.start();
+    QDirIterator it(project, QDir::Files | QDir::NoSymLinks,
+                    QDirIterator::Subdirectories);
+    while (it.hasNext() && items.size() < 500 && budget.elapsed() < 800) {
+        const QString path = it.next();
+        const QString rel =
+            QDir::fromNativeSeparators(path.mid(project.size() + 1));
+        bool skip = false;
+        const QStringList segs = rel.split(QLatin1Char('/'));
+        for (const QString &seg : segs) {
+            if (kSkip.contains(seg, Qt::CaseInsensitive)) {
+                skip = true;
+                break;
+            }
+        }
+        if (skip || segs.size() > 6) {
+            continue;  // 太深的路径基本是依赖内部结构，不进产物
+        }
+        QFileInfo fi(path);
+        if (!shareableExt(fi.fileName())) {
+            continue;
+        }
+        const qint64 m = fi.lastModified().toMSecsSinceEpoch();
+        if (m < cutoff) {
+            continue;
+        }
+        items.append({rel, fi.size(), m});
+    }
+    std::sort(items.begin(), items.end(),
+              [](const Item &a, const Item &b) { return a.mtime > b.mtime; });
+    int n = 0;
+    for (const Item &item : items) {
+        if (n++ >= 30) {
+            break;
+        }
+        arr.append(QJsonObject{
+            {QStringLiteral("rel"), item.rel},
+            {QStringLiteral("name"), QFileInfo(item.rel).fileName()},
+            {QStringLiteral("size"), static_cast<double>(item.size)},
+            {QStringLiteral("mtime"),
+             QDateTime::fromMSecsSinceEpoch(item.mtime)
+                 .toUTC()
+                 .toString(Qt::ISODate)}});
+    }
+    return arr;
+}
+
 QString MainWindow::lanInboxList(const QJsonObject &meta) {
     const QString dir = inboxDirFor(meta);
     if (dir.isEmpty()) {
@@ -4612,10 +4688,15 @@ QString MainWindow::lanInboxList(const QJsonObject &meta) {
             {QStringLiteral("mtime"),
              fi.lastModified().toUTC().toString(Qt::ISODate)}});
     }
+    QJsonObject out{{QStringLiteral("ok"), true},
+                    {QStringLiteral("files"), arr}};
+    // 产物区：agent 在会话工作区里生成的文件。拿不到 project 就不给。
+    QString project, session;
+    if (resolveInboxTarget(meta, &project, &session) && !project.isEmpty()) {
+        out.insert(QStringLiteral("artifacts"), lanProjectArtifacts(project));
+    }
     return QString::fromUtf8(
-        QJsonDocument(QJsonObject{{QStringLiteral("ok"), true},
-                                  {QStringLiteral("files"), arr}})
-            .toJson(QJsonDocument::Compact));
+        QJsonDocument(out).toJson(QJsonDocument::Compact));
 }
 
 // 下载 inbox 里的一个文件。name 由客户端给、不可信：只认 basename，再用

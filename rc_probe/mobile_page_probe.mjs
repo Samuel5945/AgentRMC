@@ -669,7 +669,8 @@ async function runFlow() {
   await page.click('#chatFiles');
   await page.waitForSelector('#chatFilePanel:not([hidden]) .frow');
   ok(await page.locator('#chatFilePanel .frow').count() === 2, '电脑文件面板列出 inbox');
-  ok((await page.textContent('#chatFileCount')) === '2', '面板报文件数');
+  ok((await page.textContent('#chatFileCount')).includes('文件 2'),
+    '面板报文件数（产物 · 文件）');
   const fhref = await page.locator('#chatFilePanel .frow').first().getAttribute('href');
   ok(fhref.includes('/m/file?') && fhref.includes('name=') && fhref.includes('session=sess-8f31c2a9'),
     '文件行指向下载路由且带会话上下文', fhref);

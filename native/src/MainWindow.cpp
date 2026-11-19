@@ -4195,6 +4195,17 @@ QString MainWindow::dispatchToSession(const QString &agentExe,
                         .arg(AgentWindow::displayName(agentExe))
                         .arg(gw);
                 }
+                if (gw != 0) {
+                    // 端口通 ≠ 桥已连上：外部桥是独立进程，断线后自己的重连
+                    // 计时器（封顶 3s）可能还没落地。这时派发会让桥在
+                    // gatewayUp=false 下把这条拒掉——「第一条指令被吞」就是
+                    // 这么来的（2026-11-19 桥日志：02s 拒单、18s 才重连）。
+                    for (int i = 0; i < 8; ++i) {
+                        QCoreApplication::processEvents(
+                            QEventLoop::ExcludeUserInputEvents);
+                        QThread::msleep(500);
+                    }
+                }
             }
         }
     }

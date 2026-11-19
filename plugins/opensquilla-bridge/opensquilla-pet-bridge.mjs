@@ -503,7 +503,10 @@ function connect() {
     subscribed.clear();
     log(`gateway closed, reconnect in ${reconnectDelay}ms`);
     setTimeout(connect, reconnectDelay);
-    reconnectDelay = Math.min(reconnectDelay * 2, 30000);
+    // 网关是本机服务（OpenSquilla 自己的子进程）：退避封顶 3s，宿主/网关起来后
+// 3 秒内就能重连上。原来封顶 30s，网关刚就绪时桥往往正卡在等待周期里，
+// 派发过去只会回「网关没连上，未注入」——第一条指令就这么被吞了（2026-11-19）。
+reconnectDelay = Math.min(reconnectDelay * 2, 3000);
   };
 
   ws.onerror = () => { /* onclose 会接管重连 */ };

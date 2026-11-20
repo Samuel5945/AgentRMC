@@ -680,10 +680,34 @@ SessionTranscript::Result readJsonl(const QString &home, const QString &sessionI
     }
     // 还在跑的调用（会话最后一条就是它，没有结果行）：也要露一行，否则页面
     // 停在上一条回复上，看起来像卡住。
+    // 但**只认「晚于最后一条已渲染消息」的调用**：历史残留（分页截断导致
+    // result 在另一页、或格式没配对上）以前会永远以「进行中」挂在会话末尾
+    // ——用户 2026-11-20 报「最下面一直有两个进行中，明明早完成了」。
+    qint64 lastMsgMs = 0;
+    for (const QJsonObject &row : full.all) {
+        // 只跟真实的对话消息比：system 行（工具摘要/备注）不算「最后一条消息」，
+        // 否则刚跑完的那条调用会被自己旁边那行摘要误判成历史残留。
+        if (row.value(QStringLiteral("role")).toString() ==
+            QLatin1String("system")) {
+            continue;
+        }
+        const QDateTime dt =
+            QDateTime::fromString(row.value(QStringLiteral("at")).toString(),
+                                  Qt::ISODate);
+        if (dt.isValid()) {
+            lastMsgMs = qMax(lastMsgMs, dt.toMSecsSinceEpoch());
+        }
+    }
     for (const QString &callId : callOrder) {
         const auto hit = calls.constFind(callId);
         if (hit == calls.constEnd()) {
             continue;
+        }
+        const QDateTime callAt =
+            QDateTime::fromString(hit->at, Qt::ISODate);
+        if (lastMsgMs > 0 && callAt.isValid() &&
+            callAt.toMSecsSinceEpoch() < lastMsgMs) {
+            continue;  // 早于最后一条消息：已完成的历史调用，不再挂「进行中」
         }
         QString text = QStringLiteral("进行中 · ") + toolVerb(hit->name);
         if (!hit->brief.isEmpty()) {
@@ -1862,14 +1886,33 @@ SessionTranscript::Result readDsh(const QString &root, const QString &sessionId,
     }
     if (full.title.isEmpty() && !firstUser.isEmpty()) {
         full.title = firstUser.simplified();
-        if (full.title.size() > 60) {
-            full.title = full.title.left(60) + QStringLiteral("…");
+        if (full.title.size() > 30) {
+            full.title = full.title.left(30) + QStringLiteral("…");
         }
     }
     // 还在跑的工具调用（会话最后一条就是它）：也露一行，别让页面停在上一句上。
+    // 同 jsonl 分支：早于最后一条消息的未配对调用属于历史残留，不挂「进行中」。
+    qint64 lastMsgMs2 = 0;
+    for (const QJsonObject &row : full.all) {
+        if (row.value(QStringLiteral("role")).toString() ==
+            QLatin1String("system")) {
+            continue;  // 同 jsonl 分支：system 行不参与「最后一条消息」
+        }
+        const QDateTime dt =
+            QDateTime::fromString(row.value(QStringLiteral("at")).toString(),
+                                  Qt::ISODate);
+        if (dt.isValid()) {
+            lastMsgMs2 = qMax(lastMsgMs2, dt.toMSecsSinceEpoch());
+        }
+    }
     for (const QString &callId : callOrder) {
         const auto hit = calls.constFind(callId);
         if (hit == calls.constEnd()) {
+            continue;
+        }
+        const QDateTime callAt = QDateTime::fromString(hit->at, Qt::ISODate);
+        if (lastMsgMs2 > 0 && callAt.isValid() &&
+            callAt.toMSecsSinceEpoch() < lastMsgMs2) {
             continue;
         }
         QString text = QStringLiteral("进行中 · ") + toolVerb(hit->name);

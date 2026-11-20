@@ -590,7 +590,8 @@ void LanWebServer::onReadable(QTcpSocket *socket) {
               body.left(static_cast<int>(contentLength)));
         return;
     }
-    if (method == "GET") {
+    // HEAD 与 GET 同路由、不带 body：下载前探活用（见 /m/file 的 serveDownload）。
+    if (method == "GET" || method == "HEAD") {
         route(socket, method, path, query, headerLines, QByteArray());
         return;
     }
@@ -929,7 +930,7 @@ void LanWebServer::route(QTcpSocket *socket, const QByteArray &method,
         finish(socket, "200 OK", body.toUtf8(), "application/json");
         return;
     }
-    if (path == "/m/file" && method == "GET") {
+    if (path == "/m/file" && (method == "GET" || method == "HEAD")) {
         if (authDevice(headerLines) < 0) {
             finish(socket, "401 Unauthorized");
             return;
@@ -937,28 +938,16 @@ void LanWebServer::route(QTcpSocket *socket, const QByteArray &method,
         const Download file =
             inboxFileProvider_ ? inboxFileProvider_(queryMeta(query)) : Download{};
         if (!file.ok || file.data.isEmpty()) {
-            finish(socket, "404 Not Found");
+            // 失败也要回一份**明确不是文件**的响应：以前 404 是空 body、无
+            // Content-Type，Chrome 对 <a download> 会把它当空文件存成
+            // file.txt（用户 2026-11-20 第三次报同一个症状）。现在页面先
+            // HEAD 探活，看到这份 JSON 就在页面上报「文件不在了」。
+            finish(socket, "404 Not Found",
+                   QByteArray("{\"ok\":false,\"error\":\"file_missing\"}"),
+                   "application/json");
             return;
         }
-        const QByteArray data = file.data;
-        const QString name = file.name;
-        // Content-Disposition 双写：filename* 用 RFC 5987 带中文，filename 给
-        // 老客户端一个纯 ASCII 兜底（非 ASCII 一律换下划线）。
-        QByteArray ascii;
-        for (const QChar c : name) {
-            ascii += (c.unicode() < 128 && c != QLatin1Char('"')
-                      && c != QLatin1Char('\\'))
-                         ? QByteArray(1, static_cast<char>(c.unicode()))
-                         : QByteArray("_");
-        }
-        const QByteArray headers =
-            QByteArray("Content-Disposition: attachment; filename=\"") + ascii
-            + "\"; filename*=UTF-8''" + QUrl::toPercentEncoding(name) + "\r\n";
-        QByteArray type = file.contentType;
-        if (type.isEmpty()) {
-            type = "application/octet-stream";
-        }
-        finish(socket, "200 OK", data, type.constData(), headers, "no-store");
+        serveDownload(socket, file, method == "HEAD");
         return;
     }
     if (path.startsWith("/m/theme/") && method == "GET") {
@@ -1129,6 +1118,42 @@ void LanWebServer::finish(QTcpSocket *socket, const char *status,
     response += "Content-Length: " + QByteArray::number(body.size()) +
                 "\r\n\r\n";
     response += body;
+    socket->write(response);
+    buffers_.remove(socket);
+    socket->disconnectFromHost();
+}
+
+void LanWebServer::serveDownload(QTcpSocket *socket, const Download &file,
+                                 bool headOnly) {
+    // Content-Disposition 双写：filename* 用 RFC 5987 带中文，filename 给老
+    // 客户端一个纯 ASCII 兜底（非 ASCII 一律换下划线）。文件名只来自**解析后的
+    // 真实文件**，不信页面传来的 rel/name——否则斜杠、空名都会被浏览器当成
+    // 「没有文件名」，最后又存成 file.txt。
+    QByteArray ascii;
+    for (const QChar c : file.name) {
+        ascii += (c.unicode() < 128 && c != QLatin1Char('"') &&
+                  c != QLatin1Char('\\'))
+                     ? QByteArray(1, static_cast<char>(c.unicode()))
+                     : QByteArray("_");
+    }
+    const QByteArray headers =
+        QByteArray("Content-Disposition: attachment; filename=\"") + ascii +
+        "\"; filename*=UTF-8''" + QUrl::toPercentEncoding(file.name) + "\r\n" +
+        "X-Content-Type-Options: nosniff\r\n";
+    const QByteArray type = file.contentType.isEmpty()
+                                ? QByteArray("application/octet-stream")
+                                : file.contentType;
+    if (!headOnly) {
+        finish(socket, "200 OK", file.data, type.constData(), headers,
+               "no-store");
+        return;
+    }
+    // HEAD：与 GET 同头、无 body。页面只拿 200/404 判活，不读内容。
+    QByteArray response = QByteArray("HTTP/1.1 200 OK\r\nConnection: close\r\n") +
+                          "Content-Type: " + type + "\r\n" +
+                          "Cache-Control: no-store\r\n" + headers +
+                          "Content-Length: " +
+                          QByteArray::number(file.data.size()) + "\r\n\r\n";
     socket->write(response);
     buffers_.remove(socket);
     socket->disconnectFromHost();
@@ -2235,7 +2260,7 @@ const MSG_FILE_EXT=new Set(('png jpg jpeg gif webp bmp svg ico mp4 mov webm mkv 
 // 扩展名显式白名单 + 路径段贪婪：以前是「非贪婪 + [A-Za-z0-9]{1,5}」，
 // 文件名里的 1.4.7 会被当成后缀（base 截到「…演示-1」、ext='4'），
 // 白名单一查就丢——2026-11-20 用户报「带路径的产物还是没有下载」的真凶。
-const MSG_FILE_RE=/(?:^|[\s"'`（(【\[、，。：:])((?:[A-Za-z]:[\\/][^"'<>|`\r\n]{0,180})|(?:(?:[^\s"'<>|`\r\n\/]+\/){1,6}[^\s"'<>|`\r\n\/]{1,80}))\.(png|jpg|jpeg|gif|webp|bmp|svg|ico|mp4|mov|webm|mkv|mp3|wav|m4a|pdf|md|txt|doc|docx|xls|xlsx|ppt|pptx|zip|7z|rar|exe|msi|apk|hwt|hap|hsp)\b/gi;
+const MSG_FILE_RE=/(?:^|[\s"'`（(【\[、，。：:])((?:[A-Za-z]:[\\/][^"'<>|`\r\n，。；：、！？]{0,180})|(?:(?:[^\s"'<>|`\r\n\/，。；：、！？]+\/){1,6}[^\s"'<>|`\r\n\/，。；：、！？]{1,80}))\.(png|jpg|jpeg|gif|webp|bmp|svg|ico|mp4|mov|webm|mkv|mp3|wav|m4a|pdf|md|txt|doc|docx|xls|xlsx|ppt|pptx|zip|7z|rar|exe|msi|apk|hwt|hap|hsp)\b/gi;
 function msgFiles(text){
  if(!text||text.length<5)return [];
  const out=[],seen=new Set();
@@ -2300,7 +2325,8 @@ function bubble(m){
    const isImg=/\.(png|jpe?g|gif|webp|bmp)$/i.test(name);
    const a=document.createElement('a');
    a.className=isImg?'bubatt img':'bubatt';
-   if(rel){a.href=fpUrl(null,rel);a.setAttribute('download','');}
+   if(rel){a.href=fpUrl(null,rel);a.setAttribute('download','');
+    a.onclick=e=>{e.preventDefault();saveFile(a.href);};}
    else{a.href='#';a.onclick=e=>e.preventDefault();}
    if(isImg){
     const im=document.createElement('img');im.src=a.href;im.alt=name;
@@ -2357,6 +2383,7 @@ function bubble(m){
     a.className='bubfile';
     a.href=fpUrl(null,f.rel,f.abs);
     a.setAttribute('download','');
+    a.onclick=e=>{e.preventDefault();saveFile(a.href);};
     const ic=document.createElement('span');ic.className='ic';ic.innerHTML=ATT_ICON;
     const nm=document.createElement('b');nm.textContent=f.name;
     const dl=document.createElement('span');dl.className='dl';dl.textContent='下载到手机';
@@ -2786,6 +2813,21 @@ function fpUrl(name,rel,abs){
  else if(name)q+='&name='+encodeURIComponent(name);
  return '/m/'+((name||rel)?'file':'files')+q;
 }
+// 下载统一入口。文件可能已经被移走/删掉：直接 <a download> 的话，浏览器会把
+// 那条 404 也存下来，叫 file.txt（用户 2026-11-20 第三次报同一个症状）。
+// 这里先 HEAD 探活：200 才跳转，文件名由服务端 Content-Disposition 给；
+// 探不到就在页面上说清楚。**新增下载入口也只准走这里**（见下载契约文档）。
+async function saveFile(url){
+ if(!url||url==='#')return;
+ try{
+  const r=await fetch(url,{method:'HEAD',cache:'no-store'});
+  if(r.status===401){showPair();return;}
+  if(!r.ok){toast('文件已不在电脑上（可能被移动或删除）');return;}
+  const a=document.createElement('a');
+  a.href=url;a.setAttribute('download','');a.rel='noopener';
+  document.body.append(a);a.click();a.remove();
+ }catch(e){toast('下载失败：网络不通');}
+}
 // 产物行第二行原来放 rel 路径（「dist/AgentRMC-Setup.exe」）——上级目录对
 // 认文件没用，名字里已经带得出（用户 2026-11-19）；换成修改时间，今天
 // 只给时分、昨天/更早给日期，扫一眼就知道哪个是刚出炉的。
@@ -2825,6 +2867,7 @@ async function fpLoad(){
    arts.forEach(f=>{
     const a=document.createElement('a');a.className='mprow frow';
     a.href=fpUrl(null,f.rel);a.download=f.name||'';
+    a.onclick=e=>{e.preventDefault();saveFile(a.href);};
     const ic=document.createElement('span');ic.className='mpico';
     ic.innerHTML=FP_ICON;
     const wrap=document.createElement('span');wrap.className='mpname';
@@ -2844,6 +2887,7 @@ async function fpLoad(){
    files.forEach(f=>{
     const a=document.createElement('a');a.className='mprow frow';
     a.href=fpUrl(f.name);a.download=f.name||'';
+    a.onclick=e=>{e.preventDefault();saveFile(a.href);};
     const ic=document.createElement('span');ic.className='mpico';
     ic.innerHTML=FP_ICON;
     const wrap=document.createElement('span');wrap.className='mpname';

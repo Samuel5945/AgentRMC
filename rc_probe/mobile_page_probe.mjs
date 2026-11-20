@@ -84,6 +84,8 @@ const DARK = {
 
 const NOW = Date.now();
 const iso = (ms) => new Date(ms).toISOString();
+// 底部实时行的文案（flow 里会改它，验证「原位更新、不堆叠」）。
+let LIVE_TEXT = '思考：…把那条内容校验断言的写法改成直白写法 · 本轮已 13m41s';
 const ITEMS = () => ([
   {
     id: 'a1', title: 'WorkBuddy AI', stage: 'needs-me',
@@ -173,6 +175,9 @@ function sessionTranscript(exe, session) {
   return {
     total: 3, supported: true, sessionTitle: row.title, agentExe: exe,
     agentName: agent.name, sessionId: session,
+    // 底部实时行（2026-11-20）：长轮跑着时 transcript 没有新行，native 把进行中
+    // 卡片的活动回声 + 本轮时长塞进 live；这里给一条让页面断言得到。
+    live: session === 'sess-8f31c2a9' ? { text: LIVE_TEXT, at: iso(NOW - 5e3) } : undefined,
     messages: [
       { id: 'sm0', role: 'user', at: iso(NOW - 760e3),
         text: '请查看文件：D:/githubrepos/Agentrmc/.agentrmc/inbox/sess-8f31c2a9/20261118-204924-965-shot.jpg' },
@@ -278,6 +283,7 @@ function startServer() {
           files: [
             { name: '会议记录.md', size: 2048, mtime: iso(NOW) },
             { name: '截图一.png', size: 40960, mtime: iso(NOW - 60e3) },
+            { name: 'missing.txt', size: 0, mtime: iso(NOW - 120e3) },
           ],
           artifacts: [
             { rel: 'dist/AgentRMC-Setup.exe', name: 'AgentRMC-Setup.exe',
@@ -286,11 +292,19 @@ function startServer() {
         }));
       }
       if (url.pathname === '/m/file') {
-        FILES.push({ file: url.search });
-        res.writeHead(200, {
+        // 真实下载契约：文件名/类型由服务端 Content-Disposition 定；
+        // 文件不在了回 404 JSON，页面先 HEAD 探活，不该把 404 存成 file.txt。
+        if (url.searchParams.get('name') === 'missing.txt') {
+          res.writeHead(404, { 'Content-Type': 'application/json' });
+          return res.end('{"ok":false,"error":"file_missing"}');
+        }
+        FILES.push({ file: url.search, method: req.method });
+        const headers = {
           'Content-Type': 'application/octet-stream',
           'Content-Disposition': 'attachment; filename="a.txt"',
-        });
+        };
+        if (req.method === 'HEAD') { res.writeHead(200, headers); return res.end(); }
+        res.writeHead(200, headers);
         return res.end('DOWNLOAD');
       }
       if (url.pathname === '/m/action') {
@@ -612,9 +626,20 @@ async function runFlow() {
   ok((await page.textContent('#chatSub')).includes('WorkBuddy AI'), '会话聊天页显示 Agent');
   ok(await page.locator('#chatList .bub').count() === 5, '会话聊天记录已加载');
   // 系统信息行：工具调用耗时/后台任务，灰色一行，不算对话气泡
-  ok(await page.locator('#chatList .bubsys').count() === 1, '系统信息行渲染出来');
-  ok((await page.textContent('#chatList .bubsys')).includes('执行命令 5.7s'),
-    '系统信息行带耗时与命令摘要');
+  ok(await page.locator('#chatList .bubsys:not(.bublive)').count() === 1, '系统信息行渲染出来');
+  ok((await page.locator('#chatList .bubsys:not(.bublive)').first().textContent())
+    .includes('执行命令 5.7s'), '系统信息行带耗时与命令摘要');
+  // 底部实时行（2026-11-20 用户报「长时间不显示进度内容」）：长轮里 transcript
+  // 没新行，靠这行说明正在干什么；文案变了原位刷新，不能一条条堆上去。
+  ok(await page.locator('#chatList .bublive').count() === 1, '实时行渲染且只有一条');
+  ok((await page.locator('#chatList .bublive .t').textContent()).includes('思考：'),
+    '实时行显示活动内容（不只是时长）');
+  LIVE_TEXT = '执行 exec_command · npm run build · 本轮已 13m50s';
+  await page.waitForFunction(
+    () => document.querySelectorAll('#chatList .bublive').length === 1 &&
+          (document.querySelector('#chatList .bublive .t') || {}).textContent.includes('exec_command'),
+    null, { timeout: 6000 });
+  ok(await page.locator('#chatList .bublive').count() === 1, '实时行原位更新、不堆叠');
 
   posts.length = 0;
   await page.fill('#chatText', '拒绝这条派发');
@@ -700,9 +725,9 @@ async function runFlow() {
   FILES.length = 0;
   await page.click('#chatFiles');
   await page.waitForSelector('#chatFilePanel:not([hidden]) .frow');
-  ok(await page.locator('#chatFilePanel .frow').count() === 3, '面板列出产物 + inbox');
+  ok(await page.locator('#chatFilePanel .frow').count() === 4, '面板列出产物 + inbox');
   const fc = await page.textContent('#chatFileCount');
-  ok(fc.includes('产物 1') && fc.includes('文件 2'), '面板报文件数（产物 · 文件）', fc);
+  ok(fc.includes('产物 1') && fc.includes('文件 3'), '面板报文件数（产物 · 文件）', fc);
   // 产物行：第一行是 rel 路径的位置换成时间戳（用户 2026-11-19：上级目录没用）。
   const aHref = await page.locator('#chatFilePanel .frow').first().getAttribute('href');
   ok(aHref.includes('scope=project') && aHref.includes('rel='),
@@ -716,6 +741,24 @@ async function runFlow() {
   ok(fDir && /\d/.test(fDir), 'inbox 行也带时间戳', fDir);
   ok(FILES.length === 1 && FILES[0].req.includes('session=sess-8f31c2a9'),
     '列表请求带会话上下文', JSON.stringify(FILES));
+  // 真下载 E2E（2026-11-20）：点一行必须真的拿到文件，而且文件名来自服务端
+  // Content-Disposition——「下载下来是 file.txt」就是这么反复出现的。
+  const [dl] = await Promise.all([
+    page.waitForEvent('download', { timeout: 8000 }),
+    page.locator('#chatFilePanel .frow').first().click(),
+  ]);
+  ok(dl.suggestedFilename() === 'a.txt',
+    '下载文件名来自服务端（不是 file.txt）', dl.suggestedFilename());
+  const dlPath = await dl.path();
+  ok(dlPath && fs.readFileSync(dlPath).toString() === 'DOWNLOAD', '下载字节完整');
+  // 文件不在了：先 HEAD 探活 → 页面提示，不许再触发一次空下载。
+  let ghostDownload = false;
+  page.once('download', () => { ghostDownload = true; });
+  await page.locator('#chatFilePanel .frow', { hasText: 'missing.txt' }).click();
+  await page.waitForTimeout(600);
+  ok(!ghostDownload, '文件不存在时不触发下载（不会落成 file.txt）');
+  ok((await page.textContent('#toast')).includes('文件已不在'),
+    '文件不存在时页面说清楚', await page.textContent('#toast'));
   await page.click('#chatFileClose');
   ok(await page.locator('#chatFilePanel').evaluate((el) => el.hidden), '× 能关掉文件面板');
 

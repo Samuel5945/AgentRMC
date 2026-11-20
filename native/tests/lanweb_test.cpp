@@ -64,6 +64,12 @@ QByteArray get(const QByteArray &path, const QByteArray &extraHeaders = QByteArr
            "\r\n";
 }
 
+// 下载前的探活请求：页面用 HEAD 先问「这文件还在吗」。
+QByteArray head(const QByteArray &path, const QByteArray &extraHeaders = QByteArray()) {
+    return "HEAD " + path + " HTTP/1.1\r\nHost: 127.0.0.1\r\n" + extraHeaders +
+           "\r\n";
+}
+
 QByteArray cookieHeader(const QByteArray &token) {
     return "Cookie: armc_dev=" + token + "\r\n";
 }
@@ -190,6 +196,7 @@ int main(int argc, char **argv) {
     });
     // 电脑文件（inbox）：列表与下载。下载侧只认 a.txt，其余一律 ok=false。
     QString lastInboxSession, lastInboxProject, lastInboxName;
+    QString lastInboxScope, lastInboxAbs;
     lan.setInboxListProvider([&](const QJsonObject &meta) {
         lastInboxSession = meta.value(QStringLiteral("session")).toString();
         lastInboxProject = meta.value(QStringLiteral("project")).toString();
@@ -199,7 +206,17 @@ int main(int argc, char **argv) {
     lan.setInboxFileProvider([&](const QJsonObject &meta) {
         const QString name = meta.value(QStringLiteral("name")).toString();
         lastInboxName = name;
+        lastInboxScope = meta.value(QStringLiteral("scope")).toString();
+        lastInboxAbs = meta.value(QStringLiteral("abs")).toString();
         LanWebServer::Download out;
+        // 项目外绝对路径（scope=abs）：文件名/类型由服务端按真实文件给。
+        if (lastInboxScope == QStringLiteral("abs")) {
+            out.ok = true;
+            out.name = QStringLiteral("LiquidDesk-1.4.7-B站封面-4x3.jpg");
+            out.contentType = QByteArray("image/jpeg");
+            out.data = QByteArray("JPGDATA");
+            return out;
+        }
         if (name != QStringLiteral("a.txt")) {
             return out;  // ok=false → 404
         }
@@ -520,6 +537,55 @@ int main(int argc, char **argv) {
                 [](const QByteArray &resp) {
                     check(resp.startsWith("HTTP/1.1 404"), "file unknown 404",
                           resp);
+                    // 404 必须是**明确的错误响应**：空 body 会被浏览器当成文件
+                    // 存成 file.txt（2026-11-20 用户第三次报的症状）。
+                    check(resp.contains("Content-Type: application/json"),
+                          "404 is json (not a fake file)", resp);
+                    check(resp.contains("file_missing"), "404 names the reason",
+                          resp);
+                },
+                next);
+    });
+    // 9k2. 项目外绝对路径（scope=abs）：中文名不丢、类型/文件名由服务端定。
+    // 这三条以前各自出过事（abs 参数被白名单丢掉 → 404 → file.txt；中文名没
+    // 进 filename* → 存出来是乱名），所以在这里一起锁死。
+    seq.add([&](std::function<void()> next) {
+        request(app, port,
+                get("/m/file?session=sess-9&project=D%3A%2Fwork%2Fdemo&scope=abs"
+                    "&abs=D%3A%2FUsers%2FPC%2FDesktop%2FLiquidDesk-1.4.7-B"
+                    "%E7%AB%99%E5%B0%81%E9%9D%A2-4x3.jpg",
+                    cookieHeader(token)),
+                [&](const QByteArray &resp) {
+                    check(resp.startsWith("HTTP/1.1 200"), "abs file 200", resp);
+                    check(lastInboxScope == QStringLiteral("abs"),
+                          "abs scope passed through");
+                    check(lastInboxAbs.endsWith(QStringLiteral("4x3.jpg")),
+                          "abs path percent-decoded", lastInboxAbs.toUtf8());
+                    check(resp.contains("Content-Type: image/jpeg"),
+                          "abs mime from resolved file", resp);
+                    check(resp.contains(
+                              "filename*=UTF-8''LiquidDesk-1.4.7-B"
+                              "%E7%AB%99%E5%B0%81%E9%9D%A2-4x3.jpg"),
+                          "abs chinese filename rfc5987", resp);
+                    check(resp.contains("Content-Length: 7"),
+                          "abs length header", resp);
+                },
+                next);
+    });
+    // 9k3. HEAD 探活：与 GET 同头、不返 body。页面靠它避免把 404 存成文件。
+    seq.add([&](std::function<void()> next) {
+        request(app, port,
+                head("/m/file?session=sess-9&project=D%3A%2Fwork%2Fdemo&name=a.txt",
+                     cookieHeader(token)),
+                [](const QByteArray &resp) {
+                    const int hdrEnd = resp.indexOf("\r\n\r\n");
+                    check(resp.startsWith("HTTP/1.1 200"), "head file 200", resp);
+                    check(resp.contains("Content-Disposition: attachment;"),
+                          "head carries download headers", resp);
+                    check(resp.contains("Content-Length: 5"),
+                          "head reports size", resp);
+                    check(hdrEnd >= 0 && resp.size() == hdrEnd + 4,
+                          "head has no body", resp);
                 },
                 next);
     });

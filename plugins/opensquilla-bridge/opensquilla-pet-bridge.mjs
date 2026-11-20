@@ -431,7 +431,45 @@ function renderTemplate(tpl, sessionKey, replyText) {
 // 有卡就刷文案 + 重置静默计时，无卡原生端直接丢（裁决 2 的延伸：不为随手
 // 聊天长待办），progress 永不出声。频率守卫：换文案最少 progressLabelMs，
 // 没新动静每 progressRefreshMs 续一次命（带已运行时长，长轮也在动）。
-const turnActivity = new Map(); // session key -> {label, startedAt, lastSentAt, dirty}
+//
+// 2026-11-20 补内容：只报「思考中 · 已 13 分」等于没说在干什么（用户报
+// 「长时间不显示进度内容」）。网关事件里本来就带 thinking 的 text 和
+// tool_use_end 的 arguments，累计后取尾巴拼进文案：「思考：…断言挂了…」
+// 「执行 exec_command · npm test」。都只截尾、不再加工；看不到就退回原词。
+const turnActivity = new Map(); // session key -> {label, startedAt, lastSentAt, dirty, think, reply}
+
+function squashAct(s) {
+  return String(s || "").replace(/\s+/g, " ").trim();
+}
+// 取尾巴：思考/回复都是流式追加，最近几十个字最能说明「此刻在干嘛」。
+function tailAct(s, n) {
+  const t = squashAct(s);
+  if (!t) return "";
+  return t.length > n ? `…${t.slice(-n)}` : t;
+}
+function appendAct(a, field, text, cap) {
+  const add = String(text || "");
+  if (!a || !add) return;
+  const merged = (a[field] || "") + add;
+  a[field] = merged.length > cap ? merged.slice(-cap) : merged;
+}
+// tool_use_end 的 arguments 已由网关按工具分类投影过（command/path/query…），
+// 取第一个像样的字符串当下文，别把整段 JSON 摊进一行卡片。
+function toolArgBrief(args) {
+  if (!args || typeof args !== "object") return "";
+  const order = ["command", "code", "path", "file_path", "paths", "pattern",
+                 "query", "queries", "url", "urls", "task", "name"];
+  const pick = (v) => (Array.isArray(v) ? v[0] : v);
+  for (const k of order) {
+    const v = pick(args[k]);
+    if (typeof v === "string" && squashAct(v)) return tailAct(v, 40);
+  }
+  for (const v of Object.values(args)) {
+    const s = pick(v);
+    if (typeof s === "string" && squashAct(s)) return tailAct(s, 40);
+  }
+  return "";
+}
 
 function activityDur(ms) {
   const s = Math.max(0, Math.round(ms / 1000));
@@ -447,9 +485,24 @@ function maybeSendProgress(key) {
   if (existsSync(CFG.pauseFile)) return; // 免打扰：不出声也不刷文案
   const now = Date.now();
   const gap = a.dirty ? CFG.progressLabelMs : CFG.progressRefreshMs;
-  if (now - a.lastSentAt < gap) return;
+  if (now - a.lastSentAt < gap) {
+    // 文案刚变、但离上次推送还差一点：排一次补发。少了这一步，「思考正文」
+    // 这类稀疏 delta 要等到下一条事件（或 10s sweep）才露出来，短轮甚至
+    // 从头到尾都刷不出内容（2026-11-20 桥测试抓到的时序）。
+    if (a.dirty && !a.timer) {
+      a.timer = setTimeout(() => {
+        a.timer = null;
+        maybeSendProgress(key);
+      }, Math.max(1, gap - (now - a.lastSentAt)));
+    }
+    return;
+  }
   a.dirty = false;
   a.lastSentAt = now;
+  if (a.timer) {
+    clearTimeout(a.timer);
+    a.timer = null;
+  }
   const text = `OpenSquilla：${a.label} · 已 ${activityDur(now - a.startedAt)}`;
   // progress 是瞬时态：发不出去就丢，不落补投队列（补投一条过期的反而误导）。
   if (now - a.startedAt >= CFG.progressCreateAfterMs && now - (a.checkedAt || 0) > 60000) {
@@ -505,14 +558,25 @@ function trackActivity(evName, sessionKey, p) {
   const key = String(sessionKey || "");
   if (!key || key === "?" || flag("no-progress")) return;
   if (!CFG.includeCron && key.startsWith("cron:")) return;
+  const a = turnActivity.get(key);
   if (evName === "session.event.thinking_start") {
-    setActivity(key, "思考中", true);
+    setActivity(key, a && a.think ? `思考：${tailAct(a.think, 32)}` : "思考中", true);
   } else if (evName === "session.event.thinking") {
-    setActivity(key, "思考中", false);
+    // delta 不建账（回合结束后的孤立 delta 不该把活动复活），只把正文攒起来。
+    if (!a) return;
+    appendAct(a, "think", p.text, 400);
+    setActivity(key, a.think ? `思考：${tailAct(a.think, 32)}` : "思考中", false);
   } else if (evName === "session.event.tool_use_start") {
     setActivity(key, `调用 ${p.tool_name || p.name || "工具"}…`, true);
+  } else if (evName === "session.event.tool_use_end") {
+    // 参数在这条事件里才齐（start 只有名字）：给「执行什么」补上下文。
+    const name = p.tool_name || p.name || "工具";
+    const brief = toolArgBrief(p.arguments || p.input);
+    setActivity(key, brief ? `执行 ${name} · ${brief}` : `执行 ${name}`, true);
   } else if (evName === "session.event.text_delta") {
-    setActivity(key, "写回复中", false);
+    if (!a) return;
+    appendAct(a, "reply", p.text, 200);
+    setActivity(key, a.reply ? `写回复：${tailAct(a.reply, 30)}` : "写回复中", false);
   } else if (evName === "session.event.turn_committed") {
     if (!turnActivity.has(key)) {
       turnActivity.set(key, { label: "已开工", startedAt: Date.now(), lastSentAt: Date.now(), dirty: false });

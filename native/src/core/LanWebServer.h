@@ -157,6 +157,10 @@ private:
                 const char *contentType = nullptr,
                 const QByteArray &extraHeaders = QByteArray(),
                 const char *cacheControl = "no-store");
+    // 下载响应的唯一出口：文件名（ASCII 兜底 + RFC 5987 中文）、Content-Type、
+    // 长度、attachment 全在这里拼。headOnly=true 只回头不回字节——页面点下载前
+    // 先用 HEAD 探活，免得把 404 存成 file.txt。
+    void serveDownload(QTcpSocket *socket, const Download &file, bool headOnly);
     void dropSocket(QTcpSocket *socket);
     QString mobileHtml() const;
 

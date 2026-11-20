@@ -530,6 +530,31 @@ await check('活动回声：thinking/tool_use → progress 刷卡带 session；-
   } finally { await stopBridge(off); }
 });
 
+await check('活动内容回声：thinking 正文 / 工具参数进文案（只截尾，不摊 JSON）', async () => {
+  received.length = 0;
+  const handle = spawnBridge(BRIDGE, path.join(TMP, 'spool-act3'), [
+    '--progress-label-ms', '10', '--progress-refresh-ms', '600000',
+  ]);
+  try {
+    await waitFor(() => gatewayReady, '网关就绪');
+    inject('session.event.turn_committed', 's-act3');
+    inject('session.event.thinking_start', 's-act3');
+    inject('session.event.thinking', 's-act3',
+      { text: '先把那条内容校验断言挂掉的写法改成直白写法' });
+    await waitFor(() => received.some((r) => r.body.event === 'progress'
+      && r.body.message.includes('思考：') && r.body.message.includes('直白写法')),
+      '思考正文回声');
+    inject('session.event.tool_use_end', 's-act3',
+      { tool_name: 'exec_command', arguments: { command: 'npm run build --silent' } });
+    await waitFor(() => received.some((r) => r.body.event === 'progress'
+      && r.body.message.includes('执行 exec_command')
+      && r.body.message.includes('npm run build')), '工具参数回声');
+    const last = received.filter((r) => r.body.event === 'progress').pop();
+    assert.ok(last.body.message.startsWith('OpenSquilla：'), last.body.message);
+    assert.ok(!last.body.message.includes('{'), '参数不该以 JSON 摊在卡面：' + last.body.message);
+  } finally { await stopBridge(handle); }
+});
+
 await check('长轮补卡：超时无活卡才用上报口径建卡；已有活卡不插', async () => {
   received.length = 0;
   jsonGet = { items: [] };

@@ -143,3 +143,16 @@
   里的旧那一层，宿主**已经开着的会话**还在按它的路径调 hook（会话启动时路径已烧进
   命令里）。删掉不会报错，只会让那个会话的提醒**静默消失**。Qoder 官方安装器自己会删，
   手工挪走前更要想清楚；App「系统」页的「等新版上报」就是给这种情况留的读数。
+
+
+
+## 手机下载契约（/m/file）
+
+- 同类问题已反复三次（产物下载变成 `file.txt`、名字丢扩展名、中文乱码），
+  **不再按入口逐个救火**。完整契约与回归矩阵见 `docs/download-contract.md`。
+- 三条硬规矩：① 页面链接一律 `fpUrl(...)` 生成，路径解析只认路径字符（中文
+  句读必须当分隔符）；② 点击一律走 `saveFile(url)`（HEAD 探活 → 导航下载，
+  404 只 toast 不下载）；③ 服务端只经 `serveDownload()` 出文件（文件名取解析后
+  的真实文件，404 回 JSON 而不是空 body）。
+- 改下载必须跑：`AgentRMCLanWebTest`（HTTP 契约）+ `node rc_probe\mobile_page_probe.mjs flow`
+  （真实 download 事件断言 + 不存在文件的 toast）。

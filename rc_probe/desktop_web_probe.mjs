@@ -102,11 +102,16 @@ const now = Date.now();
 await page.evaluate(({ now }) => window.__setSessionChat({
   sessionId: 'sess-live', offset: 0, total: 2, supported: true,
   sessionTitle: '桌面派发页联调',
+  // 底部实时行（2026-11-20）：长轮里 transcript 不更新时显示「正在干什么」。
+  live: { text: '思考：…把那条内容校验断言的写法改成直白写法 · 本轮已 13m41s',
+          at: new Date(now - 5000).toISOString() },
   messages: [
     { id: 'dm1', role: 'user', at: new Date(now - 300000).toISOString(), text: '把桌面端的会话目录接上' },
     { id: 'dm2', role: 'assistant', at: new Date(now - 200000).toISOString(), text: '目录和聊天页已经接入，底部可以直接派发。' }
   ]
 }), { now });
+const liveRows = await page.locator('#dchatList .bublive').count();
+const liveText = liveRows ? await page.textContent('#dchatList .bublive') : '';
 await page.fill('#dchatText', '继续优化项目分类');
 await page.click('#dchatSend');
 await page.waitForTimeout(100);
@@ -170,12 +175,14 @@ console.log('trashBtn=', trashBtn, 'trashLoad=', JSON.stringify(trashLoadPost),
   'trashRows=', trashRows, 'restorePost=', JSON.stringify(restorePost));
 console.log('tabOrder=', tabs.slice(0, 3).join(' / '));
 console.log('dchatVisible=', dchatVisible, 'title=', title.split('\n')[0]);
+console.log('liveRow=', liveRows, 'liveText=', liveText);
 console.log('openPost=', JSON.stringify(openPost));
 console.log('sendPost=', JSON.stringify(sendPost), 'draftBeforeResult=', sendDraft);
 console.log('failedNotice=', failedNotice, 'okNotice=', okNotice, 'backToDispatch=', backToDispatch);
 console.log('errors=', errors.length ? errors : 'none');
 const ok = dchatVisible && backToDispatch && archivedClosed && activeOpen === 1
   && tabs[0] === '待我处理' && tabs[1] === '派发'
+  && liveRows === 1 && liveText.includes('思考：')
   && groupLabels.includes('tuwen-editor · githubrepos')
   && groupLabels.includes('tuwen-editor · Desktop')
   && openPost?.cmd === 'sessionOpen' && sendPost?.cmd === 'dispatchSession'

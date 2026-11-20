@@ -2322,10 +2322,15 @@ function bubble(m){
   attFiles.forEach(p=>{
    const name=p.split(/[\\/]/).pop()||'附件';
    const rel=toRelPath(p);
+   // 工作区外的绝对路径（inbox 恰好不在项目里、或用户贴的是别处文件）：
+   // 也走下载路由，别退化成不可点的 '#'。
+   const norm=String(p||'').replace(/\\/g,'/').trim();
+   const abs=(/^[A-Za-z]:\//.test(norm)||norm[0]==='/')?norm:'';
    const isImg=/\.(png|jpe?g|gif|webp|bmp)$/i.test(name);
    const a=document.createElement('a');
    a.className=isImg?'bubatt img':'bubatt';
-   if(rel){a.href=fpUrl(null,rel);a.setAttribute('download','');
+   if(rel||abs){a.href=fpUrl(null,rel||undefined,abs||undefined);
+    a.setAttribute('download','');
     a.onclick=e=>{e.preventDefault();saveFile(a.href);};}
    else{a.href='#';a.onclick=e=>e.preventDefault();}
    if(isImg){
@@ -2811,7 +2816,10 @@ function fpUrl(name,rel,abs){
  if(rel)q+='&scope=project&rel='+encodeURIComponent(rel);
  else if(abs)q+='&scope=abs&abs='+encodeURIComponent(abs);
  else if(name)q+='&name='+encodeURIComponent(name);
- return '/m/'+((name||rel)?'file':'files')+q;
+ // 三种来源都算「取一个文件」：以前 abs 漏在判断外，项目外的产物会拼成
+ // /m/files?...&scope=abs——那是**列表**路由，直接 404，页面只能报「文件不在」
+ // （2026-11-20 用户：文件明明在桌面上）。单点修在这，别在调用处绕。
+ return '/m/'+((name||rel||abs)?'file':'files')+q;
 }
 // 下载统一入口。文件可能已经被移走/删掉：直接 <a download> 的话，浏览器会把
 // 那条 404 也存下来，叫 file.txt（用户 2026-11-20 第三次报同一个症状）。
@@ -2822,7 +2830,7 @@ async function saveFile(url){
  try{
   const r=await fetch(url,{method:'HEAD',cache:'no-store'});
   if(r.status===401){showPair();return;}
-  if(!r.ok){toast('文件已不在电脑上（可能被移动或删除）');return;}
+  if(!r.ok){toast('取不到这个文件（可能已移动或删除）');return;}
   const a=document.createElement('a');
   a.href=url;a.setAttribute('download','');a.rel='noopener';
   document.body.append(a);a.click();a.remove();

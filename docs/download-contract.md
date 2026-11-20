@@ -16,6 +16,9 @@
   - `fpUrl(name)`   → inbox 里的 basename（`?name=`）
   - `fpUrl(null, rel)` → 会话工作区相对路径（`?scope=project&rel=`）
   - `fpUrl(null, null, abs)` → 项目外绝对路径（`?scope=abs&abs=`）
+- 只要给了 `name/rel/abs` 任一，路由必须是 `/m/file`（列表是 `/m/files`）。
+  `abs` 曾漏在这个判断外，项目外产物被拼成 `/m/files?...&scope=abs` → 404，
+  页面报「文件不在」但文件就在桌面上（2026-11-20 用户实测）。
 - 路径从正文里抠出来时：只认路径字符。中文句读（`，。；：、！？`）**必须**
   当分隔符，否则整句话会被当成路径（`rel=卡片层级已经拆好了…截图.png`）。
 - 不允许在别处手拼 `/m/file?…` 字符串。

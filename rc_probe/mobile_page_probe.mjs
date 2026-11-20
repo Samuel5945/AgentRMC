@@ -751,13 +751,24 @@ async function runFlow() {
     '下载文件名来自服务端（不是 file.txt）', dl.suggestedFilename());
   const dlPath = await dl.path();
   ok(dlPath && fs.readFileSync(dlPath).toString() === 'DOWNLOAD', '下载字节完整');
+  // 项目外绝对路径：链接必须走 /m/file（以前漏了 abs 分支，拼成 /m/files 列表
+  // 路由 → 404 → 页面只能报「文件不在」，而文件其实就在桌面上）。
+  const absUrl = await page.evaluate(() =>
+    fpUrl(null, '', 'C:/Users/PC/Desktop/LiquidDesk-1.4.7-B站封面-4x3.jpg'));
+  ok(absUrl.startsWith('/m/file?') && absUrl.includes('scope=abs'),
+    'abs 链接走下载路由（不是列表路由）', absUrl);
+  const [dlAbs] = await Promise.all([
+    page.waitForEvent('download', { timeout: 8000 }),
+    page.evaluate((u) => saveFile(u), absUrl),
+  ]);
+  ok(dlAbs.suggestedFilename() === 'a.txt', 'abs 下载也走同一出口', dlAbs.suggestedFilename());
   // 文件不在了：先 HEAD 探活 → 页面提示，不许再触发一次空下载。
   let ghostDownload = false;
   page.once('download', () => { ghostDownload = true; });
   await page.locator('#chatFilePanel .frow', { hasText: 'missing.txt' }).click();
   await page.waitForTimeout(600);
   ok(!ghostDownload, '文件不存在时不触发下载（不会落成 file.txt）');
-  ok((await page.textContent('#toast')).includes('文件已不在'),
+  ok((await page.textContent('#toast')).includes('取不到这个文件'),
     '文件不存在时页面说清楚', await page.textContent('#toast'));
   await page.click('#chatFileClose');
   ok(await page.locator('#chatFilePanel').evaluate((el) => el.hidden), '× 能关掉文件面板');

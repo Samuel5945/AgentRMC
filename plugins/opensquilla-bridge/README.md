@@ -154,6 +154,18 @@ ack ok:false），再 `sessions.send {key, message, client_message_id, _source}`
 desktop-electron\opensquilla\state`，会话库是 SQLite `sessions.db`）；
 `~/.opensquilla` 是另一个实例的家，去那里读回会假阴性。
 
+## 会话真删通道（2026-11-20，对 Magpie）
+
+OpenSquilla 的会话住在共享 SQLite（`sessions.db`）里，搬文件会毁库——所以不照
+文件型宿主那套进回收站，而是走宿主官方接口：派发页的 OpenSquilla 会话行点
+「删除」→ 原生端核「在库 + 一分钟无写入」并二次确认 → 入队 → 桥 1.5s 取件
+（`GET /delete/pending?exe=OpenSquilla.exe`）→ 网关 `sessions.delete {key}` →
+`POST /delete/ack {delete_id, ok, error}`。判定口径：应答 `deleted[]` 含该 key
+才算删成（网关实测级联清 sessions/transcript/ingress，删后 resolve 即拒）；
+**宿主侧真删、不进回收站、不可恢复**；桥不在（OpenSquilla 没开/桥过旧）60s
+超时取消，绝不假装删成。删成后桥顺手清该会话的活动账/标题/工作区缓存/订阅。
+`--no-dispatch` 连这条一起关（同属插件通道）。ZCode 仍「只列不删」，等上游。
+
 ## 回合内活动回声（2026-11-19）
 
 长思考轮里 WebChat 一直有思考流，RMC 此前只剩「静默 N 分」。桥把网关的

@@ -38,6 +38,10 @@ class QTcpSocket;
 //   GET  /dispatch/pending?exe=<映像名> → DSH 定向派发取件：待注入清单 JSON 数组
 //   POST /dispatch/ack {"dispatch_id":..,"ok":true|false,"error":".."}
 //                 → 插件注入回执：ok=投递成立（durable inbox），false=守卫拒绝
+//   GET  /delete/pending?exe=<映像名> → OpenSquilla 真删取件：待执行清单
+//                 （桥拿 sessions.delete 走网关官方 RPC，宿主侧真删不进回收站）
+//   POST /delete/ack {"delete_id":..,"ok":true|false,"error":".."}
+//                 → 删除回执：ok=网关确认删除；false 带原因（未知会话/被拒）
 //   GET  /cursor/state → Agent 专用虚拟指针的状态（visible/agent/x/y/...）。
 //   POST /cursor/move  {"x":..,"y":..,"duration_ms":..,"agent":"DSH","hold_ms":..}
 //                 → 把指针挪过去（只画，不动系统光标）。
@@ -87,6 +91,14 @@ public:
     // POST /dispatch/ack 的处理器：{"dispatch_id":..,"ok":true|false,"error":".."}
     // （插件注入成功 / 守卫拒绝的回执）。返回 false = dispatch_id 不认识。
     void setDispatchAckHandler(
+        std::function<bool(const QJsonObject &)> handler);
+    // GET /delete/pending?exe 的应答来源：OpenSquilla 真删队列取件（一次取走，
+    // 未 ack 前不重发），返回 JSON 数组文本。
+    void setDeletePendingProvider(
+        std::function<QString(const QString &exe)> provider);
+    // POST /delete/ack 的处理器：{"delete_id":..,"ok":..,"error":..}。
+    // 返回 false = delete_id 不认识（超时兜底后晚到），回 404。
+    void setDeleteAckHandler(
         std::function<bool(const QJsonObject &)> handler);
     // POST /requests 的处理器：DSH 插件推送某会话当前待答请求（B1 只读展示）
     // {"exe","session_id","project","requests":[{kind,id,toolName?,reason?,questions?}]}。
@@ -152,6 +164,8 @@ private:
     std::function<QString()> healthProvider_;
     std::function<QString(const QString &exe)> dispatchPendingProvider_;
     std::function<bool(const QJsonObject &)> dispatchAckHandler_;
+    std::function<QString(const QString &exe)> deletePendingProvider_;
+    std::function<bool(const QJsonObject &)> deleteAckHandler_;
     std::function<void(const QJsonObject &)> requestsHandler_;
     std::function<void(const QJsonObject &)> modelsHandler_;
     std::function<QString(const QString &exe, const QString &session)>

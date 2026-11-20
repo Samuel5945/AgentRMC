@@ -18,6 +18,7 @@
 class QCloseEvent;
 class QAction;
 class SessionDispatch;
+class SessionDeleteQueue;
 class QComboBox;
 class QDragEnterEvent;
 struct UpdateInfo;
@@ -295,6 +296,8 @@ private:
     std::unique_ptr<WorkItemStore> workItems_;
     // 第 3 批定向派发路由（Qoder 系 CLI 通道）；拒绝原因/草稿回显给外壳。
     SessionDispatch *dispatch_ = nullptr;
+    // OpenSquilla 宿主侧真删队列（桥取件走网关 sessions.delete）。
+    SessionDeleteQueue *sessionDeletes_ = nullptr;
     QString dispatchNotice_;
     // 提示语义色（聊天页 composer 状态行用）：good=成功绿、bad=警示黄，
     // 空=中性。只在 dispatchNotice_ 赋文案处一起维护，随 state 的 noticeKind

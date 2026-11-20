@@ -29,6 +29,7 @@
 #include "core/Presets.h"
 #include "core/SessionDispatch.h"
 #include "core/SessionCleaner.h"
+#include "core/SessionDeleteQueue.h"
 #include "core/SessionTranscript.h"
 #include "core/ZcodeDispatch.h"
 #include "core/ThemeManager.h"
@@ -596,6 +597,43 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
         }
     }
     dispatch_ = new SessionDispatch(this);
+    sessionDeletes_ = new SessionDeleteQueue(this);
+    // 宿主真删终态上账：成功则该会话的活卡（含待验收）归档——会话都没了，
+    // 留着卡也无处可回；失败/桥没取件超时都如实报回页面。
+    connect(sessionDeletes_, &SessionDeleteQueue::finished, this,
+            [this](const QString &, const QString &session, const QString &title,
+                   bool ok, const QString &error) {
+                if (ok && workItems_ != nullptr) {
+                    workItems_->resolveSession(session, QString(), true);
+                    refreshWorkItems();
+                }
+                appendEvent(ok ? QStringLiteral("status") : QStringLiteral("error"),
+                            QString(), QString(),
+                            ok ? QStringLiteral("OpenSquilla 已删除会话：%1")
+                                     .arg(title.isEmpty() ? session.left(24) : title)
+                               : QStringLiteral("OpenSquilla 删除会话失败：%1").arg(error),
+                            0);
+                if (workWeb_ != nullptr) {
+                    QJsonArray failed;
+                    if (!ok) {
+                        failed.append(QJsonObject{
+                            {QStringLiteral("exe"), QStringLiteral("OpenSquilla.exe")},
+                            {QStringLiteral("session"), session},
+                            {QStringLiteral("error"), error}});
+                    }
+                    workWeb_->pushDeleteResult(QJsonObject{
+                        {QStringLiteral("ok"), ok},
+                        {QStringLiteral("host"), true},
+                        {QStringLiteral("deleted"), ok ? 1 : 0},
+                        {QStringLiteral("session"), session},
+                        {QStringLiteral("failed"), failed},
+                        {QStringLiteral("error"), ok ? QString() : error}});
+                    // 删成/没成都重推目录：真实剩余项说了算。
+                    workWeb_->pushSessions(QJsonDocument::fromJson(
+                                               lanSessionsJson().toUtf8())
+                                               .object());
+                }
+            });
     connect(dispatch_, &SessionDispatch::receipt, this,
             [this](const QString &dispatchId, const QString &exe,
                    const QString &sid, const QString &proj, const QString &text) {
@@ -1255,6 +1293,26 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
             // 不认识的 dispatch_id 要回 404：重启丢账/重复 ack 不能当成功。
             return dispatch_->pluginAck(
                 payload.value(QStringLiteral("dispatch_id")).toString(),
+                payload.value(QStringLiteral("ok")).toBool(),
+                payload.value(QStringLiteral("error")).toString());
+        });
+        // OpenSquilla 真删通道：桥轮询取件 → 网关 sessions.delete → ack。
+        bridge->setDeletePendingProvider([this](const QString &exe) {
+            const QJsonArray items =
+                sessionDeletes_ != nullptr &&
+                        SessionDeleteQueue::supportsHost(exe)
+                    ? sessionDeletes_->takePending()
+                    : QJsonArray{};
+            return QString::fromUtf8(
+                QJsonDocument(items).toJson(QJsonDocument::Compact));
+        });
+        bridge->setDeleteAckHandler([this](const QJsonObject &payload) {
+            if (sessionDeletes_ == nullptr) {
+                return false;
+            }
+            // 不认识的 delete_id（超时已取消后晚到 / 重复 ack）回 404。
+            return sessionDeletes_->ack(
+                payload.value(QStringLiteral("delete_id")).toString(),
                 payload.value(QStringLiteral("ok")).toBool(),
                 payload.value(QStringLiteral("error")).toString());
         });
@@ -4139,10 +4197,24 @@ QString MainWindow::lanSessionsJson() {
             // 不把「这个会话有卡」误当成「这个宿主能接收手机派发」。
             row.insert(QStringLiteral("can_dispatch"),
                        supported.contains(exe) && !info.archived);
-            // 删除资格只看宿主有没有安全的会话级删除通道（对齐 Magpie：
-            // 任意会话可删，活跃保护交给 60s 活跃窗口，删了进回收站可恢复）。
+            // 删除资格：文件型宿主→回收站；OpenSquilla→官方 RPC 真删（不进回收站、
+            // 不可恢复，刚有写入的行直接在页面置灰；文件型的活跃拦截在服务端，
+            // 按钮保留——Magpie：不可删要说出原因，不把控件默默藏掉）。
+            const bool fileTrash = SessionCleaner::supportsHost(exe);
+            const bool hostDelete = SessionDeleteQueue::supportsHost(exe);
+            bool hotForHost = false;
+            if (hostDelete) {
+                const QDateTime at =
+                    QDateTime::fromString(info.updatedAt, Qt::ISODateWithMs);
+                hotForHost = at.isValid() &&
+                             at.secsTo(QDateTime::currentDateTimeUtc()) < 60;
+            }
             row.insert(QStringLiteral("can_delete"),
-                       SessionCleaner::supportsHost(exe));
+                       (fileTrash || hostDelete) && !hotForHost);
+            if (hostDelete) {
+                row.insert(QStringLiteral("delete_mode"),
+                           QStringLiteral("host"));
+            }
             rows.append(row);
             const QDateTime updated =
                 QDateTime::fromString(info.updatedAt, Qt::ISODateWithMs);
@@ -5133,29 +5205,116 @@ void MainWindow::handleWebAction(const QJsonObject &action) {
             }
             return;
         }
+        // 分流两条删除通道：文件型宿主→回收站（可恢复）；OpenSquilla→桥取件
+        // 走网关官方 sessions.delete（宿主侧真删、不进回收站）。页面字段不可信，
+        // 宿主侧逐条复核在库与「一分钟无写入」护栏——真删无回头路，这条必须实。
+        QJsonArray trashItems;
+        QJsonArray hostItems;
+        QJsonArray rejected;
+        const auto reject = [&rejected](const QJsonObject &item, const QString &why) {
+            QJsonObject row = item;
+            row.insert(QStringLiteral("error"), why);
+            rejected.append(row);
+        };
+        const QDateTime nowUtc = QDateTime::currentDateTimeUtc();
+        QHash<QString, QHash<QString, QString>> hostIndex;
+        for (const QJsonValue &value : items) {
+            const QJsonObject item = value.toObject();
+            const QString exe = item.value(QStringLiteral("exe")).toString();
+            const QString sid = item.value(QStringLiteral("session")).toString();
+            if (SessionCleaner::supportsHost(exe)) {
+                trashItems.append(item);
+                continue;
+            }
+            if (SessionDeleteQueue::supportsHost(exe)) {
+                if (!hostIndex.contains(exe)) {
+                    QHash<QString, QString> idx;
+                    for (const auto &info :
+                         SessionTranscript::listSessions(exe, 1000)) {
+                        idx.insert(info.id, info.updatedAt);
+                    }
+                    hostIndex.insert(exe, idx);
+                }
+                if (!hostIndex.value(exe).contains(sid)) {
+                    reject(item,
+                           QStringLiteral("会话不在该宿主会话库（可能已清理），未动"));
+                    continue;
+                }
+                const QDateTime at = QDateTime::fromString(
+                    hostIndex.value(exe).value(sid), Qt::ISODateWithMs);
+                if (at.isValid() && at.secsTo(nowUtc) < 60) {
+                    reject(item, QStringLiteral(
+                                     "会话一分钟内有写入，可能正在运行，稍后再试"));
+                    continue;
+                }
+                hostItems.append(item);
+                continue;
+            }
+            reject(item, QStringLiteral("该宿主没有安全的会话删除接口"));
+        }
+        const int total = trashItems.size() + hostItems.size();
+        if (total == 0) {
+            if (workWeb_ != nullptr) {
+                workWeb_->pushDeleteResult(
+                    QJsonObject{{QStringLiteral("ok"), false},
+                                {QStringLiteral("deleted"), 0},
+                                {QStringLiteral("failed"), rejected},
+                                {QStringLiteral("error"),
+                                 QStringLiteral("没有可删除的会话")}});
+            }
+            return;
+        }
         QStringList lines;
-        for (int i = 0; i < items.size() && i < 40; ++i) {
-            const QJsonObject item = items.at(i).toObject();
-            lines.append(QStringLiteral("%1 · %2 · %3")
+        const auto appendLine = [&lines](const QJsonObject &item,
+                                         const QString &mode) {
+            if (lines.size() >= 40) {
+                return;
+            }
+            lines.append(QStringLiteral("%1 · %2 · %3 [%4]")
                              .arg(item.value(QStringLiteral("title")).toString(),
                                   item.value(QStringLiteral("exe")).toString(),
-                                  item.value(QStringLiteral("project")).toString()));
+                                  item.value(QStringLiteral("project")).toString(),
+                                  mode));
+        };
+        for (const QJsonValue &value : trashItems) {
+            appendLine(value.toObject(), QStringLiteral("进回收站"));
         }
-        if (items.size() > 40) {
-            lines.append(QStringLiteral("…另有 %1 条").arg(items.size() - 40));
+        for (const QJsonValue &value : hostItems) {
+            appendLine(value.toObject(), QStringLiteral("宿主真删"));
+        }
+        if (total > lines.size()) {
+            lines.append(QStringLiteral("…另有 %1 条").arg(total - lines.size()));
         }
         raise();
         activateWindow();
         QMessageBox box(this);
         box.setIcon(QMessageBox::Warning);
         box.setWindowTitle(QStringLiteral("删除会话"));
-        box.setText(QStringLiteral("把 %1 条会话移入回收站？").arg(items.size()));
-        box.setInformativeText(QStringLiteral(
-            "会话文件整体移入本机回收站（派发页右上「回收站」），随时可恢复；"
-            "只有回收站里点「彻底删除」才真删。一分钟内有写入的活跃会话会被拒绝。"));
+        if (!trashItems.isEmpty() && !hostItems.isEmpty()) {
+            box.setText(QStringLiteral("删除 %1 条会话？").arg(total));
+            box.setInformativeText(QStringLiteral(
+                "%1 条移入本机回收站（随时可恢复）；%2 条走 OpenSquilla 官方接口——"
+                "宿主侧真删，不进回收站、不可恢复。")
+                                       .arg(trashItems.size())
+                                       .arg(hostItems.size()));
+        } else if (!hostItems.isEmpty()) {
+            box.setText(QStringLiteral(
+                "按 OpenSquilla 官方接口删除 %1 条会话？").arg(total));
+            box.setInformativeText(QStringLiteral(
+                "宿主侧真删：不进回收站、不可恢复。一分钟内有写入的会话已拦下。"));
+        } else {
+            box.setText(QStringLiteral("把 %1 条会话移入回收站？").arg(total));
+            box.setInformativeText(QStringLiteral(
+                "会话文件整体移入本机回收站（派发页右上「回收站」），随时可恢复；"
+                "只有回收站里点「彻底删除」才真删。一分钟内有写入的活跃会话会被拒绝。"));
+        }
         box.setDetailedText(lines.join(QLatin1Char('\n')));
-        QPushButton *erase = box.addButton(QStringLiteral("删除并备份"),
-                                           QMessageBox::DestructiveRole);
+        QPushButton *erase = box.addButton(
+            hostItems.isEmpty()
+                ? QStringLiteral("移入回收站")
+                : (trashItems.isEmpty() ? QStringLiteral("按宿主接口删除")
+                                        : QStringLiteral("删除")),
+            QMessageBox::DestructiveRole);
         QPushButton *cancel = box.addButton(QStringLiteral("取消"),
                                             QMessageBox::RejectRole);
         box.setDefaultButton(cancel);
@@ -5166,16 +5325,43 @@ void MainWindow::handleWebAction(const QJsonObject &action) {
                     QJsonObject{{QStringLiteral("ok"), false},
                                 {QStringLiteral("canceled"), true},
                                 {QStringLiteral("deleted"), 0},
+                                {QStringLiteral("failed"), rejected},
                                 {QStringLiteral("error"),
                                  QStringLiteral("已取消")}});
             }
             return;
         }
         QString error;
-        QJsonObject result = SessionCleaner::removeSessions(items, &error);
+        QJsonObject result = trashItems.isEmpty()
+                                 ? QJsonObject{{QStringLiteral("ok"), true},
+                                               {QStringLiteral("deleted"), 0},
+                                               {QStringLiteral("failed"), QJsonArray()}}
+                                 : SessionCleaner::removeSessions(trashItems, &error);
         if (!error.isEmpty() && !result.contains(QStringLiteral("error"))) {
             result.insert(QStringLiteral("error"), error);
         }
+        if (!hostItems.isEmpty() && sessionDeletes_ != nullptr) {
+            QJsonArray q;
+            for (const QJsonValue &value : hostItems) {
+                const QJsonObject item = value.toObject();
+                q.append(QJsonObject{
+                    {QStringLiteral("session"),
+                     item.value(QStringLiteral("session")).toString()},
+                    {QStringLiteral("title"),
+                     item.value(QStringLiteral("title")).toString()}});
+            }
+            const int n = sessionDeletes_->enqueue(q);
+            if (n > 0) {
+                result.insert(QStringLiteral("host_pending"), n);
+            }
+        }
+        QJsonArray failed = result.value(QStringLiteral("failed")).toArray();
+        for (const QJsonValue &value : rejected) {
+            failed.append(value);
+        }
+        result.insert(QStringLiteral("failed"), failed);
+        result.insert(QStringLiteral("ok"),
+                      failed.isEmpty() && !result.contains(QStringLiteral("error")));
         if (workWeb_ != nullptr) {
             workWeb_->pushDeleteResult(result);
             // 目录立刻重推一份，删除成功/部分失败都能反映真实剩余项。

@@ -166,6 +166,14 @@ gateway.on('upgrade', (req, socket) => {
         } else {
           send({ type: 'res', id: msg.id, ok: true, payload: { status: 'accepted', turn_id: 't-' + sentMessages.length, key: msg.params && msg.params.key } });
         }
+      } else if (msg.method === 'sessions.delete') {
+        const k = msg.params && msg.params.key;
+        deleteCalls.push(k);
+        if (String(k || '').includes('del-bad')) {
+          send({ type: 'res', id: msg.id, ok: true, payload: { deleted: [], errors: [{ key: k, code: 'NOT_FOUND' }] } });
+        } else {
+          send({ type: 'res', id: msg.id, ok: true, payload: { deleted: [k], errors: [] } });
+        }
       } else if (msg.method === 'sessions.list') {
         if (myUpgrade === blackholeUpgrade) continue; // 半开：收得到请求，永不回应
         gatewayReady = true;
@@ -208,10 +216,21 @@ function inject(eventName, sessionKey, extra = {}) {
 // ------------------------------------------------------- 假 AgentBridge
 const received = [];
 const acks = [];
+const deleteAcks = [];   // POST /delete/ack 收到的回执
+let pendingDeletes = []; // /delete/pending 一次性吐完（模拟取件一次）
+const deleteCalls = [];  // 假网关收到过的 sessions.delete key
 let jsonGet = { items: [] };   // GET /work-items 的应答（长轮补卡前查账用）
 let pendingItems = [];   // /dispatch/pending 一次性吐完（模拟 take-once）
 let pendingGets = 0;
 const fakeBridge = http.createServer((req, res) => {
+  if (req.method === 'GET' && req.url.startsWith('/delete/pending')) {
+    const items = pendingDeletes;
+    pendingDeletes = [];
+    res.statusCode = 200;
+    res.setHeader('Content-Type', 'application/json');
+    res.end(JSON.stringify(items));
+    return;
+  }
   if (req.method === 'GET' && req.url.startsWith('/dispatch/pending')) {
     pendingGets += 1;
     const items = pendingItems;
@@ -239,6 +258,12 @@ const fakeBridge = http.createServer((req, res) => {
   req.on('end', () => {
     if (req.url === '/dispatch/ack') {
       acks.push(JSON.parse(body));
+      res.statusCode = 204;
+      res.end();
+      return;
+    }
+    if (req.url === '/delete/ack') {
+      deleteAcks.push(JSON.parse(body));
       res.statusCode = 204;
       res.end();
       return;
@@ -736,6 +761,43 @@ await check('dispatch：--no-dispatch 不取件', async () => {
     assert.strictEqual(pendingItems.length, 1, '队列原样留着');
   } finally {
     pendingItems = [];
+    await stopBridge(handle);
+  }
+});
+
+// ------------------------------------------------------------ 真删通道
+await check('真删：取件 → sessions.delete → ack（生效 ok；未生效 ok:false 带原因）', async () => {
+  const handle = spawnBridge(BRIDGE, path.join(TMP, 'spool-osqdel'));
+  try {
+    await waitFor(() => gatewayReady, '网关就绪');
+    pendingDeletes = [
+      { delete_id: 'd1', session: 'agent:main:webchat:del-ok', title: '甲' },
+      { delete_id: 'd2', session: 'agent:main:webchat:del-bad', title: '乙' },
+    ];
+    await waitFor(() => deleteAcks.length >= 2, '两条删除回执');
+    const ok = deleteAcks.find((d) => d.delete_id === 'd1');
+    const bad = deleteAcks.find((d) => d.delete_id === 'd2');
+    assert.strictEqual(ok.ok, true);
+    assert.strictEqual(bad.ok, false);
+    assert.ok(String(bad.error).includes('未生效'), '原因要原样带回：' + bad.error);
+    assert.ok(deleteCalls.includes('agent:main:webchat:del-ok') &&
+      deleteCalls.includes('agent:main:webchat:del-bad'), '两条都真调了网关');
+  } finally { await stopBridge(handle); }
+});
+
+await check('真删：--no-dispatch 不取件、不碰网关', async () => {
+  const callsBefore = deleteCalls.length;
+  const acksBefore = deleteAcks.length;
+  const handle = spawnBridge(BRIDGE, path.join(TMP, 'spool-osqdel2'), ['--no-dispatch']);
+  try {
+    await waitFor(() => gatewayReady, '网关就绪');
+    pendingDeletes = [{ delete_id: 'd3', session: 'agent:main:webchat:del-c' }];
+    await sleep(2000);
+    assert.strictEqual(deleteCalls.length, callsBefore, '不该调网关删除');
+    assert.strictEqual(deleteAcks.length, acksBefore);
+    assert.strictEqual(pendingDeletes.length, 1, '队列原样留着');
+  } finally {
+    pendingDeletes = [];
     await stopBridge(handle);
   }
 });

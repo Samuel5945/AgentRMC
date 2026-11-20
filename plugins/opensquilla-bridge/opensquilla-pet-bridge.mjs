@@ -822,6 +822,73 @@ async function pollDispatches() {
 }
 setInterval(pollDispatches, 1500);
 
+// —— 会话真删通道（2026-11-20，对 Magpie）：OpenSquilla 的会话在共享 SQLite 里，
+// 搬文件会毁库；网关有官方 sessions.delete（实测级联清 sessions/transcript/
+// ingress 三表、删后 resolve 即拒）。native 侧已核过「在库 + 一分钟无写入 +
+// 人确认」才入队；桥取件 → RPC → ack。宿主侧真删、不进回收站，没有回执就
+// 绝不假装删成（60s 取件超时由原生兜底）。--no-dispatch 同关整条插件通道。
+let deleteBusy = false;
+async function pollDeletes() {
+  if (deleteBusy || !gatewayUp || flag("no-dispatch")) return;
+  deleteBusy = true;
+  try {
+    const res = await fetch(
+      `${CFG.bridge}/delete/pending?exe=${encodeURIComponent("OpenSquilla.exe")}`,
+      { signal: AbortSignal.timeout(5000) },
+    );
+    if (res.status !== 200) return; // 老原生端没有这条路由：安静跳过
+    let items;
+    try { items = JSON.parse(await res.text()); } catch { return; }
+    if (!Array.isArray(items) || !items.length) return;
+    for (const item of items) {
+      const deleteId = String((item && item.delete_id) || "");
+      const sessionId = String((item && item.session) || "");
+      let error = "";
+      if (!deleteId || !sessionId) {
+        error = "真删取件缺字段（delete_id/session）";
+      } else {
+        try {
+          const out = await call("sessions.delete", { key: sessionId });
+          const deleted = Array.isArray(out && out.deleted) ? out.deleted : [];
+          if (!deleted.includes(sessionId)) {
+            const errs = out && Array.isArray(out.errors) && out.errors.length
+              ? JSON.stringify(out.errors[0]).slice(0, 120)
+              : "网关 deleted 清单里没有该会话";
+            error = `sessions.delete 未生效：${errs}`;
+          } else {
+            // 删成收摊：活动账、标题/工作区缓存、订阅集合都别再留孤儿。
+            turnActivity.delete(sessionId);
+            sessionTitles.delete(sessionId);
+            sessionProjects.delete(sessionId);
+            subscribed.delete(sessionId);
+          }
+        } catch (e) {
+          error = "sessions.delete 被拒：" + (((e && e.message) || String(e)).slice(0, 140));
+        }
+      }
+      try {
+        await fetch(`${CFG.bridge}/delete/ack`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json; charset=utf-8" },
+          body: JSON.stringify({
+            delete_id: deleteId, ok: error === "", ...(error ? { error } : {}),
+          }),
+          signal: AbortSignal.timeout(5000),
+        });
+      } catch (e) {
+        // ack 丢了原生端 60s 超时会兜底报失败，这里只记一笔。
+        dispatchWarn(`delete ack failed: ${(e && e.message) || e}`);
+      }
+      log(`DELETE sess=${sessionId} ok=${error === ""}${error ? " " + error : ""}`);
+    }
+  } catch (e) {
+    dispatchWarn("delete poll failed: " + ((e && e.message) || e));
+  } finally {
+    deleteBusy = false;
+  }
+}
+setInterval(pollDeletes, 1500);
+
 // —— 内联应答通道（B2/B3，与 DSH 插件同款契约）：会话事件 → 待答账本 →
 // POST /requests 推可答卡片；手机/桌面聊天页的答案 → pollAnswers 取件 →
 // 网关 RPC 应答 → /request-answer/ack 回执。字段映射依据蛋仔实现：

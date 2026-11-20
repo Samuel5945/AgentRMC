@@ -260,8 +260,9 @@ M1。AP 隔离/防火墙排查并入 M1 真机验收（手机页配对失败文�
 - 归档项目行提供单条「删除」；批量入口在页头「批量删除」（区头按钮
   2026-11-20 上移，因批量对象已不限于归档区）。手机端不开放删除。
 - **任意会话可删，不要求归档（对齐 Magpie `Deletable`+`rowDeletable`）**：
-  门槛只剩三道——宿主是文件型（WorkBuddy 系/Qoder 系/DSH；数据库型的
-  ZCode/OpenSquilla 与 Magpie 同口径「只列不删」）、会话真在该宿主会话库、
+  门槛只剩三道——宿主有删除通道（文件型 WorkBuddy 系/Qoder 系/DSH 进回收站；
+  OpenSquilla 走桥的网关官方 sessions.delete 真删，见下；数据库型的
+  ZCode 与 Magpie 同口径「只列不删」）、会话真在该宿主会话库、
   一分钟内有写入的活跃会话拒绝动手（Magpie `ActiveWindow`/`ErrActive`
   同款）；正在用项目的会话删前还有原生二次确认列明细，删错了从回收站
   恢复回来即可。
@@ -277,9 +278,12 @@ M1。AP 隔离/防火墙排查并入 M1 真机验收（手机页配对失败文�
   拒绝移入回收站；会话 id 与回收站 key 都过字符白名单 + 前缀归属校验，拒绝
   路径穿越与软链带出回收目录；同卷 rename、跨卷复制+删原件且失败回滚。
 - 文件型宿主：WorkBuddy 系 / Qoder 系移动 jsonl + 同 id sidecar（subagents /
-  tool-results / state）；DSH 移动会话目录 + projcache。ZCode/OpenSquilla
-  没有稳定的会话级物理删除接口，返回「该宿主没有安全的会话删除接口」，
-  不硬删数据库。失败逐条回页面，成功/部分成功都会刷新目录。
+  tool-results / state）；DSH 移动会话目录 + projcache。**OpenSquilla 走官方
+  RPC 真删通道（2026-11-20）**：native 核完「在库 + 一分钟无写入 + 人确认」
+  入队 → 桥取件（GET /delete/pending）→ 网关 sessions.delete → ack；宿主侧
+  真删、不进回收站（共享 SQLite 不能搬文件；与 Magpie 对数据库型宿主不做
+  半吊子同口径）；桥不在 60s 超时取消。ZCode 仍「只列不删」，等上游接口。
+  失败逐条回页面，成功/部分成功都会刷新目录。
 - 旧版 `session-trash/<时间戳>/` 备份目录不再被扫描或清理（只读遗产，用户可
   自行删除）；新结构只在 `entries/` 下。
 - 测试：transcript_test 回收站段——移动/条目结构/列表/恢复回位/落点被占整体

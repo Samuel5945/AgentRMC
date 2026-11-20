@@ -91,6 +91,16 @@ void AgentBridge::setDispatchAckHandler(
     dispatchAckHandler_ = std::move(handler);
 }
 
+void AgentBridge::setDeletePendingProvider(
+    std::function<QString(const QString &exe)> provider) {
+    deletePendingProvider_ = std::move(provider);
+}
+
+void AgentBridge::setDeleteAckHandler(
+    std::function<bool(const QJsonObject &)> handler) {
+    deleteAckHandler_ = std::move(handler);
+}
+
 void AgentBridge::setRequestsHandler(
     std::function<void(const QJsonObject &)> handler) {
     requestsHandler_ = std::move(handler);
@@ -209,6 +219,27 @@ void AgentBridge::onReadable(QTcpSocket *socket) {
         finish(socket, "200 OK", items.toUtf8(), "application/json");
         return;
     }
+    if (requestLine.startsWith("GET /delete/pending")) {
+        // OpenSquilla 真删取件（桥轮询）；exe 解析同款。
+        QString exe;
+        const int queryAt = requestLine.indexOf('?');
+        if (queryAt >= 0) {
+            const QByteArray query = requestLine.mid(queryAt + 1);
+            const int spaceAt = query.indexOf(' ');
+            const QByteArray pairs =
+                query.left(spaceAt >= 0 ? spaceAt : query.size());
+            for (const QByteArray &pair : pairs.split('&')) {
+                if (pair.startsWith("exe=")) {
+                    exe = QUrl::fromPercentEncoding(pair.mid(4));
+                }
+            }
+        }
+        const QString items = deletePendingProvider_
+                                  ? deletePendingProvider_(exe)
+                                  : QStringLiteral("[]");
+        finish(socket, "200 OK", items.toUtf8(), "application/json");
+        return;
+    }
     const bool isAnswerPending =
         requestLine.startsWith("GET /request-answer/pending");
     if (isAnswerPending) {
@@ -244,13 +275,14 @@ void AgentBridge::onReadable(QTcpSocket *socket) {
     const bool isUpdate = requestLine.startsWith("POST /work-items/update ");
     const bool isCommand = requestLine.startsWith("POST /command ");
     const bool isDispatchAck = requestLine.startsWith("POST /dispatch/ack ");
+    const bool isDeleteAck = requestLine.startsWith("POST /delete/ack ");
     const bool isRequests = requestLine.startsWith("POST /requests ");
     const bool isModels = requestLine.startsWith("POST /models ");
     const bool isAnswerAck = requestLine.startsWith("POST /request-answer/ack ");
     const bool isCursor = requestLine.startsWith("POST /cursor/");
     if (!isNotify && !isSpeak && !isAck && !isUpdate && !isCommand &&
-        !isDispatchAck && !isRequests && !isModels && !isAnswerAck &&
-        !isCursor) {
+        !isDispatchAck && !isDeleteAck && !isRequests && !isModels &&
+        !isAnswerAck && !isCursor) {
         finish(socket, "404 Not Found");
         return;
     }
@@ -285,6 +317,16 @@ void AgentBridge::onReadable(QTcpSocket *socket) {
         const bool handled =
             !dispatchId.isEmpty() && dispatchAckHandler_ &&
             dispatchAckHandler_(obj);
+        finish(socket, handled ? "204 No Content" : "404 Not Found");
+        return;
+    }
+    if (isDeleteAck) {
+        // OpenSquilla 真删回执：ok=网关 sessions.delete 确认删除；false 带原因。
+        // delete_id 不认识（取件超时已取消 / 重复 ack）回 404。
+        const QString deleteId =
+            obj.value(QStringLiteral("delete_id")).toString().trimmed();
+        const bool handled =
+            !deleteId.isEmpty() && deleteAckHandler_ && deleteAckHandler_(obj);
         finish(socket, handled ? "204 No Content" : "404 Not Found");
         return;
     }

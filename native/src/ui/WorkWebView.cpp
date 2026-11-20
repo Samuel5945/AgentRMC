@@ -1464,7 +1464,7 @@ QString WorkWebView::htmlFor(const QString &stateJson) const {
     <span class="total">派发会话</span>
     <span class="dsp-summary" id="dspSummary"></span>
     <span class="spacer"></span>
-    <button class="ghost" id="dspBatchToggle" title="批量选择会话删除：移入回收站，可随时恢复" hidden>批量删除</button>
+    <button class="ghost" id="dspBatchToggle" title="批量选择会话删除：文件型宿主进回收站可恢复；OpenSquilla 按官方接口真删（不可恢复）" hidden>批量删除</button>
     <button class="ghost" id="dspTrash" title="回收站：删除先进这里，可恢复；只有这里的「彻底删除」才真删" hidden>回收站</button>
   <button class="ghost" id="dspRefresh" title="重新读取各 Agent 的最近会话">刷新会话</button>
   </div>
@@ -2341,7 +2341,9 @@ function dspSession(agent,row,archived){
   if(!DSP_CLEAN&&row.can_delete!==false){
     const del=document.createElement('button');del.className='dspdel';
     del.textContent='删除';del.disabled=DSP_DELETING;
-    del.title='把这条会话移入回收站，可随时恢复；一分钟内有写入的会话会被拒';
+    del.title=row.delete_mode==='host'
+      ?'按 OpenSquilla 官方接口删除：宿主侧真删、不进回收站、不可恢复'
+      :'把这条会话移入回收站，可随时恢复；一分钟内有写入的会话会被拒';
     del.onclick=e=>{e.stopPropagation();deleteRows([{agent,row}]);};
     el.append(del);
   }else if(!DSP_CLEAN){
@@ -2473,18 +2475,24 @@ function deleteRows(pairs){
   updateDspBatch();
   const items=pairs.map(({agent,row})=>({exe:agent.exe,session:row.id,
     project:row.project||'',title:row.title||''}));
-  showDspNotice('等待确认：将把 '+items.length+' 条会话移入回收站…');
+  showDspNotice('等待确认：将删除 '+items.length+' 条会话…');
   postObj({cmd:'sessionDelete',items});
 }
 window.__setDeleteResult=function(r){
   DSP_DELETING=false;updateDspBatch();
   if(!r)return;
   if(r.canceled){showDspNotice('已取消，没有删除任何会话。');return;}
+  if(r.host){ // OpenSquilla 真删终态（单条）：只报结果，不动批量态。
+    if(r.ok)showDspNotice('OpenSquilla 已删除该会话（宿主真删，不进回收站）。');
+    else showDspNotice('OpenSquilla 删除失败：'+(r.error||'未知原因'),true);
+    return;
+  }
   const failed=(r.failed||[]).length;
-  if((r.deleted||0)>0){
+  if((r.deleted||0)>0||r.host_pending){
     DSP_CLEAN=false;DSP_DEL_SEL.clear();DSP_SIG='';
     showDspNotice('已移入回收站 '+(r.deleted||0)+' 条会话'
-      +(failed?'，'+failed+' 条失败':'')+'；可在右上「回收站」恢复',failed>0);
+      +(r.host_pending?('，另有 '+r.host_pending+' 条走 OpenSquilla 官方接口删除（真删，等回执）'):'')
+      +(failed?'，'+failed+' 条失败':''),failed>0);
     render();
     requestSessions(true);
   }else{

@@ -3,7 +3,9 @@
 #include <QCoreApplication>
 #include <QDateTime>
 #include <QDir>
+#include <QEventLoop>
 #include <QFile>
+#include <QTimer>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -20,6 +22,7 @@
 #include <cstdio>
 
 #include "core/SessionCleaner.h"
+#include "core/SessionDeleteQueue.h"
 #include "core/SessionTranscript.h"
 
 namespace {
@@ -1298,6 +1301,55 @@ int main(int argc, char **argv) {
         check(!pa.value(QStringLiteral("ok")).toBool() &&
                   paErr.contains(QStringLiteral("空")),
               "purgeAll on empty reports, never touches hosts");
+    }
+
+    // ---- OpenSquilla 真删队列：入队/一次取件/ack 终态/在途去重/取件超时 ----
+    {
+        SessionDeleteQueue q(nullptr, 250);  // 取件超时缩到 250ms，别拖测试
+        QStringList finishedIds;
+        QStringList finishedErrs;
+        int okCount = 0;
+        QObject::connect(&q, &SessionDeleteQueue::finished,
+                         [&](const QString &id, const QString &, const QString &,
+                             bool ok, const QString &error) {
+                             finishedIds.append(id);
+                             finishedErrs.append(error);
+                             if (ok) ++okCount;
+                         });
+        const QJsonArray itemA{QJsonObject{
+            {QStringLiteral("session"), QStringLiteral("agent:main:webchat:a")},
+            {QStringLiteral("title"), QStringLiteral("甲")}}};
+        const QJsonArray items{itemA.at(0),
+                               QJsonObject{{QStringLiteral("session"),
+                                           QStringLiteral("agent:main:webchat:b")},
+                                           {QStringLiteral("title"), QStringLiteral("乙")}}};
+        QStringList ids;
+        const int n = q.enqueue(items, &ids);
+        const QJsonArray first = q.takePending();
+        const QJsonArray again = q.takePending();
+        check(n == 2 && first.size() == 2 && again.isEmpty() &&
+                  first.at(0).toObject().value(QStringLiteral("delete_id")).toString() ==
+                      ids.at(0),
+              "delete queue: enqueue + take-once");
+        const int dup = q.enqueue(itemA, nullptr);
+        check(dup == 0, "delete queue: same session in-flight not re-queued");
+        const bool acked = q.ack(ids.at(0), true, QString());
+        check(acked && finishedIds.size() == 1 && okCount == 1,
+              "delete queue: ack ok -> finished");
+        check(!q.ack(QStringLiteral("nope"), true, QString()),
+              "delete queue: unknown id refused");
+        const int re = q.enqueue(itemA, nullptr);
+        check(re == 1, "delete queue: session re-enqueues after its ack");
+        // 未 ack 的两条（b + 重新入队的 a）靠取件超时兜底报失败。
+        QEventLoop loop;
+        QTimer::singleShot(600, &loop, &QEventLoop::quit);
+        loop.exec();
+        int timeouts = 0;
+        for (const QString &why : finishedErrs) {
+            if (why.contains(QStringLiteral("取件"))) ++timeouts;
+        }
+        check(finishedIds.size() == 3 && okCount == 1 && timeouts == 2,
+              "delete queue: take timeout finishes with reason");
     }
 
     std::printf(ok ? "ALL PASS transcript (%d checks)\n"

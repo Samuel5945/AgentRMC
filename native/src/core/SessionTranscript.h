@@ -24,6 +24,10 @@ public:
         bool supported = false;
         QString error;       // 不支持/读失败的原因（给用户看）
         QString title;       // 会话标题（拿得到就给）
+        // 会话的工作目录（jsonl 里的 cwd）。**无工作区的任务**（待办 item.project
+        // 为空）靠它才能找到产物目录——否则「产物与文件」永远是空的，
+        // agent 在会话里生成的图/文档都下不了（2026-11-20 用户报绯澜 OS8 主题）。
+        QString project;
         // 会话当前在用的模型（显示名，如 "DeepSeek-V4.1-Flash" / "GLM-5.3"）。
         // 宿主记在最后一条 assistant 消息的元数据里：jsonl 系看 providerData，
         // ZCode 看 message.data.model。读不到就空——页面显示「跟随会话」。
@@ -31,6 +35,12 @@ public:
         QJsonArray messages; // 按时间正序的一页 [{id, role, text, at}]
         int total = 0;       // 可用总条数（SQLite 宿主封顶 500）
         bool hasMore = false; // 还有更旧的页
+        // 当前正在跑的那一轮（OpenSquilla agent_tasks.finished_at 为空）。
+        // 这两个字段**每次 read 都重查**、不吃全量缓存：长轮要十几分钟才有下一条
+        // transcript，缓存住就永远停在打开页面那一刻的秒数（用户 2026-11-20 报
+        // 「长时间不显示进度内容」）。runningSinceMs＝0 表示没有在跑的轮。
+        qint64 runningSinceMs = 0;
+        QString runningText;  // 「本轮已 13 分 41 秒」
     };
 
     // 手机「派发」页选的会话目录项：只读元数据，不含正文。

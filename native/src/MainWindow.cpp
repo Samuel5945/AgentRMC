@@ -681,6 +681,71 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
                                 .arg(dispatchId.left(8), reason), 0);
                 refreshWorkItems();
             });
+    connect(dispatch_, &SessionDispatch::controlDone, this,
+            [this](const QString &controlId, const QString &exe,
+                   const QString &sid, const QString &action) {
+                // 控制件收场：停止/插话成功。只动提示与草稿，不动工单状态——
+                // 工单的 working/review 由宿主自己的 turn 事件重算，这里硬改会
+                // 和随后的 stop 事件打架。
+                dispatchSessionById_.remove(controlId);
+                controlTextById_.remove(controlId);
+                if (action == QStringLiteral("stop")) {
+                    dispatchNotice_ = QStringLiteral("已停止这一轮");
+                } else {
+                    dispatchNotice_ = QStringLiteral("已插话：并进当前这一轮，不再另起一轮");
+                    dispatchDraftId_.clear();
+                    dispatchDraftText_.clear();
+                }
+                dispatchNoticeKind_ = QStringLiteral("good");
+                dispatchNoticeId_ = itemIdForSession(sid);
+                dispatchNoticeExe_ = exe;
+                appendEvent(QStringLiteral("status"), QString(), QString(),
+                            QStringLiteral("会话控制：%1 会话 %2")
+                                .arg(action == QStringLiteral("stop")
+                                         ? QStringLiteral("停止")
+                                         : QStringLiteral("插话"),
+                                     sid.left(8)),
+                            0);
+                refreshWorkItems();
+                if (workWeb_ != nullptr) {
+                    // dchat 的发送键由 __setDispatchResult 复位（control 标记让它
+                    // 区分「停止/插话」与普通派发的收场文案）。
+                    workWeb_->pushSessionResult(
+                        QJsonObject{{QStringLiteral("ok"), true},
+                                    {QStringLiteral("control"), action},
+                                    {QStringLiteral("session"), sid}});
+                    workWeb_->refresh();
+                }
+            });
+    connect(dispatch_, &SessionDispatch::controlFailed, this,
+            [this](const QString &controlId, const QString &exe,
+                   const QString &sid, const QString &action,
+                   const QString &reason) {
+                Q_UNUSED(exe);
+                dispatchSessionById_.remove(controlId);
+                const QString steerText = controlTextById_.take(controlId);
+                dispatchNotice_ = reason;
+                dispatchNoticeKind_ = QStringLiteral("bad");
+                dispatchNoticeId_ = itemIdForSession(sid);
+                // 插话没落地：正文回填成草稿，人不用重打一遍（停止没有正文）。
+                if (action == QStringLiteral("steer")) {
+                    dispatchDraftId_ = sid;
+                    dispatchDraftText_ = steerText;
+                }
+                appendEvent(QStringLiteral("error"), QString(), QString(),
+                            QStringLiteral("会话控制未生效（会话 %1）：%2")
+                                .arg(sid.left(8), reason),
+                            0);
+                refreshWorkItems();
+                if (workWeb_ != nullptr) {
+                    workWeb_->pushSessionResult(
+                        QJsonObject{{QStringLiteral("ok"), false},
+                                    {QStringLiteral("control"), action},
+                                    {QStringLiteral("session"), sid},
+                                    {QStringLiteral("error"), reason}});
+                    workWeb_->refresh();
+                }
+            });
     connect(dispatch_, &SessionDispatch::zcodeTurnFinished, this,
             [this](const QString &dispatchId, const QString &exe,
                    const QString &sid, const QString &proj,
@@ -1295,6 +1360,59 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
                 payload.value(QStringLiteral("dispatch_id")).toString(),
                 payload.value(QStringLiteral("ok")).toBool(),
                 payload.value(QStringLiteral("error")).toString());
+        });
+        // 停止生成 / 插话通道（2026-11-20）：插件轮询取件 → agent.cancel()/
+        // steer() → ack。与派发分开排：派发是「新的一轮」，这两件是「动这一轮」。
+        bridge->setControlPendingProvider([this](const QString &exe) {
+            const QJsonArray items =
+                dispatch_ != nullptr ? dispatch_->takeControls(exe) : QJsonArray{};
+            return QString::fromUtf8(
+                QJsonDocument(items).toJson(QJsonDocument::Compact));
+        });
+        bridge->setControlAckHandler([this](const QJsonObject &payload) {
+            if (dispatch_ == nullptr) {
+                return false;
+            }
+            // 不认识的 control_id（超时已取消后晚到 / 重复 ack）回 404。
+            return dispatch_->controlAck(
+                payload.value(QStringLiteral("control_id")).toString(),
+                payload.value(QStringLiteral("ok")).toBool(),
+                payload.value(QStringLiteral("error")).toString());
+        });
+        // 活会话/运行态上报：页面据此把没打开的会话标出来、把发送键切成停止。
+        // 插件每 2s 心跳一次，无变化时不催刷新（别让页面每 2s 重绘一遍）。
+        bridge->setLiveSessionsHandler([this](const QJsonObject &payload) {
+            const QString exe =
+                payload.value(QStringLiteral("exe")).toString().trimmed();
+            if (exe.isEmpty()) {
+                return;
+            }
+            LiveAgents live;
+            live.exe = exe;
+            for (const QJsonValue &value :
+                 payload.value(QStringLiteral("open")).toArray()) {
+                const QString id = value.toString();
+                if (!id.isEmpty()) {
+                    live.open.insert(id);
+                }
+            }
+            for (const QJsonValue &value :
+                 payload.value(QStringLiteral("running")).toArray()) {
+                const QString id = value.toString();
+                if (!id.isEmpty()) {
+                    live.running.insert(id);
+                }
+            }
+            live.at = QDateTime::currentDateTimeUtc();
+            const QString key = exe.toLower();
+            const auto prev = liveAgents_.constFind(key);
+            const bool changed = prev == liveAgents_.constEnd() ||
+                                 prev->open != live.open ||
+                                 prev->running != live.running;
+            liveAgents_.insert(key, live);
+            if (changed && workWeb_ != nullptr) {
+                workWeb_->refresh();
+            }
         });
         // OpenSquilla 真删通道：桥轮询取件 → 网关 sessions.delete → ack。
         bridge->setDeletePendingProvider([this](const QString &exe) {
@@ -3601,7 +3719,65 @@ QJsonArray MainWindow::osqModelsFresh() const {
     return osqModels_;
 }
 
+// 活会话账的有效期：插件每 2s 报一次（变化时立刻报），15s 没动静＝宿主关了或
+// 插件没加载。过期账一律不用（宁可退回旧行为，也不拿过期的「没打开」拦住人）。
+static constexpr int kLiveAgentsTtlSec = 15;
+
+QString MainWindow::liveGuard(const QString &agentExe,
+                              const QString &sessionId) const {
+    const auto it = liveAgents_.constFind(agentExe.toLower());
+    if (it == liveAgents_.constEnd() || !it->at.isValid()) {
+        return QString();
+    }
+    if (it->at.secsTo(QDateTime::currentDateTimeUtc()) > kLiveAgentsTtlSec) {
+        return QString();
+    }
+    if (it->open.contains(sessionId)) {
+        return QString();
+    }
+    return QStringLiteral(
+               "这条会话没在 %1 里打开——先在宿主窗口里点开它再发"
+               "（没打开的会话收不到注入）")
+        .arg(AgentWindow::displayName(agentExe));
+}
+
+bool MainWindow::liveRunning(const QString &sessionId) const {
+    const QDateTime nowUtc = QDateTime::currentDateTimeUtc();
+    for (auto it = liveAgents_.constBegin(); it != liveAgents_.constEnd(); ++it) {
+        if (!it->at.isValid() ||
+            it->at.secsTo(nowUtc) > kLiveAgentsTtlSec) {
+            continue;
+        }
+        if (it->running.contains(sessionId)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 QJsonObject MainWindow::dispatchStateJson() const {
+    // 活会话/运行中清单（只放新鲜的账）：页面拿它标「没打开」、切停止/插话。
+    // 按 exe 分组：DSH 的 session-<uuid> 与其它宿主的会话 id 不互通，混在一个
+    // 数组里会让 WorkBuddy 的会话被误判成「DSH 里没打开」。
+    QJsonObject live;
+    const QDateTime nowUtc = QDateTime::currentDateTimeUtc();
+    for (auto it = liveAgents_.constBegin(); it != liveAgents_.constEnd(); ++it) {
+        if (!it->at.isValid() ||
+            it->at.secsTo(nowUtc) > kLiveAgentsTtlSec) {
+            continue;
+        }
+        QJsonArray openIds;
+        QJsonArray runningIds;
+        for (const QString &id : it->open) {
+            openIds.append(id);
+        }
+        for (const QString &id : it->running) {
+            runningIds.append(id);
+        }
+        live.insert(it->exe,
+                    QJsonObject{{QStringLiteral("open"), openIds},
+                                {QStringLiteral("running"), runningIds}});
+    }
     return QJsonObject{{QStringLiteral("notice"), dispatchNotice_},
                        {QStringLiteral("noticeId"), dispatchNoticeId_},
                        {QStringLiteral("noticeExe"), dispatchNoticeExe_},
@@ -3610,6 +3786,10 @@ QJsonObject MainWindow::dispatchStateJson() const {
                        {QStringLiteral("draftId"), dispatchDraftId_},
                        {QStringLiteral("draftText"), dispatchDraftText_},
                        {QStringLiteral("supported"), supportedDispatchExes()},
+                       // 活会话账：open = 宿主里打开的会话，running = 正在跑的。
+                       // 两个数组都是会话 id（DSH 的 session-<uuid> / OpenSquilla
+                       // 的 agent:…），页面按 id 反查，不关心归属。
+                       {QStringLiteral("live"), live},
                        // 个人供应商模型目录：ZCode 会话派发时选 override 模型
                        // 用（账号套餐模型会话必须选，个人供应商可选切）。空目录
                        // 时页面把选择入口整个藏掉。思考强度一律「跟随会话」，
@@ -4087,6 +4267,78 @@ void MainWindow::dropAnswerPendingForSession(const QString &sessionId) {
     }
 }
 
+namespace {
+// 卡片上的活动回声是「宿主名：文案 · 已 N 分」：聊天页实时行不要宿主名前缀，
+// 时长也由本轮计时重算——桥那边的「已 N 分」是它自己的心跳，和「本轮已」
+// 并排刷两个数字只会打架。
+QString liveCardText(const WorkItem &item) {
+    QString text = item.message.trimmed();
+    const QString prefix = AgentWindow::displayName(item.agentExe) + QStringLiteral("：");
+    if (text.startsWith(prefix)) {
+        text = text.mid(prefix.size()).trimmed();
+    }
+    const int sep = text.indexOf(QStringLiteral(" · 已 "));
+    if (sep > 0) {
+        text = text.left(sep).trimmed();
+    }
+    return text;
+}
+}  // namespace
+
+// 聊天页底部实时行。空对象＝不显示。
+QJsonObject MainWindow::liveLine(const QString &sessionId, qint64 runningSinceMs,
+                                 const QString &runningText,
+                                 const QString &lastMessageAt,
+                                 bool firstPage) const {
+    if (!firstPage || workItems_ == nullptr) {
+        return QJsonObject();
+    }
+    // 找同会话最近一张还在跑的卡（进行中）。用户 2026-11-20 报「长时间不显示
+    // 进度内容」：OpenSquilla 一轮 40 分钟都不落 transcript，页面只能靠这条。
+    const WorkItem *working = nullptr;
+    for (const WorkItem &it : workItems_->items()) {
+        if (it.done || it.stage != QStringLiteral("working") ||
+            it.sessionId != sessionId) {
+            continue;
+        }
+        if (working == nullptr || it.updatedAt > working->updatedAt) {
+            working = &it;
+        }
+    }
+    const QDateTime now = QDateTime::currentDateTime();
+    QDateTime lastAt = QDateTime::fromString(lastMessageAt, Qt::ISODateWithMs);
+    QString text;
+    QDateTime at;
+    if (working != nullptr) {
+        const bool fresh = working->updatedAt.isValid() &&
+                           working->updatedAt.toLocalTime().secsTo(now) <= 15 * 60;
+        // 播完最后一条回复后卡片往往还挂着「进行中」：transcript 已经比卡片新，
+        // 这时实时行该收掉，别让一句「思考中」压在完成的回答下面。
+        const bool superseded =
+            lastAt.isValid() && working->updatedAt.isValid() &&
+            lastAt.toUTC() > working->updatedAt.toUTC();
+        if (fresh && !superseded) {
+            text = liveCardText(*working);
+            at = working->updatedAt;
+        }
+    }
+    if (runningSinceMs > 0 && !runningText.isEmpty()) {
+        text = text.isEmpty() ? QStringLiteral("进行中 · ") + runningText
+                              : text + QStringLiteral(" · ") + runningText;
+        if (!at.isValid()) {
+            at = QDateTime::fromMSecsSinceEpoch(runningSinceMs);
+        }
+    }
+    if (text.isEmpty()) {
+        return QJsonObject();
+    }
+    return QJsonObject{
+        {QStringLiteral("text"), text},
+        {QStringLiteral("at"),
+         at.toUTC().toString(Qt::ISODateWithMs)},
+    };
+}
+
 QJsonObject MainWindow::chatStateFor(const QString &id, int offset, int limit) {
     if (workItems_ == nullptr || id.isEmpty()) {
         return QJsonObject();
@@ -4103,6 +4355,10 @@ QJsonObject MainWindow::chatStateFor(const QString &id, int offset, int limit) {
     }
     const SessionTranscript::Result r =
         SessionTranscript::read(item->agentExe, item->sessionId, limit, offset);
+    const QString lastAt =
+        r.messages.isEmpty()
+            ? QString()
+            : r.messages.last().toObject().value(QStringLiteral("at")).toString();
     return QJsonObject{
         {QStringLiteral("id"), item->id},
         {QStringLiteral("title"), item->title},
@@ -4115,7 +4371,10 @@ QJsonObject MainWindow::chatStateFor(const QString &id, int offset, int limit) {
         {QStringLiteral("stage"), item->stage},
         // 手机页顶栏副标题用：待办标题往往只是宿主名（WorkBuddy），
         // 补个项目工作目录才知道这条会话是哪个仓库的。
-        {QStringLiteral("project"), item->project},
+        // 无工作区的任务（item.project 为空）用会话 cwd 兜底：产物面板和
+        // scope=project 下载都靠它定位目录。
+        {QStringLiteral("project"),
+         item->project.isEmpty() ? r.project : item->project},
         {QStringLiteral("supported"), r.supported},
         {QStringLiteral("error"), r.error},
         {QStringLiteral("sessionTitle"), r.title},
@@ -4125,6 +4384,10 @@ QJsonObject MainWindow::chatStateFor(const QString &id, int offset, int limit) {
         {QStringLiteral("total"), r.total},
         {QStringLiteral("hasMore"), r.hasMore},
         {QStringLiteral("offset"), offset},
+        // 底部实时行：跑长轮时让页面有「正在干什么」可看（见 liveLine）。
+        {QStringLiteral("live"),
+         liveLine(item->sessionId, r.runningSinceMs, r.runningText, lastAt,
+                  offset == 0)},
         // B1：该会话当前待答请求（DSH 插件推送），聊天页渲染；B2 带可答性。
         {QStringLiteral("requests"), requestsWithAnswerable(item->sessionId)},
     };
@@ -4270,6 +4533,8 @@ QString MainWindow::lanSessionTranscript(const QString &agentExe,
     const QJsonObject chat{
         {QStringLiteral("agentExe"), agentExe},
         {QStringLiteral("agentName"), AgentWindow::displayName(agentExe)},
+        // 会话 cwd：无工作区任务的下拉与产物定位都靠它。
+        {QStringLiteral("project"), r.project},
         {QStringLiteral("sessionId"), sessionId},
         {QStringLiteral("title"), r.title},
         {QStringLiteral("sessionTitle"), r.title},
@@ -4281,6 +4546,15 @@ QString MainWindow::lanSessionTranscript(const QString &agentExe,
         {QStringLiteral("total"), r.total},
         {QStringLiteral("hasMore"), r.hasMore},
         {QStringLiteral("offset"), offset},
+        // 与待办会话页同一条实时行（手机在派发页直接进会话也要有）。
+        {QStringLiteral("live"),
+         liveLine(sessionId, r.runningSinceMs, r.runningText,
+                  r.messages.isEmpty()
+                      ? QString()
+                      : r.messages.last().toObject()
+                            .value(QStringLiteral("at"))
+                            .toString(),
+                  offset == 0)},
         {QStringLiteral("requests"), reqs},
     };
     return QString::fromUtf8(QJsonDocument(chat).toJson(QJsonDocument::Compact));
@@ -4301,6 +4575,21 @@ QString MainWindow::dispatchToSession(const QString &agentExe,
     const QJsonArray supported = supportedDispatchExes();
     if (!supported.contains(QJsonValue(agentExe))) {
         return QStringLiteral("这个 Agent 暂不支持手机派发");
+    }
+    // 活会话门：插件报上来的「宿主里打开的会话」里没有它，就提前拦下并说清该
+    // 怎么办——让插件守卫去拒只会回一句「不在活表里」，人看不懂为什么。
+    // 账过期（宿主关了/插件没上报）时 liveGuard 返回空，保持旧行为。
+    if (const QString liveWhy = liveGuard(agentExe, sessionId);
+        !liveWhy.isEmpty()) {
+        dispatchNotice_ = liveWhy;
+        dispatchNoticeKind_ = QStringLiteral("bad");
+        dispatchNoticeId_ = itemIdForSession(sessionId);
+        dispatchNoticeExe_ = agentExe;
+        refreshWorkItems();
+        if (workWeb_ != nullptr) {
+            workWeb_->refresh();
+        }
+        return liveWhy;
     }
     // 宿主没在跑时先把它拉起来——**这才是「网关没连上」的真正原因**：
     // OpenSquilla 的网关是它自己的子服务，进程不在就没有网关，外部桥只会回
@@ -5193,6 +5482,45 @@ void MainWindow::handleWebAction(const QJsonObject &action) {
         }
         return;
     }
+    if (cmd == QStringLiteral("control")) {
+        // 聊天页的「停止生成 / 插话」（与 DSH 自己的停止/插话同语义）：
+        //   action=stop  → agent.cancel({kind:'user'})，打断当前这一轮
+        //   action=steer → agent.steer()，把正文并进当前这一轮（不另起一轮）
+        const QString ctlAction =
+            action.value(QStringLiteral("action")).toString().trimmed();
+        const QString exe = action.value(QStringLiteral("exe")).toString();
+        const QString sid = action.value(QStringLiteral("session")).toString();
+        const QString text =
+            action.value(QStringLiteral("text")).toString().trimmed();
+        QString why;
+        QString controlId;
+        if (dispatch_ == nullptr ||
+            !dispatch_->control(exe, sid, ctlAction, text, &why, &controlId)) {
+            dispatchNotice_ =
+                why.isEmpty() ? QStringLiteral("控制通道没就绪") : why;
+            dispatchNoticeKind_ = QStringLiteral("bad");
+            dispatchNoticeId_ = itemIdForSession(sid);
+            appendEvent(QStringLiteral("error"), QString(), QString(),
+                        QStringLiteral("会话控制未发：%1").arg(dispatchNotice_), 0);
+            refreshWorkItems();
+            if (workWeb_ != nullptr) {
+                workWeb_->refresh();
+            }
+            return;
+        }
+        dispatchSessionById_.insert(controlId, sid);
+        controlTextById_.insert(controlId, text);
+        dispatchNotice_ = ctlAction == QStringLiteral("stop")
+                              ? QStringLiteral("正在停止这一轮…")
+                              : QStringLiteral("正在插话…");
+        dispatchNoticeKind_.clear();
+        dispatchNoticeId_ = itemIdForSession(sid);
+        refreshWorkItems();
+        if (workWeb_ != nullptr) {
+            workWeb_->refresh();
+        }
+        return;
+    }
     if (cmd == QStringLiteral("sessionDelete")) {
         const QJsonArray items = action.value(QStringLiteral("items")).toArray();
         if (items.isEmpty()) {
@@ -5719,6 +6047,10 @@ void MainWindow::handleWebAction(const QJsonObject &action) {
             QString dispatchId;
             if (item == nullptr || text.isEmpty()) {
                 reason = QStringLiteral("选中待办或派发文案为空");
+            } else if (!liveGuard(item->agentExe, item->sessionId).isEmpty()) {
+                // 活会话门：这条会话没在宿主里打开，插件守卫必拒。提前说清楚
+                // 该怎么办（页面草稿照旧保留，人点开会话后能直接重发）。
+                reason = liveGuard(item->agentExe, item->sessionId);
             } else if (dispatch_->dispatch(item->agentExe, item->sessionId,
                                            item->project, text, &reason,
                                            &dispatchId,

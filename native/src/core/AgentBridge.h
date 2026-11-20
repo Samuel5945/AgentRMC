@@ -38,6 +38,13 @@ class QTcpSocket;
 //   GET  /dispatch/pending?exe=<映像名> → DSH 定向派发取件：待注入清单 JSON 数组
 //   POST /dispatch/ack {"dispatch_id":..,"ok":true|false,"error":".."}
 //                 → 插件注入回执：ok=投递成立（durable inbox），false=守卫拒绝
+//   GET  /control/pending?exe=<映像名> → 停止生成 / 插话取件：待执行控制件
+//                   [{control_id, session_id, action:"stop"|"steer", text?}]
+//   POST /control/ack {"control_id":..,"ok":true|false,"error":".."}
+//                 → 控制回执：ok=宿主已受理（cancel/steer 已调）；false 带原因
+//   POST /live/sessions {"exe":..,"open":[会话id],"running":[会话id]}
+//                 → 插件上报活会话/正在跑的会话：派发页据此标「没打开」，
+//                   聊天页据此把发送键切成「停止」、有正文时改走插话
 //   GET  /delete/pending?exe=<映像名> → OpenSquilla 真删取件：待执行清单
 //                 （桥拿 sessions.delete 走网关官方 RPC，宿主侧真删不进回收站）
 //   POST /delete/ack {"delete_id":..,"ok":true|false,"error":".."}
@@ -100,6 +107,17 @@ public:
     // 返回 false = delete_id 不认识（超时兜底后晚到），回 404。
     void setDeleteAckHandler(
         std::function<bool(const QJsonObject &)> handler);
+    // GET /control/pending?exe 的应答来源：停止生成/插话队列取件（一次取走，
+    // 未 ack 前不重发），返回 JSON 数组文本。
+    void setControlPendingProvider(
+        std::function<QString(const QString &exe)> provider);
+    // POST /control/ack 的处理器：{"control_id":..,"ok":..,"error":..}。
+    // 返回 false = control_id 不认识（超时后晚到），回 404。
+    void setControlAckHandler(
+        std::function<bool(const QJsonObject &)> handler);
+    // POST /live/sessions 的处理器：插件上报活会话/运行中的会话（派发页与
+    // 聊天页据此判断「能不能派」「要不要把发送键切成停止」）。
+    void setLiveSessionsHandler(std::function<void(const QJsonObject &)> handler);
     // POST /requests 的处理器：DSH 插件推送某会话当前待答请求（B1 只读展示）
     // {"exe","session_id","project","requests":[{kind,id,toolName?,reason?,questions?}]}。
     void setRequestsHandler(std::function<void(const QJsonObject &)> handler);
@@ -166,6 +184,9 @@ private:
     std::function<bool(const QJsonObject &)> dispatchAckHandler_;
     std::function<QString(const QString &exe)> deletePendingProvider_;
     std::function<bool(const QJsonObject &)> deleteAckHandler_;
+    std::function<QString(const QString &exe)> controlPendingProvider_;
+    std::function<bool(const QJsonObject &)> controlAckHandler_;
+    std::function<void(const QJsonObject &)> liveSessionsHandler_;
     std::function<void(const QJsonObject &)> requestsHandler_;
     std::function<void(const QJsonObject &)> modelsHandler_;
     std::function<QString(const QString &exe, const QString &session)>

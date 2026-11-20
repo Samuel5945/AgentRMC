@@ -921,6 +921,99 @@ process.stdin.on('end', () => process.exit(0));
         }
     }
 
+    // —— 会话控制通道（停止 / 插话，2026-11-20）——
+    // 排的是「动这一轮」的活：stop → agent.cancel，steer → agent.steer。这里只
+    // 验原生侧队列语义（取件一次、同会话不重复排、ack 收场、失败带原因），
+    // 插件侧执行在 plugin.test.js 里验。
+    {
+        SessionDispatch ctl;
+        int doneCount = 0;
+        int failedCount = 0;
+        QString lastAction;
+        QString lastFailReason;
+        QObject::connect(
+            &ctl, &SessionDispatch::controlDone,
+            [&](const QString &, const QString &, const QString &,
+                const QString &action) {
+                ++doneCount;
+                lastAction = action;
+            });
+        QObject::connect(
+            &ctl, &SessionDispatch::controlFailed,
+            [&](const QString &, const QString &, const QString &,
+                const QString &, const QString &reasonText) {
+                ++failedCount;
+                lastFailReason = reasonText;
+            });
+        const QString dshExe = QStringLiteral("DeepSeek Harness.exe");
+        const QString ctlSid =
+            QStringLiteral("session-12345678-90ab-4cde-8f01-234567890abc");
+        QString reason;
+        QString ctlId;
+        check("control: 非插件宿主拒绝",
+              !ctl.control(QStringLiteral("WorkBuddy.exe"), ctlSid,
+                           QStringLiteral("stop"), QString(), &reason, &ctlId));
+        check("control: 不认识的动作拒绝",
+              !ctl.control(dshExe, ctlSid, QStringLiteral("explode"), QString(),
+                           &reason, &ctlId));
+        check("control: steer 空正文拒绝",
+              !ctl.control(dshExe, ctlSid, QStringLiteral("steer"),
+                           QStringLiteral("   "), &reason, &ctlId));
+        check("control: stop 入队并给 id",
+              ctl.control(dshExe, ctlSid, QStringLiteral("stop"), QString(),
+                          &reason, &ctlId) &&
+                  !ctlId.isEmpty());
+        {
+            QString again;
+            QString againId;
+            check("control: 同会话连点不重复排队",
+                  !ctl.control(dshExe, ctlSid, QStringLiteral("stop"),
+                               QString(), &again, &againId));
+        }
+        {
+            const QJsonArray taken = ctl.takeControls(dshExe);
+            const QJsonObject item = taken.isEmpty() ? QJsonObject{}
+                                                     : taken.at(0).toObject();
+            check("control: 取件带 action / session_id",
+                  taken.size() == 1 &&
+                      item.value(QStringLiteral("action")).toString() ==
+                          QStringLiteral("stop") &&
+                      item.value(QStringLiteral("session_id")).toString() ==
+                          ctlSid);
+            check("control: 取件一次，不重复下发",
+                  ctl.takeControls(dshExe).isEmpty());
+            check("control: 别的 exe 取不到别家的件",
+                  ctl.takeControls(QStringLiteral("OpenSquilla.exe")).isEmpty());
+        }
+        check("control: 不认识的 id ack 回 false（要回 404）",
+              !ctl.controlAck(QStringLiteral("no-such-id"), true, QString()));
+        check("control: ack ok → controlDone（停止收场）",
+              ctl.controlAck(ctlId, true, QString()) && doneCount == 1 &&
+                  lastAction == QStringLiteral("stop"));
+        check("control: 重复 ack 不算成功",
+              !ctl.controlAck(ctlId, true, QString()));
+        {
+            QString steerReason;
+            QString steerId;
+            check("control: steer 入队",
+                  ctl.control(dshExe, ctlSid, QStringLiteral("steer"),
+                              QStringLiteral("插一句就走"), &steerReason,
+                              &steerId));
+            const QJsonArray taken = ctl.takeControls(dshExe);
+            const QJsonObject item = taken.isEmpty() ? QJsonObject{}
+                                                     : taken.at(0).toObject();
+            check("control: steer 取件带正文",
+                  taken.size() == 1 &&
+                      item.value(QStringLiteral("text")).toString() ==
+                          QStringLiteral("插一句就走"));
+            check("control: ack false → controlFailed 带原因",
+                  ctl.controlAck(steerId, false,
+                                 QStringLiteral("这一轮已经跑完了")) &&
+                      failedCount == 1 &&
+                      lastFailReason == QStringLiteral("这一轮已经跑完了"));
+        }
+    }
+
     // 活体 harness（默认不跑）：AGENTRMC_DISPATCH_LIVE=<session id> 时真派一条
     // 探针进该会话并等回执，用来把路由问题和 UI 探针问题分开。
     const QByteArray live = qgetenv("AGENTRMC_DISPATCH_LIVE");

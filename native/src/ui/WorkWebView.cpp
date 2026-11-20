@@ -1011,6 +1011,11 @@ QString WorkWebView::htmlFor(const QString &stateJson) const {
    font-size:var(--f11);line-height:1.5;color:var(--muted)}
  .bubsys .t{flex:1;min-width:0;word-break:break-word}
  .bubsys .bt{flex:0 0 auto;margin:0;font-size:var(--f10);color:var(--faint)}
+ /* 底部实时行：还在跑但要跟历史系统信息区分开——一颗呼吸的点 + 主色竖线。 */
+ .bublive{border-left-color:var(--accent);color:var(--text-soft)}
+ .bublive .dot{flex:0 0 auto;width:6px;height:6px;border-radius:50%;
+   background:var(--accent);align-self:center;animation:bublive 1.6s ease-in-out infinite}
+ @keyframes bublive{0%,100%{opacity:.35}50%{opacity:1}}
  .reqcard{flex:0 0 auto;align-self:stretch;margin:6px 0;padding:10px 12px;
    border-radius:10px;background:var(--w8);border:1px solid var(--a64)}
  .reqbtn{display:block;width:100%;text-align:left;margin:4px 0;padding:8px 10px;
@@ -1124,6 +1129,11 @@ QString WorkWebView::htmlFor(const QString &stateJson) const {
   .csend svg.cspin{animation:cspin .8s linear infinite}
   @keyframes cspin{to{transform:rotate(360deg)}}
   .csend:disabled{background:var(--w10);color:var(--faint);cursor:default}
+  /* 运行中：同一颗键变成「停止生成」（实心方块，危险色描边不抢眼） */
+  .csend.stopmode{background:var(--w10);color:var(--danger);
+    box-shadow:inset 0 0 0 1px var(--danger)}
+  .csend.stopmode:hover{background:var(--w18)}
+  .csend.stopmode svg{width:11px;height:11px}
   @keyframes crise{from{opacity:0;transform:translateY(3px)}to{opacity:1;
     transform:none}}
   @media (prefers-reduced-motion:reduce){
@@ -1675,7 +1685,7 @@ const DSP_GROUP_STATE=new Map();
 const DSP_DEL_SEL=new Set();
 let DSCHAT=null,dchatOpen=false,dchatMsgs=[],dchatIds=new Set(),dchatTotal=0,
     dchatHasMore=false,dchatLoading=false,dchatKey='',DCHAT_PENDING='',
-    DCHAT_REFRESHING=false;
+    DCHAT_REFRESHING=false,dchatLive=null;
 const $ = id => document.getElementById(id);
 // CSS 变量名 → token 名，和 style.qss 里的 @token@ 同名；缺项保持 :root 的兜底值。
 // 颜色解析/合成：只认 #rgb(a) 与 rgb(a)()，够了——主题 token 就这两种写法。
@@ -2702,6 +2712,7 @@ function openDSession(agent,row){
   cLabel('dchat','派发');
   dchatOpen=true;dchatKey=agent.exe+'|'+row.id;
   dchatMsgs=[];dchatIds=new Set();dchatTotal=0;dchatHasMore=false;dchatLoading=true;
+  dchatLive=null;
   DCHAT_PENDING='';DCHAT_REFRESHING=false;
   mpReset('dchat');mpSyncChip('dchat');
   cValue('dchat','');attClear('dchat');
@@ -2743,6 +2754,7 @@ function paintDchat(mode,prevH,prevTop){
   }else{
     dchatMsgs.forEach(msg=>list.append(bubble(msg)));
   }
+  renderDLive();
   if(mode==='init'){
     list.scrollTop=list.scrollHeight;
     requestAnimationFrame(()=>{list.scrollTop=list.scrollHeight;
@@ -2756,6 +2768,7 @@ window.__setSessionChat=function(p){
   if(!dchatOpen||!DSCHAT||!p||!p.sessionId||p.sessionId!==DSCHAT.row.id)return;
   DSCHAT.meta=p;
   dchatTotal=p.total||0;
+  dchatLive=p.live||null;
   const msgs=p.messages||[];
   const list=$('dchatList');
   const prevH=list.scrollHeight,prevTop=list.scrollTop;
@@ -2775,6 +2788,7 @@ window.__setSessionChat=function(p){
     cNotice('dchat','');
   }
   renderDchatHeader();
+  renderDLive();  // 翻页/复推都要把实时行摆回末尾
 };
 // —— 模型选择（对齐 ZCode remote v4）：胶囊「选择模型 ⌄」/「模型名 档位 ⌄」；
 // 一级面板＝‹ 上一步 + 供应商行（立方体图标+名+API 徽标+✓/›）+ 底部「管理模型」，
@@ -2942,23 +2956,88 @@ function mpToggle(prefix){
     mpSyncChip(prefix);
   });
 });
+// ---------- 活会话/运行态（2026-11-20）----------
+// 宿主插件每 5s 报一次「这个宿主里打开的会话 + 正在跑的会话」，native 按 exe
+// 分组塞进 STATE.dispatch.live。聊天页据此：输入框空着时发送键变「停止」，
+// 有正文时发送＝插话（并进当前这一轮，不另起一轮）。
+function liveFor(exe){
+  const l=(STATE.dispatch||{}).live||{};
+  if(!exe)return null;
+  if(l[exe])return l[exe];
+  // 大小写兜底：native 按 payload 原文存，页面拿到的 exe 可能来自另一条账。
+  const want=String(exe).toLowerCase();
+  for(const k in l){if(String(k).toLowerCase()===want)return l[k];}
+  return null;
+}
+function liveIsOpen(exe,id){
+  const v=liveFor(exe);
+  return v?v.open.indexOf(id)>=0:true;  // 没报账＝不做判断（老宿主放行）
+}
+function liveIsRunning(exe,id){
+  const v=liveFor(exe);
+  return !!(v&&id&&v.running.indexOf(id)>=0);
+}
+function chatExe(){return (CHAT&&(CHAT.agentExe||CHAT.agent))||'';}
+function dchatExe(){return (DSCHAT&&DSCHAT.agent&&DSCHAT.agent.exe)||'';}
+// 这条会话此刻能不能「停」/「插话」：宿主报了运行中才算。
+function cRunning(prefix){
+  if(prefix==='chat')return liveIsRunning(chatExe(),chatOpenedId);
+  return liveIsRunning(dchatExe(),DSCHAT?DSCHAT.row.id:'');
+}
+const C_STOP_SVG='<svg viewBox="0 0 24 24" fill="currentColor"><rect x="7" y="7" width="10" height="10" rx="2"/></svg>';
 function sendDchat(){
   if(!dchatOpen||!DSCHAT||!DSCHAT.canDispatch)return;
+  const exe=dchatExe(),sid=DSCHAT.row.id;
   const typed=$('dchatText').value.trim();
   const refs=attText('dchat');
   const t=typed?(refs?typed+'\n'+refs:typed):refs;
+  const running=liveIsRunning(exe,sid);
+  // 运行中的回合：输入框空着 → 这颗键是「停止」；有正文 → 发送＝插话。
+  if(running&&!t){
+    cBusy('dchat');cNotice('dchat','正在停止这一轮…');
+    postObj({cmd:'control',action:'stop',exe:exe,session:sid});
+    return;
+  }
   if(!t)return;
+  if(!liveIsOpen(exe,sid)){
+    cNotice('dchat','这条会话没在 '+(DSCHAT.agent.name||'宿主')
+      +' 里打开——先在那边点开它再派发','bad');
+    return;
+  }
+  if(running){
+    DCHAT_PENDING=typed;
+    cBusy('dchat');cNotice('dchat','正在插话（并进当前这一轮，不另起一轮）…');
+    postObj({cmd:'control',action:'steer',exe:exe,session:sid,text:t});
+    return;
+  }
   // DCHAT_PENDING 记**原文**（不含路径行）：回执回来要对上输入框里的内容。
   DCHAT_PENDING=typed;
   cBusy('dchat');
   cNotice('dchat','正在派发，等回执…');
   const model=mpPicked('dchat');
-  postObj({cmd:'dispatchSession',exe:DSCHAT.agent.exe,session:DSCHAT.row.id,
+  postObj({cmd:'dispatchSession',exe:exe,session:sid,
     project:DSCHAT.row.project||'',text:t,model:model||undefined});
 }
 window.__setDispatchResult=function(r){
   if(!dchatOpen||!DSCHAT)return;
   cSendReady('dchat',DSCHAT.canDispatch);
+  if(r&&r.control==='stop'){
+    cNotice('dchat',r.ok?'已停止这一轮':'没停下来：'+((r&&r.error)||'未知原因'),
+      r.ok?'good':'bad');
+    DCHAT_PENDING='';
+    return;
+  }
+  if(r&&r.control==='steer'){
+    if(r.ok){
+      if($('dchatText').value===DCHAT_PENDING)cValue('dchat','');
+      attClear('dchat');
+      cNotice('dchat','已插话：并进当前这一轮，不再另起一轮','good');
+    }else{
+      cNotice('dchat','没插进去：'+((r&&r.error)||'未知原因')+'（草稿已保留）','bad');
+    }
+    DCHAT_PENDING='';
+    return;
+  }
   if(r&&r.ok){
     if($('dchatText').value===DCHAT_PENDING)cValue('dchat','');
     attClear('dchat');  // 附件已随正文派出去，chip 不能留在下一发
@@ -2973,6 +3052,7 @@ window.__setDispatchResult=function(r){
 };
 function closeDSession(){
   dchatOpen=false;DSCHAT=null;dchatMsgs=[];dchatIds=new Set();dchatKey='';
+  dchatLive=null;
   cSendReady('dchat',true);
   attClear('dchat');
   mpReset('dchat');mpSyncChip('dchat');
@@ -3586,6 +3666,11 @@ function cSync(prefix){
   // 派发未回执：按钮保持「派发中…」，别让清空后的 sync 把它解禁。
   const b=$(prefix+'Send');
   if(b&&b.dataset.busy==='1')return;
+  // 宿主报「这一轮正在跑」且输入框空着：这颗键让位给「停止生成」。
+  if(cRunning(prefix)&&n===0&&!attHas(prefix)){
+    cStopReady(prefix,!ta.disabled,'停止生成');
+    return;
+  }
   // 只有附件没有正文也能发（正文由路径自动拼）。
   cSendReady(prefix,!ta.disabled&&(n>0||attHas(prefix)));
 }
@@ -3593,11 +3678,23 @@ function cSendReady(prefix,on,sendLabel){
   const b=$(prefix+'Send');if(!b)return;
   b.dataset.busy='0';
   b.disabled=!on;
+  if(b.classList)b.classList.remove('stopmode');
   b.dataset.label=sendLabel||b.dataset.label||'发送';
   // 按钮只留图标（用户 2026-11-18：别写「派发」两个字），文字给 title/aria。
   b.title=b.dataset.label;
   b.setAttribute('aria-label',b.dataset.label);
   b.innerHTML=C_PLANE_SVG;
+}
+// 运行中且输入框空着：这颗键就是「停止生成」（同 DSH 的停止键）。
+function cStopReady(prefix,on,label){
+  const b=$(prefix+'Send');if(!b)return;
+  b.dataset.busy='0';
+  b.disabled=!on;
+  b.dataset.label=label;
+  b.title=label;
+  b.setAttribute('aria-label',label);
+  if(b.classList)b.classList.add('stopmode');
+  b.innerHTML=C_STOP_SVG;
 }
 function cBusy(prefix){
   const b=$(prefix+'Send');if(!b)return;
@@ -3629,8 +3726,32 @@ function cNoticeDropOnEmpty(prefix){
 }
 // ---------- 聊天页：打开即最新，旧记录上翻按页加载 ----------
 let CHAT=null,chatMsgs=[],chatIds=new Set(),chatTotal=0,chatHasMore=false,
-    chatLoading=false,chatOpenedId='',chatAtBottom=true;
+    chatLoading=false,chatOpenedId='',chatAtBottom=true,chatLive=null;
 function msgKey(m){return m.id||(m.at+'|'+m.role+'|'+(m.text||'').slice(0,80));}
+// 底部实时行：宿主长轮（OpenSquilla 一轮能跑 40 分钟）在 transcript 里没有新行，
+// 页面只剩旧消息＝「半天没动静」（用户 2026-11-20 报）。native 把进行中那张
+// 卡的最新活动回声（思考中/调用工具…）和本轮已跑时长塞进 live，这里原位改文字，
+// 不重排版——每拍重画 50 条气泡会打断滚动和选中。两个聊天面（待办会话/派发会话）
+// 共用这一份渲染。
+function renderLiveRow(listId,live){
+  const list=$(listId);if(!list)return;
+  let el=list.querySelector('.bublive');
+  if(!live||!live.text){if(el)el.remove();return;}
+  const atBottom=list.scrollHeight-list.scrollTop-list.clientHeight<60;
+  if(!el){
+    el=document.createElement('div');el.className='bubsys bublive';
+    const dot=document.createElement('span');dot.className='dot';
+    const t=document.createElement('span');t.className='t';
+    const bt=document.createElement('span');bt.className='bt';
+    el.append(dot,t,bt);
+  }
+  el.querySelector('.t').textContent=live.text;
+  el.querySelector('.bt').textContent=live.at?hhmm(live.at):'';
+  if(list.lastElementChild!==el)list.append(el);
+  if(atBottom)list.scrollTop=list.scrollHeight;
+}
+function renderLive(){renderLiveRow('chatList',chatLive);}
+function renderDLive(){renderLiveRow('dchatList',dchatLive);}
 // 手机传上来的附件在正文里是「请查看文件：<PC 绝对路径>」——那是给 agent 按
 // 路径读文件用的，不该给人看（2026-11-18 用户：「我发的不是这个安全提示吗」，
 // 他指的就是这行字）。渲染时摘掉，换成文件名条；桌面上悬停能看全路径。
@@ -3809,6 +3930,7 @@ function paintChat(mode,prevH,prevTop){
   }
   chatMsgs.forEach(m=>list.append(bubble(m)));
   ((CHAT&&CHAT.requests)||[]).forEach(req=>list.append(requestCard(req)));
+  renderLive();
   if(mode==='init'){
     chatAtBottom=true;$('chatNew').hidden=true;
     // 打开即最新：同步定位 + 多帧兜底（WebView2 解除隐藏后布局可能晚落定，
@@ -3827,6 +3949,7 @@ function paintChat(mode,prevH,prevTop){
 }
 function mergeChatPage(p,mode){
   chatTotal=p.total||0;
+  chatLive=p.live||null;
   const msgs=p.messages||[];
   if(mode==='init'){
     chatMsgs=msgs.slice();chatIds=new Set(chatMsgs.map(msgKey));
@@ -3841,6 +3964,7 @@ function mergeChatPage(p,mode){
   // 本地算剩余：轮询推的是最新页，它的 hasMore 不代表已加载范围之外还有旧页。
   chatHasMore=chatMsgs.length<chatTotal;
   renderChatFrame();
+  renderLive();  // 没有新消息也要刷：本轮已跑时长在走
 }
 function renderChatFrame(){
   if(!CHAT)return;
@@ -3895,10 +4019,48 @@ window.__setChatPage=function(p){
   paintChat('prepend',prevH,prevTop);
 };
 function sendChat(){
+  const exe=chatExe(),sid=chatOpenedId;
   const typed=$('chatText').value.trim();
   const refs=attText('chat');
   const t=typed?(refs?typed+'\n'+refs:typed):refs;
-  if(!t||!chatOpenedId)return;
+  if(!sid)return;
+  const running=liveIsRunning(exe,sid);
+  // 运行中：空输入＝停止（同 DSH 的停止键），有正文＝插话（不另起一轮）。
+  if(running&&!t){
+    // 在途标记留着：按钮的解锁交给下面那套「notice 变了＝这一发有下文」的
+    // 收场逻辑（cBusy 之后必须先有一次 cSendReady，否则会一直转圈）。
+    CHAT_PENDING='__stop__';
+    CHAT_SENT_NOTICE=((STATE.dispatch||{}).notice)||'';
+    cBusy('chat');cNotice('chat','正在停止这一轮…');
+    postObj({cmd:'control',action:'stop',exe:exe,session:sid});
+    setTimeout(()=>{
+      if(!CHAT_PENDING)return;
+      CHAT_PENDING='';CHAT_SENT_NOTICE='';
+      cSendReady('chat',!$('chatText').disabled
+        &&($('chatText').value.trim().length>0||attHas('chat')));
+    },5000);
+    return;
+  }
+  if(!t)return;
+  if(!liveIsOpen(exe,sid)){
+    cNotice('chat','这条会话没在 '+((CHAT&&CHAT.agentName)||'宿主')
+      +' 里打开——先在那边点开它再发','bad');
+    return;
+  }
+  if(running){
+    CHAT_PENDING=typed||t;
+    CHAT_SENT_NOTICE=((STATE.dispatch||{}).notice)||'';
+    cBusy('chat');cNotice('chat','正在插话（并进当前这一轮，不另起一轮）…');
+    postObj({cmd:'control',action:'steer',exe:exe,session:sid,text:t});
+    cValue('chat','');
+    setTimeout(()=>{
+      if(!CHAT_PENDING)return;
+      CHAT_PENDING='';CHAT_SENT_NOTICE='';
+      cSendReady('chat',!$('chatText').disabled
+        &&($('chatText').value.trim().length>0||attHas('chat')));
+    },5000);
+    return;
+  }
   const model=mpPicked('chat');
   // 在途正文记原文（不含路径行）：收场时拿它跟输入框对账。
   CHAT_PENDING=typed||t;
@@ -3985,7 +4147,7 @@ function adopt(s){
       CHAT=c;render();mergeChatPage(c,'append');
     }
   }else{
-    if(chatOpenedId){chatOpenedId='';CHAT=null;chatMsgs=[];chatIds=new Set();
+    if(chatOpenedId){chatOpenedId='';CHAT=null;chatMsgs=[];chatIds=new Set();chatLive=null;
       mpReset('chat');mpSyncChip('chat');}
     render();
   }

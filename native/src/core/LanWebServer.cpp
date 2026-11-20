@@ -333,6 +333,7 @@ bool LanWebServer::isAllowedAction(const QString &cmd) {
     // tts 会弹 TtsSettingsDialog，readLast 只是让 PC 念最近转写，可以进。
     return cmd == QStringLiteral("ack") || cmd == QStringLiteral("dispatch") ||
            cmd == QStringLiteral("dispatchSession") ||
+           cmd == QStringLiteral("control") ||
            cmd == QStringLiteral("answer") ||
            cmd == QStringLiteral("open") ||
            cmd == QStringLiteral("raiseZcode") ||
@@ -1374,6 +1375,11 @@ QString LanWebServer::mobileHtml() const {
    font-size:12px;line-height:1.5;color:var(--muted)}
  .bubsys .t{flex:1;min-width:0;word-break:break-word}
  .bubsys .bt{flex:0 0 auto;color:var(--faint);font-size:11px}
+ /* 底部实时行：还在跑——呼吸点 + 主色竖线，跟历史系统信息区分开。 */
+ .bublive{border-left-color:var(--accent);color:var(--text-soft)}
+ .bublive .dot{flex:0 0 auto;width:6px;height:6px;border-radius:50%;
+   background:var(--accent);align-self:center;animation:bublive 1.6s ease-in-out infinite}
+ @keyframes bublive{0%,100%{opacity:.35}50%{opacity:1}}
  /* Agent 产出的文件条：气泡下方一行一个，右侧「下载到手机」。 */
  .bubfiles{display:flex;flex-direction:column;gap:6px;margin-top:8px;
    white-space:normal}
@@ -1798,7 +1804,13 @@ QString LanWebServer::mobileHtml() const {
 <div id="toast"></div>
 <script>
 )HTML") + QString::fromUtf8(R"HTML(let STATE=null,tab=0,timer=null,lastSig='';
-let chatId='',chatMsgs=[],chatIds=new Set(),chatTotal=0,chatHasMore=false,chatLoading=false,chatAtBottom=true,chatMeta={},chatModel='';
+// 会话工作目录：待办本身可能没有 project（无工作区任务），这时用 transcript
+// 带回的 cwd 兜底——产物面板、上传、下载全靠它（2026-11-20 用户报：无工作区
+// 任务里 agent 生成的主题文件在 RMC 里下载不了）。
+function chatProjectPath(){
+ return String(chatProject||(chatMeta&&chatMeta.project)||'');
+}
+let chatId='',chatMsgs=[],chatIds=new Set(),chatTotal=0,chatHasMore=false,chatLoading=false,chatAtBottom=true,chatMeta={},chatModel='',chatLive=null;
 let chatKind='work',chatExe='',chatSession='',chatProject='',chatAgentName='',chatCanDispatch=true;
 let CATALOG=null,catalogLoading=false,catalogAt=0,catalogError='',dispatchSig='',selectedExe='';
 const GROUP_STATE=new Map();  // 项目折叠态：跨轮询/切换 Agent/进出聊天保持
@@ -2195,7 +2207,7 @@ function toRelPath(p){
  // 正斜杠/反斜杠统一成 '/' 再比：present_files 给的是 d:/a/b.hwt，会话 project
  // 是 D:\a，以前把反斜杠整个删掉去比，前斜杠路径一条都过不了（2026-11-19）。
  let rel=String(p).replace(/\\/g,'/').trim();
- const root=String(chatProject||'').replace(/\\/g,'/').replace(/\/+$/,'');
+ const root=chatProjectPath().replace(/\\/g,'/').replace(/\/+$/,'');
  if(/^[A-Za-z]:\//.test(rel)||rel[0]==='/'){
   if(!root||!rel.toLowerCase().startsWith(root.toLowerCase()+'/'))return '';
   rel=rel.slice(root.length+1);
@@ -2222,7 +2234,7 @@ const MSG_FILE_RE=/(?:^|[\s"'`（(【\[、，。：:])((?:[A-Za-z]:[\\/][^"'<>|`
 function msgFiles(text){
  if(!text||text.length<5)return [];
  const out=[],seen=new Set();
- const root=String(chatProject||'').replace(/\\/g,'/').replace(/\/+$/,'').toLowerCase();
+ const root=chatProjectPath().replace(/\\/g,'/').replace(/\/+$/,'').toLowerCase();
  let m;
  MSG_FILE_RE.lastIndex=0;
  while((m=MSG_FILE_RE.exec(text))){
@@ -2329,6 +2341,27 @@ function bubble(m){
  if(m.at){const t=document.createElement('span');t.className='bt';
   t.textContent=hhmm(m.at);d.append(t);}
  return d;
+}
+// 底部实时行：OpenSquilla 一轮能跑四十分钟，transcript 里这期间没有新行，页面
+// 只剩旧消息＝「半天没动静」（用户 2026-11-20 报）。native 把进行中那张卡的活动
+// 回声（思考中/调用工具…）和本轮已跑时长塞进 live，这里原位改文字不重排版。
+function renderLive(){
+  const list=$('chatList');if(!list)return;
+  let el=list.querySelector('.bublive');
+  const live=chatLive;
+  if(!live||!live.text){if(el)el.remove();return;}
+  if(!el){
+    el=document.createElement('div');el.className='bubsys bublive';
+    const dot=document.createElement('span');dot.className='dot';
+    const t=document.createElement('span');t.className='t';
+    const bt=document.createElement('span');bt.className='bt';
+    el.append(dot,t,bt);
+    list.append(el);
+  }
+  el.querySelector('.t').textContent=live.text;
+  el.querySelector('.bt').textContent=live.at?hhmm(live.at):'';
+  if(list.lastElementChild!==el)list.append(el);
+  if(chatAtBottom)list.scrollTop=list.scrollHeight;
 }
 // B1：待答请求只读卡片（授权/提问）。内联应答是 B2/B3，这里先展示。
 function requestCard(req){
@@ -2466,6 +2499,7 @@ function paintChat(mode,prevH,prevTop){
  }
  chatMsgs.forEach(m=>list.append(bubble(m)));
  (chatMeta.requests||[]).forEach(req=>list.append(requestCard(req)));
+ renderLive();
  if(mode==='init'){
   list.scrollTop=list.scrollHeight;chatAtBottom=true;$('chatNew').hidden=true;
   // 刚解除隐藏的元素布局可能下一帧才落定：双 rAF 兜底再定位。
@@ -2565,7 +2599,7 @@ function attMeta(id){
  const m={};
  if(id)m.id=id;
  if(chatKind==='session'){
-  m.session=chatSession||'';m.project=chatProject||'';m.exe=chatExe||'';
+  m.session=chatSession||'';m.project=chatProjectPath();m.exe=chatExe||'';
  }
  return m;
 }
@@ -2573,7 +2607,7 @@ function attUrl(id){
  let q='/m/upload?id='+encodeURIComponent(id||'');
  if(chatKind==='session')
   q+='&session='+encodeURIComponent(chatSession||'')
-    +'&project='+encodeURIComponent(chatProject||'')
+    +'&project='+encodeURIComponent(chatProjectPath())
     +'&exe='+encodeURIComponent(chatExe||'');
  return q;
 }
@@ -2718,7 +2752,7 @@ function fpUrl(name,rel){
  let q='?id='+encodeURIComponent(chatKind==='session'?'':chatId);
  if(chatKind==='session')
   q+='&session='+encodeURIComponent(chatSession||'')
-    +'&project='+encodeURIComponent(chatProject||'');
+    +'&project='+encodeURIComponent(chatProjectPath());
  if(rel)q+='&scope=project&rel='+encodeURIComponent(rel);
  else if(name)q+='&name='+encodeURIComponent(name);
  return '/m/'+((name||rel)?'file':'files')+q;
@@ -3054,7 +3088,8 @@ function pickedModel(){
  return model;
 }
 function mergeChatPage(p,mode){
- chatTotal=p.total||0; chatModel=p.model||chatModel; const msgs=p.messages||[];
+ chatTotal=p.total||0; chatModel=p.model||chatModel; chatLive=p.live||null;
+ const msgs=p.messages||[];
  if(mode==='init'){
   chatMsgs=msgs.slice();chatIds=new Set(chatMsgs.map(msgKey));
   paintChat('init');
@@ -3068,6 +3103,7 @@ function mergeChatPage(p,mode){
  // 本地算剩余：轮询推的是最新页，它的 hasMore 不代表已加载范围之外还有旧页。
  chatHasMore=chatMsgs.length<chatTotal;
  renderChatFrame();
+ renderLive();  // 没有新消息也要刷：本轮已跑时长在走
 }
 async function fetchTranscript(offset,mode){
  if(!chatId)return;
@@ -3115,7 +3151,7 @@ window.addEventListener('popstate',e=>{
  if(v!==VIEW_CHAT&&chatId)closeChat();
 });
 function startChat(kind,id,meta){
- chatKind=kind;chatId=id;chatMsgs=[];chatIds=new Set();chatLoading=false;chatMeta={};
+ chatKind=kind;chatId=id;chatMsgs=[];chatIds=new Set();chatLoading=false;chatMeta={};chatLive=null;
  mpResetState();
  chatExe=meta&&meta.exe||'';chatSession=meta&&meta.session||'';
  chatProject=meta&&meta.project||'';chatAgentName=meta&&meta.agentName||'';
@@ -3131,7 +3167,7 @@ function openSession(agent,row){
   agentName:agent.name,canDispatch:row.can_dispatch!==false});
 }
 function closeChat(){
- chatId='';chatMsgs=[];chatIds=new Set();chatModel='';
+ chatId='';chatMsgs=[];chatIds=new Set();chatModel='';chatLive=null;
  attClear('');fpClose();
  chatKind='work';chatExe='';chatSession='';chatProject='';chatAgentName='';
  chatCanDispatch=true;

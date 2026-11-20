@@ -530,6 +530,76 @@ int main(int argc, char **argv) {
         }
     }
 
+    // ---- 正文成串空行折叠 + 长轮实时行（2026-11-20 用户报「大片空白 /
+    //      长时间不显示进度内容」） ----
+    {
+        const QString fRoot = temp.filePath("osq-fold");
+        QDir().mkpath(fRoot);
+        const QString key = QStringLiteral("agent:main:cli:fold1");
+        const qint64 now = QDateTime::currentMSecsSinceEpoch();
+        {
+            QSqlDatabase db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"),
+                                                        QStringLiteral("setup_of"));
+            db.setDatabaseName(fRoot + QStringLiteral("/sessions.db"));
+            db.open();
+            QSqlQuery q(db);
+            q.exec("CREATE TABLE transcript_entries(id INTEGER PRIMARY KEY, "
+                   "session_key TEXT, role TEXT, content TEXT, created_at INTEGER)");
+            q.exec("CREATE TABLE agent_tasks(task_id TEXT, session_key TEXT, "
+                   "status TEXT, started_at INTEGER, finished_at INTEGER, "
+                   "error_message TEXT)");
+            auto entry = [&](int id, const QString &role, const QString &text,
+                             qint64 ms) {
+                QSqlQuery i(db);
+                i.prepare("INSERT INTO transcript_entries VALUES(?,?,?,?,?)");
+                i.addBindValue(id);
+                i.addBindValue(key);
+                i.addBindValue(role);
+                i.addBindValue(text);
+                i.addBindValue(ms);
+                i.exec();
+            };
+            entry(1, "user", QStringLiteral("跑一轮"), now - 120000);
+            entry(2, "assistant",
+                  QStringLiteral("\n\n先看现状：\n\n\n\n\n\n\n\n树里干净。\n\n\n\n提交。"),
+                  now - 110000);
+            QSqlQuery t(db);
+            t.prepare("INSERT INTO agent_tasks VALUES(?,?,?,?,?,?)");
+            t.addBindValue(QStringLiteral("tr1"));
+            t.addBindValue(key);
+            t.addBindValue(QStringLiteral("running"));
+            t.addBindValue(now - 95000);
+            t.addBindValue(QVariant());  // NULL finished_at：还在跑
+            t.addBindValue(QString());
+            t.exec();
+            db.close();
+        }
+        QSqlDatabase::removeDatabase(QStringLiteral("setup_of"));
+        const auto rr = SessionTranscript::read(QStringLiteral("OpenSquilla.exe"),
+                                                key, 50, 0, fRoot);
+        QString assistant;
+        bool sawRunningRow = false;
+        for (const QJsonValue &v : rr.messages) {
+            const QJsonObject m = v.toObject();
+            if (m.value(QStringLiteral("role")).toString() ==
+                QStringLiteral("assistant")) {
+                assistant = m.value(QStringLiteral("text")).toString();
+            }
+            if (m.value(QStringLiteral("text")).toString().startsWith(
+                    QStringLiteral("进行中"))) {
+                sawRunningRow = true;
+            }
+        }
+        check(!assistant.contains(QStringLiteral("\n\n\n")),
+              "blank runs folded to one blank line");
+        check(assistant.startsWith(QStringLiteral("先看现状：")),
+              "leading/trailing blanks trimmed");
+        check(rr.runningSinceMs > 0 &&
+                  rr.runningText.startsWith(QStringLiteral("本轮已 1m")),
+              "running turn exposed as live (not baked into messages)");
+        check(!sawRunningRow, "running row not baked into cached messages");
+    }
+
     // ---- DSH：工具调用耗时 → 一行系统信息 ----
     {
         // 夹具是 zstd 压好的（vendored libzstd 只编解压子集，测试里压不了），

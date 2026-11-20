@@ -101,6 +101,21 @@ void AgentBridge::setDeleteAckHandler(
     deleteAckHandler_ = std::move(handler);
 }
 
+void AgentBridge::setControlPendingProvider(
+    std::function<QString(const QString &exe)> provider) {
+    controlPendingProvider_ = std::move(provider);
+}
+
+void AgentBridge::setControlAckHandler(
+    std::function<bool(const QJsonObject &)> handler) {
+    controlAckHandler_ = std::move(handler);
+}
+
+void AgentBridge::setLiveSessionsHandler(
+    std::function<void(const QJsonObject &)> handler) {
+    liveSessionsHandler_ = std::move(handler);
+}
+
 void AgentBridge::setRequestsHandler(
     std::function<void(const QJsonObject &)> handler) {
     requestsHandler_ = std::move(handler);
@@ -240,6 +255,27 @@ void AgentBridge::onReadable(QTcpSocket *socket) {
         finish(socket, "200 OK", items.toUtf8(), "application/json");
         return;
     }
+    if (requestLine.startsWith("GET /control/pending")) {
+        // 停止生成 / 插话取件（DSH 插件轮询）；exe 解析同款。
+        QString exe;
+        const int queryAt = requestLine.indexOf('?');
+        if (queryAt >= 0) {
+            const QByteArray query = requestLine.mid(queryAt + 1);
+            const int spaceAt = query.indexOf(' ');
+            const QByteArray pairs =
+                query.left(spaceAt >= 0 ? spaceAt : query.size());
+            for (const QByteArray &pair : pairs.split('&')) {
+                if (pair.startsWith("exe=")) {
+                    exe = QUrl::fromPercentEncoding(pair.mid(4));
+                }
+            }
+        }
+        const QString items = controlPendingProvider_
+                                  ? controlPendingProvider_(exe)
+                                  : QStringLiteral("[]");
+        finish(socket, "200 OK", items.toUtf8(), "application/json");
+        return;
+    }
     const bool isAnswerPending =
         requestLine.startsWith("GET /request-answer/pending");
     if (isAnswerPending) {
@@ -279,10 +315,12 @@ void AgentBridge::onReadable(QTcpSocket *socket) {
     const bool isRequests = requestLine.startsWith("POST /requests ");
     const bool isModels = requestLine.startsWith("POST /models ");
     const bool isAnswerAck = requestLine.startsWith("POST /request-answer/ack ");
+    const bool isControlAck = requestLine.startsWith("POST /control/ack ");
+    const bool isLiveSessions = requestLine.startsWith("POST /live/sessions ");
     const bool isCursor = requestLine.startsWith("POST /cursor/");
     if (!isNotify && !isSpeak && !isAck && !isUpdate && !isCommand &&
         !isDispatchAck && !isDeleteAck && !isRequests && !isModels &&
-        !isAnswerAck && !isCursor) {
+        !isAnswerAck && !isControlAck && !isLiveSessions && !isCursor) {
         finish(socket, "404 Not Found");
         return;
     }
@@ -328,6 +366,24 @@ void AgentBridge::onReadable(QTcpSocket *socket) {
         const bool handled =
             !deleteId.isEmpty() && deleteAckHandler_ && deleteAckHandler_(obj);
         finish(socket, handled ? "204 No Content" : "404 Not Found");
+        return;
+    }
+    if (isControlAck) {
+        // 停止/插话回执：ok=宿主已受理（cancel/steer 已调）；false 带原因。
+        // control_id 不认识（取件超时已取消 / 重复 ack）回 404。
+        const QString controlId =
+            obj.value(QStringLiteral("control_id")).toString().trimmed();
+        const bool handled =
+            !controlId.isEmpty() && controlAckHandler_ && controlAckHandler_(obj);
+        finish(socket, handled ? "204 No Content" : "404 Not Found");
+        return;
+    }
+    if (isLiveSessions) {
+        // 插件上报活会话/运行中的会话。无 handler 也回 204，别让插件反复重试。
+        if (liveSessionsHandler_) {
+            liveSessionsHandler_(obj);
+        }
+        finish(socket, "204 No Content");
         return;
     }
     if (isRequests) {

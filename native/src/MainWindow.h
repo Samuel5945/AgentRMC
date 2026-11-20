@@ -111,6 +111,12 @@ private:
     // 给 /m/transcript?id=&offset=&limit=。
     QJsonObject chatState();
     QJsonObject chatStateFor(const QString &id, int offset = 0, int limit = 50);
+    // 聊天页底部「正在干什么」实时行：宿主长轮里 transcript 没有新行，靠进行中
+    // 那张卡的最新活动回声 + 本轮已跑时长撑住页面（手机/桌面同一份 JSON）。
+    // firstPage=false（上翻旧页）时不带，免得实时行跟着旧页跑。
+    QJsonObject liveLine(const QString &sessionId, qint64 runningSinceMs,
+                         const QString &runningText, const QString &lastMessageAt,
+                         bool firstPage) const;
     // B2：给推送来的待答请求标可答性（只有 question 能内联应答）。
     QJsonArray requestsWithAnswerable(const QString &sessionId) const;
     // B2/B3：把一条应答落收件箱（聊天页 answer 与桌宠交互卡共用）。返回拒绝原因，
@@ -311,6 +317,8 @@ private:
     QString dispatchNoticeExe_;
     QString dispatchDraftId_;
     QString dispatchDraftText_;
+    // 在途插话正文（controlId → 正文）：控制失败时回填成草稿（停止没有正文）。
+    QHash<QString, QString> controlTextById_;
     QHash<QString, QString> dispatchSessionById_;
     // ZCode 派发 turn 的回复正文（会话 id → 回复）：stop hook 落卡时若已知
     // 回复，直接用正文替代通用收尾文案。
@@ -332,6 +340,21 @@ private:
     // native 不自己连网关；聊天页/手机页的「选模型」据此给 OpenSquilla 列目录。
     QJsonArray osqModels_;
     QDateTime osqModelsAt_;
+    // 插件上报的活会话账（2026-11-20）：exe(小写) → 这个宿主进程里打开的会话 +
+    // 正在跑的会话 + 上报时间。派发页据此把「没打开」的会话标出来，聊天页据此
+    // 把发送键切成「停止」、有正文时改走插话。内存账不落盘；超过 15s 没再上报
+    // 视为过期（宿主关了 / 插件没加载），过期时一律不做判断，保持旧行为。
+    struct LiveAgents {
+        QString exe;  // 上报时的映像名原文（页面按它查，大小写照 payload）
+        QSet<QString> open;
+        QSet<QString> running;
+        QDateTime at;
+    };
+    QHash<QString, LiveAgents> liveAgents_;
+    // 派发前的活会话预检：空串＝放行；非空＝拒绝原因（账过期/不认识这个宿主时放行）。
+    QString liveGuard(const QString &agentExe, const QString &sessionId) const;
+    // 这条会话此刻是不是正在跑（聊天页据此决定发送/停止/插话）。
+    bool liveRunning(const QString &sessionId) const;
     // B2：手机/桌面下发的应答件（answer_id → {sessionId,kind,id,answers,outcome,exe}）。
     // 插件 1.2s 轮询取件 → 远程面/Web UI 应答 → ack 落账。内存账，超时未取作废。
     struct PendingAnswer {

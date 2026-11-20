@@ -24,6 +24,10 @@ constexpr qint64 kReceiptTimeoutMs = 120000;
 // 干等一分钟才知道失败。25s 足够覆盖冷启动（DSH 实测 1s 起进程 + 几秒
 // 加载插件），也让人更快得到「重启宿主」这个提示（2026-11-19）。
 constexpr qint64 kPluginAckTimeoutMs = 25000;
+// 会话控制（停止/插话）的取件+回执窗口。停止是「要立刻见效」的动作：插件
+// 1.5s 轮询，正常 1~2 秒就该有 ack；10s 还没有＝宿主没开/插件没加载，直接
+// 告诉人，别让人盯着按钮猜自己点没点上。
+constexpr qint64 kControlTimeoutMs = 10000;
 
 }  // namespace
 
@@ -650,6 +654,99 @@ bool SessionDispatch::pluginAck(const QString &dispatchId, bool ok,
     return handled;
 }
 
+bool SessionDispatch::control(const QString &agentExe, const QString &sessionId,
+                              const QString &action, const QString &text,
+                              QString *reason, QString *controlIdOut) {
+    const auto refuse = [reason](const QString &why) {
+        if (reason != nullptr) {
+            *reason = why;
+        }
+        return false;
+    };
+    if (!supportsPluginChannel(agentExe)) {
+        return refuse(QStringLiteral(
+            "该宿主没有停止/插话通道（当前只有 DSH / OpenSquilla 走桥插件）"));
+    }
+    if (sessionId.trimmed().isEmpty()) {
+        return refuse(QStringLiteral("没关联会话，停不了"));
+    }
+    if (action != QLatin1String("stop") && action != QLatin1String("steer")) {
+        return refuse(QStringLiteral("不认识的控制动作：%1").arg(action));
+    }
+    if (action == QLatin1String("steer") && text.trimmed().isEmpty()) {
+        return refuse(QStringLiteral("插话内容为空"));
+    }
+    for (auto it = controls_.constBegin(); it != controls_.constEnd(); ++it) {
+        // 同一条会话连点：第一件还没回执时不排队——多半是在催同一次停止，
+        // 排第二件只会让第二件超时后冒一条假失败。
+        if (it->sessionId == sessionId &&
+            it->agentExe.compare(agentExe, Qt::CaseInsensitive) == 0) {
+            return refuse(QStringLiteral("这条会话已有停止/插话在途，等回执再点"));
+        }
+    }
+    Control c;
+    c.controlId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    c.agentExe = agentExe;
+    c.sessionId = sessionId;
+    c.action = action;
+    c.text = action == QLatin1String("steer") ? text : QString();
+    c.clock.start();
+    if (controlIdOut != nullptr) {
+        *controlIdOut = c.controlId;
+    }
+    controls_.insert(c.controlId, c);
+    if (!timer_->isActive()) {
+        timer_->start();
+    }
+    return true;
+}
+
+QJsonArray SessionDispatch::takeControls(const QString &agentExe) {
+    QJsonArray out;
+    if (!supportsPluginChannel(agentExe)) {
+        return out;
+    }
+    for (auto it = controls_.begin(); it != controls_.end(); ++it) {
+        if (it->handed) {
+            continue;
+        }
+        if (it->agentExe.compare(agentExe, Qt::CaseInsensitive) != 0) {
+            continue;
+        }
+        it->handed = true;  // 一次取件：超时前不重复下发，插件重连也不会双执行
+        QJsonObject o;
+        o.insert(QStringLiteral("control_id"), it->controlId);
+        o.insert(QStringLiteral("session_id"), it->sessionId);
+        o.insert(QStringLiteral("action"), it->action);
+        if (!it->text.isEmpty()) {
+            o.insert(QStringLiteral("text"), it->text);
+        }
+        out.append(o);
+    }
+    return out;
+}
+
+bool SessionDispatch::controlAck(const QString &controlId, bool ok,
+                                 const QString &error) {
+    auto it = controls_.find(controlId);
+    if (it == controls_.end()) {
+        return false;  // 回复的是一条已超时/重复的件：调用方回 404
+    }
+    const Control c = it.value();
+    controls_.erase(it);
+    if (ok) {
+        emit controlDone(c.controlId, c.agentExe, c.sessionId, c.action);
+    } else {
+        emit controlFailed(
+            c.controlId, c.agentExe, c.sessionId, c.action,
+            error.isEmpty() ? QStringLiteral("宿主拒绝了这次控制") : error);
+    }
+    if (pending_.isEmpty() && controls_.isEmpty()) {
+        timer_->stop();
+    }
+    return true;
+}
+
 void SessionDispatch::poll() {
     const QStringList keys = pending_.keys();
     for (const QString &sid : keys) {
@@ -663,20 +760,36 @@ void SessionDispatch::poll() {
             continue;
         }
         if (p.channel == Channel::Plugin) {
-            // 插件通道不读会话库：回执走 ack。取件窗口超时 = 插件没在跑。
+            // 插件通道不读会话库：回执走 ack。取件窗口超时按「插件有没有来
+            // 取过件」分两种说法（2026-11-20）：handed=false = 插件压根没轮询
+            // （宿主没开/插件没加载）；handed=true = 插件取了件但没回 ack
+            // （注入那步卡住、插件被重载、或另一个消费者的轮询把件取走了）。
+            // 一句「没来取件」把这两种混在一起，排障时会把人带偏。
             if (p.clock.elapsed() > kPluginAckTimeoutMs) {
                 const QString id = p.dispatchId;
                 const bool osq = p.agentExe.compare(
                                      QStringLiteral("OpenSquilla.exe"),
                                      Qt::CaseInsensitive) == 0;
+                const bool handed = p.pluginHanded;
                 pending_.erase(it);
-                emit failed(id,
-                            osq ? QStringLiteral(
-                                      "OpenSquilla 桥没来取件（OpenSquilla 没开或"
-                                      "桥过旧），派发取消")
-                                : QStringLiteral(
-                                      "DSH 插件没来取件——多半是 DeepSeek Harness "
-                                      "开着但插件没加载，关掉它重开一次再派"));
+                if (osq) {
+                    emit failed(id,
+                                handed ? QStringLiteral(
+                                             "OpenSquilla 桥取了件但没回执——网关那条"
+                                             "注入多半卡住了，重开 OpenSquilla 再试")
+                                       : QStringLiteral(
+                                             "OpenSquilla 桥没来取件（OpenSquilla 没开或"
+                                             "桥过旧），派发取消"));
+                } else {
+                    emit failed(id,
+                                handed ? QStringLiteral(
+                                             "DSH 插件取了件但 25 秒没回执——注入那一步"
+                                             "没落地（插件被重载/宿主卡住），重开 "
+                                             "DeepSeek Harness 再试")
+                                       : QStringLiteral(
+                                             "DSH 插件没来取件——多半是 DeepSeek Harness "
+                                             "开着但插件没加载，关掉它重开一次再派"));
+                }
             }
             continue;
         }
@@ -715,7 +828,30 @@ void SessionDispatch::poll() {
             }
         }
     }
-    if (pending_.isEmpty()) {
+    // 控制件（停止/插话）不想等插件 ack 的那套 25s：10s 没回执就认通道没起来。
+    // 与派发同用一个 1s 定时器——它们都是「等宿主回话」的小队列。
+    const QStringList controlIds = controls_.keys();
+    for (const QString &cid : controlIds) {
+        auto cit = controls_.find(cid);
+        if (cit == controls_.end()) {
+            continue;
+        }
+        if (cit->clock.elapsed() > kControlTimeoutMs) {
+            const QString id = cit->controlId;
+            const QString exe = cit->agentExe;
+            const QString sid = cit->sessionId;
+            const QString action = cit->action;
+            const bool handed = cit->handed;
+            controls_.erase(cit);
+            emit controlFailed(
+                id, exe, sid, action,
+                handed ? QStringLiteral(
+                             "宿主取了件但没回执（注入/取消那一步没落地）——重开宿主再试")
+                       : QStringLiteral(
+                             "宿主没来取件（没开或插件没加载）——控制没生效"));
+        }
+    }
+    if (pending_.isEmpty() && controls_.isEmpty()) {
         timer_->stop();
     }
 }

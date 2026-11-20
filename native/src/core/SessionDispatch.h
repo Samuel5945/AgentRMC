@@ -70,6 +70,20 @@ public:
     // 桥/插件轮询：取走该宿主（按 exe 过滤）尚未下发的派发（Pending 标记
     // handed，等 ack/超时）。
     QJsonArray takePluginDispatches(const QString &agentExe);
+
+    // —— 会话控制通道（停止生成 / 插话，2026-11-20）——
+    // 与派发分开排：派发是「新的一轮」，停止/插话是「动这一轮」，两者不能混
+    // 进同一个队列（同一会话可能在跑着的时候既要插话又要能停）。
+    // action：stop = agent.cancel({kind:'user'})（与 DSH 自己的停止同一入口）；
+    //         steer = agent.steer()（插进当前这一轮的下一步，只在 running 时可用）。
+    // 接受返回 true；拒绝返回 false 并给原因（比如同一会话已有控制件在途）。
+    bool control(const QString &agentExe, const QString &sessionId,
+                 const QString &action, const QString &text, QString *reason,
+                 QString *controlIdOut = nullptr);
+    // 插件轮询取件（按 exe 过滤，一次取走，等 ack/超时）。
+    QJsonArray takeControls(const QString &agentExe);
+    // 插件回执：ok=true = cancel/steer 已被受理。false = 拒绝（带原因）。
+    bool controlAck(const QString &controlId, bool ok, const QString &error);
     // 插件应答：ok=true = followup 已被接受（durable inbox 落账，投递成立 →
     // receipt）；false = 插件侧守卫拒绝（reason 给用户 → failed）。
     // 返回 false = 不认识的 dispatch_id（重启丢账/重复 ack）：调用方要回 404，
@@ -87,6 +101,14 @@ signals:
                  const QString &sessionId, const QString &project,
                  const QString &text);
     void failed(const QString &dispatchId, const QString &reason);
+    // 会话控制：插件受理了停止/插话（action = "stop" / "steer"）。
+    void controlDone(const QString &controlId, const QString &agentExe,
+                     const QString &sessionId, const QString &action);
+    // 控制失败：reason 给用户看（原样上卡）。action 让调用方决定要不要把插话
+    // 正文回填成草稿（stop 失败没有草稿）。
+    void controlFailed(const QString &controlId, const QString &agentExe,
+                       const QString &sessionId, const QString &action,
+                       const QString &reason);
     // ZCode：turn 跑完（回执只代表送达）。reply 为该轮 assistant 正文，空＝
     // 没等到（超时/turn 失败）。
     void zcodeTurnFinished(const QString &dispatchId, const QString &agentExe,
@@ -119,11 +141,23 @@ private:
         QJsonObject modelOverride;
     };
 
+    struct Control {
+        QString controlId;
+        QString agentExe;
+        QString sessionId;
+        QString action;  // "stop" / "steer"
+        QString text;    // steer 才有
+        QElapsedTimer clock;
+        bool handed = false;  // 已交给插件，等 ack
+    };
+
     void poll();
 
     QTimer *timer_ = nullptr;
     std::function<QJsonArray()> osqModelsProvider_;
     QHash<QString, Pending> pending_;  // key = sessionId（同会话串行）
+    // key = controlId；同会话的控制件在途时不再排队（避免连点停止发两发）。
+    QHash<QString, Control> controls_;
     // UI 通道依赖前台焦点：全局串行，一次只跑一条。
     class UiDispatch *ui_ = nullptr;
     bool uiBusy_ = false;

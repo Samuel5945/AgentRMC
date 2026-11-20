@@ -97,11 +97,41 @@ QString normalizeTs(const QJsonValue &v) {
     return dt2.isValid() ? dt2.toUTC().toString(Qt::ISODateWithMs) : QString();
 }
 
-QString capText(const QString &text) {
-    if (text.size() <= kMaxTextChars) {
-        return text;
+// 宿主正文里成串空行很常见：OpenSquilla 每段之间固定四五个，长轮里能到十几行
+// （实测一条 3KB 正文里有两段连着 18 个 \n）。聊天页气泡是 pre-wrap 原样渲染，
+// 一串空行就是半屏多空白（用户 2026-11-20 报「OpenSquilla 会话在 RMC 里大片
+// 空白」的根因）。显示前压成最多一个空行；只压空行、不动行首缩进（代码块、
+// 缩进列表要保住）。
+QString foldBlankLines(const QString &text) {
+    QString out;
+    out.reserve(text.size());
+    bool pendingBlank = false;
+    const QStringList lines = text.split(QLatin1Char('\n'));
+    for (const QString &raw : lines) {
+        QString line = raw;
+        while (!line.isEmpty() &&
+               (line.endsWith(QLatin1Char(' ')) || line.endsWith(QLatin1Char('\t')))) {
+            line.chop(1);
+        }
+        if (line.trimmed().isEmpty()) {
+            pendingBlank = !out.isEmpty();
+            continue;
+        }
+        if (!out.isEmpty()) {
+            out += pendingBlank ? QStringLiteral("\n\n") : QStringLiteral("\n");
+        }
+        pendingBlank = false;
+        out += line;
     }
-    return text.left(kMaxTextChars) + QStringLiteral("\n…（内容过长，已截断）");
+    return out;
+}
+
+QString capText(const QString &text) {
+    QString folded = foldBlankLines(text);
+    if (folded.size() <= kMaxTextChars) {
+        return folded;
+    }
+    return folded.left(kMaxTextChars) + QStringLiteral("\n…（内容过长，已截断）");
 }
 
 QString contentText(const QJsonValue &content) {
@@ -163,7 +193,8 @@ struct FullCache {
     QString stamp;
     QVector<QJsonObject> all;  // 正序
     QString title;
-    QString model;  // 会话当前模型（能读到就给）
+    QString project;  // cwd：无工作区任务靠它定位产物目录
+    QString model;    // 会话当前模型（能读到就给）
     int realTotal = 0;  // 实际可渲染条数（SQLite 封顶 500 内、滤掉注入后）
 };
 QHash<QString, FullCache> g_cache;
@@ -201,6 +232,7 @@ SessionTranscript::Result slicePage(const FullCache &full, int limit, int offset
     SessionTranscript::Result out;
     out.supported = true;
     out.title = full.title;
+    out.project = full.project;
     out.model = full.model;
     out.total = full.realTotal;
     const int end = qMax(0, full.all.size() - offset);
@@ -592,6 +624,12 @@ SessionTranscript::Result readJsonl(const QString &home, const QString &sessionI
         // 用待办标题（=Agent 名），待办会话页顶栏就看不到会话名
         // （2026-11-19 用户截图：大标题是「WorkBuddy」）。DSH 分支同款：
         // 取首条非空 user 消息。
+        if (full.project.isEmpty()) {
+            const QString cwd = obj.value(QStringLiteral("cwd")).toString();
+            if (!cwd.isEmpty()) {
+                full.project = cwd;
+            }
+        }
         if (full.title.isEmpty() && role == QLatin1String("user") &&
             !text.trimmed().isEmpty()) {
             full.title = text.trimmed().left(30);  // 顶栏展示宽度有限
@@ -854,6 +892,34 @@ QString shortTitleOf(const QString &text, const QString &sessionId);
 bool isGenericOsqTitle(const QString &text);
 QString normalizeOsqUserText(const QString &raw);
 
+// 正在跑的那一轮（agent_tasks.finished_at 为空）：现查现算，**不进全量缓存**。
+// 长轮十几分钟才落一条 transcript，页面上就靠这个「本轮已 N 分」证明还活着；
+// 缓存住的话秒数会停在打开页面那一刻（用户 2026-11-20 报的卡住不动）。
+SessionTranscript::Result attachRunningOsq(SessionTranscript::Result out,
+                                           const QString &stateRoot,
+                                           const QString &sessionKey) {
+    ReadOnlyDb db(stateRoot + QStringLiteral("/sessions.db"));
+    if (!db.ok()) {
+        return out;
+    }
+    QSqlQuery q(db.db());
+    q.prepare(QStringLiteral(
+        "SELECT started_at FROM agent_tasks WHERE session_key=? "
+        "AND finished_at IS NULL ORDER BY started_at DESC LIMIT 1"));
+    q.addBindValue(sessionKey);
+    if (q.exec() && q.next()) {
+        const qint64 started = q.value(0).toLongLong();
+        if (started > 0) {
+            out.runningSinceMs = started;
+            out.runningText =
+                QStringLiteral("本轮已 ") +
+                humanDuration(QDateTime::currentMSecsSinceEpoch() - started);
+        }
+    }
+    q.finish();
+    return out;
+}
+
 SessionTranscript::Result readOsq(const QString &stateRoot, const QString &sessionKey,
                                   int limit, int offset) {
     SessionTranscript::Result out;
@@ -867,7 +933,7 @@ SessionTranscript::Result readOsq(const QString &stateRoot, const QString &sessi
     const QString stamp = sqliteStamp(dbPath);
     auto it = g_cache.constFind(key);
     if (it != g_cache.constEnd() && it->stamp == stamp) {
-        return slicePage(*it, limit, offset);
+        return attachRunningOsq(slicePage(*it, limit, offset), stateRoot, sessionKey);
     }
     ReadOnlyDb db(dbPath);
     if (!db.ok()) {
@@ -1008,25 +1074,13 @@ SessionTranscript::Result readOsq(const QString &stateRoot, const QString &sessi
         full.all.append(sysRow(turns.at(ti).text, isoFromMs(turns.at(ti).at)));
         ++ti;
     }
-    // 正在跑的那一轮：没有 finished_at，按「已跑了多久」露一行。
-    QSqlQuery runQ(db.db());
-    runQ.prepare(QStringLiteral(
-        "SELECT started_at FROM agent_tasks WHERE session_key=? "
-        "AND finished_at IS NULL ORDER BY started_at DESC LIMIT 1"));
-    runQ.addBindValue(sessionKey);
-    if (runQ.exec() && runQ.next()) {
-        const qint64 started = runQ.value(0).toLongLong();
-        const qint64 ms = QDateTime::currentMSecsSinceEpoch() - started;
-        if (started > 0 && ms >= kSysTurnMinMs) {
-            full.all.append(sysRow(
-                QStringLiteral("进行中 · 本轮已 ") + humanDuration(ms),
-                isoFromMs(started)));
-        }
-    }
-    runQ.finish();
+    // 正在跑的那一轮**不往 messages 里塞**：那股「已 N 分」是随时间变的，
+    // 塞进全量缓存就会永远停在打开页面那一刻（用户 2026-11-20 报「进行中 ·
+    // 本轮已 13m41s 卡住不动」）。改成每次 read 现查（见 attachRunningOsq），
+    // 由聊天页底部的实时行渲染。
     full.realTotal = qMin(total, kSqliteCap);
     cachePut(key, full);
-    return slicePage(full, limit, offset);
+    return attachRunningOsq(slicePage(full, limit, offset), stateRoot, sessionKey);
 }
 
 QString osqStateRoot() {

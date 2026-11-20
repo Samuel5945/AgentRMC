@@ -256,16 +256,34 @@ M1。AP 隔离/防火墙排查并入 M1 真机验收（手机页配对失败文�
   拒绝原因原样回 409，页面保留草稿。Qoder 等无手机派发通道的宿主只读。
 - 手机 `/m/state` 不再下发 events（无界面消费），降低 2.5s 轮询体积。
 
-### M1.8 · 电脑端归档会话清理（2026-11-16）
-- 归档项目行提供单条「删除」，页头「清理归档」进入批量多选；只允许 archived
-  且宿主支持安全删除的会话。手机端不开放删除。
-- 删除前由 `SessionCleaner` 完整复制到
-  `AppData/LIG/AgentRMCNative/session-trash/<时间戳>/` 并写 manifest，复制
-  校验成功后才动原件；Windows 原生 `QMessageBox` 二次确认并列出受影响会话。
-- 文件型宿主：WorkBuddy 系 / Qoder 系删除 jsonl + 同 id sidecar（subagents /
-  tool-results / state）；DSH 删除会话目录 + projcache。ZCode/OpenSquilla
+### M1.8 · 会话删除与回收站（2026-11-16；2026-11-20 对 Magpie 重做成回收站，并放开任意会话可删）
+- 归档项目行提供单条「删除」；批量入口在页头「批量删除」（区头按钮
+  2026-11-20 上移，因批量对象已不限于归档区）。手机端不开放删除。
+- **任意会话可删，不要求归档（对齐 Magpie `Deletable`+`rowDeletable`）**：
+  门槛只剩三道——宿主是文件型（WorkBuddy 系/Qoder 系/DSH；数据库型的
+  ZCode/OpenSquilla 与 Magpie 同口径「只列不删」）、会话真在该宿主会话库、
+  一分钟内有写入的活跃会话拒绝动手（Magpie `ActiveWindow`/`ErrActive`
+  同款）；正在用项目的会话删前还有原生二次确认列明细，删错了从回收站
+  恢复回来即可。
+- **回收站语义（参考 yetone/magpie `internal/sessions/manage.go`）**：删除 =
+  整条目**移动**进 `AppData/LIG/AgentRMCNative/session-trash/entries/<宿主>/<UTC
+  时间>-<id>/{entry.json,files/N-原名}`，宿主侧条目随即消失；manifest 随移动
+  增量落盘，中途失败把已移动的搬回去——旧版「备份成功但原件没删净」的两不脏
+  状态没有了。派发页右上「回收站」面板：列表（标题/宿主/时间/大小，损坏条目
+  只标可删），逐条「恢复」（任一落点已被占则整体拒绝、绝半恢复；恢复后目录
+  重推）与「彻底删除」，页头「彻底清空」；两步确认（首击变「再点一次确认」，
+  4 秒窗口）。**永不自动过期/自动清空**（Magpie：只有人开口才删）。
+- 新增守卫：任一成员文件 60s 内有写入（活跃窗口，Magpie ActiveWindow 同款）
+  拒绝移入回收站；会话 id 与回收站 key 都过字符白名单 + 前缀归属校验，拒绝
+  路径穿越与软链带出回收目录；同卷 rename、跨卷复制+删原件且失败回滚。
+- 文件型宿主：WorkBuddy 系 / Qoder 系移动 jsonl + 同 id sidecar（subagents /
+  tool-results / state）；DSH 移动会话目录 + projcache。ZCode/OpenSquilla
   没有稳定的会话级物理删除接口，返回「该宿主没有安全的会话删除接口」，
   不硬删数据库。失败逐条回页面，成功/部分成功都会刷新目录。
+- 旧版 `session-trash/<时间戳>/` 备份目录不再被扫描或清理（只读遗产，用户可
+  自行删除）；新结构只在 `entries/` 下。
+- 测试：transcript_test 回收站段——移动/条目结构/列表/恢复回位/落点被占整体
+  拒绝/腾开后可恢复/活跃窗口拒绝/会话 id 与 key 穿越拒绝/purge/purgeAll 空站。
 - **项目分组按完整路径**，不能按 basename 合并：`D:\githubrepos\tuwen-editor`
   和已消失的 `C:\Users\PC\Desktop\tuwen-editor` 必须分成两组；同名时标题补
   上级目录（`tuwen-editor · githubrepos` / `tuwen-editor · Desktop`），

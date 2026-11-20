@@ -89,7 +89,10 @@ const visible = await page.locator('#dspList .dspsess').count();
 const groups = await page.locator('#dspList .dspgroup').count();
 const groupLabels = await page.locator('#dspList .dspgname').allTextContents();
 const activeOpen = await page.locator('#dspList .dspgroup:not(.archived) .dspbody:not([hidden])').count();
-const archivedClosed = await page.locator('#dspList .dspgroup.archived .dspbody').first().evaluate((el) => el.hidden);
+// 归档区的收起在区级 .dspsec.closed（2026-11-17 改版后；旧探针盯的
+// .dspgroup.archived 是区内的项目组，收起状态不在它身上）。归档区固定排最后。
+const archivedClosed = await page.locator('#dspList .dspsec').last()
+  .evaluate((el) => el.classList.contains('closed') && el.querySelector('.dspsecbody')?.hidden === true);
 await page.locator('#dspList .dspsess').nth(0).click();
 await page.waitForTimeout(200);
 const dchatVisible = await page.locator('#dchat').evaluate((el) => !el.hidden);
@@ -117,14 +120,16 @@ await page.click('#dchatBack');
 await page.waitForTimeout(100);
 const backToDispatch = await page.locator('#dispatch').evaluate((el) => !el.hidden);
 
-// 归档清理：单条入口 + 批量模式 + 原生确认后的失败/成功结果。
+// 会话删除（对 Magpie：任意会话可删）：单条入口在所有行 + 批量模式 +
+// 原生确认后的失败/成功结果。批量开关在页头（旧顶栏 #dspClean、后改区头
+// .dspsecclean，2026-11-20 再升回页头 #dspBatchToggle）。
 const singleDelete = await page.locator('#dspList .dspdel').count();
-await page.click('#dspClean');
+await page.click('#dspBatchToggle');
 await page.waitForTimeout(120);
 const cleanGroups = await page.locator('#dspList .dspgroup').count();
 const cleanExpanded = await page.locator('#dspList .dspgroup.archived .dspbody').first().evaluate((el) => !el.hidden);
 const selectable = await page.locator('#dspList .dspcheck').count();
-await page.locator('#dspList .dspsess').nth(0).click();
+await page.locator('#dspList .dspsess', { hasText: '旧图文编辑器记录' }).click();
 await page.waitForTimeout(80);
 const batchCount = await page.textContent('#dspBatchCount');
 await page.click('#dspDelete');
@@ -139,12 +144,30 @@ await page.evaluate(() => window.__setDeleteResult({ ok: true, deleted: 1, backu
 await page.waitForTimeout(100);
 const batchOff = await page.locator('#dspBatch').evaluate((el) => el.hidden);
 
+// 回收站（Magpie 口径）：常驻入口 → 打开先拉列表 → 条目行 → 恢复命令接线。
+const trashBtn = await page.locator('#dspTrash').isVisible();
+await page.click('#dspTrash');
+await page.waitForTimeout(80);
+const trashLoadPost = await page.evaluate(() => window.__lastPost);
+await page.evaluate(() => window.__setTrash({ ok: true, items: [
+  { key: 'WorkBuddy.exe/20261120T000000Z-clean-sid-0001', exe: 'WorkBuddy.exe',
+    session: 'clean-sid-0001', title: '回收站里的会话',
+    deleted: '2026-11-20T00:00:00', size: 2048, damaged: false },
+] }));
+await page.waitForTimeout(100);
+const trashRows = await page.locator('#dspList .dsptrashrow').count();
+await page.locator('#dspList .dsptrashrow .dsptrashops button').nth(0).click();
+await page.waitForTimeout(80);
+const restorePost = await page.evaluate(() => window.__lastPost);
+
 console.log('groups=', groups, 'sessions=', visible, 'labels=', groupLabels.join(' | '),
   'activeOpen=', activeOpen, 'archivedClosed=', archivedClosed);
 console.log('cleanGroups=', cleanGroups, 'cleanExpanded=', cleanExpanded,
   'selectable=', selectable, 'singleDelete=', singleDelete, 'batch=', batchCount);
 console.log('deletePost=', JSON.stringify(deletePost), 'deleteFail=', deleteFail,
   'batchStillOn=', batchStillOn, 'batchOffAfterSuccess=', batchOff);
+console.log('trashBtn=', trashBtn, 'trashLoad=', JSON.stringify(trashLoadPost),
+  'trashRows=', trashRows, 'restorePost=', JSON.stringify(restorePost));
 console.log('tabOrder=', tabs.slice(0, 3).join(' / '));
 console.log('dchatVisible=', dchatVisible, 'title=', title.split('\n')[0]);
 console.log('openPost=', JSON.stringify(openPost));
@@ -157,9 +180,12 @@ const ok = dchatVisible && backToDispatch && archivedClosed && activeOpen === 1
   && groupLabels.includes('tuwen-editor · Desktop')
   && openPost?.cmd === 'sessionOpen' && sendPost?.cmd === 'dispatchSession'
   && failedNotice.includes('模拟拒绝') && okNotice.includes('已派发')
-  && cleanGroups === 2 && cleanExpanded && selectable === 2 && singleDelete === 2
+  && cleanGroups === 4 && cleanExpanded && selectable === 4 && singleDelete === 4
   && deletePost?.cmd === 'sessionDelete' && deletePost?.items?.length === 1
   && deleteFail.includes('模拟拒绝') && batchStillOn && batchOff
+  && trashBtn && trashLoadPost?.cmd === 'trashList' && trashRows === 1
+  && restorePost?.cmd === 'trashRestore'
+  && String(restorePost?.key || '').includes('clean-sid-0001')
   && errors.length === 0;
 await browser.close();
 process.exit(ok ? 0 : 1);

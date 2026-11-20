@@ -12,6 +12,11 @@
 #include <QSqlQuery>
 #include <QTemporaryDir>
 #include <QTextStream>
+
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
 #include <cstdio>
 
 #include "core/SessionCleaner.h"
@@ -1055,9 +1060,32 @@ int main(int argc, char **argv) {
                                         &role, &text, &at),
           "non-message line rejected");
 
-    // ---- 归档会话删除：备份成功才删；活跃项目拒绝；不支持宿主拒绝 ----
+    // ---- 归档会话删除（回收站口径）：移动可恢复；活跃拒绝；越界拒绝 ----
     {
         const QString cleanHome = temp.filePath("cleaner_home");
+        const QString trashBase = temp.filePath("cleaner_trash");
+        const auto ageFile = [](const QString &p) {
+            // Qt 的 QFile::setFileTime 对未打开文件在这里报「拒绝访问」；
+            // 直接走 Win32：CreateFile(FILE_WRITE_ATTRIBUTES)+SetFileTime。
+            HANDLE h = CreateFileW(reinterpret_cast<LPCWSTR>(p.utf16()),
+                                   FILE_WRITE_ATTRIBUTES,
+                                   FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                   nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL,
+                                   nullptr);
+            if (h == INVALID_HANDLE_VALUE) {
+                std::printf("FAIL age open %lu %s\n", GetLastError(),
+                            p.toUtf8().constData());
+                return;
+            }
+            SYSTEMTIME st{};
+            st.wYear = 2026; st.wMonth = 1; st.wDay = 1;
+            FILETIME local{};
+            FILETIME utc{};
+            SystemTimeToFileTime(&st, &local);
+            LocalFileTimeToFileTime(&local, &utc);
+            SetFileTime(h, nullptr, nullptr, &utc);
+            CloseHandle(h);
+        };
         const QString delSid = QStringLiteral("clean-sid-0001");
         const QString delFile = cleanHome +
             QStringLiteral("/.workbuddy/projects/slug-clean/") + delSid +
@@ -1077,6 +1105,9 @@ int main(int argc, char **argv) {
         side.open(QIODevice::WriteOnly);
         side.write("side");
         side.close();
+        // 刚写的 fixture 会被 60s 活跃窗口拦住——把 mtime 改陈，模拟真正的旧归档。
+        ageFile(delFile);
+        ageFile(sidecar + QStringLiteral("/subagents/a.txt"));
 
         const QJsonArray delItems{QJsonObject{
             {QStringLiteral("exe"), QStringLiteral("WorkBuddy.exe")},
@@ -1084,18 +1115,81 @@ int main(int argc, char **argv) {
             {QStringLiteral("project"), missingProject},
             {QStringLiteral("title"), QStringLiteral("归档清理测试")}}};
         QString why;
-        const QJsonObject result = SessionCleaner::removeArchived(
-            delItems, &why, cleanHome, temp.filePath("cleaner_trash"));
+        const QJsonObject result = SessionCleaner::removeSessions(
+            delItems, &why, cleanHome, trashBase);
         check(result.value(QStringLiteral("deleted")).toInt() == 1,
-              "cleaner deletes archived jsonl");
+              "cleaner moves archived jsonl to trash");
         check(!QFileInfo::exists(delFile), "cleaner removes session jsonl");
         check(!QFileInfo::exists(sidecar), "cleaner removes session sidecar");
-        const QString backup = result.value(QStringLiteral("backup")).toString();
-        check(QFileInfo::exists(backup + QStringLiteral("/manifest.json")),
-              "cleaner writes manifest");
-        check(QFileInfo::exists(backup + QStringLiteral("/WorkBuddy.exe/") + delSid +
-                                QLatin1Char('/') + delSid + QStringLiteral(".jsonl")),
-              "cleaner backup present");
+        const QString key0 = result.value(QStringLiteral("entries")).toArray()
+                                 .at(0).toString();
+        const QString entry0 = trashBase + QStringLiteral("/entries/") + key0;
+        check(QFileInfo::exists(entry0 + QStringLiteral("/entry.json")),
+              "cleaner writes entry manifest");
+        check(QFileInfo::exists(entry0 + QStringLiteral("/files/0-") + delSid +
+                                QStringLiteral(".jsonl")),
+              "entry holds the jsonl");
+        check(QFileInfo::exists(entry0 + QStringLiteral("/files/1-") + delSid +
+                                QStringLiteral("/subagents/a.txt")),
+              "entry holds the sidecar");
+
+        // 列表→恢复→回位；回收站条目消失。
+        const QJsonArray tRows = SessionCleaner::listTrash(trashBase);
+        check(tRows.size() == 1 &&
+                  tRows.at(0).toObject().value(QStringLiteral("key")).toString() ==
+                      key0 &&
+                  tRows.at(0).toObject().value(QStringLiteral("session")).toString() ==
+                      delSid,
+              "listTrash sees the entry");
+        QString rerr;
+        const QJsonObject rr =
+            SessionCleaner::restore(key0, &rerr, cleanHome, trashBase);
+        check(rr.value(QStringLiteral("ok")).toBool(),
+              QStringLiteral("restore ok (%1)").arg(rerr).toUtf8().constData());
+        check(QFileInfo::exists(delFile) &&
+                  QFileInfo::exists(sidecar + QStringLiteral("/subagents/a.txt")),
+              "restore puts files back");
+        QFile restoredFile(sidecar + QStringLiteral("/subagents/a.txt"));
+        const bool opened = restoredFile.open(QIODevice::ReadOnly);
+        const QByteArray restoredBytes = opened ? restoredFile.readAll() : QByteArray();
+        restoredFile.close();  // 不关掉句柄，下一轮删除会被自己锁住（Windows）
+        check(opened && restoredBytes == QByteArray("side"),
+              QStringLiteral("restored content intact (opened=%1 bytes=%2)")
+                  .arg(opened)
+                  .arg(QString::fromUtf8(restoredBytes.toHex()))
+                  .toUtf8()
+                  .constData());
+        check(SessionCleaner::listTrash(trashBase).isEmpty(),
+              "restore removes the entry");
+
+        // 再删一次→原位被占→整体拒绝且不动任何文件；腾开后能恢复。
+        const QJsonObject r2 =
+            SessionCleaner::removeSessions(delItems, &why, cleanHome, trashBase);
+        check(r2.value(QStringLiteral("deleted")).toInt() == 1,
+              "second delete moves to trash again");
+        const QString key2 = r2.value(QStringLiteral("entries")).toArray()
+                                 .at(0).toString();
+        {
+            QFile occ(delFile);
+            occ.open(QIODevice::WriteOnly);
+            occ.write("宿主又建了同 id 的新会话");
+        }
+        rerr.clear();
+        const QJsonObject rr2 =
+            SessionCleaner::restore(key2, &rerr, cleanHome, trashBase);
+        check(!rr2.value(QStringLiteral("ok")).toBool() &&
+                  rerr.contains(QStringLiteral("原位已有东西")),
+              "restore refuses when the slot is taken");
+        check(QFileInfo::exists(delFile) &&
+                  SessionCleaner::listTrash(trashBase).size() == 1,
+              "refused restore touched nothing");
+        QFile::remove(delFile);
+        check(SessionCleaner::restore(key2, &rerr, cleanHome, trashBase)
+                  .value(QStringLiteral("ok"))
+                  .toBool(),
+              "restore works again once the slot is free");
+        ageFile(delFile);
+        ageFile(sidecar + QStringLiteral("/subagents/a.txt"));
 
         const QString liveProject = temp.filePath("cleaner_live_project");
         QDir().mkpath(liveProject);
@@ -1116,23 +1210,94 @@ int main(int argc, char **argv) {
             {QStringLiteral("session"), liveSid},
             {QStringLiteral("project"), liveProject},
             {QStringLiteral("title"), QStringLiteral("活跃会话")}}};
-        const QJsonObject liveResult = SessionCleaner::removeArchived(
+        // 对 Magpie：不再要求归档——项目目录还在的会话照样可删；刚写的
+        // 由 60s 活跃窗口拦在下面的 hot 用例测。这里先把 mtime 改陈再删。
+        ageFile(liveFile);
+        const QJsonObject liveResult = SessionCleaner::removeSessions(
             liveItems, &why, cleanHome, temp.filePath("cleaner_trash2"));
-        check(liveResult.value(QStringLiteral("deleted")).toInt() == 0,
-              "cleaner refuses active project");
-        check(liveResult.value(QStringLiteral("failed")).toArray().size() == 1,
-              "cleaner reports active refusal");
-        check(QFileInfo::exists(liveFile), "cleaner keeps active session");
+        check(liveResult.value(QStringLiteral("deleted")).toInt() == 1,
+              "cleaner deletes non-archived session too");
+        check(!QFileInfo::exists(liveFile),
+              "cleaner removes live-project jsonl too");
 
         const QJsonArray badItems{QJsonObject{
             {QStringLiteral("exe"), QStringLiteral("OpenSquilla.exe")},
             {QStringLiteral("session"), QStringLiteral("agent:main:x:y")}}};
-        const QJsonObject badResult = SessionCleaner::removeArchived(
+        const QJsonObject badResult = SessionCleaner::removeSessions(
             badItems, &why, cleanHome, temp.filePath("cleaner_trash3"));
         check(badResult.value(QStringLiteral("deleted")).toInt() == 0,
               "cleaner refuses unsupported host");
         check(!SessionCleaner::supportsHost(QStringLiteral("OpenSquilla.exe")),
               "cleaner supported-host matrix");
+
+        // 活跃窗口：刚写过的归档会话不碰（Magpie ActiveWindow 口径）。
+        const QString hotSid = QStringLiteral("hot-sid-0001");
+        const QString hotFile = cleanHome +
+            QStringLiteral("/.workbuddy/projects/slug-hot/") + hotSid +
+            QStringLiteral(".jsonl");
+        writeLines(hotFile, {
+            QString::fromUtf8(QJsonDocument(QJsonObject{
+                {QStringLiteral("type"), QStringLiteral("workspace-directories")},
+                {QStringLiteral("directories"), QJsonArray{missingProject}}}).toJson(
+                QJsonDocument::Compact)),
+            wbLine(QStringLiteral("h1"), QStringLiteral("user"),
+                   QStringLiteral("热会话"), base, hotSid),
+        });
+        const QJsonArray hotItems{QJsonObject{
+            {QStringLiteral("exe"), QStringLiteral("WorkBuddy.exe")},
+            {QStringLiteral("session"), hotSid},
+            {QStringLiteral("project"), missingProject},
+            {QStringLiteral("title"), QStringLiteral("热会话")}}};
+        const QJsonObject hotResult = SessionCleaner::removeSessions(
+            hotItems, &why, cleanHome, trashBase);
+        check(hotResult.value(QStringLiteral("deleted")).toInt() == 0 &&
+                  hotResult.value(QStringLiteral("failed")).toArray()
+                      .at(0).toObject()
+                      .value(QStringLiteral("error")).toString()
+                      .contains(QStringLiteral("一分钟内有写入")) &&
+                  QFileInfo::exists(hotFile),
+              "active window refuses the trash move");
+
+        // 会话 id / 回收站 key 的路径穿越全拒。
+        const QJsonArray evilItems{QJsonObject{
+            {QStringLiteral("exe"), QStringLiteral("WorkBuddy.exe")},
+            {QStringLiteral("session"), QStringLiteral("../../evil")}}};
+        const QJsonObject evilResult = SessionCleaner::removeSessions(
+            evilItems, &why, cleanHome, trashBase);
+        check(evilResult.value(QStringLiteral("deleted")).toInt() == 0 &&
+                  evilResult.value(QStringLiteral("failed")).toArray()
+                      .at(0).toObject()
+                      .value(QStringLiteral("error")).toString()
+                      .contains(QStringLiteral("不合法")),
+              "session id traversal refused");
+        QString kerr;
+        check(!SessionCleaner::purge(QStringLiteral("WorkBuddy.exe/../../evil"),
+                                     &kerr, trashBase)
+                   .value(QStringLiteral("ok"))
+                   .toBool(),
+              "trash key traversal refused");
+
+        // purge 单条 / purgeAll 清空：只删条目目录，不碰宿主已消失的事实。
+        const QJsonObject r3 =
+            SessionCleaner::removeSessions(delItems, &why, cleanHome, trashBase);
+        check(r3.value(QStringLiteral("deleted")).toInt() == 1,
+              "third delete moves to trash");
+        const QString key3 = r3.value(QStringLiteral("entries")).toArray()
+                                 .at(0).toString();
+        const QString entry3 = trashBase + QStringLiteral("/entries/") + key3;
+        check(QFileInfo::exists(entry3), "entry exists before purge");
+        QString perr;
+        check(SessionCleaner::purge(key3, &perr, trashBase)
+                  .value(QStringLiteral("ok"))
+                  .toBool(),
+              "purge removes one entry");
+        check(!QFileInfo::exists(entry3) && !QFileInfo::exists(delFile),
+              "purged entry gone, host file stays gone");
+        QString paErr;
+        const QJsonObject pa = SessionCleaner::purgeAll(&paErr, trashBase);
+        check(!pa.value(QStringLiteral("ok")).toBool() &&
+                  paErr.contains(QStringLiteral("空")),
+              "purgeAll on empty reports, never touches hosts");
     }
 
     std::printf(ok ? "ALL PASS transcript (%d checks)\n"

@@ -4139,8 +4139,10 @@ QString MainWindow::lanSessionsJson() {
             // 不把「这个会话有卡」误当成「这个宿主能接收手机派发」。
             row.insert(QStringLiteral("can_dispatch"),
                        supported.contains(exe) && !info.archived);
+            // 删除资格只看宿主有没有安全的会话级删除通道（对齐 Magpie：
+            // 任意会话可删，活跃保护交给 60s 活跃窗口，删了进回收站可恢复）。
             row.insert(QStringLiteral("can_delete"),
-                       info.archived && SessionCleaner::supportsHost(exe));
+                       SessionCleaner::supportsHost(exe));
             rows.append(row);
             const QDateTime updated =
                 QDateTime::fromString(info.updatedAt, Qt::ISODateWithMs);
@@ -5146,11 +5148,11 @@ void MainWindow::handleWebAction(const QJsonObject &action) {
         activateWindow();
         QMessageBox box(this);
         box.setIcon(QMessageBox::Warning);
-        box.setWindowTitle(QStringLiteral("删除已归档会话"));
-        box.setText(QStringLiteral("将同步删除 %1 条已归档会话。").arg(items.size()));
+        box.setWindowTitle(QStringLiteral("删除会话"));
+        box.setText(QStringLiteral("把 %1 条会话移入回收站？").arg(items.size()));
         box.setInformativeText(QStringLiteral(
-            "删除前会先完整备份到 AgentRMC 数据目录的 session-trash。"
-            "宿主中的原会话会被移除，备份仅用于人工找回。"));
+            "会话文件整体移入本机回收站（派发页右上「回收站」），随时可恢复；"
+            "只有回收站里点「彻底删除」才真删。一分钟内有写入的活跃会话会被拒绝。"));
         box.setDetailedText(lines.join(QLatin1Char('\n')));
         QPushButton *erase = box.addButton(QStringLiteral("删除并备份"),
                                            QMessageBox::DestructiveRole);
@@ -5170,7 +5172,7 @@ void MainWindow::handleWebAction(const QJsonObject &action) {
             return;
         }
         QString error;
-        QJsonObject result = SessionCleaner::removeArchived(items, &error);
+        QJsonObject result = SessionCleaner::removeSessions(items, &error);
         if (!error.isEmpty() && !result.contains(QStringLiteral("error"))) {
             result.insert(QStringLiteral("error"), error);
         }
@@ -5179,6 +5181,56 @@ void MainWindow::handleWebAction(const QJsonObject &action) {
             // 目录立刻重推一份，删除成功/部分失败都能反映真实剩余项。
             workWeb_->pushSessions(
                 QJsonDocument::fromJson(lanSessionsJson().toUtf8()).object());
+        }
+        return;
+    }
+    if (cmd == QStringLiteral("trashList") ||
+        cmd == QStringLiteral("trashRestore") ||
+        cmd == QStringLiteral("trashPurge") ||
+        cmd == QStringLiteral("trashPurgeAll")) {
+        // 回收站（Magpie 口径：删除=入站可恢复，彻底删除只认用户在回收站里
+        // 的明确点击，永不自动）。桌面壳专属：手机 /m/action 白名单不含这几条。
+        QString err;
+        QJsonObject out;
+        const QString key = action.value(QStringLiteral("key")).toString();
+        if (cmd == QStringLiteral("trashList")) {
+            out = QJsonObject{{QStringLiteral("ok"), true}};
+        } else if (cmd == QStringLiteral("trashRestore")) {
+            out = SessionCleaner::restore(key, &err);
+        } else if (cmd == QStringLiteral("trashPurge")) {
+            out = SessionCleaner::purge(key, &err);
+        } else {
+            out = SessionCleaner::purgeAll(&err);
+        }
+        const bool ok = out.value(QStringLiteral("ok")).toBool();
+        const QString why = out.value(QStringLiteral("error")).toString().isEmpty()
+                                ? err
+                                : out.value(QStringLiteral("error")).toString();
+        out.insert(QStringLiteral("items"), SessionCleaner::listTrash());
+        QString notice;
+        if (cmd == QStringLiteral("trashList")) {
+            // 列表回包不带提示条。
+        } else if (ok) {
+            notice = cmd == QStringLiteral("trashRestore")
+                         ? QString::fromUtf8("已恢复：%1")
+                               .arg(out.value(QStringLiteral("title")).toString())
+                         : cmd == QStringLiteral("trashPurgeAll")
+                               ? QString::fromUtf8("回收站已清空")
+                               : QString::fromUtf8("已从回收站彻底删除");
+        } else {
+            notice = why.isEmpty() ? QString::fromUtf8("操作失败") : why;
+        }
+        if (!notice.isEmpty()) {
+            out.insert(QStringLiteral("notice"), notice);
+            out.insert(QStringLiteral("bad"), !ok);
+        }
+        if (workWeb_ != nullptr) {
+            workWeb_->pushTrash(out);
+            if (ok && cmd == QStringLiteral("trashRestore")) {
+                // 恢复回来的会话回到归档组：目录重推一份才能立刻看见。
+                workWeb_->pushSessions(
+                    QJsonDocument::fromJson(lanSessionsJson().toUtf8()).object());
+            }
         }
         return;
     }

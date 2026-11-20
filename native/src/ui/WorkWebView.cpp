@@ -595,6 +595,18 @@ void WorkWebView::pushDeleteResult(const QJsonObject &result) {
                                nullptr);
 }
 
+void WorkWebView::pushTrash(const QJsonObject &payload) {
+    if (!documentReady_ || d_->webview == nullptr) {
+        return;
+    }
+    const QString json = QString::fromUtf8(
+        QJsonDocument(payload).toJson(QJsonDocument::Compact));
+    const QString script = QStringLiteral("window.__setTrash(")
+                           + jsEscape(json) + QStringLiteral(");");
+    d_->webview->ExecuteScript(reinterpret_cast<LPCWSTR>(script.utf16()),
+                               nullptr);
+}
+
 // 首帧只能整页给（NavigateToString 没有「换个 body」的写法）；文档一旦好了，
 // 后面一律 ExecuteScript 只喂数据。整页重载会把选中态、滚动位置、hover 全冲掉
 // （实测：标为已处理之后列表回到顶部、按钮变灰），事件一密还会闪。
@@ -949,6 +961,18 @@ QString WorkWebView::htmlFor(const QString &stateJson) const {
 .dspbatch{flex:0 0 auto;display:flex;align-items:center;gap:8px;padding:8px 2px 12px;
   border-top:1px solid var(--w14);margin-top:4px}
 .dspbatch #dspBatchCount{font-size:var(--f11);font-weight:600;color:var(--accent)}
+#dspTrash.on{border-color:var(--accent);color:var(--accent)}
+#dspBatchToggle.on{border-color:var(--danger);color:var(--danger)}
+.dsptrashhead{display:flex;align-items:center;gap:8px;padding:10px}
+.dsptrashtitle{font-size:var(--f12);font-weight:600;color:var(--text)}
+.dsptrashhead .spacer{flex:1}
+.dsptrashnote{padding:0 10px 10px;font-size:var(--f11);color:var(--text-dim);line-height:1.5}
+.dsptrashrow{display:flex;align-items:center;gap:10px;padding:9px 10px;border-top:1px solid var(--line)}
+.dsptrashmain{flex:1;min-width:0}
+.dsptrashttl{font-size:var(--f12);color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dsptrashmeta{font-size:var(--f11);color:var(--text-dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px}
+.dsptrashops{display:flex;gap:6px;flex:0 0 auto;align-items:center}
+#dspTrash.on{color:var(--accent);border-color:var(--accent)}
 .dspbatch .btn.primary{background:var(--danger);border-color:var(--danger)}
 /* 聊天页：点待办进入，打开即最新记录；旧记录上翻按页加载。
    滚动条隐藏（全局约定），上下渐隐暗示可滚；新消息 pill 不打断读历史。 */
@@ -1440,7 +1464,9 @@ QString WorkWebView::htmlFor(const QString &stateJson) const {
     <span class="total">派发会话</span>
     <span class="dsp-summary" id="dspSummary"></span>
     <span class="spacer"></span>
-    <button class="ghost" id="dspRefresh" title="重新读取各 Agent 的最近会话">刷新会话</button>
+    <button class="ghost" id="dspBatchToggle" title="批量选择会话删除：移入回收站，可随时恢复" hidden>批量删除</button>
+    <button class="ghost" id="dspTrash" title="回收站：删除先进这里，可恢复；只有这里的「彻底删除」才真删" hidden>回收站</button>
+  <button class="ghost" id="dspRefresh" title="重新读取各 Agent 的最近会话">刷新会话</button>
   </div>
   <div class="dspchips" id="dspAgents"></div>
   <div class="dspnotice" id="dspNotice" hidden></div>
@@ -1643,6 +1669,8 @@ let activeTab = 0, selected = '', filterExe = '';
 let multiMode = false; const multiSel = new Set();  // 待办多选批量销账
 let DSP=null,DSP_LOADING=false,DSP_AT=0,DSP_SELECTED='',DSP_SIG='',DSP_TIMER=null;
 let DSP_NEW=false,DSP_CLEAN=false,DSP_DELETING=false,DSP_NOTICE_TIMER=null;
+// 回收站（Magpie 口径：删除=入站可恢复，彻底删除只认用户在回收站里的明确点击）。
+let DSP_TRASH=null,DSP_TRASH_OPEN=false,DSP_TRASH_BUSY=false,DSP_TRASH_ASK='';
 const DSP_GROUP_STATE=new Map();
 const DSP_DEL_SEL=new Set();
 let DSCHAT=null,dchatOpen=false,dchatMsgs=[],dchatIds=new Set(),dchatTotal=0,
@@ -2310,15 +2338,11 @@ function dspSession(agent,row,archived){
     st.textContent=LABEL[row.stage]||'';
     el.append(st);
   }
-  if(archived&&!DSP_CLEAN){
+  if(!DSP_CLEAN&&row.can_delete!==false){
     const del=document.createElement('button');del.className='dspdel';
-    del.textContent=row.can_delete===false?'不可删':'删除';
-    del.disabled=row.can_delete===false||DSP_DELETING;
-    del.title=row.can_delete===false
-      ?'该宿主没有安全的会话物理删除接口，请在宿主内处理'
-      :'删除这条归档会话（会先备份并二次确认）';
-    del.onclick=e=>{e.stopPropagation();
-      if(row.can_delete!==false)deleteRows([{agent,row}]);};
+    del.textContent='删除';del.disabled=DSP_DELETING;
+    del.title='把这条会话移入回收站，可随时恢复；一分钟内有写入的会话会被拒';
+    del.onclick=e=>{e.stopPropagation();deleteRows([{agent,row}]);};
     el.append(del);
   }else if(!DSP_CLEAN){
     const arr=document.createElement('span');arr.className='arr';arr.textContent='›';
@@ -2383,36 +2407,18 @@ function dspArchiveSection(agent,count,defaultOpen,deletable,cleaning){
   const chev=document.createElement('span');chev.className='dspsecchev';chev.textContent='›';
   const name=document.createElement('span');name.className='dspsecname';name.textContent='已归档';
   const cnt=document.createElement('span');cnt.className='dspseccount';
-  cnt.textContent=cleaning?(count+' 条可删'):(count+' 个会话');
+  cnt.textContent=count+' 个会话';
   fold.append(chev,name,cnt);
-  fold.title=cleaning
-    ?'清理模式：勾选要删除的归档会话，删除前会备份并要求二次确认。'
-    :'已归档会话：项目目录已不存在，或宿主侧已归档。展开可查看记录、删除。';
+  fold.title='已归档会话：项目目录已不存在，或宿主侧已归档。展开可查看记录、删除（进回收站）。';
   head.append(fold);
-  if(deletable>0||cleaning){
-    const clean=document.createElement('button');
-    clean.className='dspsecclean'+(cleaning?' on':'');
-    clean.textContent=cleaning?'退出清理':'清理归档';
-    clean.disabled=DSP_DELETING;
-    clean.title=cleaning?'退出清理，回到正常浏览'
-      :'只处理已归档会话；删除前会备份并要求二次确认';
-    clean.onclick=e=>{
-      e.stopPropagation();
-      if(DSP_DELETING)return;
-      DSP_CLEAN=!DSP_CLEAN;DSP_DEL_SEL.clear();DSP_SIG='';
-      $('dspList').scrollTop=0;$('dspNotice').hidden=true;
-      render();
-    };
-    head.append(clean);
-  }
+  // 批量开关已升到页头（2026-11-20 对 Magpie 放开任意会话可删后，
+  // 批量不再只针对这一区）。
   const body=document.createElement('div');body.className='dspsecbody';
   const stateKey=agent.exe+'|__archive-section';
   const stored=DSP_GROUP_STATE.get(stateKey);
   // 清理模式必须展开（要挑条目），不管之前手动收成什么样。
   const open=cleaning?true:(stored===undefined?!!defaultOpen:stored);
-  const labelOf=opening=>cleaning
-    ?('已归档，'+count+' 条可删，'+(opening?'已展开':'已收起'))
-    :('已归档，'+count+' 个会话，'+(opening?'已展开':'已收起'));
+  const labelOf=opening=>'已归档，'+count+' 个会话，'+(opening?'已展开':'已收起');
   sec.classList.toggle('closed',!open);
   body.hidden=!open;
   fold.setAttribute('aria-expanded',String(open));
@@ -2428,8 +2434,9 @@ function dspArchiveSection(agent,count,defaultOpen,deletable,cleaning){
   sec.append(head,body);
   return {el:sec,body};
 }
-function dspArchivedRows(agent){
-  return (agent&&agent.sessions||[]).filter(r=>r.archived&&r.can_delete!==false);
+function dspDeletableRows(agent){
+  // 任意会话可删（对 Magpie：门槛是宿主支持 + 60s 活跃窗口，不是归档）。
+  return (agent&&agent.sessions||[]).filter(r=>r.can_delete!==false);
 }
 function dspCurrentAgent(){
   const agents=DSP&&DSP.agents||[];
@@ -2437,16 +2444,22 @@ function dspCurrentAgent(){
 }
 function updateDspBatch(){
   const agent=dspCurrentAgent();
-  const rows=dspArchivedRows(agent);
+  const rows=dspDeletableRows(agent);
+  const tt=$('dspBatchToggle');
+  if(tt){
+    tt.hidden=!(rows.length||DSP_CLEAN);
+    tt.textContent=DSP_CLEAN?'退出批量':'批量删除';
+    tt.classList.toggle('on',DSP_CLEAN);
+    tt.disabled=DSP_DELETING;
+  }
   $('dspBatch').hidden=!DSP_CLEAN;
   $('dspBatchCount').textContent='已选 '+DSP_DEL_SEL.size+' 条';
-  const cleanBtn=document.querySelector('#dspList .dspsecclean');
-  if(cleanBtn)cleanBtn.disabled=DSP_DELETING;
   $('dspRefresh').disabled=DSP_DELETING;
   $('dspDelete').disabled=DSP_DELETING||!DSP_DEL_SEL.size;
-  $('dspDelete').textContent=DSP_DELETING?'删除中…':'删除所选';
+  $('dspDelete').textContent=DSP_DELETING?'移入回收站中…':'移入回收站';
   $('dspCheckAll').disabled=DSP_DELETING||!rows.length;
   $('dspCheckAll').textContent=(rows.length&&DSP_DEL_SEL.size===rows.length)?'全不选':'全选';
+  updateDspTrashBtn();
 }
 function showDspNotice(text,bad){
   const el=$('dspNotice');if(!el)return;
@@ -2460,7 +2473,7 @@ function deleteRows(pairs){
   updateDspBatch();
   const items=pairs.map(({agent,row})=>({exe:agent.exe,session:row.id,
     project:row.project||'',title:row.title||''}));
-  showDspNotice('等待确认：将删除 '+items.length+' 条归档会话并备份…');
+  showDspNotice('等待确认：将把 '+items.length+' 条会话移入回收站…');
   postObj({cmd:'sessionDelete',items});
 }
 window.__setDeleteResult=function(r){
@@ -2470,18 +2483,103 @@ window.__setDeleteResult=function(r){
   const failed=(r.failed||[]).length;
   if((r.deleted||0)>0){
     DSP_CLEAN=false;DSP_DEL_SEL.clear();DSP_SIG='';
-    showDspNotice('已删除 '+(r.deleted||0)+' 条归档会话'
-      +(failed?'，'+failed+' 条失败':'')
-      +(r.backup?('；备份：'+r.backup):''),failed>0);
+    showDspNotice('已移入回收站 '+(r.deleted||0)+' 条会话'
+      +(failed?'，'+failed+' 条失败':'')+'；可在右上「回收站」恢复',failed>0);
     render();
     requestSessions(true);
   }else{
-    showDspNotice('没有删除成功：'+((r.error||'未知原因'))
-      +(r.backup?('；备份：'+r.backup):''),true);
+    showDspNotice('没有删除成功：'+((r.error||'未知原因')),true);
   }
 };
+function updateDspTrashBtn(){
+  const b=$('dspTrash');if(!b)return;
+  const n=DSP_TRASH?DSP_TRASH.length:0;
+  // 常驻可见：只按「条目>0」显示的话，从没开过回收站的人永远找不到入口
+  // （里面可能正躺着恢复无门的会话）。
+  b.hidden=false;
+  b.textContent='回收站'+(n?(' '+n):'');
+  b.classList.toggle('on',DSP_TRASH_OPEN);
+}
+function openTrash(){
+  if(DSP_TRASH_BUSY)return;
+  DSP_TRASH_OPEN=!DSP_TRASH_OPEN;DSP_TRASH_ASK='';
+  if(DSP_TRASH_OPEN){DSP_CLEAN=false;DSP_DEL_SEL.clear();}  // 两面互斥
+  $('dspNotice').hidden=true;
+  if(DSP_TRASH_OPEN&&!DSP_TRASH){DSP_TRASH_BUSY=true;postObj({cmd:'trashList'});}
+  DSP_SIG='';render();
+}
+window.__setTrash=function(j){
+  DSP_TRASH_BUSY=false;
+  if(!j)return;
+  DSP_TRASH=j.items||[];
+  if(j.notice)showDspNotice(j.notice,!!j.bad);
+  DSP_SIG='';render();
+}
+function trashAsk(which,label,cmd){
+  if(DSP_TRASH_BUSY)return;
+  if(DSP_TRASH_ASK!==which){
+    DSP_TRASH_ASK=which;render();
+    setTimeout(()=>{if(DSP_TRASH_ASK===which){DSP_TRASH_ASK='';render();}},4000);
+    return;
+  }
+  DSP_TRASH_ASK='';DSP_TRASH_BUSY=true;void label;
+  postObj(Object.assign({cmd},which==='__all__'?{}:{key:which}));render();
+}
+function renderTrash(){
+  const list=$('dspList');list.hidden=false;$('dspEmpty').hidden=true;
+  $('dspBatch').hidden=true;
+  list.replaceChildren();
+  const head=document.createElement('div');head.className='dsptrashhead';
+  const t=document.createElement('span');t.className='dsptrashtitle';
+  t.textContent='回收站 · '+(DSP_TRASH?DSP_TRASH.length+' 条':'读取中…');
+  const sp=document.createElement('span');sp.className='spacer';
+  const ask=document.createElement('button');ask.className='btn';
+  ask.textContent=DSP_TRASH_ASK==='__all__'?'再点一次确认清空':'彻底清空';
+  ask.disabled=DSP_TRASH_BUSY||!(DSP_TRASH&&DSP_TRASH.length);
+  ask.title='删除所有回收条目（不可恢复）；活跃会话的自动删除从不进这一步';
+  ask.onclick=()=>trashAsk('__all__','','trashPurgeAll');
+  const close=document.createElement('button');close.className='ghost';
+  close.textContent='关闭';close.onclick=openTrash;
+  head.append(t,sp,ask,close);
+  const note=document.createElement('div');note.className='dsptrashnote';
+  note.textContent='删除 = 移入回收站，随时可恢复；只有这里的「彻底删除」才真删，应用永不自动清空。';
+  list.append(head,note);
+  (DSP_TRASH||[]).forEach(r=>{
+    const row=document.createElement('div');row.className='dsptrashrow';
+    const main=document.createElement('div');main.className='dsptrashmain';
+    const ttl=document.createElement('div');ttl.className='dsptrashttl';
+    ttl.textContent=r.title||r.session||r.key;
+    const meta=document.createElement('div');meta.className='dsptrashmeta';
+    const kb=Math.round((r.size||0)/1024);
+    meta.textContent=[r.exe,(r.deleted||'').replace('T',' ').slice(0,16),
+      (kb>=1024?(kb/1024).toFixed(1)+' MB':kb+' KB')].filter(Boolean).join(' · ')
+      +(r.damaged?' · 清单损坏（不能恢复）':'');
+    main.append(ttl,meta);
+    const ops=document.createElement('div');ops.className='dsptrashops';
+    const rst=document.createElement('button');rst.className='ghost';
+    rst.textContent='恢复';rst.disabled=DSP_TRASH_BUSY||!!r.damaged;
+    rst.title='把会话文件放回宿主原位；原位已有同名文件时整体拒绝';
+    // 恢复不毁数据，一步直发；两步确认只留给「彻底删除」。
+    rst.onclick=()=>{ if(DSP_TRASH_BUSY)return;
+      DSP_TRASH_BUSY=true;postObj({cmd:'trashRestore',key:r.key});render(); };
+    const del=document.createElement('button');del.className='ghost';
+    del.textContent=DSP_TRASH_ASK===r.key?'确认删除':'彻底删除';
+    del.disabled=DSP_TRASH_BUSY;
+    del.onclick=()=>trashAsk(r.key,'','trashPurge');
+    ops.append(rst,del);
+    row.append(main,ops);
+    list.append(row);
+  });
+  if(DSP_TRASH&&!DSP_TRASH.length){
+    const e=document.createElement('div');e.className='dspempty';
+    e.textContent='回收站是空的。在「已归档」区点「清理归档」删除的会话会先进到这里。';
+    list.append(e);
+  }
+  updateDspTrashBtn();
+}
 function renderDispatch(){
   const list=$('dspList'),chips=$('dspAgents');
+  if(DSP_TRASH_OPEN){renderTrash();return;}
   if(!DSP){
     chips.replaceChildren();
     $('dspEmpty').hidden=true;list.hidden=false;
@@ -2541,8 +2639,8 @@ function renderDispatch(){
   // 未分类任务同样按归档拆：活跃单任务留在上面，已归档单任务进已归档区。
   const uncLive=unclassified.filter(r=>!r.archived);
   const uncDead=unclassified.filter(r=>!!r.archived);
-  const deletable=dspArchivedRows(agent);
-  // 选择里已经不在当前归档集（别的 Agent/已被删）的项清掉。
+  const deletable=dspDeletableRows(agent);
+  // 选择里已经不在当前可删集（别的 Agent/已删）的项清掉。
   if(DSP_CLEAN){
     const valid=new Set(deletable.map(r=>agent.exe+'|'+r.id));
     DSP_DEL_SEL.forEach(k=>{if(!valid.has(k))DSP_DEL_SEL.delete(k);});
@@ -2554,32 +2652,28 @@ function renderDispatch(){
   // 把行挤成两行，组头本来也带数量，摘要里重复。
   const liveCount=rows.filter(r=>!r.archived).length;
   $('dspSummary').textContent=DSP_CLEAN
-    ?(agent.name+' · 选择要删除的归档会话 · '+deletable.length+' 条可删')
+    ?(agent.name+' · 选择要删除的会话 · '+deletable.length+' 条可删')
     :(agent.name+' · '+active.length+' 个项目'
       +' · '+liveCount+' 个活跃会话');
   const keep=list.scrollTop;list.replaceChildren();list.hidden=false;
   $('dspEmpty').hidden=true;
-  const shown = DSP_CLEAN ? archived.filter(g=>g.items.some(r=>r.can_delete!==false)) : null;
-  const uncShown = DSP_CLEAN ? uncDead.filter(r=>r.can_delete!==false) : uncDead;
-  if(!DSP_CLEAN&&!rows.length){
+  // 批量模式不再只筛归档：任意会话可删（对 Magpie），不可删的行自带「不可删」标。
+  const shown=archived;
+  const uncShown=uncDead;
+  if(!rows.length){
     list.hidden=true;$('dspEmpty').hidden=false;
     $('dspEmpty').querySelector('b').textContent='还没有可读的会话';
   }else{
-    if(!DSP_CLEAN){
-      active.forEach((g,i)=>list.append(
-        dspGroup(agent,g.label,g.items,g.fullProject,false,i===0)));
-      // 单任务会话统一收进一个「未分类任务」组，默认折叠。
-      if(uncLive.length)list.append(dspGroup(agent,'未分类任务',uncLive,'',false,false,
-        agent.exe+'|__unclassified'));
-    }
+    active.forEach((g,i)=>list.append(
+      dspGroup(agent,g.label,g.items,g.fullProject,false,DSP_CLEAN||i===0)));
+    // 单任务会话统一收进一个「未分类任务」组，默认折叠（批量模式展开 selectable）。
+    if(uncLive.length)list.append(dspGroup(agent,'未分类任务',uncLive,'',false,DSP_CLEAN?true:false,
+      agent.exe+'|__unclassified'));
     // 已归档全部收进列表底部的独立分区：不再跟活跃项目平铺在同一条列表里。
-    // 清理模式始终渲染这一区（哪怕一条可删的都没有），退出清理的入口就在区头上。
-    const ar= DSP_CLEAN ? shown : archived;
-    const archTotal=DSP_CLEAN
-      ?deletable.length
-      :ar.reduce((n,g)=>n+g.items.length,0)+uncShown.length;
-    if(ar.length||uncShown.length||DSP_CLEAN){
-      const box=dspArchiveSection(agent,archTotal,DSP_CLEAN,deletable.length,DSP_CLEAN);
+    const ar=shown;
+    const archTotal=ar.reduce((n,g)=>n+g.items.length,0)+uncShown.length;
+    if(ar.length||uncShown.length){
+      const box=dspArchiveSection(agent,archTotal,false,deletable.length,DSP_CLEAN);
       ar.forEach((g,i)=>box.body.append(
         dspGroup(agent,g.label,g.items,g.fullProject,true,DSP_CLEAN?true:i===0,
           agent.exe+'|__archived|'+g.key,true)));
@@ -2587,11 +2681,6 @@ function renderDispatch(){
       if(uncShown.length)box.body.append(
         dspGroup(agent,'未分类任务',uncShown,'',true,DSP_CLEAN,
           agent.exe+'|__unclassified-archived',true));
-      if(DSP_CLEAN&&!ar.length&&!uncShown.length){
-        const e=document.createElement('div');e.className='dspsecempty';
-        e.textContent='没有可删除的归档会话：这个 Agent 没有已归档记录，或宿主不提供安全删除。';
-        box.body.append(e);
-      }
       list.append(box.el);
     }
     list.scrollTop=DSP_NEW?0:keep;
@@ -3155,13 +3244,22 @@ $('kmReload').onclick=()=>postObj({cmd:'keyReload'});
 $('apAdd').onclick=()=>postObj({cmd:'appAdd'});
 $('apRescan').onclick=()=>postObj({cmd:'appRescan'});
 $('dspRefresh').onclick=()=>requestSessions(true);
+$('dspTrash').onclick=openTrash;
+$('dspBatchToggle').onclick=()=>{
+  if(DSP_DELETING)return;
+  DSP_CLEAN=!DSP_CLEAN;DSP_DEL_SEL.clear();DSP_SIG='';
+  // 批量和回收站两面互斥：进批量就退回收站面，反之也一样。
+  if(DSP_CLEAN)DSP_TRASH_OPEN=false;
+  $('dspList').scrollTop=0;$('dspNotice').hidden=true;
+  render();
+};
 $('dspBatchCancel').onclick=()=>{
   if(DSP_DELETING)return;
   DSP_CLEAN=false;DSP_DEL_SEL.clear();DSP_SIG='';render();
 };
 $('dspCheckAll').onclick=()=>{
   if(DSP_DELETING)return;
-  const rows=dspArchivedRows(dspCurrentAgent());
+  const rows=dspDeletableRows(dspCurrentAgent());
   if(rows.length&&DSP_DEL_SEL.size===rows.length)DSP_DEL_SEL.clear();
   else rows.forEach(r=>DSP_DEL_SEL.add(DSP_SELECTED+'|'+r.id));
   DSP_SIG='';render();
@@ -3169,7 +3267,7 @@ $('dspCheckAll').onclick=()=>{
 $('dspDelete').onclick=()=>{
   if(DSP_DELETING)return;
   const agent=dspCurrentAgent();if(!agent)return;
-  const pairs=dspArchivedRows(agent)
+  const pairs=dspDeletableRows(agent)
     .filter(r=>DSP_DEL_SEL.has(agent.exe+'|'+r.id))
     .map(row=>({agent,row}));
   if(pairs.length)deleteRows(pairs);

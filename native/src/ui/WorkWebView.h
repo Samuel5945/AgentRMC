@@ -49,6 +49,8 @@ public:
     // （{ok,files,artifacts} 或 {error,op}），页面挂 window.__setFilePanel。
     void pushFilePanel(const QString &rawJson);
     void pushDeleteResult(const QJsonObject &result);
+    // 回收站面板的推送（桌面壳专属：手机端不开放删除与回收站）。
+    void pushTrash(const QJsonObject &payload);
     // WebView2 的边界是物理像素：跨屏换 DPI 时主窗拿原生消息催一次重喂。
     void syncBounds();
     bool ready() const { return webviewReady(); }

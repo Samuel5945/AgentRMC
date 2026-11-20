@@ -144,10 +144,12 @@ QJsonObject queryMeta(const QByteArray &query) {
             continue;
         }
         const QString key = QString::fromUtf8(pair.left(eq));
+        // abs：项目外绝对路径（scope=abs 下载用）。漏了它参数会被静默丢掉，
+        // 下载退回 404，Chrome 只能存成 file.txt（2026-11-20 用户实测）。
         if (key == QLatin1String("id") || key == QLatin1String("session")
             || key == QLatin1String("project") || key == QLatin1String("exe")
             || key == QLatin1String("name") || key == QLatin1String("scope")
-            || key == QLatin1String("rel")) {
+            || key == QLatin1String("rel") || key == QLatin1String("abs")) {
             meta.insert(key, QUrl::fromPercentEncoding(pair.mid(eq + 1)));
         }
     }

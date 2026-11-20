@@ -517,6 +517,28 @@ QString taskNoteLine(const QString &raw) {
     return summary.isEmpty() ? head : head + QStringLiteral(" · ") + summary;
 }
 
+// 宿主往会话里塞的「注入消息」冒充 user 角色：Qoder 的技能注入是
+// "Base directory for this skill: <path>" + 整篇 SKILL.md，不过滤的话聊天页
+// 会冒一个巨大的「我」气泡，把技能文档当用户发言（2026-11-20 用户截图）。
+// Claude Code 风格的命令回显、上下文续接同理。
+bool isInjectedUserText(const QString &text) {
+    const QString s = text.trimmed();
+    static const QStringList kPrefixes = {
+        QStringLiteral("Base directory for this skill"),
+        QStringLiteral("<command-name>"),
+        QStringLiteral("<local-command-stdout>"),
+        QStringLiteral("<local-command-stderr>"),
+        QStringLiteral("<user_info>"),
+        QStringLiteral("Caveat: The messages below were generated"),
+        QStringLiteral("This session is being continued")};
+    for (const QString &prefix : kPrefixes) {
+        if (s.startsWith(prefix, Qt::CaseInsensitive)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 SessionTranscript::Result readJsonl(const QString &home, const QString &sessionId,
                                     int limit, int offset) {
     SessionTranscript::Result out;
@@ -617,6 +639,9 @@ SessionTranscript::Result readJsonl(const QString &home, const QString &sessionI
         QString role, text, at, id;
         if (!SessionTranscript::messageOf(line, &role, &text, &at, &id)) {
             continue;
+        }
+        if (role == QLatin1String("user") && isInjectedUserText(text)) {
+            continue;  // 技能注入 / 命令回显：不是用户真的说的话
         }
         // 当前模型记在 assistant 行的 providerData 里（WorkBuddy/Qoder 都有，
         // 显示名在 requestModelName）。取最后一条有值的就是"现在在用的"。

@@ -2247,8 +2247,17 @@ function msgFiles(text){
   let rel=(base+'.'+ext).replace(/\\/g,'/');
   if(/^[A-Za-z]:\//.test(rel)||rel[0]==='/'){
    const lower=rel.toLowerCase();
-   if(!root||!lower.startsWith(root+'/'))continue;  // 不在工作区里，不给下
-   rel=rel.slice(root.length+1);
+   if(root&&lower.startsWith(root+'/')){
+    rel=rel.slice(root.length+1);        // 工作区内 → 相对路径
+   }else{
+    // 项目外的绝对路径（如 D:/ld-bili-147/xxx.mp4）：登记成 abs 交给服务端
+    // scope=abs（白名单扩展名 + 拒绝系统目录）。以前直接 continue，用户
+    // 2026-11-20 报「带路径的非项目区产物也要能下载到手机」。
+    const nm=rel.split('/').pop();
+    if(!seen.has(rel)){seen.add(rel);out.push({abs:rel,name:nm});}
+    if(out.length>=8)break;
+    continue;
+   }
   }
   if(!rel||seen.has(rel))continue;
   seen.add(rel);
@@ -2313,9 +2322,20 @@ function bubble(m){
   const files=[],seen=new Set();
   (m.files||[]).forEach(p=>{
    const rel=toRelPath(p);
-   if(!rel||seen.has(rel))return;
-   seen.add(rel);
-   files.push({rel:rel,name:rel.split('/').pop()});
+   if(rel){
+    if(seen.has(rel))return;
+    seen.add(rel);
+    files.push({rel:rel,name:rel.split('/').pop()});
+    return;
+   }
+   // present_files 给的是项目外绝对路径（如 D:/ld-bili-147/xxx.mp4）：
+   // 走 abs 下载，别丢。
+   const norm=String(p||'').replace(/\\/g,'/').trim();
+   if(/^[A-Za-z]:\//.test(norm)||norm[0]==='/'){
+    if(seen.has(norm))return;
+    seen.add(norm);
+    files.push({abs:norm,name:norm.split('/').pop()});
+   }
   });
   msgFiles(text).forEach(f=>{
    if(!f.rel||seen.has(f.rel))return;
@@ -2327,7 +2347,7 @@ function bubble(m){
    files.slice(0,8).forEach(f=>{
     const a=document.createElement('a');
     a.className='bubfile';
-    a.href=fpUrl(null,f.rel);
+    a.href=fpUrl(null,f.rel,f.abs);
     a.setAttribute('download','');
     const ic=document.createElement('span');ic.className='ic';ic.innerHTML=ATT_ICON;
     const nm=document.createElement('b');nm.textContent=f.name;
@@ -2748,12 +2768,13 @@ const FP_ICON='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
 let fpOpen=false;
 // rel 有值＝下工作区里的产物（scope=project，服务端做 canonical + 白名单）；
 // 否则按 inbox 里的 basename 下。
-function fpUrl(name,rel){
+function fpUrl(name,rel,abs){
  let q='?id='+encodeURIComponent(chatKind==='session'?'':chatId);
  if(chatKind==='session')
   q+='&session='+encodeURIComponent(chatSession||'')
     +'&project='+encodeURIComponent(chatProjectPath());
  if(rel)q+='&scope=project&rel='+encodeURIComponent(rel);
+ else if(abs)q+='&scope=abs&abs='+encodeURIComponent(abs);
  else if(name)q+='&name='+encodeURIComponent(name);
  return '/m/'+((name||rel)?'file':'files')+q;
 }

@@ -5173,6 +5173,49 @@ LanWebServer::Download MainWindow::lanInboxFile(const QJsonObject &meta) {
     //             但要 canonical 校验 + 扩展名白名单。
     const QString scope = meta.value(QStringLiteral("scope")).toString();
     const bool projectScope = scope == QLatin1String("project");
+    const bool absScope = scope == QLatin1String("abs");
+    // abs —— agent 在会话里提到的**项目外**绝对路径（如 D:/ld-bili-147/xxx.mp4）。
+    // 只放白名单扩展名、拒绝系统目录；手机端要配对令牌才能访问，属受信设备。
+    if (absScope) {
+        QString abs = meta.value(QStringLiteral("abs")).toString().trimmed();
+        abs.replace(QLatin1Char('\\'), QLatin1Char('/'));
+        if (abs.isEmpty() || !QFileInfo(abs).isAbsolute() ||
+            !shareableExt(abs)) {
+            return fail();
+        }
+        static const QStringList kDeny = {
+            QStringLiteral("/windows/"),   QStringLiteral("/program files"),
+            QStringLiteral("/programdata/"), QStringLiteral("/appdata/"),
+            QStringLiteral("/system volume information/"),
+            QStringLiteral("/$recycle.bin/")};
+        const QString lower = abs.toLower();
+        for (const QString &d : kDeny) {
+            if (lower.contains(d)) {
+                return fail();
+            }
+        }
+        QFile f(abs);
+        if (!f.open(QIODevice::ReadOnly) || f.size() > 512LL * 1024 * 1024) {
+            f.close();
+            return fail();
+        }
+        LanWebServer::Download out;
+        out.ok = true;
+        out.name = QFileInfo(abs).fileName();
+        out.data = f.readAll();
+        f.close();
+        out.contentType =
+            QMimeDatabase()
+                .mimeTypeForFile(abs, QMimeDatabase::MatchExtension)
+                .name()
+                .toUtf8();
+        // Chrome 明文 HTTP 下拦 .exe/.msi/.apk：与 project 分支同样包一层 zip。
+        if (riskyDownloadExt(QFileInfo(abs).suffix())) {
+            out.data = zipSingleStore(QFileInfo(abs).fileName(), out.data);
+            out.contentType = QByteArray("application/zip");
+        }
+        return out;
+    }
     QString dir;
     if (projectScope) {
         QString project, session;
@@ -5211,7 +5254,7 @@ LanWebServer::Download MainWindow::lanInboxFile(const QJsonObject &meta) {
         return fail();
     }
     QFile f(canonFile);
-    if (!f.open(QIODevice::ReadOnly) || f.size() > 100LL * 1024 * 1024) {
+    if (!f.open(QIODevice::ReadOnly) || f.size() > 512LL * 1024 * 1024) {
         f.close();
         return fail();
     }

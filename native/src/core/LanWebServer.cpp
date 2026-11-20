@@ -2230,7 +2230,10 @@ const MSG_FILE_EXT=new Set(('png jpg jpeg gif webp bmp svg ico mp4 mov webm mkv 
 // 绝对路径（盘符开头，允许含空格，如 D:/HONOR Share/…）或「以空白/引号/括号
 // 为界」的相对路径。路径段不再限制 [\w.-]：中文目录名（产物/OS8成品/凝蓝.hwt）
 // 以前整个认不出来。
-const MSG_FILE_RE=/(?:^|[\s"'`（(【\[、，。：:])((?:[A-Za-z]:[\\/][^"'<>|`\r\n]{0,180}?)|(?:(?:[^\s"'<>|`\r\n\/]+\/){1,6}[^\s"'<>|`\r\n\/]{1,80}))\.([A-Za-z0-9]{1,5})/g;
+// 扩展名显式白名单 + 路径段贪婪：以前是「非贪婪 + [A-Za-z0-9]{1,5}」，
+// 文件名里的 1.4.7 会被当成后缀（base 截到「…演示-1」、ext='4'），
+// 白名单一查就丢——2026-11-20 用户报「带路径的产物还是没有下载」的真凶。
+const MSG_FILE_RE=/(?:^|[\s"'`（(【\[、，。：:])((?:[A-Za-z]:[\\/][^"'<>|`\r\n]{0,180})|(?:(?:[^\s"'<>|`\r\n\/]+\/){1,6}[^\s"'<>|`\r\n\/]{1,80}))\.(png|jpg|jpeg|gif|webp|bmp|svg|ico|mp4|mov|webm|mkv|mp3|wav|m4a|pdf|md|txt|doc|docx|xls|xlsx|ppt|pptx|zip|7z|rar|exe|msi|apk|hwt|hap|hsp)\b/gi;
 function msgFiles(text){
  if(!text||text.length<5)return [];
  const out=[],seen=new Set();
@@ -2338,8 +2341,11 @@ function bubble(m){
    }
   });
   msgFiles(text).forEach(f=>{
-   if(!f.rel||seen.has(f.rel))return;
-   seen.add(f.rel);
+   // abs 项没有 rel：以前这里只认 rel，项目外的绝对路径刚提取出来就被丢了
+   // （2026-11-20 用户第二次报「还是没有」的真凶）。
+   const key=f.rel||f.abs;
+   if(!key||seen.has(key))return;
+   seen.add(key);
    files.push(f);
   });
   if(files.length){

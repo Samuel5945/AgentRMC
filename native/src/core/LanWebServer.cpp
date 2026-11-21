@@ -560,13 +560,15 @@ void LanWebServer::onReadable(QTcpSocket *socket) {
     QByteArray path = parts.at(1);
     // 追踪：一条请求 = 一行；UA 决定是哪个浏览器，Origin 用来判它认的源是谁
     // （被代理/加速改写过的页面，Origin 会和 Host 对不上，正好解释 fetch 失败）。
+    // path 记到 300 字符：下载链接的 rel/abs 参数动辄上百字符，截 80 就永远
+    // 看不到「到底请求了哪个文件」（2026-11-21 排查产物 404 就卡在这）。
     if (!lanTracePath().isEmpty()) {
         const QByteArray ua = headerValue(headerLines, "user-agent").left(140);
         const QByteArray origin = headerValue(headerLines, "origin");
         const QByteArray host = headerValue(headerLines, "host");
         const QByteArray referer = headerValue(headerLines, "referer").left(90);
         traceReq_.insert(
-            socket, method + " " + path.left(80) + " host=" + host +
+            socket, method + " " + path.left(300) + " host=" + host +
                         " origin=" + origin + " ref=" + referer +
                         " ua=" + ua);
         lanTrace("REQ " + socket->peerAddress().toString().toUtf8() + " " +
@@ -2394,7 +2396,7 @@ const MSG_FILE_EXT=new Set(('png jpg jpeg gif webp bmp svg ico mp4 mov webm mkv 
 // 扩展名显式白名单 + 路径段贪婪：以前是「非贪婪 + [A-Za-z0-9]{1,5}」，
 // 文件名里的 1.4.7 会被当成后缀（base 截到「…演示-1」、ext='4'），
 // 白名单一查就丢——2026-11-20 用户报「带路径的产物还是没有下载」的真凶。
-const MSG_FILE_RE=/(?:^|[\s"'`（(【\[、，。：:])((?:[A-Za-z]:[\\/][^"'<>|`\r\n，。；：、！？]{0,180})|(?:(?:[^\s"'<>|`\r\n\/，。；：、！？]+\/){1,6}[^\s"'<>|`\r\n\/，。；：、！？]{1,80}))\.(png|jpg|jpeg|gif|webp|bmp|svg|ico|mp4|mov|webm|mkv|mp3|wav|m4a|pdf|md|txt|doc|docx|xls|xlsx|ppt|pptx|zip|7z|rar|exe|msi|apk|hwt|hap|hsp)\b/gi;
+const MSG_FILE_RE=/(?:^|[\s"'`（(【\[、，。：:)\]】》])((?:[A-Za-z]:[\\/][^"'<>|`\r\n，。；：、！？)\]}】》]{0,180})|(?:(?:[^\s"'<>|`\r\n\/，。；：、！？)\]}】》]+\/){1,6}[^\s"'<>|`\r\n\/，。；：、！？)\]}】》]{1,80}))\.(png|jpg|jpeg|gif|webp|bmp|svg|ico|mp4|mov|webm|mkv|mp3|wav|m4a|pdf|md|txt|doc|docx|xls|xlsx|ppt|pptx|zip|7z|rar|exe|msi|apk|hwt|hap|hsp)\b/gi;
 function msgFiles(text){
  if(!text||text.length<5)return [];
  const out=[],seen=new Set();
@@ -2404,7 +2406,10 @@ function msgFiles(text){
  while((m=MSG_FILE_RE.exec(text))){
   const ext=(m[2]||'').toLowerCase();
   if(!MSG_FILE_EXT.has(ext))continue;
-  const base=(m[1]||'').replace(/[，。；：、）】》,.;:)\]}]+$/,'');
+  // markdown 链接 `[文字](C:/…/x.jpg)`：路径边界会把开头的 `(` 一起吃进来
+  // （2026-11-21 trace 实锤：rel=16:9（…）](C:/…）。开头的括号也要剥掉。
+  const base=(m[1]||'').replace(/^[（(【\[]+/,'')
+    .replace(/[，。；：、）】》,.;:)\]}]+$/,'');
   if(!base)continue;
   // 正则把扩展名拆到 m[2]，路径要拼回去：少了 .hwt 卡片名会变成「凝蓝_OS8」，
   // 下载的 rel 也少一段，浏览器只能存成 file.txt（2026-11-19 用户实测）。

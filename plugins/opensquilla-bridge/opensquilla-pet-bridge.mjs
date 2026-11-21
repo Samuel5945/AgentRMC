@@ -878,7 +878,10 @@ async function pollDispatches() {
       log(`DISPATCH ${dispatchId.slice(0, 8)} sess=${sessionId} ok=${error === ""}${error ? " " + error : ""}`);
     }
   } catch (e) {
-    // 原生端没开：轮询失败保持安静，60s 记一次。
+    // 原生端没开：轮询失败保持安静，60s 记一次。顺手清模型目录 sig：native
+    // 重启后是空账，不清的话 pushModels 的「目录没变」比对会让新实例永远
+    // 收不到目录（2026-11-21 实测：native 重启后模型菜单一直藏着）。
+    modelsSig = "";
     dispatchWarn("dispatch poll failed: " + e.message);
   } finally {
     dispatchBusy = false;
@@ -1256,7 +1259,8 @@ async function pollAnswers() {
       log(`ANSWER ${answerId.slice(0, 8)} sess=${sessionId} ${item.kind} ok=${error === ""}${error ? " " + error : ""}`);
     }
   } catch (e) {
-    // 原生端没开：轮询失败保持安静，60s 记一次。
+    // 原生端没开：轮询失败保持安静，60s 记一次；同 dispatch 侧清模型目录 sig。
+    modelsSig = "";
     answerWarn("answer poll failed: " + e.message);
   } finally {
     answerBusy = false;

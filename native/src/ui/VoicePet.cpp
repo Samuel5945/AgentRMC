@@ -98,6 +98,11 @@ class VoicePet::Card final : public QWidget {
 public:
     explicit Card(VoicePet *pet) : QWidget(pet), pet_(pet) {
         setObjectName("petCard");
+        // 可区分的窗口标题（2026-11-21）：桌宠这一族全是 Qt::Tool 顶层窗，
+        // Windows 会给它们套上进程名「AgentRMCNative」，与主窗（「AgentRMC
+        // Native」）只差一个空格和大小写——排障时按标题枚举会认错人。
+        // 标题只用于辨认，不参与任何逻辑（主窗标题在 MainWindow.cpp）。
+        setWindowTitle(QStringLiteral("AgentRMC Pet Card"));
         setWindowFlags(Qt::Tool | Qt::FramelessWindowHint |
                        Qt::WindowStaysOnTopHint | Qt::NoDropShadowWindowHint);
         setAttribute(Qt::WA_TranslucentBackground);
@@ -420,6 +425,8 @@ public:
 
     explicit PetBubble(QWidget *parent) : QLabel(parent) {
         setObjectName("petBubble");
+        // 窗口标题只为排障辨认（见 Card 的注释）。
+        setWindowTitle(QStringLiteral("AgentRMC Pet Bubble"));
         setWindowFlags(Qt::Tool | Qt::FramelessWindowHint |
                        Qt::WindowStaysOnTopHint | Qt::NoDropShadowWindowHint);
         setAttribute(Qt::WA_TranslucentBackground);
@@ -712,6 +719,8 @@ class VoicePet::RequestCard final : public QWidget {
 public:
     explicit RequestCard(QWidget *parent) : QWidget(parent) {
         setObjectName(QStringLiteral("petRequestCard"));
+        // 窗口标题只为排障辨认（见 Card 的注释）。
+        setWindowTitle(QStringLiteral("AgentRMC Pet Request"));
         // 同 PetBubble：必须设顶层窗口标志，否则作为子控件会被 92px 桌宠窗口
         // 裁剪，浮在桌宠外的卡片永远看不见（2026-11-14 真机「没提示」根因）。
         setWindowFlags(Qt::Tool | Qt::FramelessWindowHint |
@@ -1211,6 +1220,8 @@ private:
 VoicePet::VoicePet(ProfileStore *store, VoiceController *voice, QWidget *parent)
     : QWidget(parent), store_(store), voice_(voice) {
     setObjectName("voicePet");
+    // 桌宠球体自己的窗口标题（排障辨认用，见 Card 的注释）。
+    setWindowTitle(QStringLiteral("AgentRMC Pet"));
     setWindowFlags(Qt::Tool | Qt::FramelessWindowHint |
                    Qt::WindowStaysOnTopHint | Qt::NoDropShadowWindowHint);
     setAttribute(Qt::WA_TranslucentBackground);

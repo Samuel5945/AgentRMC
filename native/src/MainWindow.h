@@ -184,6 +184,11 @@ private:
     // 下载 inbox 里的一个文件：只认 basename + canonical 前缀校验，不许跳出 inbox。
     // 直接返回字节（不走 base64），100MB 的包才不会把内存放大三倍。
     LanWebServer::Download lanInboxFile(const QJsonObject &meta);
+    // 失效链接兜底：正文给的路径被改名/移动时，在同目录找真实文件再下。
+    LanWebServer::Download lanResolveFile(const QJsonObject &meta);
+    // 会话正文里提到的项目外产物（桌面/别处），按磁盘上的真实文件给。
+    QJsonArray lanSessionMentionedArtifacts(const QString &exe,
+                                            const QString &session);
     // 系统页「手机访问」卡片的状态：开关/监听/URL/配对/设备（配对码只给桌面）。
     QJsonObject lanState();
     // 懒创建 LAN 服务并接好 provider/持久化；开关与恢复启动都走这里。

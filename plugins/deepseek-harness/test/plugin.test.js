@@ -1200,6 +1200,263 @@ await check('派发通道: dispatch=false 不轮询（关开关就该安静）',
   }
 });
 
+// —— 停止生成 / 插话通道 + 活会话上报（2026-11-20）——
+/** 假原生端：/control/pending 一次性吐完、/control/ack 与 /live/sessions 记账。
+ * 其余轮询口（dispatch / 应答件）回空数组，别让它们抢戏。 */
+function makeControlServer(controlItems) {
+  const seen = { acks: [], live: [], controlUrls: [] };
+  const queue = controlItems.slice();
+  const server = http.createServer((req, res) => {
+    let body = '';
+    req.on('data', (chunk) => {
+      body += chunk;
+    });
+    req.on('end', () => {
+      res.setHeader('Connection', 'close');
+      if (req.url.startsWith('/control/pending')) {
+        seen.controlUrls.push(req.url);
+        res.setHeader('Content-Type', 'application/json');
+        res.end(JSON.stringify(queue.splice(0)));
+        return;
+      }
+      if (req.url === '/control/ack') {
+        seen.acks.push(JSON.parse(body || '{}'));
+        res.end('{"ok":true}');
+        return;
+      }
+      if (req.url === '/live/sessions') {
+        seen.live.push(JSON.parse(body || '{}'));
+        res.end('');
+        return;
+      }
+      res.setHeader('Content-Type', 'application/json');
+      res.end('[]');
+    });
+  });
+  return { server, seen, queue };
+}
+
+await check('控制通道: stop → agent.cancel({kind:"user"})（与 DSH 自己的停止同入口）→ ack ok', async () => {
+  const sid = 'session-11111111-2222-4333-8444-555555555555';
+  const cancels = [];
+  const agents = {
+    get: (id) => (id === sid ? { status: 'running', cancel: (cause) => cancels.push(cause) } : undefined),
+    list: () => [],
+  };
+  const { server, seen } = makeControlServer([
+    { control_id: 'c-1', session_id: sid, action: 'stop' },
+  ]);
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const stub = applyWithAgents(agents, {
+    port: server.address().port,
+    registerSkill: false,
+    registerTools: false,
+  });
+  try {
+    assert.ok(await waitUntil(() => seen.acks.length > 0), 'ack 未到');
+    assert.deepStrictEqual(cancels, [{ kind: 'user' }], '必须走 agent.cancel，且 cause 是用户');
+    assert.strictEqual(seen.acks[0].control_id, 'c-1');
+    assert.strictEqual(seen.acks[0].ok, true);
+    assert.ok(
+      seen.controlUrls[0].includes('exe=DeepSeek%20Harness.exe'),
+      '取件要带自己的映像名，实际 ' + seen.controlUrls[0],
+    );
+  } finally {
+    stub.effects.forEach((dispose) => dispose());
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+await check('控制通道: steer（正在跑）→ agent.steer 收到与 followup 同形的 user 消息 → ack ok', async () => {
+  const sid = 'session-22222222-3333-4444-8555-666666666666';
+  const steered = [];
+  const agents = {
+    get: (id) => (id === sid ? { status: 'running', steer: (m) => steered.push(m) } : undefined),
+    list: () => [],
+  };
+  const { server, seen } = makeControlServer([
+    { control_id: 'c-2', session_id: sid, action: 'steer', text: '插话探针 MARK-2' },
+  ]);
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const stub = applyWithAgents(agents, {
+    port: server.address().port,
+    registerSkill: false,
+    registerTools: false,
+  });
+  try {
+    assert.ok(await waitUntil(() => seen.acks.length > 0), 'ack 未到');
+    assert.strictEqual(steered.length, 1);
+    assert.strictEqual(steered[0].role, 'user');
+    assert.strictEqual(steered[0].source.kind, 'user');
+    assert.strictEqual(steered[0].content[0].type, 'text');
+    assert.strictEqual(steered[0].content[0].text, '插话探针 MARK-2');
+    assert.ok(steered[0].id, 'UserMessage 要有稳定 id');
+    assert.strictEqual(seen.acks[0].ok, true);
+  } finally {
+    stub.effects.forEach((dispose) => dispose());
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+await check('控制通道: steer 跑完被拒 / stop 对不在活表的会话算成功（没在跑＝停完了）', async () => {
+  const sid = 'session-33333333-4444-4555-8666-777777777777';
+  const steered = [];
+  const agents = {
+    get: (id) =>
+      id === sid ? { status: 'idle', steer: (m) => steered.push(m) } : undefined,
+    list: () => [],
+  };
+  const { server, seen } = makeControlServer([
+    { control_id: 'c-3', session_id: sid, action: 'steer', text: '太晚了' },
+    { control_id: 'c-4', session_id: 'session-gone', action: 'stop' },
+  ]);
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const stub = applyWithAgents(agents, {
+    port: server.address().port,
+    registerSkill: false,
+    registerTools: false,
+  });
+  try {
+    assert.ok(await waitUntil(() => seen.acks.length >= 2), 'ack 未到');
+    assert.deepStrictEqual(steered, [], '跑完的回合不能被插话');
+    const idle = seen.acks.find((ack) => ack.control_id === 'c-3');
+    const gone = seen.acks.find((ack) => ack.control_id === 'c-4');
+    assert.strictEqual(idle.ok, false);
+    assert.ok(/跑完|运行中/.test(idle.error), idle.error);
+    // 停止：不在活表 = 本来就没在跑，当成功（别去唤醒它平白拉起一个 Agent）。
+    assert.strictEqual(gone.ok, true, gone.error);
+  } finally {
+    stub.effects.forEach((dispose) => dispose());
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+await check('活会话上报: 列出打开的会话与正在跑的会话（原生端据此切停止/插话）', async () => {
+  const agents = {
+    get: () => undefined,
+    list: () => [
+      { id: 'session-open-running', status: 'running' },
+      { id: 'session-open-idle', status: 'idle' },
+    ],
+  };
+  const { server, seen } = makeControlServer([]);
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const stub = applyWithAgents(agents, {
+    port: server.address().port,
+    registerSkill: false,
+    registerTools: false,
+  });
+  try {
+    assert.ok(await waitUntil(() => seen.live.length > 0), 'live 上报没到');
+    const first = seen.live[0];
+    assert.strictEqual(first.exe, 'DeepSeek Harness.exe');
+    assert.deepStrictEqual(first.open.sort(), ['session-open-idle', 'session-open-running']);
+    assert.deepStrictEqual(first.running, ['session-open-running']);
+  } finally {
+    stub.effects.forEach((dispose) => dispose());
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+await check('派发通道: 会话不在活表 → 先 resolveAgent 唤醒，再 followup 注入（手机派回旧会话）', async () => {
+  const sid = 'session-99999999-8888-4777-8666-555555555555';
+  const injected = [];
+  const woke = [];
+  // 活表里没有它（＝宿主窗口里没打开），但 sessionController 能唤醒。
+  const agents = { get: () => undefined };
+  const sessionController = {
+    resolveAgent: async (id) => {
+      woke.push(id);
+      return { agent: { followup: (m) => injected.push(m) } };
+    },
+  };
+  const { server, seen } = makeDispatchServer([
+    { dispatch_id: 'd-wake', session_id: sid, project: '', text: '派回旧会话探针' },
+  ]);
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const stub = makeCtx();
+  const innerGet = stub.ctx.get;
+  stub.ctx.get = (service) => {
+    if (service === 'agents') return agents;
+    if (service === 'sessionController') return sessionController;
+    return innerGet(service);
+  };
+  apply(stub.ctx, {
+    port: server.address().port,
+    registerSkill: false,
+    registerTools: false,
+  });
+  try {
+    assert.ok(await waitUntil(() => seen.acks.length > 0), 'ack 未到');
+    assert.deepStrictEqual(woke, [sid], '应该先唤醒这条会话');
+    assert.strictEqual(injected.length, 1, '唤醒后要真的注入');
+    assert.strictEqual(injected[0].content[0].text, '派回旧会话探针');
+    assert.strictEqual(seen.acks[0].ok, true, seen.acks[0].error);
+    stub.effects.forEach((dispose) => dispose());
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+await check('派发通道: 唤醒失败 → ack ok:false 带上 DSH 给的原因', async () => {
+  const sid = 'session-77777777-6666-4555-8444-333333333333';
+  const agents = { get: () => undefined };
+  const sessionController = {
+    resolveAgent: async () => ({
+      error: { code: 'session/not-found', message: 'session not found' },
+    }),
+  };
+  const { server, seen } = makeDispatchServer([
+    { dispatch_id: 'd-dead', session_id: sid, project: '', text: 'x' },
+  ]);
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const stub = makeCtx();
+  const innerGet = stub.ctx.get;
+  stub.ctx.get = (service) => {
+    if (service === 'agents') return agents;
+    if (service === 'sessionController') return sessionController;
+    return innerGet(service);
+  };
+  apply(stub.ctx, {
+    port: server.address().port,
+    registerSkill: false,
+    registerTools: false,
+  });
+  try {
+    assert.ok(await waitUntil(() => seen.acks.length > 0), 'ack 未到');
+    assert.strictEqual(seen.acks[0].ok, false);
+    assert.ok(/唤醒失败/.test(seen.acks[0].error), seen.acks[0].error);
+    assert.ok(/session not found/.test(seen.acks[0].error), seen.acks[0].error);
+    stub.effects.forEach((dispose) => dispose());
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+await check('派发通道: 没有 sessionController 服务（老 DSH）→ 退回只认活表', async () => {
+  const { server, seen } = makeDispatchServer([
+    { dispatch_id: 'd-old', session_id: 'session-missing', project: '', text: 'x' },
+  ]);
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const stub = makeCtx();
+  const innerGet = stub.ctx.get;
+  stub.ctx.get = (service) =>
+    service === 'agents' ? { get: () => undefined } : innerGet(service);
+  apply(stub.ctx, {
+    port: server.address().port,
+    registerSkill: false,
+    registerTools: false,
+  });
+  try {
+    assert.ok(await waitUntil(() => seen.acks.length > 0), 'ack 未到');
+    assert.strictEqual(seen.acks[0].ok, false);
+    assert.ok(/不在活表/.test(seen.acks[0].error), seen.acks[0].error);
+    stub.effects.forEach((dispose) => dispose());
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
 fs.rmSync(SPOOL_ROOT, { recursive: true, force: true });
 
 const total = passed + failures.length;

@@ -57,6 +57,14 @@ const DEFAULTS = {
   registerSkill: true,
   // 定向派发通道：轮询原生端取件 → agent.followup() 注入 → ack 回执。
   dispatch: true,
+  // 停止生成 / 插话通道（2026-11-20）：原生端下发 → 本插件取件 →
+  // agent.cancel()（与 DSH 自己的停止同入口）/ agent.steer()（插进当前这轮）→
+  // ack。与 dispatch 分开排：派发＝新的一轮，这两件＝动正在跑的这一轮。
+  control: true,
+  // 活会话/运行态上报：原生端据此把「宿主里没打开的会话」标出来、把聊天页的
+  // 发送键切成「停止」。只报 id 与 running 状态，不碰会话内容。
+  liveReport: true,
+  liveReportMs: 5000,
   // B3 授权内联答（opt-in，默认关）：开启后插件成为 approval/request 瀑布的
   // 独占应答者——授权改由 RMC 聊天页允许/拒绝，桌面 Web UI 的授权卡不再弹。
   // 默认关保持安全只读（进程内无按 id 应答口，硬抢瀑布会卡住授权）。
@@ -135,6 +143,9 @@ function normalizeConfig(raw) {
     registerTools: asBool(input.registerTools, DEFAULTS.registerTools),
     registerSkill: asBool(input.registerSkill, DEFAULTS.registerSkill),
     dispatch: asBool(input.dispatch, DEFAULTS.dispatch),
+    control: asBool(input.control, DEFAULTS.control),
+    liveReport: asBool(input.liveReport, DEFAULTS.liveReport),
+    liveReportMs: asDuration(input.liveReportMs, DEFAULTS.liveReportMs),
     approvalInline: asBool(input.approvalInline, DEFAULTS.approvalInline),
     questionInline: asBool(input.questionInline, DEFAULTS.questionInline),
     questionHoldTimeoutMs: asDuration(
@@ -1263,12 +1274,51 @@ export function apply(ctx, rawConfig) {
 
   // —— 定向派发通道（2026-11-07 接线）：原生端下发 → 本插件轮询取件 →
   // agent.followup() 注入 → ack 回执。followup 同步落 durable inbox，ack ok
-  // 就是「确实到了那条会话」的回执（与 WorkBuddy 的 jsonl user 行同级证明）；
-  // 守卫在取件后：agents.get(session_id) 命中才注入——证明不了目标就不发，
-  // 拒绝原因走 ack ok:false，原生端按派发失败上卡（裁决 6）。
+  // 就是「确实到了那条会话」的回执（与 WorkBuddy 的 jsonl user 行同级证明）。
+  //
+  // 会话不在活表里怎么办（2026-11-21 修）：以前直接拒「未打开」。但手机端
+  // 根本没法去点开宿主窗口，于是「从手机派回一条旧会话」永远失败——用户报的
+  // 「还是不行」就是这个。DSH 自己提供了按需唤醒：sessionController
+  // .resolveAgent(sessionId) 会 agents.resume() 把持久化会话重建成活 Agent
+  // （桌面端点开会话走的就是这条路）。所以先尝试唤醒，唤醒成功再注入；
+  // 唤醒失败才拒，并把 DSH 给的原因原样带回去。
   let dispatchBusy = false;
   let dispatchLogAt = 0;
   if (config.dispatch && typeof ctx.get === 'function') {
+    // 按需唤醒会话：返回 { agent } 或 { error }。services 缺失时返回 null
+    // （老版本 DSH 没有这个服务，退回原来的「只认活表」行为）。
+    const wakeAgent = async (sessionId) => {
+      let controller = null;
+      try {
+        controller = ctx.get('sessionController');
+      } catch {
+        controller = null;
+      }
+      if (!controller || typeof controller.resolveAgent !== 'function') {
+        return null;
+      }
+      try {
+        const found = await controller.resolveAgent(sessionId);
+        if (found && found.agent) {
+          return { agent: found.agent };
+        }
+        const why =
+          (found && found.error && (found.error.message || found.error.code)) ||
+          '';
+        return {
+          error:
+            '会话 ' +
+            sessionId.slice(0, 13) +
+            '… 唤醒失败' +
+            (why ? '：' + why : '（会话可能已被删除）'),
+        };
+      } catch (e) {
+        return {
+          error: '唤醒会话 ' + sessionId.slice(0, 13) + '… 出错：' +
+            ((e && e.message) || e),
+        };
+      }
+    };
     const pollDispatches = async () => {
       if (dispatchBusy) return;
       dispatchBusy = true;
@@ -1296,11 +1346,20 @@ export function apply(ctx, rawConfig) {
           } else if (!dispatchId || !sessionId || !text) {
             error = '取件缺字段（dispatch_id/session_id/text）';
           } else {
-            const agent = agents.get(sessionId);
-            if (!agent || typeof agent.followup !== 'function') {
+            let agent = agents.get(sessionId);
+            if (!agent) {
+              // 不在活表：先唤醒（桌面端点开会话走同一条路），再取一次。
+              const woke = await wakeAgent(sessionId);
+              if (woke && woke.agent) {
+                agent = woke.agent;
+              } else if (woke && woke.error) {
+                error = woke.error;
+              }
+            }
+            if (!error && (!agent || typeof agent.followup !== 'function')) {
               error =
                 '会话 ' + sessionId.slice(0, 13) + '… 不在活表里（未打开），未注入';
-            } else {
+            } else if (!error) {
               // 手搓 UserMessage，与 ACP 桥同形（kind:'user' 源 + 单 text 块），
               // 不 import 任何 @deepseek-ai 包。
               try {
@@ -1348,6 +1407,168 @@ export function apply(ctx, rawConfig) {
       ctx.effect(
         () => () => clearInterval(dispatchTimer),
         'agentrmc-bridge dispatch poll',
+      );
+    }
+  }
+
+  // —— 活会话上报 + 停止生成/插话（2026-11-20）——
+  // 上报让页面知道「哪些会话在这个宿主里开着、哪些正在跑」；控制通道把页面上
+  // 的「停止 / 插话」落到 agent.cancel() / agent.steer()。两者都只跟原生端说话。
+  const readAgents = () => {
+    try {
+      const agents = ctx.get('agents');
+      return agents && typeof agents === 'object' ? agents : null;
+    } catch {
+      return null;  // 没这个服务（版本不匹配）：两条通道都安静跳过
+    }
+  };
+
+  if (config.liveReport) {
+    const reportLive = async () => {
+      const agents = readAgents();
+      if (!agents || typeof agents.list !== 'function') return;
+      let list = [];
+      try {
+        list = agents.list() || [];
+      } catch {
+        return;
+      }
+      const open = [];
+      const running = [];
+      for (const agent of list) {
+        const id = String((agent && agent.id) || '');
+        if (!id) continue;
+        open.push(id);
+        // status 只有 idle / running（DSH 的 AgentStatus）；「等授权/等回答」也
+        // 算 running——那正是最该让人能按「停止」的时刻。
+        if (agent.status === 'running') running.push(id);
+      }
+      try {
+        await bridge.post('/live/sessions', {
+          exe: config.raiseExe || '',
+          open,
+          running,
+        });
+      } catch {
+        // 原生端没开：不落盘（这是心跳，下一次会重新报，补投没意义）。
+      }
+    };
+    const liveTimer = setInterval(reportLive, config.liveReportMs);
+    if (typeof liveTimer.unref === 'function') liveTimer.unref();
+    // 先报一次：宿主刚起来时页面就该知道「哪条会话开着、谁在跑」，别等第一个周期。
+    void reportLive();
+    if (typeof ctx.effect === 'function') {
+      ctx.effect(
+        () => () => clearInterval(liveTimer),
+        'agentrmc-bridge live report',
+      );
+    }
+  }
+
+  if (config.control) {
+    let controlBusy = false;
+    let controlLogAt = 0;
+    const ackControl = async (item, error) => {
+      try {
+        await bridge.post('/control/ack', {
+          control_id: item.control_id,
+          ok: error === '',
+          ...(error ? { error } : {}),
+        });
+      } catch (e) {
+        const now = Date.now();
+        if (now - controlLogAt > 60_000) {
+          controlLogAt = now;
+          warn('control ack failed: ' + ((e && e.message) || e));
+        }
+      }
+    };
+    const runControl = async (item) => {
+      const action = String((item && item.action) || '');
+      const sessionId = String((item && item.session_id) || '');
+      const text = String((item && item.text) || '');
+      const agents = readAgents();
+      let error = '';
+      if (!agents || typeof agents.get !== 'function') {
+        error = 'agents 服务不可达（ctx 拿不到，DSH 版本不匹配？）';
+      } else {
+        let agent = agents.get(sessionId);
+        if (!agent && action === 'stop') {
+          // 停止：会话不在活表＝它本来就没在跑，没什么可停的。这时唤醒它反而
+          // 会平白拉起一个 Agent（占 writer、影响下次打开），所以直接当成功。
+          await ackControl(item, '');
+          return;
+        }
+        if (!agent && action === 'steer') {
+          error = '会话 ' + sessionId.slice(0, 13) + '… 不在活表里（未打开）';
+        } else if (action === 'stop') {
+          // 与 DSH 自己的停止同一入口：不带 keepInbox（排队里没开跑的一起收），
+          // 这样「点了停止却还在跑旧活」不会发生。
+          try {
+            agent.cancel({ kind: 'user' });
+          } catch (e) {
+            error = '停止被拒：' + ((e && e.message) || e);
+          }
+        } else if (action === 'steer') {
+          // 插话只在 running 时成立（DSH 自己的 steer 前置条件）；跑完了就明说，
+          // 别把正文吞了——原生端会把正文回填成草稿。
+          if (agent.status !== 'running') {
+            error = '这一轮已经跑完了（插话只对运行中的回合生效），直接发送就行';
+          } else if (!text) {
+            error = '插话内容为空';
+          } else {
+            try {
+              agent.steer({
+                id: randomUUID(),
+                role: 'user',
+                content: [{ type: 'text', text }],
+                source: { kind: 'user' },
+              });
+            } catch (e) {
+              error = '插话被拒：' + ((e && e.message) || e);
+            }
+          }
+        } else {
+          error = '不认识的控制动作：' + action;
+        }
+      }
+      await ackControl(item, error);
+    };
+    const pollControls = async () => {
+      if (controlBusy) return;
+      controlBusy = true;
+      try {
+        const res = await bridge.get(
+          '/control/pending?exe=' + encodeURIComponent(config.raiseExe || ''),
+        );
+        if (res.status !== 200) return;  // 旧原生端没有这条路由：安静跳过
+        let items;
+        try {
+          items = JSON.parse(res.body || '[]');
+        } catch {
+          return;
+        }
+        if (!Array.isArray(items)) return;
+        for (const item of items) {
+          if (!item || !item.control_id) continue;
+          await runControl(item);
+        }
+      } catch (e) {
+        const now = Date.now();
+        if (now - controlLogAt > 60_000) {
+          controlLogAt = now;
+          warn('control poll failed: ' + ((e && e.message) || e));
+        }
+      } finally {
+        controlBusy = false;
+      }
+    };
+    const controlTimer = setInterval(pollControls, 1200);
+    if (typeof controlTimer.unref === 'function') controlTimer.unref();
+    if (typeof ctx.effect === 'function') {
+      ctx.effect(
+        () => () => clearInterval(controlTimer),
+        'agentrmc-bridge control poll',
       );
     }
   }

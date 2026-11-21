@@ -1,9 +1,13 @@
 #include "AgentBridge.h"
 
+#include <QDateTime>
 #include <QDebug>
+#include <QFile>
+#include <QFileInfo>
 #include <QHostAddress>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QStandardPaths>
 #include <QTcpServer>
 #include <QTcpSocket>
 #include <QTimer>
@@ -14,6 +18,47 @@ namespace {
 constexpr int kMaxHeaderBytes = 16 * 1024;
 constexpr int kMaxBodyBytes = 64 * 1024;
 constexpr int kStaleMs = 10000;
+
+// —— 本机回环口的请求追踪（2026-11-20，与 LanWebServer 的 LAN 追踪同款）——
+// 「插件改了，重启了，到底加载没加载」这类问题远程复现不了：插件不轮询
+// /control/pending、不上报 /live/sessions，就是它跑的还是旧代码。有了这行
+// 日志，看一眼就知道有没有、走的是哪条路由。
+// 开关：存在 <AppData>/bridge-trace.on，或环境变量 AGENTRMC_BRIDGE_TRACE=<文件
+// 路径>；默认关，零开销。
+QString bridgeTracePath() {
+    const QByteArray env = qgetenv("AGENTRMC_BRIDGE_TRACE");
+    if (!env.isEmpty()) {
+        return QString::fromLocal8Bit(env);
+    }
+    const QString dir =
+        QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+    if (dir.isEmpty()) {
+        return QString();
+    }
+    if (!QFileInfo::exists(dir + QStringLiteral("/bridge-trace.on"))) {
+        return QString();
+    }
+    return dir + QStringLiteral("/bridge-trace.log");
+}
+
+void bridgeTrace(const QByteArray &line) {
+    const QString path = bridgeTracePath();
+    if (path.isEmpty() || line.isEmpty()) {
+        return;
+    }
+    const QFileInfo fi(path);
+    if (fi.exists() && fi.size() > 256 * 1024) {
+        QFile::remove(path);
+    }
+    QFile f(path);
+    if (!f.open(QIODevice::Append)) {
+        return;
+    }
+    f.write(QDateTime::currentDateTime().toString("HH:mm:ss.zzz").toUtf8());
+    f.write(" ");
+    f.write(line);
+    f.write("\n");
+}
 
 QString defaultFor(const QString &kind) {
     if (kind == QStringLiteral("stop")) {
@@ -180,6 +225,20 @@ void AgentBridge::onReadable(QTcpSocket *socket) {
     // 按行拆头：request line + 每行一个 header，兼容 curl / node / 手拼请求。
     const QList<QByteArray> headerLines = head.split('\n');
     const QByteArray requestLine = headerLines.value(0).trimmed();
+
+    if (!bridgeTracePath().isEmpty()) {
+        // 这个口没有 headerValue 辅助（只有 content-length 那处内联解析），
+        // 这里就地取一次 UA——只为追踪，不进任何逻辑。
+        QByteArray ua;
+        for (const QByteArray &line : headerLines) {
+            if (line.toLower().startsWith("user-agent:")) {
+                ua = line.mid(11).trimmed().left(120);
+                break;
+            }
+        }
+        bridgeTrace("REQ " + socket->peerAddress().toString().toUtf8() + " " +
+                    requestLine.left(160) + " ua=" + ua);
+    }
 
     if (requestLine.startsWith("GET /state ")) {
         const QString state = stateProvider_ ? stateProvider_()
@@ -554,6 +613,10 @@ void AgentBridge::finish(QTcpSocket *socket, const char *status,
                 "\r\n\r\n";
     response += body;
     socket->write(response);
+    if (!bridgeTracePath().isEmpty()) {
+        bridgeTrace("RES " + QByteArray(status) + " len=" +
+                    QByteArray::number(body.size()));
+    }
     buffers_.remove(socket);
     socket->disconnectFromHost();
 }

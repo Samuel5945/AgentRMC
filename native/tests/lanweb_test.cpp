@@ -292,6 +292,23 @@ int main(int argc, char **argv) {
         check(resp.contains("function syncMultiUi()"), "GET /m/ in-place multi render", resp);
         check(resp.contains("touchcancel"), "GET /m/ touch cancel recovery", resp);
         check(resp.contains("prefers-reduced-motion"), "GET /m/ reduced motion", resp);
+        // 手机内核门（2026-11-20）：荣耀/百度浏览器内核报 Chrome 97，没有
+        // AbortSignal.timeout（Chrome 103+）。直接调用会抛 TypeError 被 load()
+        // 吞成「连不上电脑」，配对永远停在配对屏。只许兜底函数里出现一次
+        // （探测它存不存在），调用点一律走 timeoutSignal()。
+        check(resp.contains("function timeoutSignal"), "GET /m/ timeout shim", resp);
+        check(resp.count("AbortSignal.timeout(") == 1,
+              "GET /m/ AbortSignal.timeout only inside shim", resp);
+        check(resp.count("timeoutSignal(") >= 3, "GET /m/ all fetches use shim", resp);
+        check(resp.contains("pairTech"), "GET /m/ pair diagnostics line", resp);
+        // 停止/插话（2026-11-20）：手机页也要有同一颗键的两副面孔。
+        // cRunning 必须按**会话 id** 判（chatSession），别用工单 id——桌面端
+        // 就是这么写错的，症状是「插话在、停止没有」。
+        check(resp.contains("function cRunning"), "GET /m/ stop gate", resp);
+        check(resp.contains("function chatSid"), "GET /m/ session id helper", resp);
+        check(resp.contains("C_STOP_SVG"), "GET /m/ stop icon", resp);
+        check(resp.contains("cmd:'control',action:'stop'"), "GET /m/ stop wiring", resp);
+        check(resp.contains("cmd:'control',action:'steer'"), "GET /m/ steer wiring", resp);
     }));
     // 2. /m 重定向到 /m/。
     seq.add(ask(get("/m"), [](const QByteArray &resp) {

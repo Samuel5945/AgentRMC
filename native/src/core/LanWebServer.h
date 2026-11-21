@@ -105,6 +105,10 @@ public:
         QByteArray data;
     };
     void setInboxFileProvider(std::function<Download(const QJsonObject &meta)> provider);
+    // GET /m/file/resolve：链接失效（文件被改名/移动）时的兜底下载。同一 meta，
+    // 服务端负责在同一目录里找真实文件；找不到返回 ok=false（页面照报，不假装下成）。
+    void setInboxFileResolveProvider(
+        std::function<Download(const QJsonObject &meta)> provider);
     // POST /m/action 的处理器（白名单已在服务端验过）：
     // 返回 {"ok":bool,"code":200|400|403|409}，code 直接当 HTTP 状态。
     void setActionHandler(
@@ -166,6 +170,9 @@ private:
 
     QTcpServer *server_ = nullptr;
     QHash<QTcpSocket *, QByteArray> buffers_;
+    // 手机浏览器配对/访问排查用的追踪标签（每个连接当前那条请求）。
+    // 追踪默认关：见 lanTracePath()（存在 lan-trace.on 或设 AGENTRMC_LAN_TRACE）。
+    QHash<QTcpSocket *, QByteArray> traceReq_;
     // 超大 body：先排干再回 413。收缓冲里还压着没读的数据就关连接，Windows
     // 会发 RST 而不是 FIN，客户端连已收到的响应都会丢（lanweb_test 实测）。
     QHash<QTcpSocket *, qint64> drain_;
@@ -201,6 +208,7 @@ private:
     std::function<void(const QString &)> chunkAbortProvider_;
     std::function<QString(const QJsonObject &)> inboxListProvider_;
     std::function<Download(const QJsonObject &)> inboxFileProvider_;
+    std::function<Download(const QJsonObject &)> inboxFileResolveProvider_;
     std::function<QJsonObject(const QJsonObject &)> actionHandler_;
     QString themeRoot_;
     QJsonArray devices_;  // {id,name,tokenHash,pairedAt,lastSeen}

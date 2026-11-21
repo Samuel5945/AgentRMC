@@ -284,17 +284,42 @@ function startServer() {
             { name: '会议记录.md', size: 2048, mtime: iso(NOW) },
             { name: '截图一.png', size: 40960, mtime: iso(NOW - 60e3) },
             { name: 'missing.txt', size: 0, mtime: iso(NOW - 120e3) },
+            { name: 'renamed.png', size: 1024, mtime: iso(NOW - 150e3) },
           ],
           artifacts: [
             { rel: 'dist/AgentRMC-Setup.exe', name: 'AgentRMC-Setup.exe',
               size: 36619313, mtime: iso(NOW - 30e3) },
           ],
+          // 正文里提到的项目外产物（桌面）：面板要看得见、也要能下（abs 形态）。
+          mentioned: [
+            { abs: 'C:/Users/PC/Desktop/LiquidDesk-1.4.7-B站封面-4x3.jpg',
+              name: 'LiquidDesk-1.4.7-B站封面-4x3.jpg', size: 807971,
+              mtime: iso(NOW - 90e3), stale: false },
+          ],
         }));
+      }
+      if (url.pathname === '/m/file/resolve') {
+        // 失效链接兜底：原路径 404、同一目录里有同名文件时，这里 200。
+        // 只有 renamed.png 能兜底找到；missing.txt 两级都失败。
+        FILES.push({ resolve: url.search, method: req.method });
+        if (url.searchParams.get('name') === 'missing.txt') {
+          res.writeHead(404, { 'Content-Type': 'application/json' });
+          return res.end('{"ok":false,"error":"file_missing"}');
+        }
+        const headers = {
+          'Content-Type': 'application/octet-stream',
+          'Content-Disposition': 'attachment; filename="a.txt"',
+        };
+        if (req.method === 'HEAD') { res.writeHead(200, headers); return res.end(); }
+        res.writeHead(200, headers);
+        return res.end('DOWNLOAD');
       }
       if (url.pathname === '/m/file') {
         // 真实下载契约：文件名/类型由服务端 Content-Disposition 定；
         // 文件不在了回 404 JSON，页面先 HEAD 探活，不该把 404 存成 file.txt。
-        if (url.searchParams.get('name') === 'missing.txt') {
+        // renamed.png 模拟「正文给的路径已失效」（原路径 404，resolve 兜底找到）。
+        if (url.searchParams.get('name') === 'missing.txt' ||
+            url.searchParams.get('name') === 'renamed.png') {
           res.writeHead(404, { 'Content-Type': 'application/json' });
           return res.end('{"ok":false,"error":"file_missing"}');
         }
@@ -722,22 +747,30 @@ async function runFlow() {
     pfNames);
 
   // 电脑文件面板：列出会话 inbox，行上带下载链接，× 能关。
+  // 产物 = 工作区产物（rel）+ 正文提到的项目外产物（abs，2026-11-21 用户报
+  // 「桌面的封面在面板里一条都看不到」）。合并按 mtime 排，上限 30。
   FILES.length = 0;
   await page.click('#chatFiles');
   await page.waitForSelector('#chatFilePanel:not([hidden]) .frow');
-  ok(await page.locator('#chatFilePanel .frow').count() === 4, '面板列出产物 + inbox');
+  ok(await page.locator('#chatFilePanel .frow').count() === 6, '面板列出产物（含 abs）+ inbox');
   const fc = await page.textContent('#chatFileCount');
-  ok(fc.includes('产物 1') && fc.includes('文件 3'), '面板报文件数（产物 · 文件）', fc);
+  ok(fc.includes('产物 2') && fc.includes('文件 4'), '面板报文件数（产物 · 文件）', fc);
   // 产物行：第一行是 rel 路径的位置换成时间戳（用户 2026-11-19：上级目录没用）。
   const aHref = await page.locator('#chatFilePanel .frow').first().getAttribute('href');
   ok(aHref.includes('scope=project') && aHref.includes('rel='),
     '产物行指向工作区下载', aHref);
   const aDir = await page.locator('#chatFilePanel .frow').first().locator('.fdir').textContent();
   ok(aDir && !aDir.includes('/') && /\d/.test(aDir), '产物行第二行是时间戳不是路径', aDir);
-  const fhref = await page.locator('#chatFilePanel .frow').nth(1).getAttribute('href');
+  // abs 产物行：正文提到的桌面文件，必须出现在产物区、指向 scope=abs。
+  const absRow = page.locator('#chatFilePanel .frow', { hasText: 'LiquidDesk-1.4.7-B站封面-4x3.jpg' });
+  ok(await absRow.count() === 1, '正文提到的桌面产物出现在产物区');
+  const absHref = await absRow.getAttribute('href');
+  ok(absHref.includes('scope=abs') && absHref.includes('4x3.jpg'),
+    'abs 产物行指向 abs 下载', absHref);
+  const fhref = await page.locator('#chatFilePanel .frow').nth(2).getAttribute('href');
   ok(fhref.includes('/m/file?') && fhref.includes('name=') && fhref.includes('session=sess-8f31c2a9'),
     '文件行指向下载路由且带会话上下文', fhref);
-  const fDir = await page.locator('#chatFilePanel .frow').nth(1).locator('.fdir').textContent();
+  const fDir = await page.locator('#chatFilePanel .frow').nth(2).locator('.fdir').textContent();
   ok(fDir && /\d/.test(fDir), 'inbox 行也带时间戳', fDir);
   ok(FILES.length === 1 && FILES[0].req.includes('session=sess-8f31c2a9'),
     '列表请求带会话上下文', JSON.stringify(FILES));
@@ -762,7 +795,19 @@ async function runFlow() {
     page.evaluate((u) => saveFile(u), absUrl),
   ]);
   ok(dlAbs.suggestedFilename() === 'a.txt', 'abs 下载也走同一出口', dlAbs.suggestedFilename());
-  // 文件不在了：先 HEAD 探活 → 页面提示，不许再触发一次空下载。
+  // 失效链接兜底（2026-11-21）：原路径 404 但同目录有同名文件时，服务端
+  // resolve 出真文件继续下，页面提示一下，不再直接说「取不到」。
+  const [dlResolve] = await Promise.all([
+    page.waitForEvent('download', { timeout: 8000 }),
+    page.evaluate(() => saveFile(fpUrl('renamed.png'))),
+  ]);
+  ok(dlResolve.suggestedFilename() === 'a.txt', '失效链接走 resolve 兜底也能下',
+    dlResolve.suggestedFilename());
+  const resolveReqs = FILES.filter((x) => x.resolve);
+  ok(resolveReqs.length >= 2 &&
+     resolveReqs.every((x) => x.resolve.includes('name=renamed.png')),
+    'resolve 请求带原文件名', JSON.stringify(resolveReqs));
+  // 彻底没有的文件：两级都 404 → 页面提示，不许再触发一次空下载。
   let ghostDownload = false;
   page.once('download', () => { ghostDownload = true; });
   await page.locator('#chatFilePanel .frow', { hasText: 'missing.txt' }).click();

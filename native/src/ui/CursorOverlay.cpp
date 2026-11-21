@@ -190,6 +190,8 @@ public:
     LayerWidget(const QRect &logicalRect, Painter painter)
         : QWidget(nullptr), painter_(std::move(painter)) {
         setObjectName(QStringLiteral("agentCursorLayer"));
+        // 窗口标题只为排障辨认（见 VoicePet::Card 的注释）。
+        setWindowTitle(QStringLiteral("AgentRMC Cursor"));
         setWindowFlags(Qt::Tool | Qt::FramelessWindowHint |
                        Qt::WindowStaysOnTopHint | Qt::WindowTransparentForInput |
                        Qt::NoDropShadowWindowHint |

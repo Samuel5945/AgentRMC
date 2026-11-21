@@ -3725,20 +3725,15 @@ static constexpr int kLiveAgentsTtlSec = 15;
 
 QString MainWindow::liveGuard(const QString &agentExe,
                               const QString &sessionId) const {
-    const auto it = liveAgents_.constFind(agentExe.toLower());
-    if (it == liveAgents_.constEnd() || !it->at.isValid()) {
-        return QString();
-    }
-    if (it->at.secsTo(QDateTime::currentDateTimeUtc()) > kLiveAgentsTtlSec) {
-        return QString();
-    }
-    if (it->open.contains(sessionId)) {
-        return QString();
-    }
-    return QStringLiteral(
-               "这条会话没在 %1 里打开——先在宿主窗口里点开它再发"
-               "（没打开的会话收不到注入）")
-        .arg(AgentWindow::displayName(agentExe));
+    // 2026-11-21 起不再拦「没打开」的会话：插件会先用 DSH 自己的
+    // sessionController.resolveAgent() 把持久化会话唤醒成活 Agent（桌面端点开
+    // 会话走的就是这条路），所以「没在窗口里打开」不再是失败条件。手机端根本
+    // 没法去点开宿主窗口，拦它等于把「从手机派回旧会话」这条路堵死——用户报的
+    // 「还是不行」就是这个（见 08:06 截图）。
+    // 这个函数保留下来只为将来加别的准入条件（比如宿主离线），现在一律放行。
+    Q_UNUSED(agentExe);
+    Q_UNUSED(sessionId);
+    return QString();
 }
 
 bool MainWindow::liveRunning(const QString &sessionId) const {
@@ -3911,6 +3906,8 @@ void MainWindow::ensureLanServer() {
         [this](const QJsonObject &meta) { return lanInboxList(meta); });
     lan_->setInboxFileProvider(
         [this](const QJsonObject &meta) { return lanInboxFile(meta); });
+    lan_->setInboxFileResolveProvider(
+        [this](const QJsonObject &meta) { return lanResolveFile(meta); });
     lan_->setThemeRoot(ThemeManager::themesRoot());
     // 白名单已在服务端验过；这里与桌面外壳走同一个 handleWebAction，
     // 做完它内部统一 refresh，桌面外壳自动跟着刷新，双端一致免费。
@@ -5133,9 +5130,16 @@ QString MainWindow::lanInboxList(const QJsonObject &meta) {
     QJsonObject out{{QStringLiteral("ok"), true},
                     {QStringLiteral("files"), arr}};
     // 产物区：agent 在会话工作区里生成的文件。拿不到 project 就不给。
-    QString project, session;
+    QString project, session, exe;
     if (resolveInboxTarget(meta, &project, &session) && !project.isEmpty()) {
         out.insert(QStringLiteral("artifacts"), lanProjectArtifacts(project));
+    }
+    // agent 在正文里提到的**项目外**产物（桌面/别处）：正文给了路径，但文件可能
+    // 已被改名/移动，这里按磁盘上的真实文件给，手机端「产物」面板才看得见。
+    exe = meta.value(QStringLiteral("exe")).toString();
+    if (!session.isEmpty() && !exe.isEmpty()) {
+        out.insert(QStringLiteral("mentioned"),
+                   lanSessionMentionedArtifacts(exe, session));
     }
     return QString::fromUtf8(
         QJsonDocument(out).toJson(QJsonDocument::Compact));
@@ -5147,22 +5151,103 @@ QString MainWindow::lanInboxList(const QJsonObject &meta) {
 // 「能给 agent 写文件」就把整个目录放开。只放产物类：媒体、文档、压缩包、安装包。
 // HarmonyOS 的 hwt（主题包）/ hap（应用包）/ hsp（共享包）都是 zip 壳的产物，
 // 跟 apk 同级；缺了 hwt 会让「凝蓝_OS8.hwt」这类主题成品在产物面板里消失
-// （2026-11-19 用户实测）。
+// （2026-11-19 用户实测）。这份表同时给正文路径提取用（同一份口径）。
+static const QSet<QString> kShareableExt = {
+    QStringLiteral("png"),  QStringLiteral("jpg"),  QStringLiteral("jpeg"),
+    QStringLiteral("gif"),  QStringLiteral("webp"), QStringLiteral("bmp"),
+    QStringLiteral("svg"),  QStringLiteral("ico"),  QStringLiteral("mp4"),
+    QStringLiteral("mov"),  QStringLiteral("webm"), QStringLiteral("mkv"),
+    QStringLiteral("mp3"),  QStringLiteral("wav"),  QStringLiteral("m4a"),
+    QStringLiteral("pdf"),  QStringLiteral("md"),   QStringLiteral("txt"),
+    QStringLiteral("doc"),  QStringLiteral("docx"), QStringLiteral("xls"),
+    QStringLiteral("xlsx"), QStringLiteral("ppt"),  QStringLiteral("pptx"),
+    QStringLiteral("zip"),  QStringLiteral("7z"),   QStringLiteral("rar"),
+    QStringLiteral("exe"),  QStringLiteral("msi"),  QStringLiteral("apk"),
+    QStringLiteral("hwt"),  QStringLiteral("hap"),  QStringLiteral("hsp")};
+
 bool shareableExt(const QString &path) {
-    static const QSet<QString> kOk = {
-        QStringLiteral("png"),  QStringLiteral("jpg"),  QStringLiteral("jpeg"),
-        QStringLiteral("gif"),  QStringLiteral("webp"), QStringLiteral("bmp"),
-        QStringLiteral("svg"),  QStringLiteral("ico"),  QStringLiteral("mp4"),
-        QStringLiteral("mov"),  QStringLiteral("webm"), QStringLiteral("mkv"),
-        QStringLiteral("mp3"),  QStringLiteral("wav"),  QStringLiteral("m4a"),
-        QStringLiteral("pdf"),  QStringLiteral("md"),   QStringLiteral("txt"),
-        QStringLiteral("doc"),  QStringLiteral("docx"), QStringLiteral("xls"),
-        QStringLiteral("xlsx"), QStringLiteral("ppt"),  QStringLiteral("pptx"),
-        QStringLiteral("zip"),  QStringLiteral("7z"),   QStringLiteral("rar"),
-        QStringLiteral("exe"),  QStringLiteral("msi"),  QStringLiteral("apk"),
-        QStringLiteral("hwt"),  QStringLiteral("hap"),  QStringLiteral("hsp")};
     const QString ext = QFileInfo(path).suffix().toLower();
-    return !ext.isEmpty() && kOk.contains(ext);
+    return !ext.isEmpty() && kShareableExt.contains(ext);
+}
+
+// 正文里提到的**项目外绝对路径**（agent 常把产物写到桌面/别处）：与手机页
+// msgFiles 同口径——盘符开头、白名单扩展名，中文句读与闭括号不当路径字符，
+// 避免把「封面（1920×1080，可上传）](C:/…/x.jpg」整句吞进路径里。
+QStringList mentionedAbsPaths(const QString &text) {
+    if (text.isEmpty()) {
+        return QStringList();
+    }
+    static const QString extList =
+        QStringList(kShareableExt.values()).join(QStringLiteral("|"));
+    static const QRegularExpression re(
+        QStringLiteral("(?:^|[\\s\"'`（(【\\[、，。：:])"
+                       "([A-Za-z]:[\\\\/][^\"'<>|`\\r\\n，。；：、！？)\\]}】》]"
+                       "{0,180})\\.(?:%1)(?![A-Za-z0-9])")
+            .arg(extList));
+    QStringList out;
+    QSet<QString> seen;
+    QRegularExpressionMatchIterator it = re.globalMatch(text);
+    while (it.hasNext()) {
+        QString p = it.next().captured(1);
+        p.replace(QLatin1Char('\\'), QLatin1Char('/'));
+        if (!seen.contains(p)) {
+            seen.insert(p);
+            out.append(p);
+        }
+    }
+    return out;
+}
+
+// 提及的路径可能已被改名/移动（agent 常加后缀、改前缀）：先按原路径找，找不到
+// 就在同目录里找「同扩展名 + 文件名有足够长公共前缀」的文件，返回磁盘上的真
+// 正那个。找不到返回空 QFileInfo。
+QFileInfo resolveMentionedPath(const QString &abs) {
+    const QFileInfo exact(abs);
+    if (exact.exists() && exact.isFile() && shareableExt(exact.fileName())) {
+        return exact;
+    }
+    const QString dir = exact.absolutePath();
+    const QString ext = exact.suffix().toLower();
+    if (dir.isEmpty() || ext.isEmpty()) {
+        return QFileInfo();
+    }
+    const QFileInfoList files =
+        QDir(dir).entryInfoList(QDir::Files | QDir::NoSymLinks, QDir::Time);
+    const QString base = exact.fileName();
+    QFileInfo best;
+    int bestLen = 0;
+    for (const QFileInfo &fi : files) {
+        const QString cand = fi.fileName();
+        if (!shareableExt(cand) || fi.suffix().toLower() != ext) {
+            continue;
+        }
+        int n = 0;
+        while (n < base.size() && n < cand.size() && base.at(n) == cand.at(n)) {
+            ++n;
+        }
+        // 公共前缀够长才算「同名候选」，别把同目录里碰巧同扩展名的别的文件捡进来。
+        if (n >= 12 && n > bestLen) {
+            bestLen = n;
+            best = fi;
+        }
+    }
+    return best;
+}
+
+// 项目外绝对路径的禁区（与 lanInboxFile 的 abs 分支同一份口径）。
+bool absPathAllowed(const QString &abs) {
+    static const QStringList kDeny = {
+        QStringLiteral("/windows/"),   QStringLiteral("/program files"),
+        QStringLiteral("/programdata/"), QStringLiteral("/appdata/"),
+        QStringLiteral("/system volume information/"),
+        QStringLiteral("/$recycle.bin/")};
+    const QString lower = abs.toLower();
+    for (const QString &d : kDeny) {
+        if (lower.contains(d)) {
+            return false;
+        }
+    }
+    return true;
 }
 
 LanWebServer::Download MainWindow::lanInboxFile(const QJsonObject &meta) {
@@ -5180,19 +5265,8 @@ LanWebServer::Download MainWindow::lanInboxFile(const QJsonObject &meta) {
         QString abs = meta.value(QStringLiteral("abs")).toString().trimmed();
         abs.replace(QLatin1Char('\\'), QLatin1Char('/'));
         if (abs.isEmpty() || !QFileInfo(abs).isAbsolute() ||
-            !shareableExt(abs)) {
+            !shareableExt(abs) || !absPathAllowed(abs)) {
             return fail();
-        }
-        static const QStringList kDeny = {
-            QStringLiteral("/windows/"),   QStringLiteral("/program files"),
-            QStringLiteral("/programdata/"), QStringLiteral("/appdata/"),
-            QStringLiteral("/system volume information/"),
-            QStringLiteral("/$recycle.bin/")};
-        const QString lower = abs.toLower();
-        for (const QString &d : kDeny) {
-            if (lower.contains(d)) {
-                return fail();
-            }
         }
         QFile f(abs);
         if (!f.open(QIODevice::ReadOnly) || f.size() > 512LL * 1024 * 1024) {
@@ -5281,6 +5355,101 @@ LanWebServer::Download MainWindow::lanInboxFile(const QJsonObject &meta) {
         out.contentType = QByteArray("application/zip");
     }
     return out;
+}
+
+// 失效链接的兜底下载：正文里给的路径可能已被改名/移动（agent 常在产出后又改
+// 名），直接按原路径下就是 404。这里让服务端在同一目录里找同名文件，找到就下
+// **磁盘上真正的那个**，手机端看到的仍是真实文件名。找不到返回空（页面照报）。
+LanWebServer::Download MainWindow::lanResolveFile(const QJsonObject &meta) {
+    const auto fail = [] { return LanWebServer::Download{}; };
+    QString abs = meta.value(QStringLiteral("abs")).toString().trimmed();
+    abs.replace(QLatin1Char('\\'), QLatin1Char('/'));
+    if (abs.isEmpty() || !QFileInfo(abs).isAbsolute() ||
+        !shareableExt(abs) || !absPathAllowed(abs)) {
+        return fail();
+    }
+    const QFileInfo hit = resolveMentionedPath(abs);
+    if (!hit.exists() || !hit.isFile() ||
+        hit.size() > 512LL * 1024 * 1024) {
+        return fail();
+    }
+    QFile f(hit.absoluteFilePath());
+    if (!f.open(QIODevice::ReadOnly)) {
+        return fail();
+    }
+    LanWebServer::Download out;
+    out.ok = true;
+    out.name = hit.fileName();
+    out.data = f.readAll();
+    f.close();
+    out.contentType =
+        QMimeDatabase()
+            .mimeTypeForFile(hit.absoluteFilePath(), QMimeDatabase::MatchExtension)
+            .name()
+            .toUtf8();
+    if (riskyDownloadExt(hit.suffix())) {
+        out.data = zipSingleStore(hit.fileName(), out.data);
+        out.name = hit.fileName() + QStringLiteral(".zip");
+        out.contentType = QByteArray("application/zip");
+    }
+    return out;
+}
+
+// 会话正文里提到的项目外产物（桌面/别处）：按磁盘上的真实文件给，手机端「产物」
+// 面板才看得见、也才点得动。上限 10 个，按提到顺序去重。
+QJsonArray MainWindow::lanSessionMentionedArtifacts(
+    const QString &exe, const QString &session) {
+    QJsonArray arr;
+    if (exe.isEmpty() || session.isEmpty()) {
+        return arr;
+    }
+    const SessionTranscript::Result r =
+        SessionTranscript::read(exe, session, 200);
+    if (!r.supported || r.messages.isEmpty()) {
+        return arr;
+    }
+    QSet<QString> seen;
+    int n = 0;
+    for (const QJsonValue &v : r.messages) {
+        const QJsonObject m = v.toObject();
+        if (m.value(QStringLiteral("role")).toString() !=
+            QStringLiteral("assistant")) {
+            continue;
+        }
+        const QStringList paths =
+            mentionedAbsPaths(m.value(QStringLiteral("text")).toString());
+        for (const QString &p : paths) {
+            if (n >= 10) {
+                break;
+            }
+            const QFileInfo hit = resolveMentionedPath(p);
+            if (!hit.exists() || !absPathAllowed(hit.absoluteFilePath())) {
+                continue;
+            }
+            const QString key = hit.absoluteFilePath().toLower();
+            if (seen.contains(key)) {
+                continue;
+            }
+            seen.insert(key);
+            const QString norm =
+                hit.absoluteFilePath().replace(QLatin1Char('\\'),
+                                               QLatin1Char('/'));
+            arr.append(QJsonObject{
+                {QStringLiteral("abs"), norm},
+                {QStringLiteral("name"), hit.fileName()},
+                {QStringLiteral("size"), static_cast<double>(hit.size())},
+                {QStringLiteral("mtime"),
+                 hit.lastModified().toUTC().toString(Qt::ISODate)},
+                // 与正文给的路径不同＝被改名/移动过，面板标一下，别让人以为是错文件。
+                {QStringLiteral("stale"),
+                 hit.fileName() != QFileInfo(p).fileName()}});
+            ++n;
+        }
+        if (n >= 10) {
+            break;
+        }
+    }
+    return arr;
 }
 
 // 页面上的按钮/双击回到这里：全部转给既有实现，不在页面里另起一套状态机。

@@ -147,6 +147,32 @@ CLI：原生端把派发排进队列（`GET /dispatch/pending?exe=…` 取件）
 - 这条通道只在会话里多一轮普通对话，气泡/语音提醒由既有的 turn-start / stop
   自动提醒照常完成，不需要插件额外做什么。
 
+## 停止生成 / 插话（`control`，2026-11-20）
+
+与派发是**两条队列**：派发＝新的一轮，这两件＝动正在跑的这一轮。原生端排件
+（`GET /control/pending?exe=…` 每 1.2s 取），插件执行后 `POST /control/ack`：
+
+- `action:"stop"` → `agent.cancel({ kind: 'user' })`。**与 DSH 自己的停止同一入口**
+  （不带 `keepInbox`：排队里没开跑的一起收，不会出现「点了停止还在跑旧活」）。
+- `action:"steer"` → `agent.steer({id, role:'user', content:[{type:'text',text}],
+  source:{kind:'user'}})`，与 `followup` 同形，正文并进当前这一轮、不另起一轮。
+  只在 `agent.status === 'running'` 时成立（DSH 自己的前置条件）；跑完了回
+  `ok:false`「这一轮已经跑完了」，原生端把正文回填成草稿，不吞字。
+- 会话不在活表、agents 服务不可达 → `ok:false` 带人话原因，原生端 10s 无回执也
+  会兜底报「没取件 / 取了没回执」两种说法（别再混成一句）。
+- 页面侧：聊天页输入框空着时发送键就是「停止」，有正文时发送＝插话。宿主报
+  `running` 才切换，没报账时保持旧的普通派发行为。
+
+## 活会话上报（`liveReport`，2026-11-20）
+
+每 5s（首帧立刻发一次）`POST /live/sessions {exe, open:[会话id], running:[会话id]}`
+——只报 id 与 `agent.status`，不碰会话内容。原生端拿它：
+
+- 派发页/派发口：目标会话不在 `open` 里就提前拦下（「这条会话没在宿主里打开」），
+  不再让插件守卫回一句人看不懂的「不在活表里」。
+- 聊天页：`running` 里有它就切「停止/插话」。
+- 账 15s 过期（宿主关了/插件没加载）：过期一律不做判断，退回旧行为。
+
 ## 当轮应答（questionInline / approvalInline，2026-11-16）
 
 **授权和提问是同一个病、同一副药**（`approval/request` 与 `user-questions/request`

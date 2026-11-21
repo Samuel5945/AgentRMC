@@ -1,6 +1,7 @@
 #include "core/LanWebServer.h"
 
 #include <QCryptographicHash>
+#include <QDateTime>
 #include <QDebug>
 #include <QDir>
 #include <QFile>
@@ -10,6 +11,7 @@
 #include <QNetworkInterface>
 #include <QRandomGenerator>
 #include <QRegularExpression>
+#include <QStandardPaths>
 #include <QTcpServer>
 #include <QTcpSocket>
 #include <QTimer>
@@ -36,6 +38,49 @@ QByteArray randomBytes(int n) {
         out[i] = char(rng->bounded(256));
     }
     return out;
+}
+
+// —— 手机浏览器排查追踪（2026-11-20）——
+// 症状：某台手机的某个浏览器配对失败、红字是「连不上电脑」，而同一台机器用
+// Chrome 正常。这种问题远程复现不了，得看服务端到底收到了什么：请求根本没到、
+// 到了但被当垃圾（比如浏览器把 http 升级成 https，发来的是 TLS ClientHello）、
+// 还是到了也回 200 但被浏览器拒收。
+// 开关：存在 <AppData>/lan-trace.on，或环境变量 AGENTRMC_LAN_TRACE=<文件路径>。
+// 关着的时候零开销（一次 stat）。
+QString lanTracePath() {
+    const QByteArray env = qgetenv("AGENTRMC_LAN_TRACE");
+    if (!env.isEmpty()) {
+        return QString::fromLocal8Bit(env);
+    }
+    const QString dir =
+        QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+    if (dir.isEmpty()) {
+        return QString();
+    }
+    if (!QFileInfo::exists(dir + QStringLiteral("/lan-trace.on"))) {
+        return QString();
+    }
+    return dir + QStringLiteral("/lan-trace.log");
+}
+
+void lanTrace(const QByteArray &line) {
+    const QString path = lanTracePath();
+    if (path.isEmpty() || line.isEmpty()) {
+        return;
+    }
+    // 别把盘写满：超过 256KB 从空文件重来（只留最近一段现场）。
+    const QFileInfo fi(path);
+    if (fi.exists() && fi.size() > 256 * 1024) {
+        QFile::remove(path);
+    }
+    QFile f(path);
+    if (!f.open(QIODevice::Append)) {
+        return;
+    }
+    f.write(QDateTime::currentDateTime().toString("HH:mm:ss.zzz").toUtf8());
+    f.write(" ");
+    f.write(line);
+    f.write("\n");
 }
 
 // 配对助记词表：2048 个常用双字词（qrc，rc_probe/gen_pair_wordlist.py 生成）。
@@ -281,6 +326,11 @@ void LanWebServer::setInboxFileProvider(
     inboxFileProvider_ = std::move(provider);
 }
 
+void LanWebServer::setInboxFileResolveProvider(
+    std::function<Download(const QJsonObject &)> provider) {
+    inboxFileResolveProvider_ = std::move(provider);
+}
+
 void LanWebServer::setDevices(const QJsonArray &devices) {
     devices_ = devices;  // 恢复持久化数据，不回发 devicesChanged
 }
@@ -482,6 +532,17 @@ void LanWebServer::onReadable(QTcpSocket *socket) {
     buffer.append(socket->readAll());
     const int headerEnd = buffer.indexOf("\r\n\r\n");
     if (headerEnd < 0) {
+        // 追踪：一个连接收到了字节却迟迟凑不出请求头——最常见的就是浏览器把
+        // http 请求升级成 https（TLS ClientHello 里没有 \r\n\r\n），记下头几个
+        // 字节就能一眼认出来。
+        if (!traceReq_.contains(socket) && buffer.size() >= 8 &&
+            !lanTracePath().isEmpty()) {
+            QByteArray head = buffer.left(16).toHex(' ');
+            traceReq_.insert(socket, QByteArray());
+            lanTrace("RAW " + socket->peerAddress().toString().toUtf8() +
+                     " bytes=" + QByteArray::number(buffer.size()) +
+                     " hex=" + head);
+        }
         if (buffer.size() > kMaxHeaderBytes) {
             finish(socket, "413 Payload Too Large");
         }
@@ -497,6 +558,20 @@ void LanWebServer::onReadable(QTcpSocket *socket) {
     }
     const QByteArray method = parts.at(0);
     QByteArray path = parts.at(1);
+    // 追踪：一条请求 = 一行；UA 决定是哪个浏览器，Origin 用来判它认的源是谁
+    // （被代理/加速改写过的页面，Origin 会和 Host 对不上，正好解释 fetch 失败）。
+    if (!lanTracePath().isEmpty()) {
+        const QByteArray ua = headerValue(headerLines, "user-agent").left(140);
+        const QByteArray origin = headerValue(headerLines, "origin");
+        const QByteArray host = headerValue(headerLines, "host");
+        const QByteArray referer = headerValue(headerLines, "referer").left(90);
+        traceReq_.insert(
+            socket, method + " " + path.left(80) + " host=" + host +
+                        " origin=" + origin + " ref=" + referer +
+                        " ua=" + ua);
+        lanTrace("REQ " + socket->peerAddress().toString().toUtf8() + " " +
+                 traceReq_.value(socket));
+    }
     QByteArray query;
     const int queryAt = path.indexOf('?');
     if (queryAt >= 0) {
@@ -950,6 +1025,26 @@ void LanWebServer::route(QTcpSocket *socket, const QByteArray &method,
         serveDownload(socket, file, method == "HEAD");
         return;
     }
+    // /m/file/resolve：链接失效（文件被改名/移动）时的兜底。meta 与 /m/file 同
+    // 一套，服务端负责在同目录里找真实文件；找不到同样回 JSON 404，不假装下成。
+    if (path == "/m/file/resolve" && (method == "GET" || method == "HEAD")) {
+        if (authDevice(headerLines) < 0) {
+            finish(socket, "401 Unauthorized");
+            return;
+        }
+        const Download file =
+            inboxFileResolveProvider_
+                ? inboxFileResolveProvider_(queryMeta(query))
+                : Download{};
+        if (!file.ok || file.data.isEmpty()) {
+            finish(socket, "404 Not Found",
+                   QByteArray("{\"ok\":false,\"error\":\"file_missing\"}"),
+                   "application/json");
+            return;
+        }
+        serveDownload(socket, file, method == "HEAD");
+        return;
+    }
     if (path.startsWith("/m/theme/") && method == "GET") {
         if (authDevice(headerLines) < 0) {
             finish(socket, "401 Unauthorized");
@@ -1119,6 +1214,11 @@ void LanWebServer::finish(QTcpSocket *socket, const char *status,
                 "\r\n\r\n";
     response += body;
     socket->write(response);
+    if (!lanTracePath().isEmpty()) {
+        const QByteArray label = traceReq_.take(socket);
+        lanTrace("RES " + QByteArray(status) + " len=" +
+                 QByteArray::number(body.size()) + " " + label);
+    }
     buffers_.remove(socket);
     socket->disconnectFromHost();
 }
@@ -1163,6 +1263,7 @@ void LanWebServer::dropSocket(QTcpSocket *socket) {
     buffers_.remove(socket);
     drain_.remove(socket);
     streamAbort(socket);
+    traceReq_.remove(socket);
     socket->abort();
 }
 
@@ -1205,6 +1306,7 @@ QString LanWebServer::mobileHtml() const {
    border:1px solid var(--w14);border-radius:10px;padding:12px;font-family:inherit}
  .pbox input:focus{outline:none;border-color:var(--accent);background:var(--w8)}
  #pairErr{font-size:13px;color:var(--danger);min-height:18px;line-height:1.5}
+ #pairTech{font-size:11px;color:var(--muted2);word-break:break-all;line-height:1.45}
  /* 应用骨架 */
  #app{flex:1;display:flex;flex-direction:column;min-height:0}
  #top{flex:0 0 auto;display:flex;align-items:center;gap:8px;padding:10px 14px;
@@ -1535,6 +1637,10 @@ QString LanWebServer::mobileHtml() const {
  @keyframes cspin{to{transform:rotate(360deg)}}
  .csend:active{background:var(--accent-hover)}
  .csend:disabled{background:var(--w10);color:var(--faint)}
+ /* 运行中：同一颗键变「停止生成」（实心方块 + 危险色描边，不抢眼但认得出来） */
+ .csend.stopmode{background:var(--w10);color:var(--danger);
+   box-shadow:inset 0 0 0 1.5px var(--danger)}
+ .csend.stopmode svg{width:13px;height:13px}
  @keyframes crise{from{opacity:0;transform:translateY(3px)}to{opacity:1;
    transform:none}}
  /* 模型选择（对齐 ZCode remote v4）：输入行灰底胶囊「选择模型 ⌄」/
@@ -1731,6 +1837,7 @@ QString LanWebServer::mobileHtml() const {
   <input id="pairCode" placeholder="6 个配对词" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
   <button id="pairBtn" class="btn primary">配对</button>
   <div id="pairErr"></div>
+ <div id="pairTech"></div>
  </div>
 </div>
 <div id="app" hidden>
@@ -1919,6 +2026,24 @@ function setNet(ok){
  $('netDot').className='dot'+(ok?' on':' bad');
  $('offline').hidden=ok||!STATE;
 }
+// 老内核兜底（2026-11-20 实测）：AbortSignal.timeout 是 Chrome 103+ 的 API，
+// 荣耀/百度浏览器的内核报 Chrome 97 — 直接调用会抛 TypeError，被 load() 的
+// catch 吞成「连不上电脑」，页面永远停在配对屏（配对请求其实早就 200 成功了）。
+function timeoutSignal(ms){
+ try{
+  if(typeof AbortSignal!=='undefined'&&typeof AbortSignal.timeout==='function')
+   return AbortSignal.timeout(ms);
+ }catch(e){}
+ const c=new AbortController();
+ setTimeout(()=>{try{c.abort();}catch(e){}},ms);
+ return c.signal;
+}
+function errText(e){return (e&&(e.name||'Error'))+': '+((e&&e.message)||String(e));}
+// 技术细节：红字是给人看的行动建议，真原因（异常/地址）落在灰字里，截图就能定位。
+function pairTech(text){
+ const el=$('pairTech');if(!el)return;
+ el.textContent=text||'';
+}
 function showPair(){
  $('app').hidden=true;$('pair').hidden=false;
  if(timer){clearInterval(timer);timer=null;}
@@ -1927,7 +2052,7 @@ let netFails=0;  // 连续失败计数：2.5s 轮询偶发抖一两次不值得�
 async function load(){
  try{
   const r=await fetch('/m/state',{cache:'no-store',
-   signal:AbortSignal.timeout(8000)});
+   signal:timeoutSignal(8000)});
   if(r.status===401){showPair();return;}
   if(!r.ok) throw new Error('http '+r.status);
   netFails=0;
@@ -1939,7 +2064,8 @@ async function load(){
   // 抖动容忍：连挂 3 轮（约 8s）才判掉线亮横幅，期间保留旧画面不闪。
   netFails++;
   if(!STATE){showPair();
-   $('pairErr').textContent='连不上电脑：确认手机和电脑在同一个 Wi-Fi、电脑端已开启「手机访问」、防火墙已放行。';}
+   $('pairErr').textContent='连不上电脑：确认手机和电脑在同一个 Wi-Fi、电脑端已开启「手机访问」、防火墙已放行。';
+   pairTech(errText(e)+' · '+location.href);}
   else if(netFails>=3) setNet(false);
  }
 }
@@ -1954,17 +2080,25 @@ document.addEventListener('visibilitychange',()=>{
  if(!document.hidden&&STATE){load();if(chatId)fetchTranscript(0,'append');}
 });
 async function doPair(code){
- $('pairErr').textContent='';$('pairBtn').disabled=true;
+ $('pairErr').textContent='';pairTech('');$('pairBtn').disabled=true;
  const name=($('pairName').value||'').trim()||autoName();
  try{
   const r=await fetch('/m/pair',{method:'POST',
    headers:{'Content-Type':'application/json','X-Requested-With':'fetch'},
    body:JSON.stringify({code:(code||'').trim(),name})});
-  if(r.ok){history.replaceState(null,'',location.pathname);startPoll();}
+  if(r.ok){
+   // 这两步哪一步炸了都不该说「连不上电脑」——那会让人去查 Wi-Fi。
+   try{history.replaceState(null,'',location.pathname);}catch(e){pairTech('replaceState: '+errText(e));}
+   try{startPoll();}catch(e){
+    $('pairErr').textContent='配对成功，但页面没能启动（看下面灰字）。';
+    pairTech('startPoll: '+errText(e));return;}
+  }
   else if(r.status===429){$('pairErr').textContent='尝试次数太多，请 15 分钟后再试。';}
+  else if(r.status===403){$('pairErr').textContent='请求被电脑拒了（跨站校验）。刷新页面再试一次。';}
   else{$('pairErr').textContent='配对码不对或已过期：在电脑「系统 → 手机访问」重新生成。';}
  }catch(e){
   $('pairErr').textContent='连不上电脑：确认同一 Wi-Fi、电脑端已开启「手机访问」、防火墙已放行。';
+  pairTech(errText(e)+' · '+location.href);
  }
  $('pairBtn').disabled=false;
 }
@@ -2578,6 +2712,8 @@ function paintChat(mode,prevH,prevTop){
 const C_MAX=4000;  // 派发正文软上限：native 侧另有守卫，这里只提前提醒
 const C_PLANE_SVG='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12l16-7-6.3 16-2.9-6.4L4 12Z"/></svg>';
 const C_SPIN_SVG='<svg class="cspin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 3a9 9 0 1 1-9 9"/></svg>';
+// 运行中：同一颗键变「停止生成」（实心方块，与桌面两端同款）。
+const C_STOP_SVG='<svg viewBox="0 0 24 24" fill="currentColor"><rect x="7" y="7" width="10" height="10" rx="2"/></svg>';
 // ---------- 附件：多选队列 / 串行上传 / 进度 / 附件条 ----------
 // 手机这条是**真的把字节传上来**：PC 落盘进会话目录、回来绝对路径，发送时
 // 拼进派发正文（agent 按路径读）。桌面端相反——本机路径直接引用，不复制。
@@ -2813,6 +2949,7 @@ function fpUrl(name,rel,abs){
  if(chatKind==='session')
   q+='&session='+encodeURIComponent(chatSession||'')
     +'&project='+encodeURIComponent(chatProjectPath());
+ if(chatExe)q+='&exe='+encodeURIComponent(chatExe);
  if(rel)q+='&scope=project&rel='+encodeURIComponent(rel);
  else if(abs)q+='&scope=abs&abs='+encodeURIComponent(abs);
  else if(name)q+='&name='+encodeURIComponent(name);
@@ -2827,13 +2964,22 @@ function fpUrl(name,rel,abs){
 // 探不到就在页面上说清楚。**新增下载入口也只准走这里**（见下载契约文档）。
 async function saveFile(url){
  if(!url||url==='#')return;
+ const downloadAt=(u)=>{const a=document.createElement('a');
+  a.href=u;a.setAttribute('download','');a.rel='noopener';
+  document.body.append(a);a.click();a.remove();};
  try{
   const r=await fetch(url,{method:'HEAD',cache:'no-store'});
   if(r.status===401){showPair();return;}
-  if(!r.ok){toast('取不到这个文件（可能已移动或删除）');return;}
-  const a=document.createElement('a');
-  a.href=url;a.setAttribute('download','');a.rel='noopener';
-  document.body.append(a);a.click();a.remove();
+  if(r.ok){downloadAt(url);return;}
+  // 404：正文给的路径可能已被改名/移动（agent 常在产出后又改一次名）。
+  // 让服务端在同目录里找真实文件，找到就下那个（页面上看到的仍是真实文件名），
+  // 找不到才报错。
+  const alt=url.replace('/m/file?','/m/file/resolve?');
+  if(alt!==url){
+   const r2=await fetch(alt,{method:'HEAD',cache:'no-store'});
+   if(r2.ok){toast('原路径已失效，已找到同名文件');downloadAt(alt);return;}
+  }
+  toast('取不到这个文件（可能已移动或删除）');
  }catch(e){toast('下载失败：网络不通');}
 }
 // 产物行第二行原来放 rel 路径（「dist/AgentRMC-Setup.exe」）——上级目录对
@@ -2859,34 +3005,42 @@ async function fpLoad(){
   if(r.status===401){showPair();return;}
   const j=await r.json();
   const files=(j&&j.files)||[];
+  // 产物两类，混在一起按修改时间排，面板只展示「能下的东西」：
+  // ① 工作区扫出来的（rel）；② 正文里提到的项目外产物（abs，桌面/别处）。
+  // 以前只有 ①，agent 写到桌面的封面在面板里一条都看不到（用户 2026-11-21）。
   const arts=(j&&j.artifacts)||[];
+  const mentioned=(j&&j.mentioned)||[];
+  const prods=arts.concat(mentioned)
+   .sort((a,b)=>((Date.parse(b.mtime||0)||0)-(Date.parse(a.mtime||0)||0)))
+   .slice(0,30);
   list.replaceChildren();
   $('chatFileCount').textContent=
-   ('产物 '+arts.length)+(files.length?(' · 文件 '+files.length):'');
-  if(!arts.length&&!files.length){
+   ('产物 '+prods.length)+(files.length?(' · 文件 '+files.length):'');
+  if(!prods.length&&!files.length){
    const e=document.createElement('div');e.className='fempty';
    e.textContent='还没有产物，也没有传上来的文件。';
    list.append(e);return;
   }
-  // 产物区在上：agent 刚生成的（安装包/截图/文档），下载走工作区相对路径。
-  if(arts.length){
+  // 产物行：图/文档/安装包，下载走工作区相对路径或项目外绝对路径。
+  function fpRow(f){
+   const a=document.createElement('a');a.className='mprow frow';
+   a.href=fpUrl(null,f.rel,f.abs);a.download=f.name||'';
+   a.onclick=e=>{e.preventDefault();saveFile(a.href);};
+   const ic=document.createElement('span');ic.className='mpico';
+   ic.innerHTML=FP_ICON;
+   const wrap=document.createElement('span');wrap.className='mpname';
+   const nm=document.createElement('b');nm.textContent=f.name||'';
+   const dir=document.createElement('i');dir.className='fdir';
+   dir.textContent=fpTime(f.mtime);
+   wrap.append(nm,dir);
+   const sz=document.createElement('span');sz.className='fsize';
+   sz.textContent=attFmt(f.size||0);
+   a.append(ic,wrap,sz);return a;
+  }
+  if(prods.length){
    const sec=document.createElement('div');sec.className='fpsec';
-   sec.textContent='产物 · 最近 24 小时';list.append(sec);
-   arts.forEach(f=>{
-    const a=document.createElement('a');a.className='mprow frow';
-    a.href=fpUrl(null,f.rel);a.download=f.name||'';
-    a.onclick=e=>{e.preventDefault();saveFile(a.href);};
-    const ic=document.createElement('span');ic.className='mpico';
-    ic.innerHTML=FP_ICON;
-    const wrap=document.createElement('span');wrap.className='mpname';
-    const nm=document.createElement('b');nm.textContent=f.name||'';
-    const dir=document.createElement('i');dir.className='fdir';
-    dir.textContent=fpTime(f.mtime);
-    wrap.append(nm,dir);
-    const sz=document.createElement('span');sz.className='fsize';
-    sz.textContent=attFmt(f.size||0);
-    a.append(ic,wrap,sz);list.append(a);
-   });
+   sec.textContent='产物';list.append(sec);
+   prods.forEach(f=>list.append(fpRow(f)));
   }
   // inbox 区在下：手机传上来的、电脑粘的图（粘图下载没意义，但留着）。
   if(files.length){
@@ -2948,12 +3102,37 @@ function cSync(p){
   cc.className='cchars'+(n>C_MAX?' over':(n>C_MAX*0.8?' warn':''));}
  const b=$(p+'chatSend');
  if(b&&b.dataset.busy==='1')return;  // 在途：保持「派发中…」
+ // 宿主报「这一轮正在跑」且输入框空着：这颗键让位给「停止生成」。
+ if(cRunning()&&n===0&&!attHas(p)){cStopReady(p,!ta.disabled);return;}
  // 只有附件没有正文也能发（正文由路径自动拼）。
  cSendReady(p,!ta.disabled&&(n>0||attHas(p)));
+}
+// 这条会话此刻在不在跑：宿主插件每 5s 报一次 live（running 数组）。
+// 两种入口都要判：从「派发页」进（chatKind='session'，startChat 就带了会话 id），
+// 从「待我处理」卡片进（chatKind='work'，会话 id 要等 mergeChatPage 从载荷补）。
+// 早先按 chatKind 分流过一次，结果工单面永远判不出 running——就是「停止没有」
+// 的第二个原因。会话 id 一律以 chatSession 为准，没有就不判。
+function chatSid(){return chatSession||'';}
+function cRunning(){
+ const sid=chatSid();
+ if(!sid||!chatExe)return false;
+ const live=((STATE||{}).dispatch||{}).live||{};
+ let v=live[chatExe];
+ if(!v){const want=String(chatExe).toLowerCase();
+  for(const k in live){if(String(k).toLowerCase()===want){v=live[k];break;}}}
+ return !!(v&&(v.running||[]).indexOf(sid)>=0);
+}
+function cStopReady(p,on){
+ const b=$(p+'chatSend');if(!b)return;
+ b.dataset.busy='0';b.disabled=!on;
+ b.title='停止生成';b.setAttribute('aria-label','停止生成');
+ if(b.classList)b.classList.add('stopmode');
+ b.innerHTML=C_STOP_SVG;
 }
 function cSendReady(p,on){
  const b=$(p+'chatSend');if(!b)return;
  b.dataset.busy='0';b.disabled=!on;
+ if(b.classList)b.classList.remove('stopmode');
  // 只留图标（用户 2026-11-18），文字退到 title/aria-label。
  b.title='派发';b.setAttribute('aria-label','派发');
  b.innerHTML=C_PLANE_SVG;
@@ -3170,6 +3349,11 @@ function pickedModel(){
 }
 function mergeChatPage(p,mode){
  chatTotal=p.total||0; chatModel=p.model||chatModel; chatLive=p.live||null;
+ // 工单面（chatKind='work'）进来时只有工单 id：从载荷里补会话 id 与宿主 exe，
+ // 否则「停止/插话」判不出这是哪条会话（两条路都要同一套 id）。
+ if(!chatSession&&p.sessionId)chatSession=p.sessionId;
+ if(!chatExe&&p.agentExe)chatExe=p.agentExe;
+ if(!chatAgentName&&p.agentName)chatAgentName=p.agentName;
  const msgs=p.messages||[];
  if(mode==='init'){
   chatMsgs=msgs.slice();chatIds=new Set(chatMsgs.map(msgKey));
@@ -3258,7 +3442,36 @@ async function sendChat(){
  const typed=$('chatText').value.trim();
  const refs=attText('');
  const t=typed?(refs?typed+'\n'+refs:typed):refs;
- if(!t||!chatId||!chatCanDispatch)return;
+ if(!chatId||!chatCanDispatch)return;
+ // 运行中：空输入＝停止（同桌面两端、同 DSH 自己的停止键）；有正文＝插话。
+ if(cRunning()&&!t){
+  cBusy('');
+  const res=await postResult({cmd:'control',action:'stop',
+   exe:chatExe,session:chatSession});
+  cIdle('');cSync('');
+  if(res.ok)cNotice('','已停止这一轮','good');
+  else cNotice('','没停下来：'+((res.data&&res.data.error)||('HTTP '+res.status)),'bad');
+  load();
+  return;
+ }
+ if(!t)return;
+ if(cRunning()){
+  cBusy('');
+  const res=await postResult({cmd:'control',action:'steer',
+   exe:chatExe,session:chatSession,text:t});
+  cIdle('');
+  if(!res.ok){
+   // 插话没落地：正文留在框里（多半是这一轮刚好跑完了，直接再发就是新一轮）。
+   cValue('',typed);
+   cNotice('','没插进去：'+((res.data&&res.data.error)||('HTTP '+res.status))
+    +'（草稿已保留）','bad');
+   return;
+  }
+  cValue('','');attClear('');
+  cNotice('','已插话：并进当前这一轮，不再另起一轮','good');
+  toast('已插话');load();fetchTranscript(0,'append');
+  return;
+ }
  cBusy('');
  const model=pickedModel();
  const res=chatKind==='session'
@@ -3429,7 +3642,7 @@ async function loadSessions(force){
  if(tab===1&&!chatId)renderDispatch();
  try{
   const r=await fetch('/m/sessions',{cache:'no-store',
-   signal:AbortSignal.timeout(12000)});
+   signal:timeoutSignal(12000)});
   if(r.status===401){showPair();return;}
   if(!r.ok)throw new Error('HTTP '+r.status);
   CATALOG=await r.json();

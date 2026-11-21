@@ -2978,10 +2978,14 @@ function liveIsRunning(exe,id){
   return !!(v&&id&&v.running.indexOf(id)>=0);
 }
 function chatExe(){return (CHAT&&(CHAT.agentExe||CHAT.agent))||'';}
+// 聊天页的**会话 id**：chatOpenedId 是待办工单 id（chatStateFor 的 id 字段），
+// 跟宿主上报的会话 id 不是一回事。停止/插话/活会话判定一律用 sessionId，
+// 用 chatOpenedId 会永远匹配不上（2026-11-20 用户报「停止生成没有」的真因）。
+function chatSid(){return (CHAT&&CHAT.sessionId)||chatOpenedId;}
 function dchatExe(){return (DSCHAT&&DSCHAT.agent&&DSCHAT.agent.exe)||'';}
 // 这条会话此刻能不能「停」/「插话」：宿主报了运行中才算。
 function cRunning(prefix){
-  if(prefix==='chat')return liveIsRunning(chatExe(),chatOpenedId);
+  if(prefix==='chat')return liveIsRunning(chatExe(),chatSid());
   return liveIsRunning(dchatExe(),DSCHAT?DSCHAT.row.id:'');
 }
 const C_STOP_SVG='<svg viewBox="0 0 24 24" fill="currentColor"><rect x="7" y="7" width="10" height="10" rx="2"/></svg>';
@@ -4019,7 +4023,7 @@ window.__setChatPage=function(p){
   paintChat('prepend',prevH,prevTop);
 };
 function sendChat(){
-  const exe=chatExe(),sid=chatOpenedId;
+  const exe=chatExe(),sid=chatSid();
   const typed=$('chatText').value.trim();
   const refs=attText('chat');
   const t=typed?(refs?typed+'\n'+refs:typed):refs;

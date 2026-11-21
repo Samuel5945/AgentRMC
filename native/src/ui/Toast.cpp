@@ -11,6 +11,9 @@
 
 Toast::Toast(QWidget *parent) : QLabel(parent) {
     setObjectName("toast");
+    // 窗口标题只为排障辨认：这些 Qt::Tool 顶层窗默认都套进程名
+    // 「AgentRMCNative」，和主窗「AgentRMC Native」只差大小写/空格。
+    setWindowTitle(QStringLiteral("AgentRMC Toast"));
     setWindowFlags(Qt::Tool | Qt::FramelessWindowHint |
                    Qt::WindowStaysOnTopHint | Qt::WindowTransparentForInput |
                    Qt::NoDropShadowWindowHint);

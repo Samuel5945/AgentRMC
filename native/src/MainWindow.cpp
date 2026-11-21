@@ -3104,6 +3104,9 @@ void MainWindow::watchdogTick() {
     // 放这里而不是 /requests 推送里——插件只推还有待答的会话，死卡对应的会话
     // 根本不会再被推一次（见 reconcileLegacyAttention 的注释）。
     reconcileLegacyAttention();
+    // 幽灵 working 卡对账：会话已删/回合已收尾但没走 stop 的卡，靠宿主投影
+    // 的硬账结案（见 reconcileGhostWorking 的注释）。
+    reconcileGhostWorking();
     refreshHealth();
     HostRuntime::refreshHint();
     if (workWeb_ != nullptr) {
@@ -4149,6 +4152,71 @@ void MainWindow::reconcileLegacyAttention() {
                 QStringLiteral("重启后对账：%1 张旧待答卡对应的请求已不存在，"
                                "已归档（重启前遗留，点了也不会生效）")
                     .arg(stale.size()),
+                0);
+    refreshWorkItems();
+}
+
+// 幽灵 working 卡对账（2026-11-21，用户报「已归档删除会话还显示进行中，
+// 模型出错后一直显示进行中」）：DSH 对出错/用户停止/会话删除的收尾都不发
+// turn-stopping（那个事件只挂在正常完成的步边界上，见宿主 agent-loop 的
+// turn()——出错走 agent/error，停止走 abort 直接中断），旧插件收不到任何
+// 收尾信号，「生成回复中」的回声就一直续，working 卡永远不静默。插件侧
+// （agent/error + agents.list() 对账）补上事件网之后，这里用比插件事件更硬
+// 的账兜底——宿主投影缓存 turnBoundary.openTurnStartSeq（回合关了就是 null）
+// 与投影文件本体（删会话连投影一起清）：
+//   投影没了   = 会话已删除，卡无处可回，结案；
+//   回合已关   = 这轮早就结束（没走 stop），结案。
+// 只动 DSH 的 working 卡，且开了 60 秒以上：新卡可能撞上「回合刚开工、投影
+// 还没写盘」的窗口，别误杀真回合；「回合已关」另要求回声断流 ≥90 秒——真在
+// 跑的回合回声每 45s 必到（投影写盘偶发滞后时，新鲜的卡不动）。坏 JSON/
+// 超大投影只是读不出（gone=false），一律不碰。删除/结束是终态，直接 ack：
+// done 卡从列表消失，历史里查得到。
+void MainWindow::reconcileGhostWorking() {
+    if (workItems_ == nullptr) {
+        return;
+    }
+    const QDateTime now = QDateTime::currentDateTimeUtc();
+    int deleted = 0;
+    int finished = 0;
+    for (const WorkItem &item : workItems_->items()) {
+        if (item.done || item.stage != QStringLiteral("working")) {
+            continue;
+        }
+        if (item.agentExe.compare(QStringLiteral("DeepSeek Harness.exe"),
+                                  Qt::CaseInsensitive) != 0) {
+            continue;  // turnBoundary 是 DSH 投影的字段，别的宿主没这份账
+        }
+        if (!item.sessionId.startsWith(QStringLiteral("session-"))) {
+            continue;  // 投影只认这个形态，对不上账的卡不归这里管
+        }
+        if (!item.createdAt.isValid() ||
+            item.createdAt.secsTo(now) < 60) {
+            continue;  // 刚建的卡：投影可能还没落盘，别误杀真回合
+        }
+        const DshSessions::Info info = DshSessions::find(item.sessionId);
+        const bool quiet = item.updatedAt.isValid() &&
+                           item.updatedAt.secsTo(now) >= 90;
+        if (info.gone) {
+            workItems_->ack(item.id);
+            ++deleted;
+        } else if (info.valid && info.turnOpen == 0 && quiet) {
+            workItems_->ack(item.id);
+            ++finished;
+        }
+    }
+    if (deleted == 0 && finished == 0) {
+        return;
+    }
+    QStringList why;
+    if (deleted > 0) {
+        why << QStringLiteral("%1 张会话已删除").arg(deleted);
+    }
+    if (finished > 0) {
+        why << QStringLiteral("%1 张回合已结束").arg(finished);
+    }
+    appendEvent(QStringLiteral("status"), QString(), QString(),
+                QStringLiteral("对账：%1（宿主侧已无对应回合，卡结案）")
+                    .arg(why.join(QStringLiteral("，"))),
                 0);
     refreshWorkItems();
 }

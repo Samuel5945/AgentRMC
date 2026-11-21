@@ -341,7 +341,13 @@ export function apply(ctx, rawConfig) {
   }
   function maybeSendProgress(id) {
     const a = turnActivity.get(id);
-    if (!a || !config.notifyProgress) return;
+    if (!a) return;
+    // 先对账再续命：回合已经死了就收摊，哪怕 sweep 还在按时敲门。
+    if (!turnStillRunning(id)) {
+      turnActivity.delete(id);
+      return;
+    }
+    if (!config.notifyProgress) return;
     const now = Date.now();
     const gap = a.dirty ? PROGRESS_LABEL_MS : PROGRESS_REFRESH_MS;
     if (now - a.lastSentAt < gap) return;
@@ -366,6 +372,34 @@ export function apply(ctx, rawConfig) {
         } catch { /* 查不到账就不补，别拿猜测刷库 */ }
       })();
     }
+  }
+  // 回合真身对账（2026-11-21）：模型出错 / 用户停止 / 会话被删的收尾都不发
+  // turn-stopping（宿主只在正常完成的步边界发它），status 已经翻回 idle，
+  // 账本却还挂着——sweep 会把「生成回复中 · 已 N 分」永远续下去，原生端那张
+  // working 卡就永远不会静默/收口（用户报的「模型出错后一直显示进行中」）。
+  // agents.list() 是「这一轮还活着吗」的唯一权威：人没了（会话删除）或不在
+  // 跑的回合直接收摊。服务缺位 / 列失败（老宿主、测试假 ctx）没有真身可对，
+  // 返回 true 保持旧行为，绝不因为对不了账就误杀真回合。
+  function turnStillRunning(id) {
+    let agents = null;
+    try {
+      agents = ctx.get('agents');
+    } catch {
+      return true;
+    }
+    if (!agents || typeof agents.list !== 'function') return true;
+    let list = null;
+    try {
+      list = agents.list() || [];
+    } catch {
+      return true;
+    }
+    for (const agent of list) {
+      if (agent && String(agent.id) === id) {
+        return agent.status === 'running';
+      }
+    }
+    return false;  // 人没了 = 会话已删除 / 已销毁
   }
   function setActivity(id, label, project) {
     if (!id) return;
@@ -955,6 +989,48 @@ export function apply(ctx, rawConfig) {
       { global: true },
     );
 
+    // 模型出错（2026-11-21）：出错的收尾宿主**不发** turn-stopping（那只挂在
+    // 正常完成的步边界上，见 agent-loop/src/agent.ts——出错走 agent/error +
+    // turn/end{kind:'error'}，停止走 abort 直接中断），旧监听一个都收不到，
+    // 「生成回复中」就靠 sweep 永远续命。这里按 ZCode bridge 的 StopFailure
+    // 同款语义补一声：permission 通道（出声 + 抢前台 + 待我处理卡），原生端
+    // 对「模型出错」开头的文案有专用豁免（不拿回复正文顶掉它）。后台维护
+    // （压缩等）也走 agent/error：没有 turn-start 的账就不喊，只收摊——那是
+    // 宿主内部事务，喊出来是把无关故障当成会话失败。
+    ctx.on(
+      'agent/error',
+      (payload) => {
+        try {
+          const agent = payload && payload.agent;
+          if (!agent || !agent.id) return;
+          const id = String(agent.id);
+          const active = turnActivity.get(id);
+          liveStreams.delete(id);
+          lastReply.delete(id);
+          turnActivity.delete(id);
+          if (!active || !config.notifyStop) return;
+          const raw =
+            payload.error && typeof payload.error === 'object'
+              ? String(payload.error.message || '')
+              : String(payload.error || '');
+          const detail = raw.replace(/\s+/g, ' ').trim();
+          send({
+            event: 'permission',
+            message: detail
+              ? '模型出错：' +
+                (detail.length > 120 ? detail.slice(0, 119) + '…' : detail)
+              : '模型出错了，回宿主里重试或换个模型',
+            speech: config.agentName + ' 模型出错了',
+            sessionId: id,
+            project: projectOf(agent),
+          });
+        } catch (error) {
+          warn('agent error notify failed: ' + (error && error.message));
+        }
+      },
+      { global: true },
+    );
+
     // 会话销毁：清掉按 agent 攒的状态，长时间运行不会越攒越多。
     ctx.on(
       'agent/disposed',
@@ -976,7 +1052,8 @@ export function apply(ctx, rawConfig) {
       { global: true },
     );
 
-    // 长轮没新事件也要有人报「还在跑」：sweep 按 refresh 间隔续命。
+    // 长轮没新事件也要有人报「还在跑」：sweep 按 refresh 间隔续命；顺路收摊——
+    // maybeSendProgress 开头会先对账真身，死回合的账到这里一并清掉。
     const activityTimer = setInterval(() => {
       for (const id of [...turnActivity.keys()]) maybeSendProgress(id);
     }, 10000);

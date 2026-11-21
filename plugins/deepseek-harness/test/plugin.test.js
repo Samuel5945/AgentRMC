@@ -102,6 +102,9 @@ function makeCtx() {
   const tools = [];
   const skills = [];
   const effects = [];
+  // agents 等可选服务的注入口：回合真身对账（turnStillRunning）要从
+  // ctx.get('agents') 拿宿主的活表，测试按需往这里塞假服务。
+  const services = new Map();
   const ctx = {
     on(event, listener, options) {
       if (!listeners.has(event)) listeners.set(event, []);
@@ -121,6 +124,7 @@ function makeCtx() {
       return () => {};
     },
     get(service) {
+      if (services.has(service)) return services.get(service);
       if (service === 'workingDirectory') {
         return { get: () => 'D:/repo' };
       }
@@ -141,7 +145,7 @@ function makeCtx() {
       },
     },
   };
-  return { ctx, listeners, tools, skills, effects, regs };
+  return { ctx, listeners, tools, skills, effects, regs, services };
 }
 
 const harness = makeCtx();
@@ -343,6 +347,68 @@ await check('turn-stopping 问句收尾: 改发 permission 的「等你回话」
   assert.strictEqual(payload.speech, 'DeepSeek Harness 在等你回话');
   // 不能撞「等你选方案」前缀，否则原生端套 180s 迟到去重把它吞掉。
   assert.doesNotMatch(payload.message, /^等你选方案/);
+});
+
+await check('agent/error: 出错的回合补一声「模型出错」并收摊活动账本', async () => {
+  clearSpool();
+  // 先让这轮开工（claimed 建 turnActivity 账），再让模型炸——宿主对出错的
+  // 收尾不发 turn-stopping，插件必须自己听 agent/error。
+  emit('agent/inbox/claimed', { agent: AGENT, turn: 7, message: {} });
+  await waitForSpool(1);  // turn-start 先落盘，别混进断言
+  clearSpool();
+  emit('agent/error', {
+    agent: AGENT,
+    turn: 7,
+    step: 3,
+    error: new Error('Custom provider request failed: 429 rate limited'),
+  });
+  const lines = await waitForSpool(1);
+  const payload = lines[0];
+  assert.strictEqual(payload.event, 'permission', '与 ZCode bridge 的 StopFailure 同通道');
+  assert.match(payload.message, /^模型出错：/);
+  assert.match(payload.message, /429/, '错误细节要进卡，光喊「出错了」还得切回宿主看');
+  assert.strictEqual(payload.speech, 'DeepSeek Harness 模型出错了');
+  assert.strictEqual(payload.session_id, 'sess-1');
+  // 账本收摊：同 agent 再来一条 error（turn/end 落盘失败等级联）不重复喊。
+  clearSpool();
+  emit('agent/error', { agent: AGENT, turn: 7, step: 3, error: new Error('cascade') });
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  assert.deepStrictEqual(spooled(), [], '同一回合的第二条 error 不再喊');
+});
+
+await check('agent/error: 后台维护出错不喊（没有 turn-start 的账）', async () => {
+  clearSpool();
+  emit('agent/error', {
+    agent: { id: 'sess-maint', session: { id: 'sess-maint' } },
+    turn: 0,
+    step: 0,
+    error: new Error('compaction failed'),
+  });
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  assert.deepStrictEqual(spooled(), [], '维护失败是宿主内部事务，不该当成会话失败喊出来');
+});
+
+await check('回合真身对账: 宿主说没在跑的回合不再续「生成回复中」', async () => {
+  clearSpool();
+  // 宿主的活表说 sess-echo 已经 idle（模型出错/用户停止后的真身）：
+  // stream 事件照常到，但回声必须收摊——原生端那张 working 卡要能静默。
+  harness.services.set('agents', {
+    list: () => [{ id: 'sess-echo', status: 'idle' }],
+  });
+  try {
+    emit('agent/assistant-stream', {
+      agent: { id: 'sess-echo', session: { id: 'sess-echo' } },
+      frame: { type: 'start', attemptId: 1 },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    assert.deepStrictEqual(
+      spooled().filter((p) => p.event === 'progress'),
+      [],
+      'status=idle 的回合不许再有活动回声',
+    );
+  } finally {
+    harness.services.delete('agents');
+  }
 });
 
 await check('工具注册: 五个工具（四个 pet_* + cursor_point）都有合法 schema 与文本渲染', () => {

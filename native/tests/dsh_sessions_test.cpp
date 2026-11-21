@@ -150,6 +150,43 @@ int main(int argc, char *argv[]) {
     check("fixture: remove projection", QFile::remove(projFile));
     check("removed file: invalid again", !DshSessions::find(sidF).valid);
 
+    // 9) gone 与 turnOpen（2026-11-21 幽灵卡对账的硬账）：
+    //    - 文件被删 → gone=true（且只这条路置位）；
+    //    - turnBoundary.openTurnStartSeq 数字=回合开着、null=已关、
+    //      键缺失=不表态；坏 JSON 只是读不出（gone=false）。
+    check("gone: removed projection flagged",
+          DshSessions::find(sidF).gone);
+    check("gone: malformed id NOT flagged as gone",
+          !DshSessions::find(QStringLiteral("session-../../evil")).gone &&
+              !DshSessions::find(QString()).gone &&
+              !DshSessions::find(QStringLiteral("1001ba4c-399e")).gone);
+    const QString sidG = QStringLiteral("session-0c1f2b9a-1111-4d5e-8f90-a1b2c3d4e5f6");
+    const QString sidH = QStringLiteral("session-0c1f2b9a-2222-4d5e-8f90-a1b2c3d4e5f6");
+    const QString sidI = QStringLiteral("session-0c1f2b9a-3333-4d5e-8f90-a1b2c3d4e5f6");
+    check("fixture: turn open projection",
+          writeProjection(tmp.path(), sidG, projection(R"({
+        "turnBoundary":{"ver":2,"seq":688,"val":{"openTurnStartSeq":5,
+          "lastStepBoundary":{"kind":"start","seq":688}}}
+      })")));
+    check("turnOpen: running turn reads 1",
+          DshSessions::find(sidG).turnOpen == 1);
+    check("fixture: turn closed projection",
+          writeProjection(tmp.path(), sidH, projection(R"({
+        "turnBoundary":{"ver":2,"seq":4229,"val":{"openTurnStartSeq":null,
+          "lastStepBoundary":{"kind":"end","seq":4223}}}
+      })")));
+    check("turnOpen: finished turn reads 0",
+          DshSessions::find(sidH).turnOpen == 0);
+    check("fixture: projection without turnBoundary row",
+          writeProjection(tmp.path(), sidI, projection(R"({
+        "titleInput":{"val":{"first":{"text":"老格式没有回合账"}}}
+      })")));
+    check("turnOpen: missing row stays unknown (-1)",
+          DshSessions::find(sidI).turnOpen == -1);
+    check("turnOpen: corrupt json unknown, NOT gone",
+          DshSessions::find(sidD).turnOpen == -1 &&
+              !DshSessions::find(sidD).gone);
+
     std::printf(failures == 0 ? "PASS native dsh_sessions (%d checks)\n"
                               : "FAIL native dsh_sessions (%d failures)\n",
                 failures == 0 ? checks : failures);

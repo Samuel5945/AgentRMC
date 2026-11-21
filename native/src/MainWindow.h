@@ -128,6 +128,10 @@ private:
     // **插件已在线 + 该会话在账里没有待答**：插件只推有待答的会话，所以「没被
     // 推送」本身就等于「没有待答」，据此归档重启前遗留的注意力卡。
     void reconcileLegacyAttention();
+    // 幽灵 working 卡对账：DSH 对出错/停止/删会话的收尾不发 turn-stopping，
+    // 旧插件的「生成回复中」回声会把 working 卡永远续下去。按宿主投影的硬账
+    // （投影文件没了=会话已删除、turnBoundary 关了=回合已结束）结案。
+    void reconcileGhostWorking();
     // B2：手机/桌面下发的应答件收件箱（会话 id → 待取 answer 数组）与清理。
     // session 非空只取该会话（bridge 系并发授权 hook 各自轮询，防互踩）。
     QString takeAnswerPending(const QString &exe, const QString &session);

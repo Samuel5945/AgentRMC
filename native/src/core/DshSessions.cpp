@@ -5,6 +5,7 @@
 #include <QFileInfo>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QJsonValue>
 
 QHash<QString, DshSessions::CacheEntry> DshSessions::cache_;
 
@@ -35,7 +36,12 @@ DshSessions::Info DshSessions::find(const QString &sessionId) {
     const QFileInfo fi(path);
     if (!fi.exists() || !fi.isFile()) {
         cache_.remove(sessionId);
-        return {};
+        // 只有走到这里才敢说「会话没了」：id 已验过合法、路径就是宿主投影
+        // 的标准位置，文件不在 = 宿主删会话时连投影一起清了（2026-11-21
+        // 本机实测）。工单对账（reconcileGhostWorking）据此把幽灵卡结案。
+        Info gone;
+        gone.gone = true;
+        return gone;
     }
     const qint64 mtime = fi.lastModified().toMSecsSinceEpoch();
     const qint64 size = fi.size();
@@ -85,6 +91,23 @@ DshSessions::Info DshSessions::find(const QString &sessionId) {
                                    .toObject()
                                    .value(QStringLiteral("cwd"))
                                    .toString();
+                }
+                // 回合开合的硬账（与标题/目录同读一份 rows，零额外 I/O）：
+                // turn/start 落 openTurnStartSeq、turn/end 清回 null。数字=有
+                // 开着的回合；JSON null=回合已关（出错/停止的收尾也走这里）；
+                // 键缺失（老投影）不表态。工单对账只信 0，1/-1 都不动卡。
+                const QJsonValue openTurn =
+                    rows.value(QStringLiteral("turnBoundary"))
+                        .toObject()
+                        .value(QStringLiteral("val"))
+                        .toObject()
+                        .value(QStringLiteral("openTurnStartSeq"));
+                if (openTurn.isDouble()) {
+                    info.turnOpen = 1;
+                } else if (openTurn.isNull()) {
+                    info.turnOpen = 0;
+                } else {
+                    info.turnOpen = -1;
                 }
             }
         }

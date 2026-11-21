@@ -953,10 +953,16 @@ QString WorkWebView::htmlFor(const QString &stateJson) const {
   justify-content:center;color:var(--on-accent);font-size:10px;font-weight:700}
 .dspcheck.on{background:var(--accent);border-color:var(--accent)}
 .dspcheck.on::before{content:'✓'}
-.dspdel{flex:0 0 auto;border:1px solid var(--w14);border-radius:6px;
-  background:transparent;color:var(--faint);font-size:var(--f10);padding:2px 7px;
-  cursor:default}
-.dspdel:hover{color:var(--danger);border-color:var(--w30);background:var(--w6)}
+/* 会话行删除键：文字「删除」改成垃圾桶图标（用户 2026-11-21）。
+   和待办行 .icobtn / 顶栏 .tico 同一套线性图标 + 7px 圆角；描边常态
+   透明（保留 1px 让 hover 时尺寸不跳），hover 才出 danger 色，
+   语义靠 title + aria-label 兜住。 */
+.dspdel{flex:0 0 auto;width:26px;height:26px;border:1px solid transparent;
+  border-radius:7px;background:transparent;color:var(--faint);
+  display:inline-flex;align-items:center;justify-content:center;
+  padding:0;cursor:default;font-family:inherit}
+.dspdel svg{width:15px;height:15px;display:block;pointer-events:none}
+.dspdel:hover{color:var(--danger);border-color:var(--w14);background:var(--w6)}
 .dspdel:disabled{opacity:.45}
 .dspbatch{flex:0 0 auto;display:flex;align-items:center;gap:8px;padding:8px 2px 12px;
   border-top:1px solid var(--w14);margin-top:4px}
@@ -1667,6 +1673,9 @@ document.getElementById('chat').innerHTML=chatShellHtml('chat',
  {backTitle:'回到待办列表',placeholder:'派回这条会话的指令，回执到了转进行中…',
   sendLabel:'发送',newPill:true,restart:true});
 const COLOR = {'needs-me':'var(--pending)','review':'var(--ok)','working':'var(--info)'};
+// 会话行删除图标：线性垃圾桶，和待办行 .icobtn、顶栏 .tico 同一笔触
+// （1.8 描边、圆角端点），不额外引入字形/字体依赖。
+const DEL_ICON='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6.6h16"/><path d="M9.2 6.6V4.9a1.3 1.3 0 0 1 1.3-1.3h3a1.3 1.3 0 0 1 1.3 1.3v1.7"/><path d="M6.6 6.6 7.5 19a1.6 1.6 0 0 0 1.6 1.5h5.8A1.6 1.6 0 0 0 16.5 19l.9-12.4"/><path d="M10.3 10.2v6.1M13.7 10.2v6.1"/></svg>';
 // 事件按 kind 上色，和 Qt 侧 appendEvent 同一套：错误红、听写/系统命令绿、
 // 状态灰（muted token）、其余（按键等）用 text.dim。阶段色一样两边硬编码同值。
 const EVCOLOR = {error:'var(--danger)',voice:'var(--ok)',system:'var(--ok)',status:'var(--muted)'};
@@ -2350,7 +2359,9 @@ function dspSession(agent,row,archived){
   }
   if(!DSP_CLEAN&&row.can_delete!==false){
     const del=document.createElement('button');del.className='dspdel';
-    del.textContent='删除';del.disabled=DSP_DELETING;
+    del.innerHTML=DEL_ICON;
+    del.setAttribute('aria-label','删除会话');
+    del.disabled=DSP_DELETING;
     del.title=row.delete_mode==='host'
       ?'按 OpenSquilla 官方接口删除：宿主侧真删、不进回收站、不可恢复'
       :'把这条会话移入回收站，可随时恢复；一分钟内有写入的会话会被拒';

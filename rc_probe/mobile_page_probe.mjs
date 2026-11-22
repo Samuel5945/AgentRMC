@@ -215,10 +215,48 @@ let CURRENT_THEME = 'light';
 const ACK = new Set();
 const UPLOADS = [];  // /m/upload 收到的定位参数 + 文件名/字节数，附件断言用
 const FILES = [];    // /m/files、/m/file 收到的 query，电脑文件面板断言用
-// 1x1 透明 PNG：假服务给图片用，让 <img> 真正加载成功。
-const PNG_1PX = Buffer.from(
-  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
-  'base64');
+// 演示图：假服务给图片用。用一张真正能看清的 480x360 渐变，
+// 否则图片查看器截图里只有一片黑，看不出「点图弹大图」。
+function makeDemoPng(w, h) {
+  // 手写一张不压缩（store）的 RGB PNG：尺寸小、无依赖、不用 zlib 参数。
+  const crcTable = [];
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    crcTable[n] = c >>> 0;
+  }
+  const crc32 = (buf) => {
+    let c = 0xffffffff;
+    for (const b of buf) c = crcTable[(c ^ b) & 0xff] ^ (c >>> 8);
+    return (c ^ 0xffffffff) >>> 0;
+  };
+  const chunk = (type, data) => {
+    const len = Buffer.alloc(4); len.writeUInt32BE(data.length);
+    const td = Buffer.concat([Buffer.from(type, 'ascii'), data]);
+    const crc = Buffer.alloc(4); crc.writeUInt32BE(crc32(td));
+    return Buffer.concat([len, td, crc]);
+  };
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(w, 0); ihdr.writeUInt32BE(h, 4);
+  ihdr[8] = 8; ihdr[9] = 2;  // 8-bit RGB
+  const raw = Buffer.alloc((w * 3 + 1) * h);
+  for (let y = 0; y < h; y++) {
+    const off = y * (w * 3 + 1);
+    raw[off] = 0;  // filter none
+    for (let x = 0; x < w; x++) {
+      const p = off + 1 + x * 3;
+      raw[p] = 40 + Math.round((x / w) * 150);            // R
+      raw[p + 1] = 90 + Math.round((y / h) * 120);        // G
+      raw[p + 2] = 200 - Math.round((x / w) * 110);       // B
+    }
+  }
+  const idat = require('node:zlib').deflateSync(raw);
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    chunk('IHDR', ihdr), chunk('IDAT', idat), chunk('IEND', Buffer.alloc(0)),
+  ]);
+}
+const PNG_1PX = makeDemoPng(480, 360);
 
 function startServer() {
   return new Promise((resolve) => {
@@ -450,6 +488,18 @@ const SCENES = {
     await page.waitForSelector('#sessList .sescard');
     await page.locator('#sessList .projhead').first().click();
     await page.waitForTimeout(200);
+  },
+  // 图片查看器：点对话里的图弹全屏查看（本版亮点）。
+  imageView: async (page) => {
+    await page.click('#tabbar .tab[data-tab="1"]');
+    await page.waitForSelector('#sessList .sescard');
+    await page.locator('#sessList .sescard').nth(0).click();
+    await page.waitForSelector('#pchat:not([hidden]) .chatlist .bub');
+    const img = page.locator('.bubatt.img').first();
+    await img.waitFor({ timeout: 8000 });
+    await img.click();
+    await page.waitForSelector('#imgView:not([hidden])');
+    await page.waitForTimeout(220);
   },
   sessionChat: async (page) => {
     await page.click('#tabbar .tab[data-tab="1"]');

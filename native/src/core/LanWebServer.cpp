@@ -1541,7 +1541,11 @@ QString LanWebServer::mobileHtml() const {
  /* 图片查看器（用户 2026-11-22）：对话里的图点一下是「看」，
     不再直接落盘；下载收到浮层里的「保存到手机」。
     黑底 + 居中缩放，点背景/叉关闭；层级高于聊天页面任何浮层。 */
- .imgview{position:fixed;inset:0;z-index:90;background:rgba(8,11,16,.94);
+ /* 层级要足够高：頂栏/tabbar/输入框都在它下面。
+    实测 z-index:90 不够——页面顶栏会浮在遮罩上面，
+    字直接压在黑底上看得见（用户截图里那一行）。 */
+ .imgview{position:fixed;inset:0;z-index:2147483000;
+   background:#070a0f;
    display:flex;flex-direction:column;overscroll-behavior:contain}
  .imgview[hidden]{display:none !important}
  .imgview .ivbar{flex:0 0 auto;display:flex;align-items:center;gap:10px;

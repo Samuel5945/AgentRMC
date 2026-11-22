@@ -5,29 +5,38 @@
 
 **多 Agent 桌面助理 · 语音桌宠**：Qoder、Qoder CN、ZCode、WorkBuddy、WorkBuddy AI、
 DeepSeek Harness、OpenSquilla 七个宿主的等确认、等选方案、待验收、进行中收进一个
-「待我处理」收件箱；桌宠自动冒泡 + 语音，点一下回到对应 Agent。它同时也是语音助理
-和输入终端：说话就能对话、打开应用、朗读回复，本地离线转写；投影仪遥控器与蓝牙耳机
-都能当按键 / 语音输入。
+「待我处理」收件箱；桌宠自动冒泡 + 语音，点一下回到对应 Agent。说一句话就能把活
+派给指定宿主，会话页里还能直接换模型。手机浏览器打开局域网地址，同样能看待办、
+派任务、读会话、下载产物——删会话先进回收站可恢复，点图片是放大查看而不是下载。
+它同时也是语音助理和输入终端：说话就能对话、打开应用、朗读回复，本地离线转写；
+投影仪遥控器与蓝牙耳机都能当按键 / 语音输入。
 
 > **AgentRMC** — Remote Mission Control for the agent desk: a multi-agent desktop
 > companion and voice pet for Windows.
 > A Pending inbox gathers approvals, option picks, reviews and in-progress work
 > from Qoder, Qoder CN, ZCode, WorkBuddy, WorkBuddy AI, DeepSeek Harness and
 > OpenSquilla; the pet bubbles and speaks when they need you and returns you to
-> the right agent. It also does LLM chat, offline ASR (SenseVoice / Qwen3-ASR),
-> theme-aware TTS, and turns a BLE projector remote and headset into key / voice
-> input terminals. The bridge plugin needs no Node.js on the agent machine — it
-> finds a runtime on PATH or borrows the host's own Electron. Qt 6 / C++, zero drivers.
+> the right agent. One spoken sentence dispatches work to a chosen host, and a
+> session's model can be switched from its chat page. Open the LAN address in a
+> phone browser to read the inbox, dispatch tasks, read sessions and download
+> artifacts — deleting a session moves it to a restorable trash bin, and tapping
+> an image opens a viewer instead of downloading it. It also does LLM chat,
+> offline ASR (SenseVoice / Qwen3-ASR), theme-aware TTS, and turns a BLE projector
+> remote and headset into key / voice input terminals. The bridge plugin needs no
+> Node.js on the agent machine — it finds a runtime on PATH or borrows the host's
+> own Electron. Qt 6 / C++, zero drivers.
 
 **关键词**：多 Agent · AI Agent · Agent 待办 · 任务完成提醒 · 桌面助理 · 桌宠 ·
 桌面宠物 · 语音助手 · 语音交互 · 离线语音识别 · SenseVoice · Qwen3-ASR · TTS ·
 LLM 对话 · MCP · Claude Code · ZCode · Qoder · Qoder CN · WorkBuddy ·
-DeepSeek Harness · OpenSquilla · 遥控器 · Qt 6 · C++ · Windows
+DeepSeek Harness · OpenSquilla · 遥控器 · 手机遥控 · 局域网 · 会话回收站 ·
+Qt 6 · C++ · Windows
 
 **Keywords**: multi-agent, AI agent, agent inbox, task notifications, desktop
 companion, desktop pet, virtual pet, voice assistant, offline ASR, SenseVoice,
 Qwen3-ASR, TTS, LLM, MCP, Claude Code, ZCode, Qoder, WorkBuddy, DeepSeek
-Harness, OpenSquilla, BLE remote, Qt 6, C++, Windows
+Harness, OpenSquilla, BLE remote, phone remote, LAN, session trash bin,
+Qt 6, C++, Windows
 
 ## 核心特性
 
@@ -40,6 +49,14 @@ Harness, OpenSquilla, BLE remote, Qt 6, C++, Windows
   （pet_notify / pet_speak / pet_state / pet_work_update）让 Agent 汇报进度、
   让桌宠出声、查桌宠状态。**装 Agent 的机器不必装 Node**：插件自己找运行时，
   找不到就借宿主自带的 Electron
+- 📱 **手机遥控（0.6）**：手机浏览器打开局域网地址就能看待办、派任务、读会话、
+  下载产物。删除会话 = 移入回收站（可恢复 / 彻底删除 / 清空，都要点名确认、
+  永不自动过期，中途失败整体回滚）；点对话里的图片是放大查看而不是直接下载，
+  想存再从浮层里点「保存到手机」
+- 🔀 **会话级换模型（0.6）**：会话页顶部直接切模型，选中后点「设为这条会话的
+  模型」下一轮生效；思考强度档位由所选模型自己公布（不同模型值域不同）
+- 🧩 **应用页图标瀑布流（0.6）**：本机识别到的应用一屏铺开，说「打开剪映」就启动；
+  已卸载的不再占位（开始菜单 + 商店激活名双重判定），自定义应用一律保留
 - 🩺 **系统状态**：「系统」页显示桥接端口、运行时长、最近事件、离线待补、Worker 表
   与健康问题；端口被占用自动重试，AgentRMC 没开时通知先落盘、启动后补投
 - 🐋 **语音桌宠**：说话 → 转写 → LLM → 气泡 + 朗读的完整闭环，带多轮记忆；
@@ -56,37 +73,53 @@ Harness, OpenSquilla, BLE remote, Qt 6, C++, Windows
 实测机型为极米「快乐星球 O3」13 键 BLE 遥控器（VID `0x000D` / PID `0x3838`）；
 同款 HID 遥控器改 `config.json` 的 `device_mark` 即可复用。
 
-当前实现是 **C++/Qt 6 原生版**（`native/`，v0.4.1；按键映射不接 LLM，动作直接交给 Qoder / WorkBuddy 等前台 Agent；只有桌宠对话模式会调用你在「对话设置」里自配的 LLM）。
+当前实现是 **C++/Qt 6 原生版**（`native/`，v0.6.0；按键映射不接 LLM，动作直接交给 Qoder / WorkBuddy 等前台 Agent；只有桌宠对话模式会调用你在「对话设置」里自配的 LLM）。
 Python 版留在 `legacy-python` 分支，两版读写同一套 `config.json` / `profiles.json`。
 
-当前 0.4.1：**四路定向派发全链接线**——说一句话直接派给 WorkBuddy / ZCode / DeepSeek Harness /
-OpenSquilla 里的指定会话（ZCode 走自带 app-server 通道、DSH 走插件通道、OpenSquilla 走网关 RPC，都不靠模拟点击；
-Qoder 桌面通道等上游，暂用「续当前会话」）；
-主窗右半区换成 **WebView2 单管线外壳**，Qt 混渲染发虚消除；语音新增**系统控制**（音量 / 亮度 / 媒体，
-关机重启要二次确认）；**模型出错（StopFailure）也会喊人**；提醒从四类变五类。
-**装 Agent 的那台机器不需要 Node**——联动插件自己找运行时（PATH 上的 node，找不到就借宿主自带的
-Electron），没 node 也不再静默失联。联动插件与 Native 同号 0.4.1。
+当前 0.6.0：**手机端能管 + 会话回收站 + 会话级换模型**。
+
+手机浏览器打开局域网地址，能看待办、派任务、读会话、下载产物——删除会话是移入
+**回收站**（可恢复 / 彻底删除 / 清空，都要点名确认，永不自动过期，中途失败整体回滚，
+绝不半恢复）；OpenSquilla 这类数据库型宿主走官方真删通道，刚有写入的行直接置灰。
+下载收成一条契约：文件名取解析后的真实文件，404 回 JSON 而不是空 body，
+不再出现 `file.txt` / 丢扩展名 / 中文乱码；项目外的绝对路径产物也能下。
+**点对话里的图片是放大查看而不是下载**，想存再从浮层里点「保存到手机」。
+
+桌面端补上 **DSH 会话级换模型**（选中后点「设为这条会话的模型」，下一轮生效，
+思考强度档位由所选模型自己公布）、**应用页图标瀑布流**（已卸载的不再占位，
+自定义应用一律保留）、**系统页可滚**（内容超高不再被裁，底部按钮固定贴底）；
+会话中途 `cd` 进子目录后不再被归错项目组（项目身份只认 `identity.cwd`）。
+
+派发链路同步提速：插件通道超时 60s→25s，重连退避封顶 3s，拉起宿主后等网关端口
+就绪再发；回合内活动回声把思考流 / 工具流刷进卡片，长思考轮不再只剩「静默 N 分」。
+联动插件与 Native 同号 0.6.0。
 
 <p align="center">
-  <img src="assets/screenshots/agentrmc-inbox.jpg" alt="AgentRMC「待我处理」：Qoder、Qoder CN、ZCode、WorkBuddy、DeepSeek Harness、OpenSquilla 等 Agent 的待办按等你处理 / 待验收 / 进行中收进一张列表" width="100%">
+  <b>桌面端</b>
 </p>
 <p align="center">
-  <img src="assets/screenshots/agentrmc-theme-whale-light.jpg" alt="AgentRMC 鲸鱼娘主题浅色：「待我处理」与语音卡片并排，美术背景透过 WebView2 卡片表面" width="49%">
-  <img src="assets/screenshots/agentrmc-theme-whale-dark.jpg" alt="AgentRMC 鲸鱼娘主题深色：同一套布局的暗色配色" width="49%">
+  <img src="assets/screenshots/agentrmc-inbox.jpg" alt="AgentRMC「待我处理」：Qoder、Qoder CN、ZCode、WorkBuddy、DeepSeek Harness、OpenSquilla 六个 Agent 的待办收进一张列表，按等你处理 / 待验收 / 进行中分开" width="100%">
 </p>
 <p align="center">
-  <img src="assets/screenshots/agentrmc-system.jpg" alt="AgentRMC 系统页：桥接状态、运行时长、离线待补与各 Worker 的在线状态，插件版本与运行中版本一并对账" width="49%">
-  <img src="assets/screenshots/agentrmc-keymap.jpg" alt="AgentRMC 按键映射页：按物理键列出单击 / 双击 / 长按，长按可绑成打开某个应用" width="49%">
+  <img src="assets/screenshots/agentrmc-dispatch.jpg" alt="AgentRMC「派发」：会话目录按 Agent 与项目分组，支持批量删除与回收站" width="49%">
+  <img src="assets/screenshots/agentrmc-chat.jpg" alt="AgentRMC 会话页：长耗时工具与每轮耗时落一行灰色系统信息，底部实时行显示这一轮在干什么" width="49%">
 </p>
 <p align="center">
-  <img src="assets/screenshots/agentrmc-apps.jpg" alt="AgentRMC 应用页：本机应用与来源，说「打开剪映」就启动；底栏新增语音系统控制开关" width="49%">
-  <img src="assets/screenshots/agentrmc-guide.jpg" alt="AgentRMC 使用引导：没有遥控器也能用——全局热键、波形语音键、耳机播放键与桌宠四种入口" width="49%">
+  <img src="assets/screenshots/agentrmc-system.jpg" alt="AgentRMC 系统页：桥接端口、运行时长、联动插件版本与七个 Worker 的在线状态；手机访问与 Agent 指针总开关都在这" width="49%">
+  <img src="assets/screenshots/agentrmc-keymap.jpg" alt="AgentRMC 按键映射页：按物理键列出单击 / 双击 / 长按，点格子直接改动作" width="49%">
 </p>
 <p align="center">
-  <img src="assets/screenshots/agentrmc-desktop.jpg" alt="AgentRMC 桌宠与语音小窗：监听状态、转写结果、当前宿主与派活模式；等确认、任务完成、模型出错时冒泡 + 出声，热键 Ctrl+Alt+V 也能开始" width="100%">
+  <b>手机端（局域网遥控）</b>
+</p>
+<p align="center">
+  <img src="assets/screenshots/agentrmc-phone-inbox.jpg" alt="手机「待我处理」：四个 Agent 的待办收进一屏，橙色角标是等你处理的数量" width="24%">
+  <img src="assets/screenshots/agentrmc-phone-dispatch.jpg" alt="手机「派发」：会话按 Agent 与项目分组，点进去就能派任务" width="24%">
+  <img src="assets/screenshots/agentrmc-phone-chat.jpg" alt="手机聊天页：正文、产物卡片与系统信息行都在一页里，行尾「下载到手机」直接取文件" width="24%">
+  <img src="assets/screenshots/agentrmc-phone-imageview.jpg" alt="点对话里的图片是放大查看，不再直接下载；想存再从浮层里点「保存到手机」" width="24%">
 </p>
 
-*真机截图（0.4.1）：多 Agent 待办、鲸鱼娘主题明暗两版、系统 / 按键映射 / 应用 / 使用引导四页，最后一张是桌宠与语音小窗。截图里的待办为演示数据。*
+*真机界面渲染（0.6.0）：上四张是桌面主窗，下四张是手机浏览器里的页面。截图里的待办为演示数据。*
+
 
 ```
 遥控器 → HID → Raw Input ─┬→ 按键 → 场景 Profile → 动作（按键/滚动/鼠标/模式/启动程序）

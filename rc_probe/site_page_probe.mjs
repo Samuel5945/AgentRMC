@@ -166,8 +166,28 @@ async function main() {
   const drift = pairs
     .map((p, i) => ({ key: p.key, i18n: p.i18n, dom: titles[i] }))
     .filter((p) => p.i18n && p.i18n !== p.dom);
-  ok(drift.length === 0, '中文正文与 i18n 中文段一致',
+  ok(drift.length === 0, '功能卡标题与 i18n 中文段一致',
     drift.map((d) => `${d.key}: dom="${d.dom}" i18n="${d.i18n}"`).join(' ; '));
+
+  // ③b 全量一致性：页面上每个 data-i18n 元素，文本都要与 i18n 中文段相同。
+  // 中文页不走上屏 apply，只改 i18n.js 不改正文时这里会大面积失败。
+  const allDrift = await page.evaluate(() => {
+    const zh = window.LIG_I18N && window.LIG_I18N.zh;
+    if (!zh) return [{ key: '(i18n missing)', dom: '', i18n: '' }];
+    const get = (path) => path.split('.').reduce((o, k) => (o == null ? null : o[k]), zh);
+    const out = [];
+    document.querySelectorAll('[data-i18n]').forEach((el) => {
+      const key = el.getAttribute('data-i18n');
+      const want = get(key);
+      if (typeof want !== 'string') return;      // 非字符串键（结构体）跳过
+      const dom = (el.textContent || '').replace(/\s+/g, ' ').trim();
+      const ref = want.replace(/\s+/g, ' ').trim();
+      if (dom !== ref) out.push({ key, dom: dom.slice(0, 40), i18n: ref.slice(0, 40) });
+    });
+    return out;
+  });
+  ok(allDrift.length === 0, '全部 data-i18n 文本与中文段一致',
+    allDrift.slice(0, 4).map((x) => `${x.key}: dom="${x.dom}" vs i18n="${x.i18n}"`).join(' ; '));
 
   // 页面错误
   ok(errs.length === 0, '页面无脚本/资源错误', errs.slice(0, 3).join(' ; '));

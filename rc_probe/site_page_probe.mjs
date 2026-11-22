@@ -106,9 +106,34 @@ async function main() {
   const badge = (await page.textContent('#agentrmc-latest-ver')) || '';
   ok(badge.trim() === expected, '版本徽标与 update.json 一致', `${badge.trim()} vs ${expected}`);
 
-  // ② 轮播图
+  // ② 轮播图：手机 3 张 + 电脑 4 张，分两组
   const figs = await page.$$eval('.cover-slide img', (els) => els.map((e) => e.getAttribute('src')));
-  ok(figs.length === 8, '轮播八张', String(figs.length));
+  ok(figs.length === 7, '轮播共 7 张（手机 3 + 电脑 4）', String(figs.length));
+  const phoneFigs = await page.$$eval('.cover-carousel.is-phone .cover-slide img',
+    (els) => els.map((e) => e.getAttribute('src')));
+  const wideFigs = await page.$$eval('.cover-carousel.is-wide .cover-slide img',
+    (els) => els.map((e) => e.getAttribute('src')));
+  ok(phoneFigs.length === 3, '手机组 3 张', String(phoneFigs.length));
+  ok(wideFigs.length === 4, '电脑组 4 张', String(wideFigs.length));
+  ok(phoneFigs.every((f) => /agentrmc-m-/.test(f)), '手机组都是竖版手机图', phoneFigs.join(','));
+  ok(wideFigs.every((f) => !/agentrmc-m-/.test(f)), '电脑组都是横版桌面图', wideFigs.join(','));
+
+  // ②b 竖版图不被裁：渲染宽高比应与原图接近（780x1688 ≈ 0.462）
+  const phoneRatios = await page.$$eval('.cover-carousel.is-phone .cover-slide.is-active img',
+    (els) => els.map((e) => {
+      const r = e.getBoundingClientRect();
+      return { src: e.getAttribute('src'), w: Math.round(r.width), h: Math.round(r.height) };
+    }));
+  const badRatio = phoneRatios.filter((r) => r.w > 0 && Math.abs(r.w / r.h - 780 / 1688) > 0.06);
+  ok(badRatio.length === 0, '手机截图完整显示（没被横版容器裁掉）',
+    badRatio.map((r) => `${r.src} ${r.w}x${r.h}`).join(' ; ') || JSON.stringify(phoneRatios));
+
+  // ②c 没有占位/测试图：图片体积不能小得可疑
+  const tiny = figs.filter((f) => {
+    const fp = path.join(root, f);
+    return fs.existsSync(fp) && fs.statSync(fp).size < 20 * 1024;
+  });
+  ok(tiny.length === 0, '没有过小的占位图', tiny.join(', '));
   const missing = figs.filter((f) => !fs.existsSync(path.join(root, f)));
   ok(missing.length === 0, '轮播图文件都在', missing.join(', '));
   const sizes = figs.map((f) => {

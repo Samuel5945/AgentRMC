@@ -91,21 +91,21 @@ const ITEMS = () => ([
     id: 'a1', title: 'WorkBuddy AI', stage: 'needs-me',
     project: 'D:\\githubrepos\\Agentrmc', session_id: 'sess-8f31c2a9',
     session_title: '手机页多选与滑动优化', done: false,
-    message: 'WorkBuddy AI：等你确认是否把 0.5.0 插件覆盖安装到本机，覆盖会重启宿主。',
+    message: 'WorkBuddy AI：等你确认是否把 0.6.0 插件覆盖安装到本机。',
     updated_at: iso(NOW - 3 * 60e3), attention_since: iso(NOW - 22 * 60e3)
   },
   {
     id: 'a2', title: 'ZCode', stage: 'needs-me',
     project: 'D:\\githubrepos\\Agentrmc\\native', session_id: 'sess-2b91aa40',
     session_title: '打包链路排查', done: false,
-    message: '要不要把 dist 里的 0.4.1 安装包归档？留着会占 58MB。',
+    message: '要不要把 dist 里的旧安装包归档？',
     updated_at: iso(NOW - 9 * 60e3), attention_since: iso(NOW - 9 * 60e3)
   },
   {
     id: 'a3', title: 'Qoder CN', stage: 'review',
     project: 'D:\\githubrepos\\Agentrmc\\plugins', session_id: 'sess-77ce0193',
     session_title: '插件版本同步脚本', done: false,
-    message: 'Qoder CN：sync-plugin-version.ps1 六处清单已对齐 0.5.0，等你验收。',
+    message: 'Qoder CN：六处清单已对齐 0.6.0，等你验收。',
     updated_at: iso(NOW - 41 * 60e3), attention_since: iso(NOW - 41 * 60e3)
   },
   {
@@ -114,6 +114,27 @@ const ITEMS = () => ([
     session_title: '转写队列', done: false,
     message: '正在重跑语音转写的长音频用例，预计 3 分钟。',
     updated_at: iso(NOW - 2 * 60e3)
+  },
+  {
+    id: 'a5', title: 'Qoder', stage: 'needs-me',
+    project: 'D:\\githubrepos\\lig-site', session_id: 'sess-5c81de20',
+    session_title: '官网预览图重做', done: false,
+    message: '要不要把这一批官网改动一起提交并推送？',
+    updated_at: iso(NOW - 5 * 60e3), attention_since: iso(NOW - 5 * 60e3)
+  },
+  {
+    id: 'a6', title: 'WorkBuddy', stage: 'review',
+    project: 'D:\\work\\weekly-report', session_id: 'sess-9d2f4b18',
+    session_title: '设计周报', done: false,
+    message: '本周设计周报已生成，等你验收。',
+    updated_at: iso(NOW - 16 * 60e3), attention_since: iso(NOW - 16 * 60e3)
+  },
+  {
+    id: 'a7', title: 'OpenSquilla', stage: 'working',
+    project: 'D:\\work\\research', session_id: 'agent:main:webchat:aaaaaaa1',
+    session_title: '竞品数据整理', done: false,
+    message: '正在整理本周竞品数据，预计 10 分钟。',
+    updated_at: iso(NOW - 7 * 60e3)
   }
 ]);
 
@@ -163,6 +184,22 @@ const SESSIONS = () => ([
         id: 'sess-77ce0193', title: '插件版本同步脚本',
         project: 'D:\\githubrepos\\Agentrmc\\plugins', updated_at: iso(NOW - 41 * 60e3),
         can_dispatch: false
+      }
+    ]
+  },
+  {
+    exe: 'OpenSquilla.exe', name: 'OpenSquilla', alive: true, window: true,
+    can_dispatch: true, count: 2,
+    sessions: [
+      {
+        id: 'agent:main:webchat:aaaaaaa1', title: '竞品数据整理',
+        project: 'D:\\work\\research', updated_at: iso(NOW - 7 * 60e3),
+        work_id: 'a7', stage: 'working', can_dispatch: true
+      },
+      {
+        id: 'agent:main:cli:bbbbbbbb', title: '网关连接排查',
+        project: 'D:\\work\\research', updated_at: iso(NOW - 3 * 3600e3),
+        can_dispatch: true
       }
     ]
   }
@@ -543,6 +580,12 @@ async function runShots(names) {
       if (!SCENES[name]) { console.log('skip', name); continue; }
       const { ctx, page } = await openPage(browser, theme);
       await SCENES[name](page);
+      // 「待办」这一张要一眼看到七个 Agent：真机一屏只装 6 张卡，
+      // 第 7 张会露半截。这里把视口加高到能完整放下七张，其余场景保持真机尺寸。
+      if (name === 'list') {
+        await page.setViewportSize({ width: 780, height: 1560 });
+        await page.waitForTimeout(120);
+      }
       const file = path.join(SHOTS, `${name}-${theme}.png`);
       await page.screenshot({ path: file });
       console.log('shot', path.basename(file));

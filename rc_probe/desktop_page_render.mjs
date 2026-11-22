@@ -20,8 +20,12 @@ const CPP = path.join(ROOT, 'native', 'src', 'ui', 'WorkWebView.cpp');
 const OUT = path.join(HERE, 'desktop_shots');
 const require = createRequire(import.meta.url);
 
-// 主窗内容区实际尺寸（1600 宽主窗减顶栏与内边距后大致如此），出图和真机观感一致。
-const VIEWPORT = { width: 1600, height: 1000 };
+// 与真实主窗一致的视口：main.cpp 里主窗默认 1060×720（比例约 1.47）。
+// 之前用 1600×1000（1.6）渲染，横向被拉宽、行距显得更扁，和真机观感对不上
+// （用户 2026-11-22 反馈「渲染的电脑端跟实际缩放不一样」）。
+// 出图时再按 1600 宽等比放大（见 main 里的 resize），保持同一比例。
+const VIEWPORT = { width: 1060, height: 720 };
+const OUT_WIDTH = 1600;
 
 function chromePath() {
   const root = path.join(process.env.LOCALAPPDATA || '', 'ms-playwright');
@@ -93,7 +97,7 @@ const WORKERS = [
   { exe: 'Qoder CN.exe', name: 'Qoder CN', alive: true, window: true },
   { exe: 'ZCode.exe', name: 'ZCode', alive: true, window: true },
   { exe: 'WorkBuddy.exe', name: 'WorkBuddy', alive: true, window: true },
-  { exe: 'WorkBuddyAI.exe', name: 'WorkBuddy AI', alive: false, window: false },
+  { exe: 'WorkBuddyAI.exe', name: 'WorkBuddy AI', alive: true, window: true },
   { exe: 'DeepSeek Harness.exe', name: 'DeepSeek Harness', alive: true, window: true },
   { exe: 'OpenSquilla.exe', name: 'OpenSquilla', alive: true, window: true },
 ];
@@ -114,6 +118,13 @@ const ITEMS = [
     session_title: '网站点击滑动动效优化',
     project: 'D:\\githubrepos\\lig-site', updated_at: iso(NOW - 5 * 60e3),
     attention_since: iso(NOW - 5 * 60e3),
+  },
+  {
+    id: 'w2b', title: 'WorkBuddy AI', agent_exe: 'WorkBuddyAI.exe', stage: 'needs-me',
+    message: '等你确认是否把 0.6.0 插件覆盖安装到本机。',
+    session_id: 'sess_demo_wbai_e', session_title: '插件覆盖安装',
+    project: 'D:\\githubrepos\\Agentrmc', updated_at: iso(NOW - 6 * 60e3),
+    attention_since: iso(NOW - 6 * 60e3),
   },
   {
     id: 'w3', title: 'WorkBuddy', agent_exe: 'WorkBuddy.exe', stage: 'review',
@@ -351,7 +362,7 @@ function stateFor(page, themeName) {
   const theme = THEMES[themeName];
   const base = {
     theme,
-    work: { items: ITEMS, attention_count: 2 },
+    work: { items: ITEMS, attention_count: 3 },
     workers: WORKERS,
     health: {
       bridge: true, uptime_seconds: 11560, spool_pending: 0, problems: [],
@@ -415,7 +426,10 @@ async function main() {
   fs.writeFileSync(tmp, html, 'utf8');
 
   const browser = await chromium.launch({ executablePath: CHROME, args: ['--force-device-scale-factor=1'] });
-  const page = await browser.newPage({ viewport: VIEWPORT, deviceScaleFactor: 2 });
+  // deviceScaleFactor ≈ 1600/1060，出图约 1600 宽且比例与真窗一致。
+  const page = await browser.newPage({
+    viewport: VIEWPORT, deviceScaleFactor: OUT_WIDTH / VIEWPORT.width,
+  });
 
   const jobs = [];
   for (const p of PAGES) {
@@ -442,6 +456,8 @@ async function main() {
     });
     await page.waitForTimeout(220);
     const file = path.join(OUT, `${job.page.key}_${job.themeName}.png`);
+    // 按 OUT_WIDTH 等比放大：1060×720 → 1600×1087，比例不变，字体渲染更清晰。
+    await page.setViewportSize({ width: VIEWPORT.width, height: VIEWPORT.height });
     await page.screenshot({ path: file });
     console.log('saved', path.basename(file));
   }

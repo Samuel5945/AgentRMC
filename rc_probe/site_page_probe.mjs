@@ -118,6 +118,28 @@ async function main() {
   ok(phoneFigs.every((f) => /agentrmc-m-/.test(f)), '手机组都是竖版手机图', phoneFigs.join(','));
   ok(wideFigs.every((f) => !/agentrmc-m-/.test(f)), '电脑组都是横版桌面图', wideFigs.join(','));
 
+  // ②a 宽屏并排：1440 宽下三张手机图都要可见、横向排开、互不重叠
+  const laid = await page.$$eval('.cover-carousel.is-phone .cover-slide', (els) =>
+    els.map((e) => {
+      const r = e.getBoundingClientRect();
+      const img = e.querySelector('img');
+      return {
+        src: img ? img.getAttribute('src') : '',
+        visible: r.width > 0 && r.height > 0 && getComputedStyle(e).display !== 'none',
+        x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width),
+      };
+    }));
+  ok(laid.length === 3 && laid.every((s) => s.visible),
+    '宽屏下三张手机图都可见（并排，不是轮播）',
+    JSON.stringify(laid.map((s) => ({ v: s.visible, x: s.x, w: s.w }))));
+  const sameRow = laid.every((s) => Math.abs(s.y - laid[0].y) < 4);
+  const noOverlap = laid.every((s, i) => i === 0 || s.x >= laid[i - 1].x + laid[i - 1].w - 2);
+  ok(sameRow && noOverlap, '三张并排在同一行且不重叠',
+    sameRow ? (noOverlap ? '' : 'overlap') : 'not same row');
+  const dotsHidden = await page.$$eval('.cover-carousel.is-phone .cover-dots',
+    (els) => els.every((e) => getComputedStyle(e).display === 'none'));
+  ok(dotsHidden, '并排时圆点隐藏（三张都在眼前）');
+
   // ②b 竖版图不被裁：渲染宽高比应与原图接近（780x1688 ≈ 0.462）
   const phoneRatios = await page.$$eval('.cover-carousel.is-phone .cover-slide.is-active img',
     (els) => els.map((e) => {

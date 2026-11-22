@@ -1523,6 +1523,312 @@ await check('派发通道: 没有 sessionController 服务（老 DSH）→ 退�
   }
 });
 
+// —— 会话级换模型通道（2026-11-21）——
+/** 假原生端：/model/pending 一次性吐完、/model/ack 与 /models 记账。
+ * 其余轮询口回空数组，别让它们抢戏。 */
+function makeModelServer(modelItems) {
+  const seen = { acks: [], catalog: [], modelUrls: [] };
+  const queue = modelItems.slice();
+  const server = http.createServer((req, res) => {
+    let body = '';
+    req.on('data', (chunk) => {
+      body += chunk;
+    });
+    req.on('end', () => {
+      res.setHeader('Connection', 'close');
+      if (req.url.startsWith('/model/pending')) {
+        seen.modelUrls.push(req.url);
+        res.setHeader('Content-Type', 'application/json');
+        res.end(JSON.stringify(queue.splice(0)));
+        return;
+      }
+      if (req.url === '/model/ack') {
+        seen.acks.push(JSON.parse(body || '{}'));
+        res.end('{"ok":true}');
+        return;
+      }
+      if (req.url === '/models') {
+        seen.catalog.push(JSON.parse(body || '{}'));
+        res.end('');
+        return;
+      }
+      res.setHeader('Content-Type', 'application/json');
+      res.end('[]');
+    });
+  });
+  return { server, seen, queue };
+}
+
+/** 假 llm 服务：两个提供方，各自的模型与（不同值域的）思考强度档位。 */
+function makeFakeLlm() {
+  const providers = [
+    { id: 'magpie', name: 'Magpie' },
+    { id: 'tr', name: '基元律动' },
+  ];
+  const models = {
+    magpie: [{ id: 'trae-cn/deepseek-v4.1-flash-max', name: 'DSH Flash (Max)' }],
+    tr: [{ id: 'glm-5.3-flash', name: 'GLM 5.3 Flash' }],
+  };
+  const efforts = {
+    'magpie/trae-cn/deepseek-v4.1-flash-max': [
+      { id: 'low', name: 'low' }, { id: 'max', name: 'max' },
+    ],
+    'tr/glm-5.3-flash': [
+      { id: 'off', name: 'off' }, { id: 'high', name: 'high' },
+    ],
+  };
+  return {
+    listProviders: () => providers,
+    listModels: async (p) => models[p] || [],
+    resolveModelInfo: async (p, m) => ({
+      reasoning: {
+        efforts: efforts[p + '/' + m] || [],
+        defaultEffort: (efforts[p + '/' + m] || [])[0]?.id,
+      },
+    }),
+  };
+}
+
+await check('换模型: 目录推送带模型与思考强度档位（原生端据此渲染菜单）', async () => {
+  const { server, seen } = makeModelServer([]);
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const stub = makeCtx();
+  const innerGet = stub.ctx.get;
+  stub.ctx.get = (service) =>
+    service === 'llm' ? makeFakeLlm() : innerGet(service);
+  apply(stub.ctx, {
+    port: server.address().port,
+    registerSkill: false,
+    registerTools: false,
+    dispatch: false,
+    control: false,
+    liveReport: false,
+  });
+  try {
+    assert.ok(await waitUntil(() => seen.catalog.length > 0), '目录没推来');
+    const payload = seen.catalog[0];
+    assert.strictEqual(payload.exe, 'DeepSeek Harness.exe');
+    const providers = payload.providers || [];
+    assert.strictEqual(providers.length, 2, JSON.stringify(providers));
+    const tr = providers.find((p) => p.providerId === 'tr');
+    assert.deepStrictEqual(tr.models, ['glm-5.3-flash']);
+    assert.strictEqual(tr.details['glm-5.3-flash'].name, 'GLM 5.3 Flash');
+    assert.deepStrictEqual(
+      tr.details['glm-5.3-flash'].efforts.map((e) => e.id),
+      ['off', 'high'],
+      '档位要按模型公布的值域来（tr 有 off，magpie 没有）',
+    );
+    stub.effects.forEach((dispose) => dispose());
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+await check('换模型: 取件 → agent.model.select（不是 selectModel，不碰默认）→ ack ok', async () => {
+  const sid = 'session-22222222-3333-4444-8555-666666666666';
+  const selected = [];
+  let selectModelCalled = 0;
+  const agent = { model: { select: (sel) => selected.push(sel) } };
+  const agents = { get: (id) => (id === sid ? agent : undefined), list: () => [] };
+  const { server, seen } = makeModelServer([
+    {
+      model_id: 'm-1',
+      session_id: sid,
+      providerId: 'tr',
+      modelId: 'glm-5.3-flash',
+      options: { reasoningLevel: 'high' },
+    },
+  ]);
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const stub = makeCtx();
+  const innerGet = stub.ctx.get;
+  stub.ctx.get = (service) => {
+    if (service === 'agents') return agents;
+    if (service === 'llm') return makeFakeLlm();
+    if (service === 'sessionController') {
+      return { selectModel: () => { selectModelCalled += 1; } };
+    }
+    return innerGet(service);
+  };
+  apply(stub.ctx, {
+    port: server.address().port,
+    registerSkill: false,
+    registerTools: false,
+    dispatch: false,
+    control: false,
+    liveReport: false,
+  });
+  try {
+    assert.ok(await waitUntil(() => seen.acks.length > 0), 'ack 未到');
+    assert.deepStrictEqual(selected, [{
+      provider: 'tr', model: 'glm-5.3-flash', reasoningEffort: 'high',
+    }], '必须落到 agent.model.select，带 provider/model/effort');
+    assert.strictEqual(selectModelCalled, 0,
+      '不许走 sessionController.selectModel（那条会把 DSH 默认模型也改掉）');
+    assert.strictEqual(seen.acks[0].ok, true, seen.acks[0].error);
+    assert.ok(seen.modelUrls[0].includes('exe=DeepSeek%20Harness.exe'),
+      '取件要带自己的映像名，实际 ' + seen.modelUrls[0]);
+    stub.effects.forEach((dispose) => dispose());
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+await check('换模型: 模型不在目录 → ack ok:false 带原因，不调 select', async () => {
+  const sid = 'session-33333333-4444-4555-8666-777777777777';
+  const selected = [];
+  const agents = {
+    get: () => ({ model: { select: (sel) => selected.push(sel) } }),
+    list: () => [],
+  };
+  const { server, seen } = makeModelServer([
+    { model_id: 'm-2', session_id: sid, providerId: 'tr', modelId: 'nope-xyz' },
+  ]);
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const stub = makeCtx();
+  const innerGet = stub.ctx.get;
+  stub.ctx.get = (service) => {
+    if (service === 'agents') return agents;
+    if (service === 'llm') return makeFakeLlm();
+    return innerGet(service);
+  };
+  apply(stub.ctx, {
+    port: server.address().port,
+    registerSkill: false,
+    registerTools: false,
+    dispatch: false,
+    control: false,
+    liveReport: false,
+  });
+  try {
+    assert.ok(await waitUntil(() => seen.acks.length > 0), 'ack 未到');
+    assert.strictEqual(seen.acks[0].ok, false);
+    assert.ok(/不在/.test(seen.acks[0].error), seen.acks[0].error);
+    assert.deepStrictEqual(selected, [], '目录外的模型绝不能落到 select');
+    stub.effects.forEach((dispose) => dispose());
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+await check('换模型: 会话没在 DSH 里打开 → 拒绝且不唤醒（P1 只认活表）', async () => {
+  const sid = 'session-44444444-5555-4666-8777-888888888888';
+  let woke = 0;
+  const agents = { get: () => undefined, list: () => [] };
+  const { server, seen } = makeModelServer([
+    { model_id: 'm-3', session_id: sid, providerId: 'tr', modelId: 'glm-5.3-flash' },
+  ]);
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const stub = makeCtx();
+  const innerGet = stub.ctx.get;
+  stub.ctx.get = (service) => {
+    if (service === 'agents') return agents;
+    if (service === 'llm') return makeFakeLlm();
+    if (service === 'sessionController') {
+      return {
+        resolveAgent: async () => {
+          woke += 1;
+          return { agent: { model: { select: () => {} } } };
+        },
+      };
+    }
+    return innerGet(service);
+  };
+  apply(stub.ctx, {
+    port: server.address().port,
+    registerSkill: false,
+    registerTools: false,
+    dispatch: false,
+    control: false,
+    liveReport: false,
+  });
+  try {
+    assert.ok(await waitUntil(() => seen.acks.length > 0), 'ack 未到');
+    assert.strictEqual(seen.acks[0].ok, false);
+    assert.ok(/没在 DSH 里打开/.test(seen.acks[0].error), seen.acks[0].error);
+    assert.strictEqual(woke, 0, '切模型不该替用户悄悄唤醒冷会话（要拿 writer）');
+    stub.effects.forEach((dispose) => dispose());
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+await check('换模型: modelSwitch=false 不轮询也不推目录（关开关就该安静）', async () => {
+  const { server, seen } = makeModelServer([]);
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const stub = makeCtx();
+  const innerGet = stub.ctx.get;
+  stub.ctx.get = (service) =>
+    service === 'llm' ? makeFakeLlm() : innerGet(service);
+  apply(stub.ctx, {
+    port: server.address().port,
+    registerSkill: false,
+    registerTools: false,
+    dispatch: false,
+    control: false,
+    liveReport: false,
+    modelSwitch: false,
+  });
+  try {
+    await new Promise((resolve) => setTimeout(resolve, 2200));
+    assert.deepStrictEqual(seen.modelUrls, [], '关掉的通道不该发取件请求');
+    assert.deepStrictEqual(seen.catalog, [], '关掉的通道不该推目录');
+  } finally {
+    stub.effects.forEach((dispose) => dispose());
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+await check('换模型: 派发件带 model → 先 select 再 followup（一次到位）', async () => {
+  const sid = 'session-55555555-6666-4777-8888-999999999999';
+  const selected = [];
+  const injected = [];
+  const agents = {
+    get: () => ({
+      model: { select: (sel) => selected.push(sel) },
+      followup: (m) => injected.push(m),
+    }),
+    list: () => [],
+  };
+  const { server, seen } = makeDispatchServer([
+    {
+      dispatch_id: 'd-model',
+      session_id: sid,
+      project: '',
+      text: '带模型派一句',
+      model: { providerId: 'tr', modelId: 'glm-5.3-flash' },
+    },
+  ]);
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const stub = makeCtx();
+  const innerGet = stub.ctx.get;
+  stub.ctx.get = (service) => {
+    if (service === 'agents') return agents;
+    if (service === 'llm') return makeFakeLlm();
+    return innerGet(service);
+  };
+  apply(stub.ctx, {
+    port: server.address().port,
+    registerSkill: false,
+    registerTools: false,
+    control: false,
+    liveReport: false,
+    modelSwitch: false,
+  });
+  try {
+    assert.ok(await waitUntil(() => seen.acks.length > 0), 'ack 未到');
+    assert.deepStrictEqual(selected,
+      [{ provider: 'tr', model: 'glm-5.3-flash' }],
+      '派发 override 要先落到 agent.model.select');
+    assert.strictEqual(injected.length, 1, '然后照常注入正文');
+    assert.strictEqual(injected[0].content[0].text, '带模型派一句');
+    assert.strictEqual(seen.acks[0].ok, true, seen.acks[0].error);
+    stub.effects.forEach((dispose) => dispose());
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
 fs.rmSync(SPOOL_ROOT, { recursive: true, force: true });
 
 const total = passed + failures.length;

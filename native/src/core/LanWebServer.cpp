@@ -386,6 +386,7 @@ bool LanWebServer::isAllowedAction(const QString &cmd) {
     return cmd == QStringLiteral("ack") || cmd == QStringLiteral("dispatch") ||
            cmd == QStringLiteral("dispatchSession") ||
            cmd == QStringLiteral("control") ||
+           cmd == QStringLiteral("switchModel") ||
            cmd == QStringLiteral("answer") ||
            cmd == QStringLiteral("open") ||
            cmd == QStringLiteral("raiseZcode") ||
@@ -1692,6 +1693,10 @@ QString LanWebServer::mobileHtml() const {
  .mpsec{padding:10px 14px 2px;font-size:12px;color:var(--muted)}
  .mpfoot{padding:12px 14px;border-top:1px solid var(--w10);
    font-size:14px;color:var(--text)}
+ .mpcommit{display:block;width:100%;padding:12px 14px;border:0;
+   border-top:1px solid var(--w10);background:var(--w8);color:var(--text);
+   font-family:inherit;font-size:14px;text-align:left}
+ .mpcommit[hidden]{display:none}
  /* 「电脑上的文件」面板：复用 mpanel 的上浮壳，行改成可点下载的 <a>。 */
  .fphead{display:flex;align-items:center;gap:8px;padding:11px 14px;
    background:var(--w8);border-bottom:1px solid var(--w10);
@@ -1921,6 +1926,7 @@ QString LanWebServer::mobileHtml() const {
       <div class="trow"><span class="tkey">思考强度</span><b id="chatMpTVal">跟随会话</b></div>
       <input type="range" id="chatMpRange" min="0" max="5" value="0" step="1">
      </div>
+     <button class="mpcommit" id="chatMpCommit" hidden>设为这条会话的模型</button>
      <div class="mpfoot" id="chatMpFoot">管理模型</div>
     </div>
     <div class="mpanel" id="chatFilePanel" hidden>
@@ -3211,7 +3217,7 @@ function renderChatFrame(){
 // 目录来自 STATE.dispatch.models（个人供应商清单，native 只读
 // provider_config.json）；空目录 / 非 ZCode / 只读会话整块隐藏。
 // 派发成功后选择一次性作废，胶囊回「选择模型」。
-const MP_LVL_LABELS={low:'极低',medium:'低',high:'中',xhigh:'极高',max:'最高'};
+const MP_LVL_LABELS={off:'关',minimal:'极低',low:'极低',medium:'低',high:'中',xhigh:'极高',max:'最高',adaptive:'自适应'};
 const MP_CUBE_SVG='<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><path d="M12 2.5 20.5 7v10L12 21.5 3.5 17V7L12 2.5Z"/><path d="M3.5 7 12 11.7 20.5 7"/><path d="M12 11.7V21.5"/></svg>';
 let mpOpen=false,mpLevel='providers',mpProvider=null;
 let mpSel=null; // {providerId,modelId,level?}；null=不切换
@@ -3223,12 +3229,30 @@ function mpExeNow(){
 }
 function mpListFor(){
  const d=((STATE||{}).dispatch)||{};
- return mpExeNow()==='OpenSquilla.exe'?(d.osqModels||[]):(d.models||[]);
+ const e=mpExeNow();
+ if(e==='OpenSquilla.exe')return d.osqModels||[];
+ if(e==='DeepSeek Harness.exe')return d.dshModels||[];
+ return d.models||[];
+}
+// 目录里某个模型的元数据（DSH 的 details：{name,efforts,defaultEffort}）。
+function mpDetail(providerId,modelId){
+ const list=mpListFor();
+ for(const p of list){
+  if(p&&p.providerId===providerId&&p.details)return p.details[modelId]||null;
+ }
+ return null;
 }
 function mpThoughts(){
  // 思考强度只有 ZCode 通道吃；OpenSquilla 档位值域不同且网关不校验
  //（实测瞎写也收），不给假答应——滑杆藏掉，一律跟随会话。
  if(mpExeNow()==='OpenSquilla.exe')return [];
+ // DSH：档位由所选模型的适配器公布（每个模型不一样）；目录没带 details
+ //（插件旧版）就不给滑杆，别拿固定五档瞎猜。
+ if(mpExeNow()==='DeepSeek Harness.exe'){
+  if(!mpSel)return [];
+  const d=mpDetail(mpSel.providerId,mpSel.modelId);
+  return d&&d.efforts&&d.efforts.length?d.efforts.map(e=>e.id):[];
+ }
  return ((STATE||{}).dispatch||{}).thoughtLevels||
  ['low','medium','high','xhigh','max'];
 }
@@ -3238,12 +3262,15 @@ function mpActive(){
  if(!chatCanDispatch)return false;
  return !!(chatKind==='session'?chatExe:chatMeta.agentExe);
 }
-// 有没有可切换的模型目录：ZCode 个人供应商 / OpenSquilla 网关目录（桥在线才有）。
+// 有没有可切换的模型目录：ZCode 个人供应商 / OpenSquilla 网关目录（桥在线才有）/
+// DSH 目录（插件读 ctx.llm 推来）。
 function mpSwitchable(){
  if(mpListFor().length===0)return false;
  const e=mpExeNow();
- return e==='ZCode.exe'||e==='OpenSquilla.exe';
+ return e==='ZCode.exe'||e==='OpenSquilla.exe'||e==='DeepSeek Harness.exe';
 }
+// 这一家的切换是不是「会话级」（DSH 的模型本来就是会话级持久状态）。
+function mpSessionLevel(){return mpExeNow()==='DeepSeek Harness.exe';}
 function mpResetState(){mpOpen=false;mpLevel='providers';mpProvider=null;mpSel=null;}
 function syncModelChip(){
  const chip=$('chatModelChip'),panel=$('chatModelPanel');
@@ -3285,18 +3312,21 @@ function mpTextRow(text,on,onclick){
 function mpRenderPanel(){
  const panel=$('chatModelPanel'),list=$('chatMpList'),
        back=$('chatMpBack'),foot=$('chatMpFoot'),
-       thought=$('chatMpThought');
+       thought=$('chatMpThought'),commit=$('chatMpCommit');
  if(!mpOpen||!mpActive()){panel.hidden=true;return;}
  panel.hidden=false;
  back.hidden=mpLevel==='providers'&&!mpProvider;
  list.replaceChildren();
  thought.hidden=true;
+ commit.hidden=true;
  if(mpLevel==='providers'){
   foot.hidden=false;
   // 第一行是「会话自己当前的模型」：读到真实模型名就报出来，读不到才写
   // 「不切换」。选中态＝没做 override。
   const switchable=mpSwitchable();
-  foot.textContent=switchable?'管理模型':'当前宿主不支持在 RMC 里切换模型';
+  foot.textContent=switchable
+   ?(mpSessionLevel()?'选一个模型，再点「设为这条会话的模型」':'管理模型')
+   :'当前宿主不支持在 RMC 里切换模型';
   list.append(mpTextRow(chatModel?('会话当前 · '+chatModel):'会话当前（不切换）',!mpSel,()=>{
    mpSel=null;mpOpen=false;syncModelChip();panel.hidden=true;
   }));
@@ -3313,22 +3343,35 @@ function mpRenderPanel(){
   sec.textContent='模型';
   list.append(sec);
   (mpProvider&&mpProvider.models||[]).forEach(mid=>{
-   list.append(mpTextRow(mid,mpSel&&mpSel.providerId===mpProvider.providerId&&
+   const d=mpProvider.details&&mpProvider.details[mid];
+   list.append(mpTextRow(d&&d.name?d.name:mid,
+    mpSel&&mpSel.providerId===mpProvider.providerId&&
     mpSel.modelId===mid,
     ()=>{
-     mpSel={providerId:mpProvider.providerId,modelId:mid,
-            level:mpSel?mpSel.level:null};
+     // 档位随模型重算：不同模型公布的强度值域不一样，留着旧档会选出不存在的值。
+     const prev=mpSel&&mpSel.level;
+     mpSel={providerId:mpProvider.providerId,modelId:mid,level:null};
+     const lv=mpThoughts();
+     if(prev&&lv.indexOf(prev)>=0)mpSel.level=prev;
+     else if(d&&d.defaultEffort&&lv.indexOf(d.defaultEffort)>=0)
+      mpSel.level=d.defaultEffort;
      mpRenderPanel();syncModelChip();
     }));
   });
   // 思考强度：选中模型后出现（0=跟随会话）
   if(mpSel){
-   thought.hidden=false;
-   const lv=mpThoughts(),range=$('chatMpRange');
-   range.max=String(lv.length);
-   range.value=mpSel.level?String(lv.indexOf(mpSel.level)+1):'0';
-   $('chatMpTVal').textContent=mpSel.level
-    ?(MP_LVL_LABELS[mpSel.level]||mpSel.level):'跟随会话';
+   const lv=mpThoughts();
+   if(lv.length){
+    thought.hidden=false;
+    const range=$('chatMpRange');
+    range.max=String(lv.length);
+    range.value=mpSel.level?String(lv.indexOf(mpSel.level)+1):'0';
+    $('chatMpTVal').textContent=mpSel.level
+     ?(MP_LVL_LABELS[mpSel.level]||mpSel.level):'跟随会话';
+   }
+   // DSH 走会话级切换：多给一颗提交键（与派发的一次性 override 分开）。
+   const commit=$('chatMpCommit');
+   commit.hidden=!mpSessionLevel();
   }
  }
 }
@@ -3336,6 +3379,26 @@ $('chatModelChip').onclick=()=>{
  if(!mpActive())return;
  mpOpen=!mpOpen;
  if(mpOpen){fpClose();mpRenderPanel();}else $('chatModelPanel').hidden=true;
+};
+// 会话级切换（DSH）：立刻下发 switchModel，结果走 sendChat 之外的一条路
+//（postResult 直接拿回执，不等 5 秒整窗）。
+$('chatMpCommit').onclick=async()=>{
+ if(!mpSel||!mpSessionLevel())return;
+ const model={providerId:mpSel.providerId,modelId:mpSel.modelId,
+  level:mpSel.level||''};
+ mpOpen=false;$('chatModelPanel').hidden=true;
+ cNotice('','正在切模型，等宿主回执…','');
+ const res=await postResult({cmd:'switchModel',exe:mpExeNow(),
+  session:chatSession,providerId:model.providerId,modelId:model.modelId,
+  level:model.level});
+ mpResetState();syncModelChip();
+ if(res.ok){
+  cNotice('','已切到 '+(model.modelId||'新模型')+'（下一步生效）','good');
+  toast('已切模型');
+  load();fetchTranscript(0,'append');
+ }else{
+  cNotice('','没切成功：'+((res.data&&res.data.error)||('HTTP '+res.status)),'bad');
+ }
 };
 $('chatMpBack').onclick=()=>{mpLevel='providers';mpRenderPanel();};
 $('chatMpRange').addEventListener('input',()=>{

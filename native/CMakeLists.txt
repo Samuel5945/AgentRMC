@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.24)
 
-project(AgentRMCNative VERSION 0.5.1 LANGUAGES CXX)
+project(AgentRMCNative VERSION 0.5.2 LANGUAGES CXX)
 
 # 版本唯一入口就是上面的 PROJECT_VERSION：app.rc 与 NSIS 的版本号都由这里生成，
 # 不再手写第二、第三处。改了版本只需重新 configure（build.bat 每次都会）。
@@ -57,6 +57,7 @@ qt_add_executable(AgentRMCNative
     src/core/SessionCleaner.h
     src/core/SessionDeleteQueue.cpp
     src/core/SessionDeleteQueue.h
+    src/core/ShellIcon.h
     src/core/UiDispatch.cpp
     src/core/UiDispatch.h
     src/core/ZcodeDispatch.cpp
@@ -287,7 +288,7 @@ add_executable(AgentRMCAppTest
     src/core/Profiles.h
 )
 target_include_directories(AgentRMCAppTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
-target_link_libraries(AgentRMCAppTest PRIVATE Qt6::Core shell32)
+target_link_libraries(AgentRMCAppTest PRIVATE Qt6::Core Qt6::Gui shell32 ole32)
 target_compile_options(AgentRMCAppTest PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
 
 add_executable(AgentRMCVoiceTest

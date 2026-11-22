@@ -614,31 +614,50 @@ QWidget#appHolder {
     background: transparent;
 }
 
-QWidget#appRow {
-    background: transparent;
-    border: 1px solid transparent;
-    border-radius: 8px;
+QFrame#appCard {
+    background: @w6@;
+    border: 1px solid @w14@;
+    border-radius: 10px;
 }
 
-QWidget#appRow:hover {
-    background: @w8@;
-    border: 1px solid @w14@;
+QFrame#appCard:hover {
+    background: @w10@;
+    border: 1px solid @w30@;
+}
+
+QLabel#appIcon {
+    background: transparent;
 }
 
 QLabel#appName {
     color: @text.soft@;
-    font-size: 12px;
+    font-size: 11px;
     font-weight: 600;
 }
 
 QLabel#appState {
     color: @ghost@;
-    font-size: 10.5px;
+    font-size: 9.5px;
 }
 
 QLabel#appStateMiss {
     color: @warn@;
-    font-size: 10.5px;
+    font-size: 9.5px;
+}
+
+QPushButton#appDel {
+    border: none;
+    background: @w10@;
+    color: @muted@;
+    font-size: 12px;
+    font-weight: 700;
+    border-radius: 6px;
+    padding: 0 5px;
+}
+
+QPushButton#appDel:hover {
+    background: @danger@;
+    color: @on.accent@;
 }
 
 QLabel#mapFoot {

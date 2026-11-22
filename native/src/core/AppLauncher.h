@@ -41,6 +41,10 @@ struct AppLaunchResult {
 class AppLauncher {
 public:
     static const QVector<AppEntry> &catalog();
+    // 应用页专用：已卸载的内置应用不出现（自定义应用一律保留）。
+    // 与 catalog() 分开：后者是身份表，语音识别 / 预设 / 自定义应用都读它，
+    // 在那里过滤会让「能语音叫出哪些应用」变成由本机装了什么决定。
+    static const QVector<AppEntry> &appPageCatalog();
     static QStringList appIds();
     static const AppEntry *findApp(const QString &id);
     static QString nameOf(const QString &id);

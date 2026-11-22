@@ -61,6 +61,15 @@ const DEFAULTS = {
   // agent.cancel()（与 DSH 自己的停止同入口）/ agent.steer()（插进当前这轮）→
   // ack。与 dispatch 分开排：派发＝新的一轮，这两件＝动正在跑的这一轮。
   control: true,
+  // 会话级模型切换（2026-11-21）：本插件把可切目录推给原生端（POST /models），
+  // 原生端下发切换件（GET /model/pending）→ agent.model.select() → ack。
+  // 走 agent.model.select 而不是 sessionController.selectModel：后者会顺手把
+  // 「默认模型」也写进 profile patch，用户在 RMC 里切一次会改掉 DSH 新会话的
+  // 默认（用户 2026-11-21 裁决：不碰默认）。
+  modelSwitch: true,
+  // 目录重推周期。目录本身由 llm/adapters-updated、llm/models-updated 等事件
+  // 驱动即时重推，这个周期只是兜底（事件丢了/宿主版本没发）。
+  modelReportMs: 60000,
   // 活会话/运行态上报：原生端据此把「宿主里没打开的会话」标出来、把聊天页的
   // 发送键切成「停止」。只报 id 与 running 状态，不碰会话内容。
   liveReport: true,
@@ -144,6 +153,8 @@ function normalizeConfig(raw) {
     registerSkill: asBool(input.registerSkill, DEFAULTS.registerSkill),
     dispatch: asBool(input.dispatch, DEFAULTS.dispatch),
     control: asBool(input.control, DEFAULTS.control),
+    modelSwitch: asBool(input.modelSwitch, DEFAULTS.modelSwitch),
+    modelReportMs: asDuration(input.modelReportMs, DEFAULTS.modelReportMs),
     liveReport: asBool(input.liveReport, DEFAULTS.liveReport),
     liveReportMs: asDuration(input.liveReportMs, DEFAULTS.liveReportMs),
     approvalInline: asBool(input.approvalInline, DEFAULTS.approvalInline),
@@ -1349,9 +1360,320 @@ export function apply(ctx, rawConfig) {
     registerOne(CURSOR_SKILL_NAME, CURSOR_SKILL_DESCRIPTION);
   }
 
-  // —— 定向派发通道（2026-11-07 接线）：原生端下发 → 本插件轮询取件 →
-  // agent.followup() 注入 → ack 回执。followup 同步落 durable inbox，ack ok
-  // 就是「确实到了那条会话」的回执（与 WorkBuddy 的 jsonl user 行同级证明）。
+  // —— 宿主服务读数（派发 / 控制 / 换模型三条通道共用）——
+  // 三条通道都要「拿到活 Agent」和「不在活表时按需唤醒」，抽在这里各留一份，
+  // 免得三处各写一遍、将来只改对一处。
+  const readAgents = () => {
+    try {
+      const agents = ctx.get('agents');
+      return agents && typeof agents === 'object' ? agents : null;
+    } catch {
+      return null;  // 没这个服务（版本不匹配）：三条通道都安静跳过
+    }
+  };
+
+  // 按需唤醒会话：返回 { agent } 或 { error }。services 缺失时返回 null
+  // （老版本 DSH 没有这个服务，退回原来的「只认活表」行为）。
+  const wakeAgent = async (sessionId) => {
+    let controller = null;
+    try {
+      controller = ctx.get('sessionController');
+    } catch {
+      controller = null;
+    }
+    if (!controller || typeof controller.resolveAgent !== 'function') {
+      return null;
+    }
+    try {
+      const found = await controller.resolveAgent(sessionId);
+      if (found && found.agent) {
+        return { agent: found.agent };
+      }
+      const why =
+        (found && found.error && (found.error.message || found.error.code)) || '';
+      return {
+        error:
+          '会话 ' +
+          sessionId.slice(0, 13) +
+          '… 唤醒失败' +
+          (why ? '：' + why : '（会话可能已被删除）'),
+      };
+    } catch (e) {
+      return {
+        error: '唤醒会话 ' + sessionId.slice(0, 13) + '… 出错：' +
+          ((e && e.message) || e),
+      };
+    }
+  };
+
+  // —— 模型切换（2026-11-21）：目录推送 + 取件切换 ——
+  // DSH 的模型是**会话级**状态：agent.model.select() 往会话日志追加一条
+  // model/selection，从下一个 step 生效（正在跑的 step 保留原模型）。
+  // 这里刻意不用 sessionController.selectModel：那条路会顺手把「默认模型」
+  // 也写进 profile patch（agentDefaultModel.saveSelection），在 RMC 里切一次
+  // 就改掉 DSH 新会话的默认（用户 2026-11-21 裁决：不碰默认）。
+  //
+  // 目录反向推给原生端（POST /models）：原生端不连 DSH 的 Web 服务（那条口要
+  // 进程内 token，直连 401），只有插件能读 ctx.llm。
+  const llmOf = () => {
+    try {
+      return typeof ctx.get === 'function' ? ctx.get('llm') : ctx.llm;
+    } catch {
+      return undefined;
+    }
+  };
+
+  /** 原生端下发的 override 形状（与 ZCode / OpenSquilla 同款）→ 内部选择。 */
+  function modelOverrideOf(raw) {
+    if (!raw || typeof raw !== 'object') return null;
+    const provider = String(raw.providerId || raw.provider || '').trim();
+    const model = String(raw.modelId || raw.model || '').trim();
+    if (!provider || !model) return null;
+    const options = raw.options && typeof raw.options === 'object' ? raw.options : {};
+    const effort = String(
+      options.reasoningLevel || raw.reasoningEffort || '',
+    ).trim();
+    return { provider, model, ...(effort ? { reasoningEffort: effort } : {}) };
+  }
+
+  /**
+   * 校验 provider/model 在当前目录里。目录读不到（llm 服务缺失/适配器炸）时
+   * 放行——DSH 自己的请求侧会兜底报错，这里不替它拦。
+   */
+  async function checkModelAvailable(provider, model) {
+    const llm = llmOf();
+    if (!llm || typeof llm.listProviders !== 'function') return { ok: true };
+    let providers = [];
+    try {
+      providers = llm.listProviders() || [];
+    } catch {
+      return { ok: true };
+    }
+    if (!providers.some((p) => p && p.id === provider)) {
+      return { ok: false, error: '提供方 ' + provider + ' 不在 DSH 的适配器清单里' };
+    }
+    if (typeof llm.listModels !== 'function') return { ok: true };
+    let models = [];
+    try {
+      models = (await llm.listModels(provider)) || [];
+    } catch (e) {
+      return {
+        ok: false,
+        error: '读 ' + provider + ' 的模型目录失败：' + ((e && e.message) || e),
+      };
+    }
+    if (!models.some((m) => m && m.id === model)) {
+      return { ok: false, error: '模型 ' + model + ' 不在 ' + provider + ' 的目录里' };
+    }
+    return { ok: true };
+  }
+
+  /** 把一次选择落到 Agent 上；返回 {ok} 或 {ok:false,error}。 */
+  async function applyModelSelection(agent, selection) {
+    if (!agent || !agent.model || typeof agent.model.select !== 'function') {
+      return {
+        ok: false,
+        error: '这个 DSH 版本的 Agent 没有 model.select（插件按旧版接口跑）',
+      };
+    }
+    const check = await checkModelAvailable(selection.provider, selection.model);
+    if (!check.ok) return check;
+    try {
+      agent.model.select({
+        provider: selection.provider,
+        model: selection.model,
+        ...(selection.reasoningEffort
+          ? { reasoningEffort: selection.reasoningEffort }
+          : {}),
+      });
+    } catch (e) {
+      return { ok: false, error: '模型切换被拒：' + ((e && e.message) || e) };
+    }
+    return { ok: true };
+  }
+
+  /** 拼一份可切目录：models 保持字符串数组（与 OpenSquilla 同形），
+   *  显示名与思考强度档位放在 details 里（老页面不认识就忽略）。 */
+  async function buildModelCatalog() {
+    const llm = llmOf();
+    if (!llm || typeof llm.listProviders !== 'function') return null;
+    let providers = [];
+    try {
+      providers = llm.listProviders() || [];
+    } catch {
+      return null;
+    }
+    const out = [];
+    for (const p of providers) {
+      const providerId = String((p && p.id) || '').trim();
+      if (!providerId) continue;
+      let models = [];
+      try {
+        models = (await llm.listModels(providerId)) || [];
+      } catch {
+        continue;  // 这个提供方目录读不出来：整组跳过，别让一个坏适配器拖垮菜单
+      }
+      const ids = [];
+      const details = {};
+      for (const m of models) {
+        const id = String((m && m.id) || '').trim();
+        if (!id) continue;
+        ids.push(id);
+        let efforts = [];
+        let defaultEffort = '';
+        try {
+          if (typeof llm.resolveModelInfo === 'function') {
+            const info = await llm.resolveModelInfo(providerId, id);
+            const reasoning = info && info.reasoning;
+            if (reasoning && Array.isArray(reasoning.efforts)) {
+              efforts = reasoning.efforts
+                .map((e) => ({
+                  id: String((e && e.id) || ''),
+                  name: String((e && e.name) || (e && e.id) || ''),
+                }))
+                .filter((e) => e.id);
+            }
+            if (reasoning && reasoning.defaultEffort) {
+              defaultEffort = String(reasoning.defaultEffort);
+            }
+          }
+        } catch {
+          // 强度元数据拿不到就不给滑杆（DSH 自己的界面这时也不显示 Effort）
+        }
+        details[id] = {
+          name: String((m && m.name) || id),
+          ...(efforts.length ? { efforts } : {}),
+          ...(defaultEffort ? { defaultEffort } : {}),
+        };
+      }
+      if (!ids.length) continue;
+      out.push({
+        providerId,
+        name: String((p && p.name) || providerId),
+        models: ids,
+        details,
+      });
+    }
+    return out.length ? out : null;
+  }
+
+  if (config.modelSwitch && typeof ctx.effect === 'function') {
+    let modelBusy = false;
+    let modelLogAt = 0;
+    let catalogBusy = false;
+    const pushCatalog = async () => {
+      if (catalogBusy) return;
+      catalogBusy = true;
+      try {
+        const providers = await buildModelCatalog();
+        if (!providers) return;
+        await bridge.post('/models', {
+          exe: config.raiseExe || '',
+          providers,
+        });
+      } catch (e) {
+        const now = Date.now();
+        if (now - modelLogAt > 60_000) {
+          modelLogAt = now;
+          warn('model catalog push failed: ' + ((e && e.message) || e));
+        }
+      } finally {
+        catalogBusy = false;
+      }
+    };
+    const pollModels = async () => {
+      if (modelBusy) return;
+      modelBusy = true;
+      try {
+        const res = await bridge.get(
+          '/model/pending?exe=' + encodeURIComponent(config.raiseExe || ''),
+        );
+        if (res.status !== 200) return;  // 旧原生端没有这条路由：安静跳过
+        markNativeAlive();
+        let items;
+        try {
+          items = JSON.parse(res.body || '[]');
+        } catch {
+          return;
+        }
+        if (!Array.isArray(items) || items.length === 0) return;
+        const agents = readAgents();
+        for (const item of items) {
+          const modelId = String((item && item.model_id) || '');
+          const sessionId = String((item && item.session_id) || '');
+          const selection = modelOverrideOf(item);
+          let error = '';
+          if (!agents || typeof agents.get !== 'function') {
+            error = 'agents 服务不可达（ctx 拿不到，DSH 版本不匹配？）';
+          } else if (!modelId || !sessionId || !selection) {
+            error = '取件缺字段（model_id/session_id/provider/model）';
+          } else {
+            let agent = agents.get(sessionId);
+            if (!agent) {
+              // 只认活表（用户 2026-11-21 裁决 P1）：切模型要动 writer，
+              // 不替用户悄悄唤醒一条没在窗口里打开的会话。
+              error =
+                '会话 ' + sessionId.slice(0, 13) + '… 没在 DSH 里打开，先在宿主里点开它再切';
+            }
+            if (!error) {
+              const applied = await applyModelSelection(agent, selection);
+              if (!applied.ok) error = applied.error;
+            }
+          }
+          try {
+            await bridge.post('/model/ack', {
+              model_id: modelId,
+              ok: error === '',
+              ...(error ? { error } : {}),
+            });
+          } catch (e) {
+            const now = Date.now();
+            if (now - modelLogAt > 60_000) {
+              modelLogAt = now;
+              warn('model ack failed: ' + ((e && e.message) || e));
+            }
+          }
+        }
+      } catch (e) {
+        const now = Date.now();
+        if (now - modelLogAt > 60_000) {
+          modelLogAt = now;
+          warn('model poll failed: ' + ((e && e.message) || e));
+        }
+      } finally {
+        modelBusy = false;
+      }
+    };
+    // 目录变了要立刻重推：DSH 在适配器/模型/凭据/设置变化时发这些事件。
+    for (const event of [
+      'llm/adapters-updated',
+      'llm/models-updated',
+      'settings/document-updated',
+      'credentials/record-updated',
+    ]) {
+      if (typeof ctx.on === 'function') {
+        ctx.on(event, () => { void pushCatalog(); }, { global: true });
+      }
+    }
+    ctx.effect(() => {
+      const pollTimer = setInterval(() => { pollModels().catch(() => {}); }, 1500);
+      const catalogTimer = setInterval(
+        () => { pushCatalog().catch(() => {}); },
+        config.modelReportMs,
+      );
+      for (const t of [pollTimer, catalogTimer]) {
+        if (typeof t.unref === 'function') t.unref();
+      }
+      // 先推一次：宿主刚起来时菜单就该有目录，别等第一个周期。
+      void pushCatalog();
+      return () => {
+        clearInterval(pollTimer);
+        clearInterval(catalogTimer);
+      };
+    }, 'agentrmc-bridge model switch');
+  }
+
+
   //
   // 会话不在活表里怎么办（2026-11-21 修）：以前直接拒「未打开」。但手机端
   // 根本没法去点开宿主窗口，于是「从手机派回一条旧会话」永远失败——用户报的
@@ -1362,40 +1684,6 @@ export function apply(ctx, rawConfig) {
   let dispatchBusy = false;
   let dispatchLogAt = 0;
   if (config.dispatch && typeof ctx.get === 'function') {
-    // 按需唤醒会话：返回 { agent } 或 { error }。services 缺失时返回 null
-    // （老版本 DSH 没有这个服务，退回原来的「只认活表」行为）。
-    const wakeAgent = async (sessionId) => {
-      let controller = null;
-      try {
-        controller = ctx.get('sessionController');
-      } catch {
-        controller = null;
-      }
-      if (!controller || typeof controller.resolveAgent !== 'function') {
-        return null;
-      }
-      try {
-        const found = await controller.resolveAgent(sessionId);
-        if (found && found.agent) {
-          return { agent: found.agent };
-        }
-        const why =
-          (found && found.error && (found.error.message || found.error.code)) ||
-          '';
-        return {
-          error:
-            '会话 ' +
-            sessionId.slice(0, 13) +
-            '… 唤醒失败' +
-            (why ? '：' + why : '（会话可能已被删除）'),
-        };
-      } catch (e) {
-        return {
-          error: '唤醒会话 ' + sessionId.slice(0, 13) + '… 出错：' +
-            ((e && e.message) || e),
-        };
-      }
-    };
     const pollDispatches = async () => {
       if (dispatchBusy) return;
       dispatchBusy = true;
@@ -1412,12 +1700,14 @@ export function apply(ctx, rawConfig) {
           return;
         }
         if (!Array.isArray(items) || items.length === 0) return;
-        const agents = ctx.get('agents');
+        const agents = readAgents();
         for (const item of items) {
           const dispatchId = String((item && item.dispatch_id) || '');
           const sessionId = String((item && item.session_id) || '');
           const text = String((item && item.text) || '');
+          const override = modelOverrideOf(item && item.model);
           let error = '';
+          let note = '';
           if (!agents || typeof agents.get !== 'function') {
             error = 'agents 服务不可达（ctx 拿不到，DSH 版本不匹配？）';
           } else if (!dispatchId || !sessionId || !text) {
@@ -1437,6 +1727,13 @@ export function apply(ctx, rawConfig) {
               error =
                 '会话 ' + sessionId.slice(0, 13) + '… 不在活表里（未打开），未注入';
             } else if (!error) {
+              // 派发件带一次性 override：先切模型再注入（DSH 的模型是会话级
+              // 状态，切了之后这一轮就用它）。切换失败不吞正文——照常注入，
+              // 只把原因带进 ack 的 note，用户至少知道这次没换成。
+              if (override) {
+                const applied = await applyModelSelection(agent, override);
+                if (!applied.ok) note = applied.error;
+              }
               // 手搓 UserMessage，与 ACP 桥同形（kind:'user' 源 + 单 text 块），
               // 不 import 任何 @deepseek-ai 包。
               try {
@@ -1456,6 +1753,7 @@ export function apply(ctx, rawConfig) {
               dispatch_id: dispatchId,
               ok: error === '',
               ...(error ? { error } : {}),
+              ...(note ? { note } : {}),
             });
           } catch (e) {
             // ack 发不回去：原生端 60s 取件超时会兜底取消，这里节流记一笔。
@@ -1491,14 +1789,6 @@ export function apply(ctx, rawConfig) {
   // —— 活会话上报 + 停止生成/插话（2026-11-20）——
   // 上报让页面知道「哪些会话在这个宿主里开着、哪些正在跑」；控制通道把页面上
   // 的「停止 / 插话」落到 agent.cancel() / agent.steer()。两者都只跟原生端说话。
-  const readAgents = () => {
-    try {
-      const agents = ctx.get('agents');
-      return agents && typeof agents === 'object' ? agents : null;
-    } catch {
-      return null;  // 没这个服务（版本不匹配）：两条通道都安静跳过
-    }
-  };
 
   if (config.liveReport) {
     const reportLive = async () => {

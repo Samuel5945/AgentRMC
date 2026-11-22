@@ -112,6 +112,11 @@ let sendReject = false;          // sessions.send 回 error
 let sendHang = false;            // sessions.send 收下但不回（模拟受理后丢回复）
 const sentMessages = [];         // 桥真注入的 sessions.send params
 const listCalls = [];            // sessions.list 的 params（验证翻页）
+// 模型目录：models.list 应答 + 桥推来的 /models 体（验证定期重推）。
+let fakeModels = [{ id: 'glm-5.1', provider: 'tokenrhythm' },
+                  { id: 'kimi-k2.6', provider: 'tokenrhythm' }];
+let modelListCalls = 0;
+const modelPushes = [];
 let gatewayReady = false; // 收到 sessions.list 应答 = hello-ok 已被桥处理
 let upgrades = 0;
 let blackholeUpgrade = 0; // 这条连接只握手、不应答 sessions.list（模拟半开）
@@ -174,6 +179,9 @@ gateway.on('upgrade', (req, socket) => {
         } else {
           send({ type: 'res', id: msg.id, ok: true, payload: { deleted: [k], errors: [] } });
         }
+      } else if (msg.method === 'models.list') {
+        modelListCalls += 1;
+        send({ type: 'res', id: msg.id, ok: true, payload: fakeModels });
       } else if (msg.method === 'sessions.list') {
         if (myUpgrade === blackholeUpgrade) continue; // 半开：收得到请求，永不回应
         gatewayReady = true;
@@ -264,6 +272,12 @@ const fakeBridge = http.createServer((req, res) => {
     }
     if (req.url === '/delete/ack') {
       deleteAcks.push(JSON.parse(body));
+      res.statusCode = 204;
+      res.end();
+      return;
+    }
+    if (req.url === '/models') {
+      modelPushes.push(JSON.parse(body));
       res.statusCode = 204;
       res.end();
       return;
@@ -823,6 +837,32 @@ await check('真删：--no-dispatch 不取件、不碰网关', async () => {
     assert.strictEqual(pendingDeletes.length, 1, '队列原样留着');
   } finally {
     pendingDeletes = [];
+    await stopBridge(handle);
+  }
+});
+
+// —— 模型目录定期重推（2026-11-21 回归）——
+// 原生端的内存账 120s 过期，而桥原来「目录没变就不推」：原生端重启/账过期后
+// 菜单永远空着（用户报「DSH 能切了，OpenSquilla 又不行了」）。现在内容没变也按
+// modelsRepushMs 重推一次。
+await check('模型目录：内容没变也定期重推（原生端账过期/重启后菜单不消失）', async () => {
+  const before = modelPushes.length;
+  const handle = spawnBridge(BRIDGE, path.join(TMP, 'spool-models1'),
+    ['--models-repush-ms', '1500']);
+  try {
+    await waitFor(() => gatewayReady, '网关就绪');
+    await waitFor(() => modelPushes.length >= before + 1, '首次推目录');
+    const first = modelPushes[modelPushes.length - 1];
+    assert.strictEqual(first.exe, 'OpenSquilla.exe');
+    assert.strictEqual(first.providers.length, 1);
+    assert.strictEqual(first.providers[0].providerId, 'tokenrhythm');
+    assert.deepStrictEqual(first.providers[0].models, ['glm-5.1', 'kimi-k2.6']);
+    // 目录一点没变，但过了重推间隔必须再来一次（否则原生端账一过期就永久空）。
+    const baseline = modelPushes.length;
+    await waitFor(() => modelPushes.length >= baseline + 1, '内容没变也要重推', 8000);
+    assert.deepStrictEqual(modelPushes[modelPushes.length - 1], first,
+      '重推的必须是同一份目录（不是被清空/改坏）');
+  } finally {
     await stopBridge(handle);
   }
 });

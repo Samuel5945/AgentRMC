@@ -315,6 +315,64 @@ check(mpCheck.osqBadgeText === '网关', 'OpenSquilla 供应商行徒标＝网�
 check(mpCheck.zcode.switchable && mpCheck.zcode.list.join() === 'prov-1' && mpCheck.zcode.thoughts === 5,
   'ZCode 路径不串：仍读个人供应商目录 + 滑杆在', mpCheck.zcode);
 
+// —— DSH 路径（2026-11-21 换模型通道）：读 dshModels、档位按模型 details 渲染、
+// 只有 DSH 出现「设为这条会话的模型」那颗提交键（会话级切换与派发 override 分开）。
+const dshCheck = await page.evaluate(() => {
+  const d = { dispatch: {
+    models: [{ providerId: 'prov-1', name: 'TestOne', models: ['m1'] }],
+    osqModels: [{ providerId: 'tokenrhythm', name: 'tokenrhythm', models: ['glm-5.1'] }],
+    dshModels: [{
+      providerId: 'tr', name: '基元律动', models: ['glm-5.3-flash'],
+      details: { 'glm-5.3-flash': { name: 'GLM 5.3 Flash',
+        efforts: [{ id: 'off', name: 'off' }, { id: 'high', name: 'high' }],
+        defaultEffort: 'high' } },
+    }],
+  } };
+  window.__savedState2 = STATE; STATE = d;
+  window.__savedExe2 = DSCHAT.agent.exe; DSCHAT.agent.exe = 'DeepSeek Harness.exe';
+  const out = { switchable: mpSwitchable('dchat'),
+    list: mpListFor('dchat').map((p) => p.providerId),
+    sessionLevel: mpSessionLevel('dchat') };
+  // 下钻到模型列表：没有选中模型时不给滑杆，选中后档位来自 details（含 off）。
+  mpReset('dchat'); const ctx = mpCtx('dchat');
+  ctx.open = true; ctx.level = 'providers';
+  mpRenderPanel('dchat');
+  const commitBefore = !document.querySelector('#dchatMpCommit').hidden;
+  ctx.provider = mpListFor('dchat')[0]; ctx.level = 'models';
+  mpRenderPanel('dchat');
+  const commitAtModels = !document.querySelector('#dchatMpCommit').hidden;
+  // 模型行显示 details.name 而不是裸 id
+  const firstRow = document.querySelector('#dchatMpList .mprow .mpname');
+  const rowText = firstRow ? firstRow.textContent : '';
+  // 点模型行：选中并出现滑杆
+  const rows = document.querySelectorAll('#dchatMpList .mprow');
+  if (rows.length) rows[rows.length - 1].onclick();
+  out.thoughts = mpThoughts('dchat');
+  out.levelDefault = mpCtx('dchat').sel && mpCtx('dchat').sel.level;
+  out.sliderVisible = !document.querySelector('#dchatMpThought').hidden;
+  out.commitAfterPick = !document.querySelector('#dchatMpCommit').hidden;
+  // 换回 ZCode：同一套面板不该再出提交键（那是 DSH 专属语义）
+  DSCHAT.agent.exe = 'ZCode.exe';
+  mpReset('dchat'); const c2 = mpCtx('dchat');
+  c2.open = true; c2.level = 'models'; c2.provider = { providerId: 'prov-1', models: ['m1'] };
+  c2.sel = { providerId: 'prov-1', modelId: 'm1', level: null };
+  mpRenderPanel('dchat');
+  out.zcodeCommit = !document.querySelector('#dchatMpCommit').hidden;
+  DSCHAT.agent.exe = window.__savedExe2; STATE = window.__savedState2; mpReset('dchat');
+  return { ...out, rowText, commitBefore, commitAtModels };
+});
+check(dshCheck.switchable && dshCheck.list.join() === 'tr',
+  'DSH 读 dshModels（不与 ZCode / OpenSquilla 串目录）', dshCheck);
+check(dshCheck.sessionLevel === true, 'DSH 是会话级切换（mpSessionLevel）');
+check(dshCheck.thoughts.join() === 'off,high',
+  'DSH 档位来自所选模型的 details（tr 有 off，不套固定五档）', dshCheck.thoughts);
+check(dshCheck.levelDefault === 'high', '选中模型后默认档位取 defaultEffort', dshCheck.levelDefault);
+check(dshCheck.sliderVisible, '有档位时滑杆出现');
+check(dshCheck.rowText === 'GLM 5.3 Flash', '模型行显示 details.name 而不是裸 id', dshCheck.rowText);
+check(!dshCheck.commitBefore && !dshCheck.commitAtModels && dshCheck.commitAfterPick,
+  '提交键只在「选中模型后」出现', dshCheck);
+check(dshCheck.zcodeCommit === false, 'ZCode 面板不出提交键（会话级切换是 DSH 专属）');
+
 // 展形箭头垂直居中：原来用「⌄」字符（YaHei 基线沉底），用户 2026-11-19 报
 // 「箭头太靠下」。量 caret 的中心跟胶囊内容中心的偏差，≤2px 才算真居中。
 const caretGeo = await page.evaluate(() => {

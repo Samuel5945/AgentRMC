@@ -66,7 +66,9 @@ int main(int argc, char *argv[]) {
     const QString sidC = QStringLiteral("session-1d3d9c52-d043-457e-a1ac-023ac28d96b4");
     const QString sidD = QStringLiteral("session-67a6b61a-f8e8-4355-8a3e-aa5c6961a8ac");
 
-    // 1) AI 标题 + workingDirectory 行优先。
+    // 1) AI 标题优先；项目身份取**原始项目**（identity.cwd），当前目录另存。
+    //    2026-11-22 用户截图：Agentrmc 的会话 /cd 进 native\build\Release 后，
+    //    按 workingDirectory 分组就把整条会话挪到了「Release」项目组下。
     check("fixture: full projection",
           writeProjection(tmp.path(), sidA,
                           projection(R"({
@@ -77,8 +79,10 @@ int main(int argc, char *argv[]) {
     const DshSessions::Info a = DshSessions::find(sidA);
     check("title: ai title wins over first user text",
           a.valid && a.title == QString::fromUtf8("修复桌宠录音背景圆弧裁剪"));
-    check("cwd: workingDirectory row wins over identity",
-          a.cwd == QStringLiteral("D:\\githubrepos\\Agentrmc"));
+    check("cwd: identity.cwd (original project) wins over workingDirectory",
+          a.cwd == QStringLiteral("D:\\fallback"));
+    check("workingDir: current directory kept separately",
+          a.workingDir == QStringLiteral("D:\\githubrepos\\Agentrmc"));
 
     // 2) 没有 AI 标题：退首条用户正文，压空白。
     check("fixture: title-less projection",
@@ -91,8 +95,27 @@ int main(int argc, char *argv[]) {
     check("title: falls back to first user text, whitespace simplified",
           b.valid &&
               b.title == QString::fromUtf8("继续优化待办的会话， 比如 dsh 的会话记录"));
-    check("cwd: falls back to identity.cwd",
+    check("cwd: falls back to workingDirectory when identity missing",
           b.cwd == QStringLiteral("D:\\fallback"));
+
+    // 2b) 回归（用户 2026-11-22 手机截图）：会话中途 /cd 进项目子目录后，
+    //     项目身份仍是原始项目，不能跟着当前目录漂到「Release」组。
+    {
+        const QString sidCd =
+            QStringLiteral("session-0c1f2b9a-6666-4d5e-8f90-a1b2c3d4e5f6");
+        check("fixture: /cd into a project subdirectory",
+              writeProjection(tmp.path(), sidCd,
+                              projection(R"({
+            "workingDirectory":{"ver":1,"seq":3057,"val":"D:\\repo\\native\\build\\Release"},
+            "title":{"ver":1,"seq":3057,"val":"优化应用界面图标瀑布流显示"}
+          })",
+                                         R"({"createdAt":1795310974661,"cwd":"D:\\repo"})")));
+        const DshSessions::Info cd = DshSessions::find(sidCd);
+        check("/cd: project identity stays the original project",
+              cd.valid && cd.cwd == QStringLiteral("D:\\repo"));
+        check("/cd: current directory records the subdirectory",
+              cd.workingDir == QStringLiteral("D:\\repo\\native\\build\\Release"));
+    }
 
     // 3) 首条正文超长：截 60 字加省略号（标题位不是正文位）。
     const QByteArray longText(200, 'x');
@@ -186,6 +209,44 @@ int main(int argc, char *argv[]) {
     check("turnOpen: corrupt json unknown, NOT gone",
           DshSessions::find(sidD).turnOpen == -1 &&
               !DshSessions::find(sidD).gone);
+
+    // 10) 会话当前模型（2026-11-21 换模型通道）：投影 rows.modelSelection.val
+    //     是 {lastUsed, pending}，与 DSH 自己的模型位同口径取 pending ?? lastUsed。
+    const QString sidJ = QStringLiteral("session-0c1f2b9a-4444-4d5e-8f90-a1b2c3d4e5f6");
+    check("fixture: modelSelection with pending",
+          writeProjection(tmp.path(), sidJ, projection(R"({
+        "modelSelection":{"ver":3,"seq":214,"val":{
+          "lastUsed":{"provider":"magpie","model":"trae-cn/deepseek-v4.1-flash-max",
+            "reasoningEffort":"max"},
+          "pending":{"provider":"tr","model":"glm-5.3-flash",
+            "reasoningEffort":"high"}}}
+      })")));
+    {
+        const DshSessions::Info j = DshSessions::find(sidJ);
+        check("modelSelection: pending wins over lastUsed",
+              j.valid && j.provider == QStringLiteral("tr") &&
+                  j.model == QStringLiteral("glm-5.3-flash") &&
+                  j.effort == QStringLiteral("high"));
+    }
+    const QString sidK = QStringLiteral("session-0c1f2b9a-5555-4d5e-8f90-a1b2c3d4e5f6");
+    check("fixture: modelSelection without pending",
+          writeProjection(tmp.path(), sidK, projection(R"({
+        "modelSelection":{"ver":3,"seq":9,"val":{
+          "lastUsed":{"provider":"jy-gateway","model":"egg-beta"},
+          "pending":null}}
+      })")));
+    {
+        const DshSessions::Info k = DshSessions::find(sidK);
+        check("modelSelection: null pending falls back to lastUsed",
+              k.valid && k.provider == QStringLiteral("jy-gateway") &&
+                  k.model == QStringLiteral("egg-beta") && k.effort.isEmpty());
+    }
+    // 老投影没有这一行：字段全空，且不能因此变成 invalid（标题/目录照旧）。
+    {
+        const DshSessions::Info a2 = DshSessions::find(sidA);
+        check("modelSelection: missing row leaves model empty, info still valid",
+              a2.valid && a2.model.isEmpty() && a2.provider.isEmpty());
+    }
 
     std::printf(failures == 0 ? "PASS native dsh_sessions (%d checks)\n"
                               : "FAIL native dsh_sessions (%d failures)\n",

@@ -7,6 +7,8 @@
         <file>icons/chevron-down.svg</file>
         <file>icons/chevron-right.svg</file>
         <file>icons/close.svg</file>
+        <file>icons/app-codex.png</file>
+        <file>icons/app-wallpaper-engine.png</file>
         <file alias="icons/icon.ico">../../assets/icon.ico</file>
         <file alias="remote/pairing-earbuds.png">../../assets/remote/pairing-earbuds-v2.png</file>
     </qresource>

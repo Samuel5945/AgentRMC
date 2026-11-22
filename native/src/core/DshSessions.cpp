@@ -82,17 +82,38 @@ DshSessions::Info DshSessions::find(const QString &sessionId) {
                         info.title = info.title.left(60) + QStringLiteral("…");
                     }
                 }
-                info.cwd = rows.value(QStringLiteral("workingDirectory"))
+                // 原始项目 = 会话 header 的 cwd（宿主工作区登记的那条路径），
+                // 会话中途 /cd 也不会变。分组与「在哪儿」只认它。
+                info.cwd = record.value(QStringLiteral("identity"))
                                .toObject()
-                               .value(QStringLiteral("val"))
+                               .value(QStringLiteral("cwd"))
                                .toString();
+                // 当前生效目录单独存：/cd 或自动恢复会改它，可能是项目子目录。
+                // 老投影没有 identity 时才退回它——那时它也是唯一能拿到的路径。
+                info.workingDir = rows.value(QStringLiteral("workingDirectory"))
+                                      .toObject()
+                                      .value(QStringLiteral("val"))
+                                      .toString();
                 if (info.cwd.isEmpty()) {
-                    info.cwd = record.value(QStringLiteral("identity"))
-                                   .toObject()
-                                   .value(QStringLiteral("cwd"))
-                                   .toString();
+                    info.cwd = info.workingDir;
                 }
-                // 回合开合的硬账（与标题/目录同读一份 rows，零额外 I/O）：
+                // 会话当前模型：投影里的 modelSelection.val = {lastUsed, pending}。
+                // 与 DSH 自己的模型位同口径取 pending ?? lastUsed（pending 是
+                // 已记录但还没被下一次请求兑现的选择）。只是列表/卡片的身份提示，
+                // 聊天页顶栏的真实读数走 SessionTranscript（读日志，不吃节流）。
+                const QJsonObject msRow =
+                    rows.value(QStringLiteral("modelSelection")).toObject();
+                const QJsonObject ms =
+                    msRow.value(QStringLiteral("val")).toObject();
+                const QJsonObject sel =
+                    ms.value(QStringLiteral("pending")).toObject().isEmpty()
+                        ? ms.value(QStringLiteral("lastUsed")).toObject()
+                        : ms.value(QStringLiteral("pending")).toObject();
+                info.provider = sel.value(QStringLiteral("provider")).toString();
+                info.model = sel.value(QStringLiteral("model")).toString();
+                info.effort =
+                    sel.value(QStringLiteral("reasoningEffort")).toString();
+                // 回合开合的硬账（与 model 同读一份 rows，零额外 I/O）：
                 // turn/start 落 openTurnStartSeq、turn/end 清回 null。数字=有
                 // 开着的回合；JSON null=回合已关（出错/停止的收尾也走这里）；
                 // 键缺失（老投影）不表态。工单对账只信 0，1/-1 都不动卡。

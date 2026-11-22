@@ -71,6 +71,9 @@ const CFG = {
   // 内联应答（攒账推 /requests + 轮询答案调网关 RPC）默认开，--no-answer 整体关掉。
   answerInline: !flag("no-answer"),
   refreshMs: Number(opt("refresh", "30000")),
+  // 模型目录的定期重推间隔：内容没变也按这个节奏重推一次（原生端内存账会
+  // 过期/重启丢账）。测试可调小。
+  modelsRepushMs: Number(opt("models-repush-ms", "45000")),
   callTimeoutMs: Number(opt("call-timeout", "15000")),
   // sessions.send 的受理比普通 RPC 慢（网关要落 ingress 账），单给一个上限；
   // 超时口径是「送达未知」，不是被拒。测试可调小。
@@ -243,6 +246,9 @@ let callSeq = 0;
 const pending = new Map();
 const subscribed = new Set();
 let refreshTimer = null;
+// 模型目录的独立重推定时器（不与 refreshTimer 绑：refreshMs 可被调到几分钟，
+// 而原生端的目录账 120s 就过期）。
+let modelsTimer = null;
 let helloTimer = null;
 let reconnectDelay = 1000;
 let shuttingDown = false;
@@ -349,6 +355,14 @@ function forceReconnect(reason) {
 // 拿这份目录反查：modelsCatalog() 兼作校验用的账本，60s TTL 重拉。
 let modelsCache = { at: 0, list: [] };
 let modelsSig = "";
+// 最后一次成功推送的时刻：目录内容没变也要按 CFG.modelsRepushMs 节奏重推
+// （原生端的内存账会过期/重启丢账，只按「目录变了才推」会让它的模型菜单两分钟
+// 后永远空着——2026-11-21 用户报「DSH 能切了，OpenSquilla 又不行了」）。
+let modelsPushedAt = 0;
+// 只在内容真变时打日志，别让定期重推把日志刷满。
+let lastLoggedSig = "";
+// 重入锁：会话刷新与目录重推两个定时器都会调 pushModels，异步不加锁会连推两次。
+let modelsBusy = false;
 let modelsWarnAt = 0;
 const modelsWarn = (msg) => {
   const now = Date.now();
@@ -370,6 +384,10 @@ async function modelsCatalog(force = false) {
 }
 async function pushModels() {
   if (flag("no-models")) return;
+  // 两个定时器（会话刷新 + 目录重推）都会调这里，且 pushModels 是异步的：
+  // 不加锁时它们会在同一秒各推一次同一份目录（2026-11-21 实测 192ms 内两发）。
+  if (modelsBusy) return;
+  modelsBusy = true;
   try {
     const list = await modelsCatalog();
     if (!list.length) return;
@@ -384,7 +402,13 @@ async function pushModels() {
       providerId, name: providerId, models,
     }));
     const sig = providers.map((p) => `${p.providerId}:${p.models.join(",")}`).join("|");
-    if (sig === modelsSig) return;
+    // 目录没变也要定期重推（2026-11-21 修）：原生端的内存账会过期/重启丢账，
+    // 只按「目录变了才推」会让它的菜单在两分钟后永远空着——用户看到的就是
+    // 「DSH 能切模型了，OpenSquilla 又不行了」。这里改成「内容没变但超过
+    // 45s 就重推一次」，流量可忽略（一个几百字节的 POST），换来菜单不消失。
+    const now = Date.now();
+    const stale = now - (modelsPushedAt || 0) > CFG.modelsRepushMs;
+    if (sig === modelsSig && !stale) return;
     const res = await fetch(`${CFG.bridge}/models`, {
       method: "POST",
       headers: { "Content-Type": "application/json; charset=utf-8" },
@@ -397,10 +421,16 @@ async function pushModels() {
     }
     if (res.status === 204) {
       modelsSig = sig;
-      log(`MODELS ${providers.length} providers / ${list.length} models`);
+      modelsPushedAt = now;
+      if (sig !== lastLoggedSig) {
+        lastLoggedSig = sig;
+        log(`MODELS ${providers.length} providers / ${list.length} models`);
+      }
     }
   } catch (e) {
     modelsWarn("push models failed: " + e.message);
+  } finally {
+    modelsBusy = false;
   }
 }
 
@@ -732,6 +762,11 @@ function connect() {
       pushModels();
       if (refreshTimer) clearInterval(refreshTimer);
       refreshTimer = setInterval(() => { refreshSessions(); pushModels(); }, CFG.refreshMs);
+      // 目录定期重推用**独立**定时器：refreshMs 管的是会话刷新（默认 30s，也可能
+      // 被调到几分钟），而原生端的内存账 120s 就过期。绑在一起的话 refreshMs 一
+      // 调大，菜单又会消失——这正是 2026-11-21 用户报的那个现象。
+      if (modelsTimer) clearInterval(modelsTimer);
+      modelsTimer = setInterval(() => { pushModels(); }, CFG.modelsRepushMs);
       return;
     }
     if (f.type === "res" && pending.has(f.id)) {
@@ -748,6 +783,7 @@ function connect() {
     gatewayUp = false;
     if (shuttingDown) return;
     if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = null; }
+    if (modelsTimer) { clearInterval(modelsTimer); modelsTimer = null; }
     subscribed.clear();
     log(`gateway closed, reconnect in ${reconnectDelay}ms`);
     setTimeout(connect, reconnectDelay);
@@ -882,6 +918,7 @@ async function pollDispatches() {
     // 重启后是空账，不清的话 pushModels 的「目录没变」比对会让新实例永远
     // 收不到目录（2026-11-21 实测：native 重启后模型菜单一直藏着）。
     modelsSig = "";
+    modelsPushedAt = 0;
     dispatchWarn("dispatch poll failed: " + e.message);
   } finally {
     dispatchBusy = false;
@@ -1261,6 +1298,7 @@ async function pollAnswers() {
   } catch (e) {
     // 原生端没开：轮询失败保持安静，60s 记一次；同 dispatch 侧清模型目录 sig。
     modelsSig = "";
+    modelsPushedAt = 0;
     answerWarn("answer poll failed: " + e.message);
   } finally {
     answerBusy = false;

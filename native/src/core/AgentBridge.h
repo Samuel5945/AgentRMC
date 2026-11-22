@@ -42,6 +42,13 @@ class QTcpSocket;
 //                   [{control_id, session_id, action:"stop"|"steer", text?}]
 //   POST /control/ack {"control_id":..,"ok":true|false,"error":".."}
 //                 → 控制回执：ok=宿主已受理（cancel/steer 已调）；false 带原因
+//   GET  /model/pending?exe=<映像名> → 会话级换模型取件：待切换件
+//                   [{model_id, session_id, providerId, modelId, options?}]
+//   POST /model/ack {"model_id":..,"ok":true|false,"error":".."}
+//                 → 切换回执：ok=agent.model.select 已追加（下一步生效）；
+//                   false 带原因（会话没打开 / 模型不在目录 / 版本不匹配）
+//   POST /models {"exe","providers":[{providerId,name,models:[..],details}]}
+//                 → 宿主可切换模型目录（DSH 插件与 OpenSquilla 桥共用这条口）
 //   POST /live/sessions {"exe":..,"open":[会话id],"running":[会话id]}
 //                 → 插件上报活会话/正在跑的会话：派发页据此标「没打开」，
 //                   聊天页据此把发送键切成「停止」、有正文时改走插话
@@ -118,6 +125,14 @@ public:
     // POST /live/sessions 的处理器：插件上报活会话/运行中的会话（派发页与
     // 聊天页据此判断「能不能派」「要不要把发送键切成停止」）。
     void setLiveSessionsHandler(std::function<void(const QJsonObject &)> handler);
+    // GET /model/pending?exe 的应答来源：会话级换模型取件（一次取走，未 ack
+    // 前不重发），返回 JSON 数组文本。
+    void setModelPendingProvider(
+        std::function<QString(const QString &exe)> provider);
+    // POST /model/ack 的处理器：{"model_id":..,"ok":..,"error":..}。
+    // 返回 false = model_id 不认识（超时后晚到），回 404。
+    void setModelAckHandler(
+        std::function<bool(const QJsonObject &)> handler);
     // POST /requests 的处理器：DSH 插件推送某会话当前待答请求（B1 只读展示）
     // {"exe","session_id","project","requests":[{kind,id,toolName?,reason?,questions?}]}。
     void setRequestsHandler(std::function<void(const QJsonObject &)> handler);
@@ -186,6 +201,8 @@ private:
     std::function<bool(const QJsonObject &)> deleteAckHandler_;
     std::function<QString(const QString &exe)> controlPendingProvider_;
     std::function<bool(const QJsonObject &)> controlAckHandler_;
+    std::function<QString(const QString &exe)> modelPendingProvider_;
+    std::function<bool(const QJsonObject &)> modelAckHandler_;
     std::function<void(const QJsonObject &)> liveSessionsHandler_;
     std::function<void(const QJsonObject &)> requestsHandler_;
     std::function<void(const QJsonObject &)> modelsHandler_;

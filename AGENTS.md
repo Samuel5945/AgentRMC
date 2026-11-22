@@ -106,6 +106,13 @@
   ① 跑测试前把 `TEMP`/`TMP` 指到工作区内目录（如 `tmp_test`）；
   ② 静默安装先把 `dist\AgentRMC-Setup.exe` 拷到工作区外（如 `D:\apps`）再 `/S`。
   这不是代码错，别去改测试或安装脚本。
+- **工作区上挂着 Low 完整性标签，沙箱进程写不进源码/构建目录**（2026-11-21 实测）：
+  `icacls D:\githubrepos\Agentrmc` 会看到 `Mandatory Label\Low Mandatory Level:(OI)(CI)(NW)`。
+  DSH 沙箱进程继承这个低完整性级别，于是 CMake 直接
+  `Could not open file for write … Permission denied`、`native\build` 和 `native\src`
+  一律写不进。**这不是 ACL 缺项**：用 `diagnose-windows-sandbox-acl` 修完 ACL 照样失败
+  （问题在完整性级别，不在 DACL）。对策：**构建 / 出包 / 装机这类要写工作区的命令
+  必须在「完全权限」下跑**；只在只读或受限模式下排查代码没问题。
 
 ## 版本号：Native 与插件同号同步升
 

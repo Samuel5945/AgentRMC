@@ -761,12 +761,16 @@ QString WorkWebView::htmlFor(const QString &stateJson) const {
  .ev{padding:5px 6px;border-radius:6px;font-size:var(--f11);line-height:1.5;
    white-space:pre-wrap;word-break:break-word}
  .ev:hover{background:var(--w6)}
- /* 系统页：几行读数 + Worker 表 + 底部按钮。表头/行用 grid 对齐。 */
+ /* 系统页：几行读数 + 手机访问/Agent 指针卡 + Worker 表 + 底部按钮。
+     中间整块装进 .sysscroll 自己滚（用户 2026-11-21：卡片展开后内容超高，
+     页面没有滚动容器，窗口把下方内容裁掉、滚轮也够不到）；底部按钮留在
+     滚动区外，始终贴在卡片底边。表头/行用 grid 对齐。 */
  .lines{flex:0 0 auto;font-size:var(--f11);color:var(--muted);line-height:1.75;
    word-break:break-word}
- .wtable{flex:1 1 auto;min-height:0;overflow-y:auto;margin-top:6px;
-   scrollbar-width:none;font-size:var(--f11)}
- .wtable::-webkit-scrollbar{width:0;height:0}
+ .sysscroll{flex:1 1 auto;min-height:0;display:flex;flex-direction:column;
+   overflow-y:auto;scrollbar-width:none;padding-right:4px}
+ .sysscroll::-webkit-scrollbar{width:0;height:0}
+ .wtable{flex:0 0 auto;margin-top:6px;font-size:var(--f11)}
  .wrow{display:grid;grid-template-columns:1.3fr .8fr .5fr .7fr .6fr .55fr;
    gap:6px;padding:5px 6px;border-bottom:1px solid var(--w8);align-items:center}
  .wrow.head{color:var(--muted2);font-size:var(--f10);border-bottom:1px solid var(--w14)}
@@ -823,13 +827,27 @@ QString WorkWebView::htmlFor(const QString &stateJson) const {
  /* 应用页 */
  .sectitle{font-size:var(--f12);font-weight:700;color:var(--text)}
  .mutedline{font-size:var(--f11);color:var(--muted);line-height:1.6}
- .approw{display:flex;align-items:center;gap:10px;padding:5px 9px;border-radius:6px}
- .approw:hover{background:var(--w6)}
- .approw .aname{width:92px;flex:0 0 92px;font-size:var(--f11);color:var(--text);
-   white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
- .approw .astate{flex:1;min-width:0;font-size:var(--f11);color:var(--muted);
-   white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
- .approw .astate.miss{color:var(--faint)}
+/* 应用页：图标瀑布流。列数在 renderApps 里按容器宽度算，卡片高度随内容
+   变化，短列自动补位（CSS columns 天然瀑布流，不用 JS 摆位）。 */
+#apList{column-count:4;column-gap:10px}
+.appcard{break-inside:avoid;display:flex;flex-direction:column;align-items:center;
+  gap:5px;padding:9px 8px;border-radius:10px;border:1px solid var(--w14);
+  background:var(--w6);cursor:default;margin:0 0 10px}
+.appcard:hover{background:var(--w10);border-color:var(--w30)}
+.appcard.on{cursor:pointer}
+.appcard .aico{width:44px;height:44px;display:flex;align-items:center;
+  justify-content:center;position:relative}
+.appcard .aico img{width:44px;height:44px;display:block}
+.appcard .aname{font-size:var(--f11);color:var(--text);font-weight:600;
+  text-align:center;line-height:1.3;word-break:break-word}
+.appcard .astate{font-size:var(--f10);color:var(--muted);text-align:center;
+  line-height:1.3;word-break:break-word}
+.appcard .astate.miss{color:var(--warn)}
+.appcard .adel{position:absolute;top:-7px;right:-7px;width:20px;height:20px;
+  border-radius:6px;border:0;background:var(--w10);color:var(--muted);
+  font-size:12px;font-weight:700;line-height:1;display:flex;align-items:center;
+  justify-content:center;cursor:pointer;padding:0}
+.appcard .adel:hover{background:var(--danger);color:var(--on-accent)}
  /* 使用引导：整页内部滚（同 Qt QScrollArea），行是 92px 键 + 说明。 */
  .guide{flex:1 1 auto;min-height:0;overflow-y:auto;padding-right:4px;
    scrollbar-width:none}
@@ -1222,6 +1240,11 @@ QString WorkWebView::htmlFor(const QString &stateJson) const {
  .mpfoot{padding:9px 12px;border-top:1px solid var(--w10);
    font-size:var(--f12);color:var(--text);cursor:default}
  .mpfoot[hidden]{display:none}
+ .mpcommit{display:block;width:100%;padding:9px 12px;border:0;
+   border-top:1px solid var(--w10);background:var(--w8);color:var(--text);
+   font-family:inherit;font-size:var(--f12);text-align:left;cursor:default}
+ .mpcommit:hover{background:var(--w12)}
+ .mpcommit[hidden]{display:none}
  .mpthought{padding:9px 12px;border-top:1px solid var(--w10)}
  .mpthought[hidden]{display:none}
  .mpthought .trow{display:flex;align-items:center;gap:5px;margin-bottom:6px;
@@ -1522,6 +1545,7 @@ QString WorkWebView::htmlFor(const QString &stateJson) const {
   </div>
 </div>
 <div id="system" class="page" hidden>
+  <div class="sysscroll">
   <div class="head"><span class="sectitle">系统健康</span></div>
   <div class="lines" id="sysLines" style="margin-top:8px"></div>
   <div class="lanbox" id="lanBox">
@@ -1554,6 +1578,7 @@ QString WorkWebView::htmlFor(const QString &stateJson) const {
     <div class="mutedline" style="margin-top:6px" id="curHint">Agent 可以在屏幕上指出它要操作的位置并点击，你的鼠标不动、随时能同时用。</div>
   </div>
   <div class="wtable" id="sysWorkers"></div>
+  </div>
   <div class="foot" style="border-top:0;padding:8px 0 4px">
     <button class="btn" id="sysRefresh">刷新</button>
     <button class="btn" id="sysBridge" title="一键复制安装话术：粘给任意一个正在干活的 Agent，它自己按所在宿主装好。顺便看各家装没装、进程里跑的是哪一版。">接入 Agent</button>
@@ -1664,6 +1689,7 @@ function chatShellHtml(P,o){
   +'<div class="trow"><span class="tkey">思考强度</span><b id="'+P+'MpTVal">跟随会话</b></div>'
   +'<input type="range" id="'+P+'MpRange" min="0" max="5" value="0" step="1">'
   +'</div>'
+  +'<button class="mpcommit" id="'+P+'MpCommit" hidden>设为这条会话的模型</button>'
   +'<div class="mpfoot" id="'+P+'MpFoot">管理模型</div>'
   +'</div></div>';
 }
@@ -2180,26 +2206,37 @@ function renderKeymap(){
 function renderApps(){
   const a=APPS||{};
   const list=$('apList'); const keep=list.scrollTop; list.replaceChildren();
+  // 列数按容器宽度算：卡片约 100px 宽 + 10px 间距，2~6 列。
+  const cw=list.clientWidth||list.parentElement.clientWidth||640;
+  const cols=Math.max(2,Math.min(6,Math.floor((cw+10)/112)));
+  list.style.columnCount=String(cols);
   (a.rows||[]).forEach(r=>{
-    const row=document.createElement('div'); row.className='approw';
+    const card=document.createElement('div');
+    card.className='appcard'+(r.found?' on':'');
+    const ico=document.createElement('div'); ico.className='aico';
+    if(r.icon){
+      const im=document.createElement('img'); im.src=r.icon; im.alt='';
+      ico.append(im);
+    }
+    if(r.custom){
+      const del=document.createElement('button'); del.className='adel';
+      del.textContent='×';
+      del.title='从自定义应用里移除（不影响应用本身）';
+      del.onclick=(e)=>{e.stopPropagation();
+        postObj({cmd:'appRemove',name:r.name,path:r.customPath});};
+      ico.append(del);
+    }
     const n=document.createElement('span'); n.className='aname';
     n.textContent=r.name||'';
     const s=document.createElement('span');
     s.className='astate'+(r.found?'':' miss');
     s.textContent=r.state||''; s.title=r.stateTip||'';
-    const open=document.createElement('button'); open.className='btn';
-    open.textContent='打开'; open.disabled=!r.found;
-    open.title='现在打开一次（语音说「打开 '+(r.name||'')+'」同样有效）';
-    open.onclick=()=>postObj({cmd:'appOpen',id:r.id});
-    row.append(n,s,open);
-    if(r.custom){
-      const del=document.createElement('button'); del.className='btn';
-      del.textContent='删';
-      del.title='从自定义应用里移除（不影响应用本身）';
-      del.onclick=()=>postObj({cmd:'appRemove',name:r.name,path:r.customPath});
-      row.append(del);
+    card.append(ico,n,s);
+    if(r.found){
+      card.title='现在打开一次（语音说「打开 '+(r.name||'')+'」同样有效）';
+      card.onclick=()=>postObj({cmd:'appOpen',id:r.id});
     }
-    list.append(row);
+    list.append(card);
   });
   list.scrollTop=keep;
   $('apSummary').textContent=a.summary||'';
@@ -2805,7 +2842,7 @@ window.__setSessionChat=function(p){
 // 一级面板＝‹ 上一步 + 供应商行（立方体图标+名+API 徽标+✓/›）+ 底部「管理模型」，
 // 二级＝「模型」分组 + 模型行 + 思考强度滑杆（0＝跟随会话）。两个聊天面共用一套
 // 状态机，按前缀（'dchat' / 'chat'）区分。空目录 / 非 ZCode / 只读会话整块隐藏。
-const MP_LVL_LABELS={low:'极低',medium:'低',high:'中',xhigh:'极高',max:'最高'};
+const MP_LVL_LABELS={off:'关',minimal:'极低',low:'极低',medium:'低',high:'中',xhigh:'极高',max:'最高',adaptive:'自适应'};
 const MP_CUBE_SVG='<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><path d="M12 2.5 20.5 7v10L12 21.5 3.5 17V7L12 2.5Z"/><path d="M3.5 7 12 11.7 20.5 7"/><path d="M12 11.7V21.5"/></svg>';
 const MP={};
 function mpCtx(prefix){
@@ -2822,13 +2859,35 @@ function mpExe(prefix){
 }
 function mpListFor(prefix){
   const d=STATE.dispatch||{};
-  return mpExe(prefix)==='OpenSquilla.exe'?(d.osqModels||[]):(d.models||[]);
+  const e=mpExe(prefix);
+  if(e==='OpenSquilla.exe')return d.osqModels||[];
+  if(e==='DeepSeek Harness.exe')return d.dshModels||[];
+  return d.models||[];
+}
+// 目录里某个模型的元数据（DSH 的 details：{name,efforts,defaultEffort}）。
+// 别的宿主没有这一层，返回 null，调用方各自走旧口径。
+function mpDetail(prefix,providerId,modelId){
+  const list=mpListFor(prefix);
+  for(const p of list){
+    if(p&&p.providerId===providerId&&p.details)return p.details[modelId]||null;
+  }
+  return null;
 }
 function mpThoughts(prefix){
   // 思考强度只有 ZCode 通道吃 options.reasoningLevel；OpenSquilla 的档位
   // 是另一套值域（minimal/…/adaptive），网关 patch 又不校验（实测瞎写也
   // 收），宁可不给也不假答应——滑杆藏掉，一律跟随会话。
   if(prefix!==undefined&&mpExe(prefix)==='OpenSquilla.exe')return [];
+  // DSH：档位由所选模型的适配器公布（每个模型不一样：magpie 的 trae-cn/* 只有
+  // low/high/xhigh/max，tr 的 glm-5.3-flash 多一个 off）。目录里没带 details
+  // （插件旧版）才退回固定五档。
+  if(prefix!==undefined&&mpExe(prefix)==='DeepSeek Harness.exe'){
+    const sel=MP[prefix]&&MP[prefix].sel;
+    if(!sel)return [];
+    const d=mpDetail(prefix,sel.providerId,sel.modelId);
+    if(d&&d.efforts&&d.efforts.length)return d.efforts.map(e=>e.id);
+    return [];
+  }
   return (STATE.dispatch||{}).thoughtLevels||
     ['low','medium','high','xhigh','max'];
 }
@@ -2839,12 +2898,16 @@ function mpActive(prefix){
   if(prefix==='dchat')return !!(dchatOpen&&DSCHAT&&DSCHAT.canDispatch&&DSCHAT.agent);
   return !!(CHAT&&CHAT.agentExe);
 }
-// 有没有可切换的模型目录：ZCode 个人供应商 / OpenSquilla 网关目录（桥在线才有）。
+// 有没有可切换的模型目录：ZCode 个人供应商 / OpenSquilla 网关目录（桥在线才有）/
+// DSH 目录（插件读 ctx.llm 推来，宿主开着才有）。
 function mpSwitchable(prefix){
   if(!mpListFor(prefix).length)return false;
   const e=mpExe(prefix);
-  return e==='ZCode.exe'||e==='OpenSquilla.exe';
+  return e==='ZCode.exe'||e==='OpenSquilla.exe'||e==='DeepSeek Harness.exe';
 }
+// 这一家的切换是不是「会话级」（改了之后下一轮就用它，不再是派发一次性 override）。
+// 只有 DSH 走这条：它的模型本来就是会话级持久状态（日志里一条 model/selection）。
+function mpSessionLevel(prefix){return mpExe(prefix)==='DeepSeek Harness.exe';}
 // 当前会话在用的模型（宿主记的显示名）。读不到就空，胶囊退回「选择模型」。
 function mpCurModel(prefix){
   if(prefix==='dchat')return (DSCHAT&&DSCHAT.meta&&DSCHAT.meta.model)||'';
@@ -2894,15 +2957,19 @@ function mpRenderPanel(prefix){
   $panel.hidden=false;
   $(prefix+'MpBack').hidden=ctx.level==='providers'&&!ctx.provider;
   const list=$(prefix+'MpList'),
-        foot=$(prefix+'MpFoot'),thought=$(prefix+'MpThought');
+        foot=$(prefix+'MpFoot'),thought=$(prefix+'MpThought'),
+        commit=$(prefix+'MpCommit');
   list.replaceChildren();
   thought.hidden=true;
+  commit.hidden=true;
   if(ctx.level==='providers'){
     foot.hidden=false;
     const curModel=mpCurModel(prefix);
     const switchable=mpSwitchable(prefix);
     // 非 ZCode / 没配供应商目录：这里只报当前模型，底部说明为什么不给切。
-    foot.textContent=switchable?'管理模型':'当前宿主不支持在 RMC 里切换模型';
+    foot.textContent=switchable
+      ?(mpSessionLevel(prefix)?'选一个模型，再点「设为这条会话的模型」':'管理模型')
+      :'当前宿主不支持在 RMC 里切换模型';
     list.append(mpTextRow(curModel?('会话当前 · '+curModel):'会话当前（不切换）',!ctx.sel,()=>{
       ctx.sel=null;ctx.open=false;mpSyncChip(prefix);$panel.hidden=true;
     }));
@@ -2919,11 +2986,21 @@ function mpRenderPanel(prefix){
     sec.textContent='模型';
     list.append(sec);
     (ctx.provider&&ctx.provider.models||[]).forEach(mid=>{
-      list.append(mpTextRow(mid,ctx.sel&&ctx.sel.providerId===ctx.provider.providerId&&
+      // DSH 目录带 details.name（适配器给的显示名，如 "DeepSeek-V4.1-Flash
+      // (Max) · Trae CN"）；其余宿主没有这一层，仍按 id 显示。
+      const d=ctx.provider.details&&ctx.provider.details[mid];
+      list.append(mpTextRow(d&&d.name?d.name:mid,
+        ctx.sel&&ctx.sel.providerId===ctx.provider.providerId&&
         ctx.sel.modelId===mid,
         ()=>{
-          ctx.sel={providerId:ctx.provider.providerId,modelId:mid,
-                   level:ctx.sel?ctx.sel.level:null};
+          // 换模型要把档位重算：不同模型公布的强度值域不一样（off 只有部分
+          // 模型有），留着上一个模型的 level 会选出一个不存在的档。
+          const prev=ctx.sel&&ctx.sel.level;
+          ctx.sel={providerId:ctx.provider.providerId,modelId:mid,level:null};
+          const lv=mpThoughts(prefix);
+          if(prev&&lv.indexOf(prev)>=0)ctx.sel.level=prev;
+          else if(d&&d.defaultEffort&&lv.indexOf(d.defaultEffort)>=0)
+            ctx.sel.level=d.defaultEffort;
           mpRenderPanel(prefix);mpSyncChip(prefix);
         }));
     });
@@ -2934,6 +3011,12 @@ function mpRenderPanel(prefix){
       range.value=ctx.sel.level?String(lv.indexOf(ctx.sel.level)+1):'0';
       $(prefix+'MpTVal').textContent=ctx.sel.level
         ?(MP_LVL_LABELS[ctx.sel.level]||ctx.sel.level):'跟随会话';
+    }
+    // DSH 走「会话级切换」：一个模型选中后多给一颗提交键，点了立刻改会话本身；
+    // 派发时的那颗「一次性 override」照旧保留（两条语义不混在一个点击上）。
+    if(ctx.sel&&mpSessionLevel(prefix)){
+      commit.hidden=false;
+      commit.textContent='设为这条会话的模型';
     }
   }
 }
@@ -2955,7 +3038,21 @@ function mpToggle(prefix){
 ['dchat','chat'].forEach(prefix=>{
   $(prefix+'ModelChip').onclick=()=>mpToggle(prefix);
   $(prefix+'MpBack').onclick=()=>{
-    const ctx=MP[prefix];ctx.level='providers';mpRenderPanel(prefix);
+    const ctx=MP[prefix];ctx.level='providers';mpRenderPanel(prefix);};
+  // 会话级切换（DSH）：点了立刻下发 switchModel，回执走 __setDispatchResult
+  // 的 control:'model' 分支。与派发的那颗「一次性 override」互不影响。
+  $(prefix+'MpCommit').onclick=()=>{
+    const ctx=MP[prefix];
+    if(!ctx||!ctx.sel||!mpSessionLevel(prefix))return;
+    const exe=mpExe(prefix);
+    const sid=prefix==='dchat'?(DSCHAT?DSCHAT.row.id:''):chatSid();
+    if(!exe||!sid)return;
+    const model=ctx.sel;
+    ctx.open=false;$(prefix+'ModelPanel').hidden=true;
+    cNotice(prefix,'正在切模型，等宿主回执…','');
+    postObj({cmd:'switchModel',exe:exe,session:sid,
+      providerId:model.providerId,modelId:model.modelId,
+      level:model.level||''});
   };
   $(prefix+'MpRange').addEventListener('input',()=>{
     const ctx=MP[prefix];
@@ -3036,6 +3133,21 @@ function sendDchat(){
 window.__setDispatchResult=function(r){
   if(!dchatOpen||!DSCHAT)return;
   cSendReady('dchat',DSCHAT.canDispatch);
+  if(r&&r.control==='model'){
+    // 会话级换模型收场：不动草稿、不动附件——这条只改「下一轮用谁」。
+    // 成功后胶囊立刻显示新模型（回执里带了 label），会话记录下一次轮询就换。
+    if(r.ok){
+      const label=r.model||'';
+      if(label&&DSCHAT.meta)DSCHAT.meta.model=label;
+      mpReset('dchat');mpSyncChip('dchat');
+      cNotice('dchat','已切到 '+(label||'新模型')+'（下一步生效）','good');
+      postObj({cmd:'sessionOpen',exe:dchatExe(),session:DSCHAT.row.id,offset:0,limit:50});
+    }else{
+      cNotice('dchat','没切成功：'+((r&&r.error)||'未知原因'),'bad');
+      mpReset('dchat');mpSyncChip('dchat');
+    }
+    return;
+  }
   if(r&&r.control==='stop'){
     cNotice('dchat',r.ok?'已停止这一轮':'没停下来：'+((r&&r.error)||'未知原因'),
       r.ok?'good':'bad');

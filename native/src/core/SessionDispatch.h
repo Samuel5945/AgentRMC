@@ -84,6 +84,20 @@ public:
     QJsonArray takeControls(const QString &agentExe);
     // 插件回执：ok=true = cancel/steer 已被受理。false = 拒绝（带原因）。
     bool controlAck(const QString &controlId, bool ok, const QString &error);
+
+    // —— 会话级换模型通道（2026-11-21）——
+    // 与派发/控制第三条独立队列：派发＝新的一轮，控制＝动这一轮，换模型＝改
+    // 「下一轮用谁」。DSH 的模型是会话级持久状态（日志里追加 model/selection），
+    // 所以这里不排队到某个 turn，只排到插件把 agent.model.select 落地。
+    // selection：{providerId, modelId, options?}（options.reasoningLevel 可选）。
+    // 只对插件通道的宿主开放（DSH / OpenSquilla）；别的宿主直接拒。
+    bool switchModel(const QString &agentExe, const QString &sessionId,
+                     const QJsonObject &selection, QString *reason,
+                     QString *modelIdOut = nullptr);
+    // 插件轮询取件（按 exe 过滤，一次取走，等 ack/超时）。
+    QJsonArray takeModels(const QString &agentExe);
+    // 插件回执：ok=true = agent.model.select 已追加（下一步生效）。
+    bool modelAck(const QString &modelId, bool ok, const QString &error);
     // 插件应答：ok=true = followup 已被接受（durable inbox 落账，投递成立 →
     // receipt）；false = 插件侧守卫拒绝（reason 给用户 → failed）。
     // 返回 false = 不认识的 dispatch_id（重启丢账/重复 ack）：调用方要回 404，
@@ -94,6 +108,11 @@ public:
     // dispatch() 选模型时拿它预检，目录没推来就不拦（桥取件后自己反查拒）。
     void setOsqModelsProvider(std::function<QJsonArray()> provider) {
         osqModelsProvider_ = std::move(provider);
+    }
+    // DSH 可选模型目录读数（插件推的 /models 账）：派发带 override 时预检。
+    // 空目录同样不拦——插件取件后会拒并带原因，别让 native 的旧账挡住人。
+    void setDshModelsProvider(std::function<QJsonArray()> provider) {
+        dshModelsProvider_ = std::move(provider);
     }
 
 signals:
@@ -109,6 +128,14 @@ signals:
     void controlFailed(const QString &controlId, const QString &agentExe,
                        const QString &sessionId, const QString &action,
                        const QString &reason);
+    // 换模型：插件把 agent.model.select 落地了（下一步生效）。
+    void modelDone(const QString &modelId, const QString &agentExe,
+                   const QString &sessionId, const QString &provider,
+                   const QString &model);
+    // 换模型失败：reason 原样上卡（会话没打开 / 模型不在目录 / 版本不匹配）。
+    void modelFailed(const QString &modelId, const QString &agentExe,
+                     const QString &sessionId, const QString &provider,
+                     const QString &model, const QString &reason);
     // ZCode：turn 跑完（回执只代表送达）。reply 为该轮 assistant 正文，空＝
     // 没等到（超时/turn 失败）。
     void zcodeTurnFinished(const QString &dispatchId, const QString &agentExe,
@@ -151,13 +178,27 @@ private:
         bool handed = false;  // 已交给插件，等 ack
     };
 
+    struct ModelSwitch {
+        QString modelId;  // 队列 id（不是模型 id），ack 对号用
+        QString agentExe;
+        QString sessionId;
+        QString provider;
+        QString model;
+        QJsonObject selection;  // 原样带给插件的 {providerId,modelId,options?}
+        QElapsedTimer clock;
+        bool handed = false;
+    };
+
     void poll();
 
     QTimer *timer_ = nullptr;
     std::function<QJsonArray()> osqModelsProvider_;
+    std::function<QJsonArray()> dshModelsProvider_;
     QHash<QString, Pending> pending_;  // key = sessionId（同会话串行）
     // key = controlId；同会话的控制件在途时不再排队（避免连点停止发两发）。
     QHash<QString, Control> controls_;
+    // key = modelId；同会话换模型在途时不再排队（连点只会白等一次超时）。
+    QHash<QString, ModelSwitch> modelSwitches_;
     // UI 通道依赖前台焦点：全局串行，一次只跑一条。
     class UiDispatch *ui_ = nullptr;
     bool uiBusy_ = false;

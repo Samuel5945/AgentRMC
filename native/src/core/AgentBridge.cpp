@@ -161,6 +161,16 @@ void AgentBridge::setLiveSessionsHandler(
     liveSessionsHandler_ = std::move(handler);
 }
 
+void AgentBridge::setModelPendingProvider(
+    std::function<QString(const QString &exe)> provider) {
+    modelPendingProvider_ = std::move(provider);
+}
+
+void AgentBridge::setModelAckHandler(
+    std::function<bool(const QJsonObject &)> handler) {
+    modelAckHandler_ = std::move(handler);
+}
+
 void AgentBridge::setRequestsHandler(
     std::function<void(const QJsonObject &)> handler) {
     requestsHandler_ = std::move(handler);
@@ -335,6 +345,27 @@ void AgentBridge::onReadable(QTcpSocket *socket) {
         finish(socket, "200 OK", items.toUtf8(), "application/json");
         return;
     }
+    if (requestLine.startsWith("GET /model/pending")) {
+        // 会话级换模型取件（DSH 插件轮询）；exe 解析同 control。
+        QString exe;
+        const int queryAt = requestLine.indexOf('?');
+        if (queryAt >= 0) {
+            const QByteArray query = requestLine.mid(queryAt + 1);
+            const int spaceAt = query.indexOf(' ');
+            const QByteArray pairs =
+                query.left(spaceAt >= 0 ? spaceAt : query.size());
+            for (const QByteArray &pair : pairs.split('&')) {
+                if (pair.startsWith("exe=")) {
+                    exe = QUrl::fromPercentEncoding(pair.mid(4));
+                }
+            }
+        }
+        const QString items = modelPendingProvider_
+                                  ? modelPendingProvider_(exe)
+                                  : QStringLiteral("[]");
+        finish(socket, "200 OK", items.toUtf8(), "application/json");
+        return;
+    }
     const bool isAnswerPending =
         requestLine.startsWith("GET /request-answer/pending");
     if (isAnswerPending) {
@@ -375,11 +406,13 @@ void AgentBridge::onReadable(QTcpSocket *socket) {
     const bool isModels = requestLine.startsWith("POST /models ");
     const bool isAnswerAck = requestLine.startsWith("POST /request-answer/ack ");
     const bool isControlAck = requestLine.startsWith("POST /control/ack ");
+    const bool isModelAck = requestLine.startsWith("POST /model/ack ");
     const bool isLiveSessions = requestLine.startsWith("POST /live/sessions ");
     const bool isCursor = requestLine.startsWith("POST /cursor/");
     if (!isNotify && !isSpeak && !isAck && !isUpdate && !isCommand &&
         !isDispatchAck && !isDeleteAck && !isRequests && !isModels &&
-        !isAnswerAck && !isControlAck && !isLiveSessions && !isCursor) {
+        !isAnswerAck && !isControlAck && !isModelAck && !isLiveSessions &&
+        !isCursor) {
         finish(socket, "404 Not Found");
         return;
     }
@@ -434,6 +467,16 @@ void AgentBridge::onReadable(QTcpSocket *socket) {
             obj.value(QStringLiteral("control_id")).toString().trimmed();
         const bool handled =
             !controlId.isEmpty() && controlAckHandler_ && controlAckHandler_(obj);
+        finish(socket, handled ? "204 No Content" : "404 Not Found");
+        return;
+    }
+    if (isModelAck) {
+        // 换模型回执：ok=agent.model.select 已追加（下一步生效）；false 带原因。
+        // model_id 不认识（取件超时已取消 / 重复 ack）回 404。
+        const QString modelId =
+            obj.value(QStringLiteral("model_id")).toString().trimmed();
+        const bool handled =
+            !modelId.isEmpty() && modelAckHandler_ && modelAckHandler_(obj);
         finish(socket, handled ? "204 No Content" : "404 Not Found");
         return;
     }

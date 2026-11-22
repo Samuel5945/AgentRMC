@@ -140,6 +140,8 @@ int main(int argc, char **argv) {
         std::printf("supported=%d total=%d hasMore=%d\n", r.supported, r.total,
                     r.hasMore);
         std::printf("title=%s\n", r.title.toUtf8().constData());
+        // 会话当前模型（DSH 换模型通道的读数）：空＝日志里还没有 selection/header。
+        std::printf("model=%s\n", r.model.toUtf8().constData());
         std::printf("error=%s\n", r.error.toUtf8().constData());
         for (const QJsonValue &m : r.messages) {
             const QJsonObject o = m.toObject();
@@ -1100,6 +1102,12 @@ int main(int argc, char **argv) {
               "dsh ts normalized");
     }
     check(r.total == 4 && !r.hasMore, "dsh total/hasMore");
+    // 模型账：日志里最后的 model/selection（tr/glm-5.3-flash）比 request/header
+    // （magpie/trae-cn/…）更晚，所以顶栏要报新选的那个——切完还没跑下一轮时，
+    // 用户看到的就是「已经切过去了」（与 DSH 自己 next = pending ?? lastUsed 同口径）。
+    check(r.model == QStringLiteral("tr/glm-5.3-flash"),
+          "dsh model: latest model/selection wins over older request/header");
+
     r = SessionTranscript::read(QStringLiteral("DeepSeek Harness.exe"), dshSid, 2, 0,
                                 dRoot);
     check(r.messages.size() == 2 && r.hasMore, "dsh page size/hasMore");
@@ -1119,6 +1127,36 @@ int main(int argc, char **argv) {
     check(r.messages.at(4).toObject().value("text").toString() ==
               QStringLiteral("追加句"),
           "dsh newest after append (multi-frame)");
+    check(r.model == QStringLiteral("tr/glm-5.3-flash"),
+          "dsh model survives frame append (still latest selection)");
+
+    // ---- DSH 会话目录：分组用原始项目（identity.cwd），不是当前工作目录 ----
+    // 用户 2026-11-22 手机截图：Agentrmc 的会话 /cd 进 native\build\Release 后，
+    // 整条被归到「Release」项目组下。会话日志的 header.cwd 才是项目身份。
+    {
+        const QString listRoot = temp.filePath("dsh-list");
+        const QString projDir = listRoot +
+            QStringLiteral("/storages/session_projcache/sessions");
+        check(QDir().mkpath(projDir), "dsh list: mkpath");
+        const QString listSid =
+            QStringLiteral("session-0c1f2b9a-7777-4d5e-8f90-a1b2c3d4e5f6");
+        QFile pf(projDir + QLatin1Char('/') + listSid + QStringLiteral(".json"));
+        if (pf.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+            pf.write(R"({"version":7,"record":{"identity":
+              {"createdAt":1795310974661,"cwd":"D:\\repo"},
+              "rows":{
+                "title":{"ver":1,"seq":3057,"val":"优化应用界面图标瀑布流显示"},
+                "workingDirectory":{"ver":1,"seq":3057,
+                  "val":"D:\\repo\\native\\build\\Release"}}}})");
+            pf.close();
+        }
+        const auto list = SessionTranscript::listSessions(
+            QStringLiteral("DeepSeek Harness.exe"), 50, listRoot);
+        check(list.size() == 1, "dsh list: one session");
+        check(list.size() == 1 &&
+                  list.first().project == QStringLiteral("D:\\repo"),
+              "dsh list: project is original project, not the /cd target");
+    }
 
     // ---- 不支持 / 边界 ----
     r = SessionTranscript::read(QStringLiteral("DeepSeek Harness.exe"),

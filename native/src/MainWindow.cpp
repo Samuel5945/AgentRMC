@@ -746,6 +746,61 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
                     workWeb_->refresh();
                 }
             });
+    connect(dispatch_, &SessionDispatch::modelDone, this,
+            [this](const QString &modelId, const QString &exe,
+                   const QString &sid, const QString &provider,
+                   const QString &model) {
+                // 换模型收场：DSH 的模型从**下一个 step** 生效（正在跑的那一步
+                // 保留原选择），所以提示写「已切到…下一步生效」而不是「已切换」。
+                // 不动工单状态：工单的 working/review 由宿主自己的 turn 事件重算。
+                modelSwitchById_.remove(modelId);
+                const QString label = provider + QLatin1Char('/') + model;
+                dispatchNotice_ =
+                    QStringLiteral("已切到 %1（下一步生效）").arg(label);
+                dispatchNoticeKind_ = QStringLiteral("good");
+                dispatchNoticeId_ = itemIdForSession(sid);
+                dispatchNoticeExe_ = exe;
+                appendEvent(QStringLiteral("status"), QString(), QString(),
+                            QStringLiteral("会话换模型：%1 → 会话 %2")
+                                .arg(label, sid.left(8)),
+                            0);
+                refreshWorkItems();
+                if (workWeb_ != nullptr) {
+                    workWeb_->pushSessionResult(
+                        QJsonObject{{QStringLiteral("ok"), true},
+                                    {QStringLiteral("control"),
+                                     QStringLiteral("model")},
+                                    {QStringLiteral("session"), sid},
+                                    {QStringLiteral("model"), label}});
+                    workWeb_->refresh();
+                }
+            });
+    connect(dispatch_, &SessionDispatch::modelFailed, this,
+            [this](const QString &modelId, const QString &exe,
+                   const QString &sid, const QString &provider,
+                   const QString &model, const QString &reason) {
+                Q_UNUSED(exe);
+                Q_UNUSED(provider);
+                Q_UNUSED(model);
+                modelSwitchById_.remove(modelId);
+                dispatchNotice_ = reason;
+                dispatchNoticeKind_ = QStringLiteral("bad");
+                dispatchNoticeId_ = itemIdForSession(sid);
+                appendEvent(QStringLiteral("error"), QString(), QString(),
+                            QStringLiteral("会话换模型未生效（会话 %1）：%2")
+                                .arg(sid.left(8), reason),
+                            0);
+                refreshWorkItems();
+                if (workWeb_ != nullptr) {
+                    workWeb_->pushSessionResult(
+                        QJsonObject{{QStringLiteral("ok"), false},
+                                    {QStringLiteral("control"),
+                                     QStringLiteral("model")},
+                                    {QStringLiteral("session"), sid},
+                                    {QStringLiteral("error"), reason}});
+                    workWeb_->refresh();
+                }
+            });
     connect(dispatch_, &SessionDispatch::zcodeTurnFinished, this,
             [this](const QString &dispatchId, const QString &exe,
                    const QString &sid, const QString &proj,
@@ -1344,7 +1399,11 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
             [this](const QJsonObject &payload) { return onCursorAction(payload); });
         // DSH 定向派发通道：插件轮询取件 + 注入 ack（回执 = ack ok，followup
         // 同步落 durable inbox，与 WorkBuddy 的 jsonl user 行同级证明）。
+        // 目录活性续命：桥/插件目录没变就不重推（sig 比对省流量），所以不能拿
+        // 「最后一次推送」当活性——它每 1.2~1.5s 都在轮询下面这些取件口，那才是
+        // 真心跳。不续命的话原生端重启两分钟后菜单就永远空着。
         bridge->setDispatchPendingProvider([this](const QString &exe) {
+            touchModelCatalog(exe);
             const QJsonArray items = dispatch_ != nullptr
                                          ? dispatch_->takePluginDispatches(exe)
                                          : QJsonArray{};
@@ -1364,6 +1423,7 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
         // 停止生成 / 插话通道（2026-11-20）：插件轮询取件 → agent.cancel()/
         // steer() → ack。与派发分开排：派发是「新的一轮」，这两件是「动这一轮」。
         bridge->setControlPendingProvider([this](const QString &exe) {
+            touchModelCatalog(exe);
             const QJsonArray items =
                 dispatch_ != nullptr ? dispatch_->takeControls(exe) : QJsonArray{};
             return QString::fromUtf8(
@@ -1376,6 +1436,26 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
             // 不认识的 control_id（超时已取消后晚到 / 重复 ack）回 404。
             return dispatch_->controlAck(
                 payload.value(QStringLiteral("control_id")).toString(),
+                payload.value(QStringLiteral("ok")).toBool(),
+                payload.value(QStringLiteral("error")).toString());
+        });
+        // 会话级换模型（2026-11-21）：插件轮询取件 → agent.model.select() →
+        // ack。与派发/控制第三条队列：派发＝新的一轮，控制＝动这一轮，
+        // 换模型＝改「下一轮用谁」（DSH 的模型是会话级持久状态）。
+        bridge->setModelPendingProvider([this](const QString &exe) {
+            touchModelCatalog(exe);
+            const QJsonArray items =
+                dispatch_ != nullptr ? dispatch_->takeModels(exe) : QJsonArray{};
+            return QString::fromUtf8(
+                QJsonDocument(items).toJson(QJsonDocument::Compact));
+        });
+        bridge->setModelAckHandler([this](const QJsonObject &payload) {
+            if (dispatch_ == nullptr) {
+                return false;
+            }
+            // 不认识的 model_id（超时已取消后晚到 / 重复 ack）回 404。
+            return dispatch_->modelAck(
+                payload.value(QStringLiteral("model_id")).toString(),
                 payload.value(QStringLiteral("ok")).toBool(),
                 payload.value(QStringLiteral("error")).toString());
         });
@@ -1434,22 +1514,29 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
                 payload.value(QStringLiteral("ok")).toBool(),
                 payload.value(QStringLiteral("error")).toString());
         });
-        // OpenSquilla 外部桥推来的可切换模型目录（models.list 只有桥能读）。
-        // 存内存账：dispatchStateJson 据此给页面列菜单，dispatch() 据此预检
-        // override（目录没新鲜推来就不拦，交给桥侧反查拒）。
+        // 宿主可切换的模型目录（DSH 插件与 OpenSquilla 桥共用这条口）：
+        // 存内存账，dispatchStateJson 据此给页面列菜单，dispatch() 据此预检
+        // override（目录没新鲜推来就不拦，交给桥/插件侧反查拒）。
         bridge->setModelsHandler([this](const QJsonObject &payload) {
             const QString exe = payload.value(QStringLiteral("exe")).toString();
-            if (exe.compare(QStringLiteral("OpenSquilla.exe"), Qt::CaseInsensitive) !=
-                0) {
-                return;
-            }
             const QJsonArray providers =
                 payload.value(QStringLiteral("providers")).toArray();
             if (providers.isEmpty()) {
                 return;
             }
-            osqModels_ = providers;
-            osqModelsAt_ = QDateTime::currentDateTimeUtc();
+            if (exe.compare(QStringLiteral("DeepSeek Harness.exe"),
+                            Qt::CaseInsensitive) == 0) {
+                // DSH 的目录由插件读 ctx.llm 推来（native 不连 DSH 的 Web
+                // 服务：那条口要进程内 token，直连 401）。
+                dshModels_ = providers;
+                dshModelsAt_ = QDateTime::currentDateTimeUtc();
+            } else if (exe.compare(QStringLiteral("OpenSquilla.exe"),
+                                   Qt::CaseInsensitive) == 0) {
+                osqModels_ = providers;
+                osqModelsAt_ = QDateTime::currentDateTimeUtc();
+            } else {
+                return;  // 不认识的宿主：不落账，页面也没地方用
+            }
             // 目录到了不空手：桥只推不改 state，这里催一次刷新让聊天页/手机页
             // 胶囊看见新目录（5 秒整窗周期太慢）。
             if (workWeb_ != nullptr) {
@@ -1459,6 +1546,7 @@ MainWindow::MainWindow(bool withTray, const QString &pin, bool autoListen,
         // 派发口的模型预检读同一份账。
         if (dispatch_ != nullptr) {
             dispatch_->setOsqModelsProvider([this] { return osqModelsFresh(); });
+            dispatch_->setDshModelsProvider([this] { return dshModelsFresh(); });
         }
         // B1：DSH 插件推送会话当前待答请求，存内存账供聊天页展示。
         // 插件 1.2s 轮询应答件 = 在线心跳：每次推送都刷新该 exe 的在线表
@@ -3699,7 +3787,8 @@ QString MainWindow::workItemsJson() {
             obj.insert(QStringLiteral("session_title"), info.title);
         }
         // 老卡/workingDirectory 服务缺位时项目可能为空：投影里有 cwd 就补上，
-        // 行身份不必退到「会话 <短 id>」。
+        // 行身份不必退到「会话 <短 id>」。这里必须用**原始项目**
+        // （identity.cwd），不是会话当前目录——后者会被 /cd 改到项目子目录。
         if (obj.value(QStringLiteral("project")).toString().isEmpty() &&
             !info.cwd.isEmpty()) {
             obj.insert(QStringLiteral("project"), info.cwd);
@@ -3720,6 +3809,43 @@ QJsonArray MainWindow::osqModelsFresh() const {
         return {};
     }
     return osqModels_;
+}
+
+// DSH 目录同款口径：插件每 60s 一拍、目录变化时立刻重推；两分钟没动静就是
+// 插件掉线/宿主关了，过期菜单不端出去（选了会在取件时被拒）。
+QJsonArray MainWindow::dshModelsFresh() const {
+    if (dshModels_.isEmpty() || !dshModelsAt_.isValid()) {
+        return {};
+    }
+    if (dshModelsAt_.secsTo(QDateTime::currentDateTimeUtc()) > 120) {
+        return {};
+    }
+    return dshModels_;
+}
+
+// 目录的「新鲜」判据是**宿主还活着**，不是「目录变过」。
+// 2026-11-21 踩坑：OpenSquilla 桥的 pushModels 目录没变就不重推（sig 比对，
+// 省流量），而 native 这边按「最后一次推送时刻」算 120s TTL——于是原生端重启
+// 后目录只活两分钟，之后 osqModelsFresh() 恒空，聊天页胶囊就一直写着「当前宿主
+// 不支持在 RMC 里切换模型」（用户报「DSH 能切了，OpenSquilla 又不行了」）。
+// 桥/插件每 1.2~1.5s 都在轮询取件口，那才是活性心跳：只要它还在轮询，目录就
+// 该继续可用；真掉线了（进程没了/桥没加载）两分钟内自然过期。
+void MainWindow::touchModelCatalog(const QString &exe) {
+    if (exe.isEmpty()) {
+        return;
+    }
+    const QDateTime now = QDateTime::currentDateTimeUtc();
+    if (exe.compare(QStringLiteral("DeepSeek Harness.exe"),
+                    Qt::CaseInsensitive) == 0) {
+        if (!dshModels_.isEmpty()) {
+            dshModelsAt_ = now;
+        }
+    } else if (exe.compare(QStringLiteral("OpenSquilla.exe"),
+                           Qt::CaseInsensitive) == 0) {
+        if (!osqModels_.isEmpty()) {
+            osqModelsAt_ = now;
+        }
+    }
 }
 
 // 活会话账的有效期：插件每 2s 报一次（变化时立刻报），15s 没动静＝宿主关了或
@@ -3799,6 +3925,9 @@ QJsonObject MainWindow::dispatchStateJson() const {
                        // 页面按当前会话的 exe 取哪份。两宿主共用一条 models 会把
                        // ZCode 会话列出 OpenSquilla 的套餐模型（选了必被拒）。
                        {QStringLiteral("osqModels"), osqModelsFresh()},
+                       // DSH 的目录第三条：插件读 ctx.llm 推来（含每个模型的
+                       // 思考强度档位 details），页面按会话 exe 分流。
+                       {QStringLiteral("dshModels"), dshModelsFresh()},
                        // 思考强度档位（remote v4 滑杆同款）：override 可带
                        // options.reasoningLevel，滑杆最左＝跟随会话原值。
                        {QStringLiteral("thoughtLevels"),
@@ -5745,6 +5874,58 @@ void MainWindow::handleWebAction(const QJsonObject &action) {
                                    action.value(QStringLiteral("plane")).toString()}};
             workWeb_->pushFilePanel(QString::fromUtf8(
                 QJsonDocument(err).toJson(QJsonDocument::Compact)));
+        }
+        return;
+    }
+    if (cmd == QStringLiteral("switchModel")) {
+        // 聊天页胶囊的「设为这条会话的模型」：与派发 override 是**两件事**
+        // （用户 2026-11-21 裁决）——这条改会话本身，下次派发/下一轮都用它；
+        // 派发 override 只管那一发。DSH 的模型是会话级持久状态，切完从下一个
+        // step 生效。
+        const QString exe = action.value(QStringLiteral("exe")).toString();
+        const QString sid = action.value(QStringLiteral("session")).toString();
+        QJsonObject selection{
+            {QStringLiteral("providerId"),
+             action.value(QStringLiteral("providerId")).toString().trimmed()},
+            {QStringLiteral("modelId"),
+             action.value(QStringLiteral("modelId")).toString().trimmed()}};
+        const QString level =
+            action.value(QStringLiteral("level")).toString().trimmed();
+        if (!level.isEmpty()) {
+            selection.insert(QStringLiteral("options"),
+                             QJsonObject{{QStringLiteral("reasoningLevel"),
+                                          level}});
+        }
+        QString why;
+        QString modelId;
+        if (dispatch_ == nullptr ||
+            !dispatch_->switchModel(exe, sid, selection, &why, &modelId)) {
+            dispatchNotice_ =
+                why.isEmpty() ? QStringLiteral("换模型通道没就绪") : why;
+            dispatchNoticeKind_ = QStringLiteral("bad");
+            dispatchNoticeId_ = itemIdForSession(sid);
+            appendEvent(QStringLiteral("error"), QString(), QString(),
+                        QStringLiteral("会话换模型未发：%1").arg(dispatchNotice_),
+                        0);
+            refreshWorkItems();
+            if (workWeb_ != nullptr) {
+                workWeb_->pushSessionResult(
+                    QJsonObject{{QStringLiteral("ok"), false},
+                                {QStringLiteral("control"),
+                                 QStringLiteral("model")},
+                                {QStringLiteral("session"), sid},
+                                {QStringLiteral("error"), dispatchNotice_}});
+                workWeb_->refresh();
+            }
+            return;
+        }
+        modelSwitchById_.insert(modelId, sid);
+        dispatchNotice_ = QStringLiteral("正在切模型，等宿主回执…");
+        dispatchNoticeKind_.clear();
+        dispatchNoticeId_ = itemIdForSession(sid);
+        refreshWorkItems();
+        if (workWeb_ != nullptr) {
+            workWeb_->refresh();
         }
         return;
     }

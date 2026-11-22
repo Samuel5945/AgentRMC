@@ -303,6 +303,11 @@ private:
     QJsonObject dispatchStateJson() const;
     // OpenSquilla 选模型目录（桥 POST /models 推来的账，2 分钟内新鲜才给）。
     QJsonArray osqModelsFresh() const;
+    QJsonArray dshModelsFresh() const;
+    // 目录的活性续命：宿主每 1.2~1.5s 轮询取件口时调用，把该 exe 的目录时刻刷新
+    // 到「现在」。目录内容由推送更新，这里只解决「目录没变 → 桥不重推 → native
+    // 按推送时刻判过期」的死锁（2026-11-21 用户报 OpenSquilla 菜单消失）。
+    void touchModelCatalog(const QString &exe);
     QString itemIdForSession(const QString &sessionId) const;
     void setVoiceStatus(const QString &detail, const QString &color,
                         bool showTranscript);
@@ -329,6 +334,8 @@ private:
     // 在途插话正文（controlId → 正文）：控制失败时回填成草稿（停止没有正文）。
     QHash<QString, QString> controlTextById_;
     QHash<QString, QString> dispatchSessionById_;
+    // 在途换模型件（modelId → 会话 id）：回执到了按它定位会话。
+    QHash<QString, QString> modelSwitchById_;
     // ZCode 派发 turn 的回复正文（会话 id → 回复）：stop hook 落卡时若已知
     // 回复，直接用正文替代通用收尾文案。
     QHash<QString, QString> dispatchReplyBySession_;
@@ -349,6 +356,11 @@ private:
     // native 不自己连网关；聊天页/手机页的「选模型」据此给 OpenSquilla 列目录。
     QJsonArray osqModels_;
     QDateTime osqModelsAt_;
+    // DSH 插件推来的可切换模型目录（同形，另带每个模型的 details：
+    // {name, efforts:[{id,name}], defaultEffort}）。DSH 的目录只有插件能读
+    // （ctx.llm；Web 服务的 /api 要进程内 token，native 直连 401）。
+    QJsonArray dshModels_;
+    QDateTime dshModelsAt_;
     // 插件上报的活会话账（2026-11-20）：exe(小写) → 这个宿主进程里打开的会话 +
     // 正在跑的会话 + 上报时间。派发页据此把「没打开」的会话标出来，聊天页据此
     // 把发送键切成「停止」、有正文时改走插话。内存账不落盘；超过 15s 没再上报

@@ -28,6 +28,9 @@ constexpr qint64 kPluginAckTimeoutMs = 25000;
 // 1.5s 轮询，正常 1~2 秒就该有 ack；10s 还没有＝宿主没开/插件没加载，直接
 // 告诉人，别让人盯着按钮猜自己点没点上。
 constexpr qint64 kControlTimeoutMs = 10000;
+// 会话级换模型（2026-11-21）的取件+回执窗口。比停止慢一档：插件可能要先校验
+// 目录（llm.listModels 是异步的），冷会话还要拿 writer。
+constexpr qint64 kModelSwitchTimeoutMs = 20000;
 
 }  // namespace
 
@@ -339,6 +342,45 @@ bool SessionDispatch::dispatch(const QString &agentExe, const QString &sessionId
                 return refuse(QStringLiteral("所选模型 %1 不在 OpenSquilla 目录（桥未推/已下线），未发").arg(mid));
             }
         }
+        // DSH 的选模型（2026-11-21）：目录来自插件推的 /models（dshModelsProvider）。
+        // 以前这里只给 osq 存 override，DSH 的 override 被静默丢掉——页面选了
+        // 模型、派发照发、模型没换，用户看不出发生了什么。现在同款预检 + 同款
+        // 下发，插件侧「先切后注入」（见插件 dispatch 分支）。
+        if (!osq && !modelOverride.isEmpty()) {
+            const QString pid =
+                modelOverride.value(QStringLiteral("providerId")).toString().trimmed();
+            const QString mid =
+                modelOverride.value(QStringLiteral("modelId")).toString().trimmed();
+            if (pid.isEmpty() || mid.isEmpty()) {
+                return refuse(QStringLiteral(
+                    "派发模型选择不完整（缺 providerId 或 modelId），未发"));
+            }
+            if (dshModelsProvider_) {
+                const QJsonArray cat = dshModelsProvider_();
+                bool hit = cat.isEmpty();  // 目录没推来就不拦，插件侧会拒并带原因
+                for (const QJsonValue &v : cat) {
+                    const QJsonObject group = v.toObject();
+                    if (group.value(QStringLiteral("providerId")).toString() != pid) {
+                        continue;
+                    }
+                    for (const QJsonValue &m :
+                         group.value(QStringLiteral("models")).toArray()) {
+                        if (m.toString() == mid) {
+                            hit = true;
+                            break;
+                        }
+                    }
+                    if (hit) {
+                        break;
+                    }
+                }
+                if (!hit) {
+                    return refuse(QStringLiteral(
+                        "所选模型 %1 不在 %2 的 DSH 目录（插件未推/已下线），未发")
+                                      .arg(mid, pid));
+                }
+            }
+        }
         if (pending_.contains(sessionId)) {
             return refuse(QStringLiteral("该会话已有派发在途，等回执后再派"));
         }
@@ -349,9 +391,9 @@ bool SessionDispatch::dispatch(const QString &agentExe, const QString &sessionId
         p.project = project;
         p.text = text;
         p.channel = Channel::Plugin;
-        if (osq) {
-            p.modelOverride = modelOverride;
-        }
+        // 两个插件通道宿主都带 override：OpenSquilla 由桥 patch 会话，
+        // DSH 由插件先 agent.model.select 再 followup。
+        p.modelOverride = modelOverride;
         p.clock.start();
         if (dispatchIdOut != nullptr) {
             *dispatchIdOut = p.dispatchId;
@@ -747,6 +789,106 @@ bool SessionDispatch::controlAck(const QString &controlId, bool ok,
     return true;
 }
 
+bool SessionDispatch::switchModel(const QString &agentExe,
+                                  const QString &sessionId,
+                                  const QJsonObject &selection, QString *reason,
+                                  QString *modelIdOut) {
+    const auto refuse = [reason](const QString &why) {
+        if (reason != nullptr) {
+            *reason = why;
+        }
+        return false;
+    };
+    if (!supportsPluginChannel(agentExe)) {
+        return refuse(QStringLiteral(
+            "这个宿主没有换模型通道（当前只有 DSH / OpenSquilla 走桥插件）"));
+    }
+    if (sessionId.trimmed().isEmpty()) {
+        return refuse(QStringLiteral("没关联会话，切不了"));
+    }
+    const QString pid =
+        selection.value(QStringLiteral("providerId")).toString().trimmed();
+    const QString mid =
+        selection.value(QStringLiteral("modelId")).toString().trimmed();
+    if (pid.isEmpty() || mid.isEmpty()) {
+        return refuse(QStringLiteral(
+            "换模型缺字段（providerId / modelId），未发"));
+    }
+    for (auto it = modelSwitches_.constBegin(); it != modelSwitches_.constEnd();
+         ++it) {
+        // 同会话连点：第一件还没回执时不再排第二件（多半是同一个选择重复提交）。
+        if (it->sessionId == sessionId &&
+            it->agentExe.compare(agentExe, Qt::CaseInsensitive) == 0) {
+            return refuse(QStringLiteral("这条会话已有换模型在途，等回执再切"));
+        }
+    }
+    ModelSwitch m;
+    m.modelId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    m.agentExe = agentExe;
+    m.sessionId = sessionId;
+    m.provider = pid;
+    m.model = mid;
+    m.selection = selection;
+    m.clock.start();
+    if (modelIdOut != nullptr) {
+        *modelIdOut = m.modelId;
+    }
+    modelSwitches_.insert(m.modelId, m);
+    if (!timer_->isActive()) {
+        timer_->start();
+    }
+    return true;
+}
+
+QJsonArray SessionDispatch::takeModels(const QString &agentExe) {
+    QJsonArray out;
+    if (!supportsPluginChannel(agentExe)) {
+        return out;
+    }
+    for (auto it = modelSwitches_.begin(); it != modelSwitches_.end(); ++it) {
+        if (it->handed) {
+            continue;
+        }
+        if (it->agentExe.compare(agentExe, Qt::CaseInsensitive) != 0) {
+            continue;
+        }
+        it->handed = true;  // 一次取件：超时前不重复下发，插件重连也不会双切
+        QJsonObject o;
+        o.insert(QStringLiteral("model_id"), it->modelId);
+        o.insert(QStringLiteral("session_id"), it->sessionId);
+        o.insert(QStringLiteral("providerId"), it->provider);
+        o.insert(QStringLiteral("modelId"), it->model);
+        const QJsonObject options =
+            it->selection.value(QStringLiteral("options")).toObject();
+        if (!options.isEmpty()) {
+            o.insert(QStringLiteral("options"), options);
+        }
+        out.append(o);
+    }
+    return out;
+}
+
+bool SessionDispatch::modelAck(const QString &modelId, bool ok,
+                               const QString &error) {
+    auto it = modelSwitches_.find(modelId);
+    if (it == modelSwitches_.end()) {
+        return false;  // 回复的是一条已超时/重复的件：调用方回 404
+    }
+    const ModelSwitch m = it.value();
+    modelSwitches_.erase(it);
+    if (ok) {
+        emit modelDone(m.modelId, m.agentExe, m.sessionId, m.provider, m.model);
+    } else {
+        emit modelFailed(m.modelId, m.agentExe, m.sessionId, m.provider, m.model,
+                         error.isEmpty() ? QStringLiteral("宿主拒绝了这次切换")
+                                         : error);
+    }
+    if (pending_.isEmpty() && controls_.isEmpty() && modelSwitches_.isEmpty()) {
+        timer_->stop();
+    }
+    return true;
+}
+
 void SessionDispatch::poll() {
     const QStringList keys = pending_.keys();
     for (const QString &sid : keys) {
@@ -851,7 +993,30 @@ void SessionDispatch::poll() {
                              "宿主没来取件（没开或插件没加载）——控制没生效"));
         }
     }
-    if (pending_.isEmpty() && controls_.isEmpty()) {
+    // 换模型件：切换可能触发一次冷会话唤醒（拿 writer），比停止慢，给 20s。
+    const QStringList modelIds = modelSwitches_.keys();
+    for (const QString &mid : modelIds) {
+        auto mit = modelSwitches_.find(mid);
+        if (mit == modelSwitches_.end()) {
+            continue;
+        }
+        if (mit->clock.elapsed() > kModelSwitchTimeoutMs) {
+            const QString id = mit->modelId;
+            const QString exe = mit->agentExe;
+            const QString sid = mit->sessionId;
+            const QString provider = mit->provider;
+            const QString model = mit->model;
+            const bool handed = mit->handed;
+            modelSwitches_.erase(mit);
+            emit modelFailed(
+                id, exe, sid, provider, model,
+                handed ? QStringLiteral(
+                             "宿主取了件但没回执（切模型那一步没落地）——重开宿主再试")
+                       : QStringLiteral(
+                             "宿主没来取件（没开或插件没加载）——模型没换"));
+        }
+    }
+    if (pending_.isEmpty() && controls_.isEmpty() && modelSwitches_.isEmpty()) {
         timer_->stop();
     }
 }

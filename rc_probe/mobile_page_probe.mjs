@@ -835,6 +835,62 @@ async function runFlow() {
       '手机页箭头与模型名垂直居中', { c: caretGeo.caretMid, l: caretGeo.labelMid });
   }
 
+  // —— 换模型按宿主分流（2026-11-21 DSH 通道）：手机页与桌面同一套口径 ——
+  // DSH 读 dshModels、档位来自所选模型的 details（不套固定五档）、选中后多一颗
+  // 「设为这条会话的模型」提交键；ZCode / OpenSquilla 的目录与行为不许被串。
+  const mpDsh = await page.evaluate(() => {
+    const savedState = STATE, savedExe = chatExe;
+    STATE = { ...STATE, dispatch: { ...(STATE.dispatch || {}), models: [
+        { providerId: 'prov-1', name: 'TestOne', models: ['m1'] }],
+      osqModels: [{ providerId: 'tokenrhythm', name: 'tokenrhythm', models: ['glm-5.1'] }],
+      dshModels: [{ providerId: 'tr', name: '基元律动', models: ['glm-5.3-flash'],
+        details: { 'glm-5.3-flash': { name: 'GLM 5.3 Flash',
+          efforts: [{ id: 'off', name: 'off' }, { id: 'high', name: 'high' }],
+          defaultEffort: 'high' } } }] } };
+    const out = {};
+    chatExe = 'DeepSeek Harness.exe';
+    out.switchable = mpSwitchable();
+    out.list = mpListFor().map((p) => p.providerId);
+    out.sessionLevel = mpSessionLevel();
+    mpResetState(); mpOpen = true; mpLevel = 'providers';
+    mpRenderPanel();
+    const footDsh = document.querySelector('#chatMpFoot').textContent;
+    out.foot = footDsh;
+    mpProvider = mpListFor()[0]; mpLevel = 'models'; mpRenderPanel();
+    const rows = document.querySelectorAll('#chatMpList .mprow');
+    out.rowText = rows.length ? rows[rows.length - 1].querySelector('.mpname').textContent : '';
+    out.commitBeforePick = !document.querySelector('#chatMpCommit').hidden;
+    if (rows.length) rows[rows.length - 1].onclick();
+    out.thoughts = mpThoughts();
+    out.levelDefault = mpSel && mpSel.level;
+    out.commitAfterPick = !document.querySelector('#chatMpCommit').hidden;
+    // 换回 ZCode：同一面板不许出提交键，目录也不许串成 DSH 的。
+    chatExe = 'ZCode.exe';
+    out.zcodeList = mpListFor().map((p) => p.providerId);
+    out.zcodeSessionLevel = mpSessionLevel();
+    mpResetState(); mpOpen = true; mpLevel = 'models';
+    mpProvider = { providerId: 'prov-1', models: ['m1'] };
+    mpSel = { providerId: 'prov-1', modelId: 'm1', level: null };
+    mpRenderPanel();
+    out.zcodeCommit = !document.querySelector('#chatMpCommit').hidden;
+    // 还原，别污染后面的用例。
+    mpResetState(); mpOpen = false; document.querySelector('#chatModelPanel').hidden = true;
+    chatExe = savedExe; STATE = savedState;
+    return out;
+  });
+  ok(mpDsh.switchable && mpDsh.list.join() === 'tr',
+    '手机页 DSH 读 dshModels（不与 ZCode / OpenSquilla 串目录）', mpDsh);
+  ok(mpDsh.sessionLevel === true, '手机页 DSH 是会话级切换', mpDsh.sessionLevel);
+  ok(mpDsh.thoughts.join() === 'off,high',
+    '手机页 DSH 档位来自所选模型的 details', mpDsh.thoughts);
+  ok(mpDsh.levelDefault === 'high', '手机页选中模型后默认档位取 defaultEffort', mpDsh.levelDefault);
+  ok(mpDsh.rowText === 'GLM 5.3 Flash', '手机页模型行显示 details.name', mpDsh.rowText);
+  ok(!mpDsh.commitBeforePick && mpDsh.commitAfterPick,
+    '手机页提交键只在选中模型后出现', mpDsh);
+  ok(mpDsh.zcodeList.join() === 'prov-1' && mpDsh.zcodeSessionLevel === false
+    && mpDsh.zcodeCommit === false,
+    '手机页 ZCode 不串 DSH 目录、也不出提交键', mpDsh);
+
   // 系统返回键 / 侧边手势在网页里就是 history.back()：必须回到上一级（列表），
   // 而不是把整个页面退掉回浏览器主页（2026-11-19 用户反馈）。
   ok(await page.evaluate(() => history.state && history.state.v === 'chat'),

@@ -3,22 +3,36 @@
 #include "core/ThemeManager.h"
 #include "core/AppLauncher.h"
 #include "core/Profiles.h"
+#include "core/ShellIcon.h"
 #include "core/SystemControl.h"
 #include "ui/ToggleSwitch.h"
 
 #include <QDialog>
+#include <QBuffer>
 #include <QFileDialog>
+#include <QFileIconProvider>
+#include <QFileInfo>
 #include <QFrame>
 #include <QHBoxLayout>
+#include <QIcon>
+#include <QIODevice>
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QLabel>
+#include <QLayout>
 #include <QLineEdit>
+#include <QMouseEvent>
+#include <QPainter>
+#include <QPixmap>
 #include <QPushButton>
 #include <QRegularExpression>
 #include <QScrollArea>
 #include <QStandardPaths>
+#include <QTimer>
 #include <QVBoxLayout>
+#include <QVector>
+
+#include <functional>
 
 namespace {
 
@@ -30,6 +44,323 @@ QString appSummaryText(int installed, int total) {
                "可以在「按键映射」里把「打开 xx」设成某个键的单击 / 双击 / 长按。")
         .arg(installed)
         .arg(total);
+}
+
+// 卡片上的状态短文案：窄卡里放不下「开始菜单 · Chrome.lnk」这种长串，
+// 只给类型，完整来源放 tooltip。
+QString appStateShort(const AppEntry &entry, const AppTarget &target) {
+    if (!target.found) {
+        return QString::fromUtf8("没装");
+    }
+    if (!entry.customPath.isEmpty()) {
+        return QString::fromUtf8("自定义");
+    }
+    if (target.kind == QStringLiteral("url")) {
+        return QString::fromUtf8("网址");
+    }
+    if (target.kind == QStringLiteral("aumid")) {
+        return QString::fromUtf8("Windows 应用");
+    }
+    if (target.kind == QStringLiteral("exe")) {
+        return QString::fromUtf8("默认浏览器");
+    }
+    return QString::fromUtf8("开始菜单");
+}
+
+QString appStateTip(const AppEntry &entry, const AppTarget &target) {
+    if (!target.found) {
+        return QString::fromUtf8("开始菜单里没有这个应用的快捷方式");
+    }
+    if (!entry.customPath.isEmpty()) {
+        return entry.customPath;
+    }
+    return target.detail.isEmpty() ? target.target : target.detail;
+}
+
+constexpr int kIconPx = 44;          // 卡片图标边长
+constexpr int kCardMinWidth = 96;    // 瀑布流单卡最小宽（决定列数）
+constexpr int kCardMaxColumns = 6;   // 最多几列，宽屏也不铺太密
+
+// —— 图标瀑布流布局 ——
+// 每张卡高度随名字/状态行数变化，普通 QVBoxLayout 会把卡片顶对齐成等高网格，
+// 这里按「最短列优先」手动摆位，做出真正的瀑布流。列数随可用宽度变化。
+class MasonryLayout : public QLayout {
+public:
+    explicit MasonryLayout(QWidget *parent = nullptr) : QLayout(parent) {}
+    ~MasonryLayout() override { qDeleteAll(items_); }
+
+    void addItem(QLayoutItem *item) override {
+        if (item != nullptr) {
+            items_.append(item);
+            cachedValid_ = false;
+            invalidate();
+        }
+    }
+    int count() const override { return items_.size(); }
+    QLayoutItem *itemAt(int index) const override {
+        return (index >= 0 && index < items_.size()) ? items_.at(index) : nullptr;
+    }
+    QLayoutItem *takeAt(int index) override {
+        if (index < 0 || index >= items_.size()) {
+            return nullptr;
+        }
+        cachedValid_ = false;
+        return items_.takeAt(index);
+    }
+    QSize sizeHint() const override {
+        return cachedValid_ ? cached_ : roughSize(geometry_.width());
+    }
+    QSize minimumSize() const override {
+        return cachedValid_ ? cached_ : roughSize(geometry_.width());
+    }
+    QSize maximumSize() const override { return QSize(16777215, 16777215); }
+    int spacing() const override { return spacing_; }
+    void setSpacing(int space) override {
+        spacing_ = space;
+        cachedValid_ = false;
+    }
+
+protected:
+    // Qt6 里 QLayout 没有 doLayout()，自定义布局覆写 setGeometry() 摆位。
+    void setGeometry(const QRect &rect) override {
+        QLayout::setGeometry(rect);
+        geometry_ = rect;
+        arrange();
+    }
+
+private:
+    void arrange() {
+        QRect area = contentsRect();
+        if (area.width() <= 0) {
+            return;
+        }
+        const int cols = columnCount(area.width());
+        const int cardW = cardWidth(area.width(), cols);
+        if (cardW <= 0) {
+            return;
+        }
+        QVector<int> colH(cols, 0);
+        for (QLayoutItem *item : items_) {
+            if (item == nullptr) {
+                continue;
+            }
+            QWidget *wgt = item->widget();
+            int h = 0;
+            if (wgt != nullptr) {
+                // 先按目标列宽约束，让卡片内部的文字折行算出真实高度。
+                wgt->setFixedWidth(cardW);
+                wgt->adjustSize();
+                h = wgt->height();
+            }
+            if (h <= 0) {
+                h = item->sizeHint().height();
+            }
+            int c = 0;
+            for (int i = 1; i < cols; ++i) {
+                if (colH[i] < colH[c]) {
+                    c = i;
+                }
+            }
+            const int x = area.left() + c * (cardW + spacing_);
+            const int y = area.top() + colH[c];
+            item->setGeometry(QRect(x, y, cardW, h));
+            colH[c] += h + spacing_;
+        }
+        int maxH = 0;
+        for (int h : colH) {
+            maxH = qMax(maxH, h);
+        }
+        cached_ = QSize(area.width(), qMax(0, maxH - spacing_));
+        cachedValid_ = true;
+        update();
+    }
+
+    int columnCount(int width) const {
+        const int cols = (width + spacing_) / (kCardMinWidth + spacing_);
+        return qBound(1, cols, kCardMaxColumns);
+    }
+    int cardWidth(int width, int cols) const {
+        return (width - (cols - 1) * spacing_) / cols;
+    }
+    // 缓存未建立时的粗算（不改动子控件宽度），仅用于首帧尺寸提示；
+    // arrange() 完成后会用精确值覆盖。
+    QSize roughSize(int width) const {
+        if (width <= 0) {
+            return QSize(0, 0);
+        }
+        const int cols = columnCount(width);
+        const int cardW = cardWidth(width, cols);
+        if (cardW <= 0) {
+            return QSize(0, 0);
+        }
+        QVector<int> colH(cols, 0);
+        for (const QLayoutItem *item : items_) {
+            if (item == nullptr) {
+                continue;
+            }
+            const int h = qMax(0, item->sizeHint().height());
+            int c = 0;
+            for (int i = 1; i < cols; ++i) {
+                if (colH[i] < colH[c]) {
+                    c = i;
+                }
+            }
+            colH[c] += h + spacing_;
+        }
+        int maxH = 0;
+        for (int h : colH) {
+            maxH = qMax(maxH, h);
+        }
+        return QSize(width, qMax(0, maxH - spacing_));
+    }
+
+    QVector<QLayoutItem *> items_;
+    QRect geometry_;
+    int spacing_ = 10;
+    mutable QSize cached_;
+    mutable bool cachedValid_ = false;
+};
+
+// 可点击的卡片：整卡点一下启动应用（按钮类子控件会自己吃掉点击，不会误触发）。
+class AppCard : public QFrame {
+public:
+    using LaunchFn = std::function<void()>;
+    explicit AppCard(const LaunchFn &launch, bool clickable,
+                     QWidget *parent = nullptr)
+        : QFrame(parent), launch_(launch), clickable_(clickable) {
+        setObjectName("appCard");
+        setCursor(clickable ? Qt::PointingHandCursor : Qt::ArrowCursor);
+        setAttribute(Qt::WA_Hover, true);
+    }
+
+protected:
+    void mousePressEvent(QMouseEvent *event) override {
+        if (clickable_ && event->button() == Qt::LeftButton && launch_) {
+            launch_();
+            return;
+        }
+        QFrame::mousePressEvent(event);
+    }
+
+private:
+    LaunchFn launch_;
+    bool clickable_ = false;
+};
+
+// 内置应用表里某些商店应用的系统图标根本取不到（Win10 老栈对 AUMID
+// 枚举/解析全部失败），改用随包资源图标：id -> qrc 路径。
+QString bundledIconPath(const AppEntry &entry) {
+    if (entry.id == QStringLiteral("codex")) {
+        return QStringLiteral(":/icons/app-codex.png");
+    }
+    // 壁纸引擎是用户自定义项：slug 带中文编码、不同机器路径不同，按名字认。
+    if (entry.id.startsWith(QStringLiteral("custom:")) &&
+        entry.name.contains(QString::fromUtf8("壁纸引擎"))) {
+        return QStringLiteral(":/icons/app-wallpaper-engine.png");
+    }
+    return {};
+}
+
+// 图标解析用真实路径（exe / .lnk / 自定义路径）；URL 和没装没有路径。
+QString targetPathForIcon(const AppEntry &entry, const AppTarget &target) {
+    if (target.found &&
+        (target.kind == QStringLiteral("shortcut") ||
+         target.kind == QStringLiteral("exe"))) {
+        return target.target;
+    }
+    if (!entry.customPath.isEmpty() &&
+        !entry.customPath.contains(QStringLiteral("://"))) {
+        return entry.customPath;
+    }
+    return {};
+}
+
+// 真实文件图标一律走 ShellIcon（IShellItemImageFactory，64px）。
+QIcon shellIconFor(const AppEntry &entry, const AppTarget &target) {
+    const QString path = targetPathForIcon(entry, target);
+    if (!path.isEmpty() && QFileInfo::exists(path)) {
+        return ShellIcon::fromPath(path);
+    }
+    return {};
+}
+
+// 取应用图标：随包资源优先（Codex / 壁纸引擎），商店应用走 AppsFolder；
+// 文件路径图标由 rebuild 走 ShellIcon → QFileIconProvider 两级兜底。
+QIcon appIconFor(const AppEntry &entry, const AppTarget &target) {
+    const QString bundled = bundledIconPath(entry);
+    if (!bundled.isEmpty()) {
+        const QIcon icon(bundled);
+        if (!icon.isNull()) {
+            return icon;
+        }
+    }
+    // Windows 商店应用：没有文件路径，经 shell:AppsFolder 枚举按名字取。
+    if (target.found && target.kind == QStringLiteral("aumid")) {
+        const QIcon big = ShellIcon::fromAumid(target.target);
+        if (!big.isNull()) {
+            return big;
+        }
+    }
+    return {};
+}
+
+// 通用图标：网址=地球、Windows 应用=方块、没装=虚线占位。
+// 按主题色现画，不做缓存；换主题时随 themeChanged 重画。
+QIcon fallbackAppIcon(const AppEntry &entry, const AppTarget &target) {
+    Q_UNUSED(entry);
+    const QString kind =
+        !target.found ? QStringLiteral("miss")
+                      : (target.kind == QStringLiteral("url")
+                             ? QStringLiteral("url")
+                             : QStringLiteral("aumid"));
+    QPixmap pm(kIconPx, kIconPx);
+    pm.fill(Qt::transparent);
+    QPainter p(&pm);
+    p.setRenderHint(QPainter::Antialiasing, true);
+    const QColor muted = ThemeManager::instance().color(QStringLiteral("muted"));
+    const QColor faint = ThemeManager::instance().color(QStringLiteral("faint"));
+    const QRectF r(1.5, 1.5, kIconPx - 3.0, kIconPx - 3.0);
+    p.setPen(QPen(muted, qMax(1.0, kIconPx * 0.055)));
+    p.setBrush(Qt::NoBrush);
+    if (kind == QStringLiteral("url")) {
+        p.drawEllipse(r);
+        p.drawEllipse(QRectF(r.center().x() - kIconPx * 0.2, r.top(),
+                             kIconPx * 0.4, kIconPx - 3.0));
+        p.drawLine(QPointF(r.center().x(), r.top() + 2),
+                   QPointF(r.center().x(), r.bottom() - 2));
+        p.drawLine(QPointF(r.left() + 2, r.center().y()),
+                   QPointF(r.right() - 2, r.center().y()));
+    } else if (kind == QStringLiteral("aumid")) {
+        p.drawRoundedRect(r, kIconPx * 0.2, kIconPx * 0.2);
+        p.drawRoundedRect(
+            QRectF(r.left() + kIconPx * 0.22, r.top() + kIconPx * 0.28,
+                   kIconPx * 0.56, kIconPx * 0.44),
+            kIconPx * 0.1, kIconPx * 0.1);
+    } else {
+        QPen dash(faint, qMax(1.0, kIconPx * 0.055), Qt::DashLine);
+        p.setPen(dash);
+        p.drawRoundedRect(r, kIconPx * 0.2, kIconPx * 0.2);
+        p.setPen(QPen(faint, qMax(1.0, kIconPx * 0.07)));
+        p.drawLine(QPointF(r.center().x() - kIconPx * 0.12, r.center().y()),
+                   QPointF(r.center().x() + kIconPx * 0.12, r.center().y()));
+    }
+    return QIcon(pm);
+}
+
+// 图标转 data URL，给 WebView 外壳直接当 <img src> 用。
+QString iconDataUrl(const QIcon &icon) {
+    const QPixmap pm = icon.pixmap(kIconPx, kIconPx);
+    if (pm.isNull()) {
+        return {};
+    }
+    QByteArray png;
+    QBuffer buffer(&png);
+    buffer.open(QIODevice::WriteOnly);
+    if (!pm.save(&buffer, "PNG")) {
+        return {};
+    }
+    return QStringLiteral("data:image/png;base64,") +
+           QString::fromLatin1(png.toBase64());
 }
 
 }  // namespace
@@ -83,9 +414,9 @@ AppPage::AppPage(ProfileStore *store, QWidget *parent)
     scroll->setFrameShape(QFrame::NoFrame);
     auto *holder = new QWidget;
     holder->setObjectName("appHolder");
-    rows_ = new QVBoxLayout(holder);
+    rows_ = new MasonryLayout(holder);
     rows_->setContentsMargins(0, 0, 6, 0);
-    rows_->setSpacing(3);
+    rows_->setSpacing(10);
     scroll->setWidget(holder);
     lay->addWidget(scroll, 1);
 
@@ -127,7 +458,18 @@ AppPage::AppPage(ProfileStore *store, QWidget *parent)
     foot->addWidget(systemSwitch_, 0, Qt::AlignVCenter);
     lay->addLayout(foot);
 
+    // 通用图标（网址 / Windows 应用 / 没装）是按主题色画的，换主题或切深浅
+    // 色时颜色要跟着重画；真实文件图标不受影响，重画也无副作用。
+    connect(&ThemeManager::instance(), &ThemeManager::themeChanged, this,
+            [this](const Theme &) {
+                iconUrls_.clear();
+                rebuild();
+            });
+
     rebuild();
+    // 首次启动不要卡在建窗：AppsFolder 枚举 + 真实图标解析推迟到事件循环
+    // 空转时再做一次（卡片先出通用占位，随后进真实图标）。
+    QTimer::singleShot(0, this, [this] { rebuild(); });
 }
 
 void AppPage::rebuild() {
@@ -138,66 +480,113 @@ void AppPage::rebuild() {
         }
         delete item;
     }
+    iconUrls_.clear();
 
     int installed = 0;
-    const QVector<AppEntry> &catalog = AppLauncher::catalog();
+    const QVector<AppEntry> &catalog = AppLauncher::appPageCatalog();
     for (const AppEntry &entry : catalog) {
         const AppTarget target = AppLauncher::resolve(entry);
         if (target.found) {
             ++installed;
         }
 
-        auto *row = new QWidget;
-        row->setObjectName("appRow");
-        row->setFixedHeight(31);
-        auto *r = new QHBoxLayout(row);
-        r->setContentsMargins(9, 0, 5, 0);
-        r->setSpacing(10);
+        const bool custom = entry.id.startsWith(QStringLiteral("custom:"));
+        // 图标解析优先级：随包资源 → 已解析缓存 → Shell 系统图标
+        // → QFileIconProvider（Qt 稳定路径）→ 通用占位。
+        // Shell 解析只进缓存、不进 appIconFor：首帧失败时缓存记 null，
+        // QFileIconProvider 仍能在 rebuild 里兜住（壁纸引擎那类 .lnk）。
+        QIcon icon;
+        const QString bundled = bundledIconPath(entry);
+        if (!bundled.isEmpty()) {
+            icon = QIcon(bundled);
+        }
+        if (icon.isNull()) {
+            auto cached = iconCache_.constFind(entry.id);
+            if (cached != iconCache_.constEnd()) {
+                icon = cached.value();
+            } else {
+                icon = appIconFor(entry, target);  // 资源 + aumid
+                if (icon.isNull()) {
+                    // ShellIcon 失败（本线程 COM 态问题）也要记，避免每次重试。
+                    const QIcon shell = shellIconFor(entry, target);
+                    if (!shell.isNull()) {
+                        icon = shell;
+                    } else {
+                        const QString path = targetPathForIcon(entry, target);
+                        if (!path.isEmpty() && QFileInfo::exists(path)) {
+                            QFileIconProvider provider;
+                            const QIcon qtIcon = provider.icon(QFileInfo(path));
+                            if (!qtIcon.isNull()) {
+                                icon = qtIcon;
+                            }
+                        }
+                    }
+                }
+                iconCache_.insert(entry.id, icon);
+            }
+        }
+        if (icon.isNull()) {
+            icon = fallbackAppIcon(entry, target);
+        }
+        iconUrls_.insert(entry.id, iconDataUrl(icon));
 
-        auto *name = new QLabel(entry.name);
-        name->setObjectName("appName");
-        name->setFixedWidth(92);
-        r->addWidget(name);
+        auto *card = new AppCard(
+            [this, entry] {
+                QString error;
+                const bool ok = AppLauncher::launch(entry.id, &error);
+                emit launched(entry.name, ok, error);
+            },
+            target.found);
 
-        auto *state = new QLabel(target.found ? target.detail
-                                              : QString::fromUtf8("没装"));
-        state->setObjectName(target.found ? "appState" : "appStateMiss");
-        state->setToolTip(target.found ? target.target
-                                       : QString::fromUtf8(
-                                             "开始菜单里没有这个应用的快捷方式"));
-        r->addWidget(state, 1);
+        auto *v = new QVBoxLayout(card);
+        v->setContentsMargins(8, 9, 8, 9);
+        v->setSpacing(5);
 
-        auto *open = new QPushButton(QString::fromUtf8("打开"));
-        open->setObjectName("ghostSmall");
-        open->setCursor(target.found ? Qt::PointingHandCursor
-                                     : Qt::ArrowCursor);
-        open->setEnabled(target.found);
-        open->setToolTip(QString::fromUtf8("现在打开一次（语音说「打开 %1」同样有效）")
-                             .arg(entry.name));
-        const QString appId = entry.id;
-        const QString appName = entry.name;
-        connect(open, &QPushButton::clicked, this, [this, appId, appName] {
-            QString error;
-            const bool ok = AppLauncher::launch(appId, &error);
-            emit launched(appName, ok, error);
-        });
-        r->addWidget(open);
-
-        if (entry.id.startsWith(QStringLiteral("custom:"))) {
-            auto *del = new QPushButton(QString::fromUtf8("删"));
-            del->setObjectName("ghostSmall");
+        // 图标行：图标居中；自定义应用在右上角放一个删除键。
+        auto *top = new QHBoxLayout;
+        top->setContentsMargins(0, 0, 0, 0);
+        top->setSpacing(0);
+        top->addStretch(1);
+        auto *iconLabel = new QLabel;
+        iconLabel->setObjectName("appIcon");
+        iconLabel->setFixedSize(kIconPx, kIconPx);
+        iconLabel->setAlignment(Qt::AlignCenter);
+        iconLabel->setPixmap(icon.pixmap(kIconPx, kIconPx));
+        top->addWidget(iconLabel, 0, Qt::AlignCenter);
+        top->addStretch(1);
+        if (custom) {
+            auto *del = new QPushButton(QString::fromUtf8("×"));
+            del->setObjectName("appDel");
             del->setCursor(Qt::PointingHandCursor);
             del->setToolTip(QString::fromUtf8("从自定义应用里移除（不影响应用本身）"));
             const QString name = entry.name;
             const QString path = entry.customPath;
             connect(del, &QPushButton::clicked, this,
                     [this, name, path] { removeCustomApp(name, path); });
-            r->addWidget(del);
+            top->addWidget(del, 0, Qt::AlignRight | Qt::AlignTop);
         }
+        v->addLayout(top);
 
-        rows_->addWidget(row);
+        auto *name = new QLabel(entry.name);
+        name->setObjectName("appName");
+        name->setAlignment(Qt::AlignCenter);
+        name->setWordWrap(true);
+        name->setTextInteractionFlags(Qt::NoTextInteraction);
+        v->addWidget(name);
+
+        auto *state = new QLabel(appStateShort(entry, target));
+        state->setObjectName(target.found ? "appState" : "appStateMiss");
+        state->setAlignment(Qt::AlignCenter);
+        state->setWordWrap(true);
+        state->setTextInteractionFlags(Qt::NoTextInteraction);
+        state->setToolTip(appStateTip(entry, target));
+        v->addWidget(state);
+
+        card->setToolTip(QString::fromUtf8("现在打开一次（语音说「打开 %1」同样有效）")
+                             .arg(entry.name));
+
+        rows_->addWidget(card);
     }
-    rows_->addStretch(1);
 
     summary_->setText(appSummaryText(installed, catalog.size()));
 }
@@ -365,7 +754,7 @@ void AppPage::removeCustomApp(const QString &name, const QString &path) {
 QJsonObject AppPage::webState() {
     int installed = 0;
     QJsonArray rows;
-    const QVector<AppEntry> &catalog = AppLauncher::catalog();
+    const QVector<AppEntry> &catalog = AppLauncher::appPageCatalog();
     for (const AppEntry &entry : catalog) {
         const AppTarget target = AppLauncher::resolve(entry);
         if (target.found) {
@@ -374,11 +763,9 @@ QJsonObject AppPage::webState() {
         rows.append(QJsonObject{
             {QStringLiteral("id"), entry.id},
             {QStringLiteral("name"), entry.name},
-            {QStringLiteral("state"),
-             target.found ? target.detail : QString::fromUtf8("没装")},
-            {QStringLiteral("stateTip"),
-             target.found ? target.target
-                          : QString::fromUtf8("开始菜单里没有这个应用的快捷方式")},
+            {QStringLiteral("icon"), iconUrls_.value(entry.id)},
+            {QStringLiteral("state"), appStateShort(entry, target)},
+            {QStringLiteral("stateTip"), appStateTip(entry, target)},
             {QStringLiteral("found"), target.found},
             {QStringLiteral("custom"),
              entry.id.startsWith(QStringLiteral("custom:"))},

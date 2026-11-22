@@ -1,11 +1,12 @@
 #pragma once
 
 #include <QFrame>
+#include <QHash>
 #include <QJsonArray>
 #include <QJsonObject>
 
 class QLabel;
-class QVBoxLayout;
+class QLayout;
 class ProfileStore;
 class ToggleSwitch;
 
@@ -36,8 +37,12 @@ private:
     void persistCustomApps(const QJsonArray &apps);
 
     ProfileStore *store_ = nullptr;
-    QVBoxLayout *rows_ = nullptr;
+    QLayout *rows_ = nullptr;
     QLabel *summary_ = nullptr;
     ToggleSwitch *voiceSwitch_ = nullptr;
     ToggleSwitch *systemSwitch_ = nullptr;
+    // app id -> 图标。真实图标只解析一次；首帧解析不到时画占位（不缓存）。
+    QHash<QString, QIcon> iconCache_;
+    // app id -> 图标 data URL，给 WebView 外壳当 <img src>；rebuild 时刷新。
+    QHash<QString, QString> iconUrls_;
 };

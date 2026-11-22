@@ -39,6 +39,14 @@ def assistant(seq, dt, mid, parts):
 
 frame1 = [
     ev("session", 1, 0, {"version": 4, "id": SID, "createdAt": BASE, "cwd": "D:/x"}),
+    # 模型账：先选 A，再跑一轮（request/header 兑现 A）。
+    ev("model/selection", 2, 0,
+       {"provider": "magpie", "model": "trae-cn/deepseek-v4.1-flash-max",
+        "reasoningEffort": "max"}),
+    ev("request/header", 3, 100,
+       {"header": {"config": {"provider": "magpie",
+                              "model": "trae-cn/deepseek-v4.1-flash-max",
+                              "reasoningEffort": "max", "maxTokens": 64000}}}),
     user(10, 0, "u1", "第一句"),
     assistant(20, 1000, "a1", [
         {"type": "reasoning", "text": "思考过程不进聊天页"},
@@ -57,6 +65,9 @@ frame2 = [
     # 纯工具调用 assistant 消息：无 text part → 应被跳过
     assistant(40, 3000, "a2", [{"type": "tool-call", "name": "write"}]),
     assistant(50, 4000, "a3", [{"type": "text", "text": "回复二"}]),
+    # 切到 B 但还没跑下一轮（pending）：顶栏应显示 B，而不是上一次 header 的 A。
+    ev("model/selection", 55, 4500,
+       {"provider": "tr", "model": "glm-5.3-flash", "reasoningEffort": "high"}),
 ]
 frame3 = [user(60, 5000, "u3", "追加句")]
 

@@ -24,6 +24,8 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+#include <shlobj.h>   // IShellItem / SHCreateItemFromParsingName
+#include <shlguid.h>  // BHID_EnumItems
 #include <shellapi.h>
 
 namespace {
@@ -402,6 +404,149 @@ bool launchTarget(const AppTarget &target, QString *error) {
     return false;
 }
 
+// AUMID 的包族前缀（剥掉 !AppId 与版本号 _x.y.z.w）。
+QString aumidFamilyPrefix(const QString &aumid) {
+    QString seg = aumid.section(QLatin1Char('!'), 0, 0);
+    static const QRegularExpression version(
+        QStringLiteral("_\\d+\\.\\d+\\.\\d+\\.\\d+$"));
+    seg.remove(version);
+    return seg;
+}
+
+// 商店激活名索引（AppsFolder 显示名 + 注册表 AppUserModelID 的精确/族前缀
+// 两种形态，全小写）。只在主线程构建（应用页/启动流程都在主线程）；
+// COM/注册表失败退化为空索引 → 过滤变成「不过滤」，宁可多显示不误删。
+QHash<QString, bool> &appsIndexRef() {
+    static QHash<QString, bool> index;
+    return index;
+}
+
+void buildAppsIndex() {
+    QHash<QString, bool> &index = appsIndexRef();
+    index.clear();
+    if (SUCCEEDED(CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED))) {
+        // 首次成功初始化：本线程退出时没人 CoUninitialize，泄漏一个计数，
+        // 对常驻 GUI 无所谓；Qt 主线程一般已初始化，走 RPC_E_CHANGED_MODE。
+    }
+    // ① AppsFolder 显示名（OpenSquilla、Codex…）。
+    IShellItem *root = nullptr;
+    if (SUCCEEDED(SHCreateItemFromParsingName(
+            L"shell:AppsFolder", nullptr, IID_PPV_ARGS(&root))) &&
+        root != nullptr) {
+        IEnumShellItems *en = nullptr;
+        if (SUCCEEDED(root->BindToHandler(nullptr, BHID_EnumItems,
+                                          IID_PPV_ARGS(&en))) &&
+            en != nullptr) {
+            IShellItem *child = nullptr;
+            while (en->Next(1, &child, nullptr) == S_OK && child != nullptr) {
+                PWSTR name = nullptr;
+                if (SUCCEEDED(child->GetDisplayName(SIGDN_NORMALDISPLAY,
+                                                    &name)) &&
+                    name != nullptr) {
+                    index.insert(QString::fromWCharArray(name).toLower(), true);
+                    CoTaskMemFree(name);
+                }
+                child->Release();
+                child = nullptr;
+            }
+            en->Release();
+        }
+        root->Release();
+    }
+    // ② 注册表激活属性 AppUserModelID（HKCU 用户包 + HKLM 系统包）：
+    //    同时登记「精确 AUMID」与「去版本号族前缀」两种键。
+    for (const QString &rootKey :
+         {QStringLiteral("HKEY_CURRENT_USER\\Software\\Classes\\ActivatableClasses\\Package"),
+          QStringLiteral("HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\ActivatableClasses\\Package")}) {
+        const QSettings packages(rootKey, QSettings::NativeFormat);
+        const QStringList children = packages.childGroups();
+        for (const QString &child : children) {
+            const QString rel = child + QStringLiteral("/Properties/AppUserModelID");
+            for (const QString &v : packages.value(rel).toStringList()) {
+                const QString low = v.toLower();
+                if (low.isEmpty()) {
+                    continue;
+                }
+                index.insert(low, true);
+                const QString family = aumidFamilyPrefix(low);
+                if (!family.isEmpty()) {
+                    index.insert(family, true);
+                }
+            }
+        }
+    }
+}
+
+void invalidateAppsIndex() {
+    appsIndexRef().clear();
+}
+
+// 开始菜单快捷方式命中（含版本号前缀兜底）。自己拿 g_cacheMutex：
+// 唯一调用方 entryPresent 是从 catalog() 来的，那里不持锁。
+bool anyShortcutHit(const AppEntry &entry) {
+    QMutexLocker locker(&g_cacheMutex);
+    if (!g_shortcutsBuilt) {
+        buildShortcutCache();
+    }
+    for (const QString &name : entry.shortcuts) {
+        const QString flat = AppLauncher::normalize(name);
+        if (flat.isEmpty()) {
+            continue;
+        }
+        if (g_shortcuts.contains(flat)) {
+            return true;
+        }
+        // 前缀兜底同 resolve：目录名不带版本号（Adobe Photoshop → …2026）。
+        for (auto it = g_shortcuts.constBegin(); it != g_shortcuts.constEnd();
+             ++it) {
+            if (it.key().startsWith(flat)) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+// 条目在不在目录里（已卸载的直接不显示）：
+// · 自定义：customPath 是文件/lnk 才存在（URL 无法验证，视为在）；
+// · 内置：开始菜单有快捷方式，或 AUMID 的族前缀 / 「AUMID!AppId」段
+//   命中商店激活名索引；browser 恒在；两者皆无的条目没处可验，保留。
+// 读 g_shortcuts 的部分走 anyShortcutHit，那里自己加锁；本函数不持锁，
+// 因此可以从 catalog() 里直接调用。
+bool entryPresent(const AppEntry &entry, const QHash<QString, bool> &index) {
+    if (!entry.customPath.isEmpty()) {
+        if (entry.customPath.contains(QStringLiteral("://"))) {
+            return true;
+        }
+        return QFileInfo::exists(entry.customPath);
+    }
+    if (entry.id == QStringLiteral("browser")) {
+        return true;
+    }
+    if (!entry.shortcuts.isEmpty() && anyShortcutHit(entry)) {
+        return true;
+    }
+    if (!entry.aumid.isEmpty()) {
+        if (index.isEmpty()) {
+            return true;  // 索引没建起来（无 COM/枚举失败）：不误删
+        }
+        const QString low = entry.aumid.toLower();
+        if (index.contains(aumidFamilyPrefix(low))) {
+            return true;
+        }
+        // 内置表的短 AUMID（com.qoder.app / WorkBuddy.WorkBuddy）在注册表里
+        // 常是「键名!AppId」形式：按「短名!」前缀再匹配一层。
+        const QString needle = low + QStringLiteral("!");
+        for (auto it = index.constBegin(); it != index.constEnd(); ++it) {
+            if (it.key().startsWith(needle)) {
+                return true;
+            }
+        }
+        return false;
+    }
+    return true;  // 既无快捷方式也无 AUMID：没有可验证的来源，保留
+}
+
 }  // namespace
 
 namespace {
@@ -480,6 +625,9 @@ QVector<AppEntry> buildBuiltinCatalog() {
 
 QVector<AppEntry> g_customApps;
 bool g_catalogDirty = true;
+// 应用页可见表的独立失效位：不能用 g_catalogDirty，因为
+// appPageCatalog() 内部会调 catalog()，后者把它清成 false。
+bool g_appPageDirty = true;
 
 QVector<AppEntry> AppLauncher::parseCustomApps(const QJsonArray &raw) {
     QVector<AppEntry> apps;
@@ -513,10 +661,14 @@ QVector<AppEntry> AppLauncher::parseCustomApps(const QJsonArray &raw) {
 void AppLauncher::setCustomApps(const QVector<AppEntry> &apps) {
     g_customApps = apps;
     g_catalogDirty = true;
+    g_appPageDirty = true;
 }
 
-// 目录 = 内置表 + 自定义。只在主线程读写（应用页/启动流程都在主线程），
-// setCustomApps 用脏标记让下一次 catalog() 重新拼。
+// 目录 = 内置表 + 自定义，不过滤。它是**身份表**：语音识别
+// matchVoice、预设下拉 Presets::appKinds、自定义应用都读它。
+// 「哪些要显示在应用页」是另一层（appPageCatalog）：在这里过滤会让
+// “哪些应用能被语音叫出来”变成本机装了什么决定。（2026-11-22：
+// 那个改动直接加在 catalog() 上，app_launcher_test 9 条断言因此失败。）
 const QVector<AppEntry> &AppLauncher::catalog() {
     static const QVector<AppEntry> builtin = buildBuiltinCatalog();
     static QVector<AppEntry> merged;
@@ -526,6 +678,43 @@ const QVector<AppEntry> &AppLauncher::catalog() {
         g_catalogDirty = false;
     }
     return merged;
+}
+
+// 应用页专用：已卸载的内置应用不显示（用户 2026-11-22）。
+// 只给应用页列表用，不影响语音识别 / 预设 / 自定义应用。
+// 自定义应用一律保留（用户自己加的，路径短暂不存在也要能看到去改）。
+const QVector<AppEntry> &AppLauncher::appPageCatalog() {
+    static QVector<AppEntry> visible;
+    if (!g_appPageDirty) {
+        return visible;
+    }
+    buildAppsIndex();
+    const QHash<QString, bool> &index = appsIndexRef();
+    visible.clear();
+    for (const AppEntry &entry : catalog()) {
+        if (entry.customPath.isEmpty()) {
+            bool present = entryPresent(entry, index);
+            if (!present && !index.isEmpty() && !entry.aumid.isEmpty()) {
+                // 内置表的 aumid 多是短形式（com.qoder.app / WorkBuddy.WorkBuddy），
+                // 注册表键是带包全名的「<键>!App」：段匹配再兜一层。
+                const QString needle =
+                    entry.aumid.toLower() + QStringLiteral("!");
+                for (auto it = index.constBegin(); it != index.constEnd();
+                     ++it) {
+                    if (it.key().startsWith(needle)) {
+                        present = true;
+                        break;
+                    }
+                }
+            }
+            if (!present) {
+                continue;
+            }
+        }
+        visible.append(entry);
+    }
+    g_appPageDirty = false;
+    return visible;
 }
 
 QStringList AppLauncher::appIds() {
@@ -593,6 +782,8 @@ AppTarget AppLauncher::resolve(const AppEntry &entry) {
             return target;
         }
     }
+    // AUMID 兜底：目录过滤（catalog）已经确认包还装着——短形式
+    // （com.qoder.app / WorkBuddy.WorkBuddy）与带版本号全名都支持。
     if (!entry.aumid.isEmpty()) {
         target.found = true;
         target.kind = QStringLiteral("aumid");
@@ -899,9 +1090,14 @@ AppLaunchResult AppLauncher::runVoice(const QString &text) {
 }
 
 void AppLauncher::refreshCache() {
-    QMutexLocker locker(&g_cacheMutex);
-    g_shortcutsBuilt = false;
-    g_shortcuts.clear();
+    {
+        QMutexLocker locker(&g_cacheMutex);
+        g_shortcutsBuilt = false;
+        g_shortcuts.clear();
+    }
+    invalidateAppsIndex();
+    g_catalogDirty = true;
+    g_appPageDirty = true;
 }
 
 QString AppLauncher::normalize(const QString &text) {

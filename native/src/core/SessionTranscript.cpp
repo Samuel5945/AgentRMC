@@ -1570,14 +1570,18 @@ QVector<SessionTranscript::SessionInfo> listDshSessions(const QString &root,
                 .value(QStringLiteral("val"))
                 .toString(),
             id);
-        info.project = rows.value(QStringLiteral("workingDirectory"))
+        // 分组用**原始项目**（identity.cwd），不是当前工作目录：会话中途
+        // /cd 进 native\build\Release 后，按当前目录分组会把整条会话从
+        // Agentrmc 挪到「Release」组下（2026-11-22 用户截图）。
+        // 老投影没有 identity 时才退回 workingDirectory。
+        info.project = rec.value(QStringLiteral("identity"))
                            .toObject()
-                           .value(QStringLiteral("val"))
+                           .value(QStringLiteral("cwd"))
                            .toString();
         if (info.project.isEmpty()) {
-            info.project = rec.value(QStringLiteral("identity"))
+            info.project = rows.value(QStringLiteral("workingDirectory"))
                                .toObject()
-                               .value(QStringLiteral("cwd"))
+                               .value(QStringLiteral("val"))
                                .toString();
         }
         info.updatedAt =
@@ -1795,6 +1799,12 @@ SessionTranscript::Result readDsh(const QString &root, const QString &sessionId,
     FullCache full;
     full.stamp = stamp;
     QString firstUser;
+    // 模型账：selection 与 header 各记一条并带出现序号，最后按「谁更晚」取。
+    QString lastSelectionModel;
+    QString lastHeaderModel;
+    int lastSelectionOrder = 0;
+    int lastHeaderOrder = 0;
+    int modelOrder = 0;
     // DSH 的 tool/call ↔ tool/result 配对（结果行的 callId 藏在 message 里）。
     QHash<QString, ToolCallInfo> calls;
     QStringList callOrder;
@@ -1857,6 +1867,37 @@ SessionTranscript::Result readDsh(const QString &root, const QString &sessionId,
                                   .toString();
             if (!t.isEmpty()) {
                 full.title = t;
+            }
+            continue;
+        }
+        // 会话当前模型：DSH 把「选了什么」记成 model/selection，「这一轮实际用了
+        // 什么」记在 request/header.config 里。两条都记、按**最后出现的**取：
+        // 切换后新 selection 还没被请求兑现时，界面上就该显示新模型（DSH 自己的
+        // 模型位用的是 next = pending ?? lastUsed，同口径）；一旦下一轮跑起来，
+        // header 就会盖上来。别读投影缓存：那份有 write-behind 节流，切换后要等
+        // turn/end 才落盘。
+        if (type == QStringLiteral("request/header")) {
+            const QJsonObject config = obj.value(QStringLiteral("data"))
+                                           .toObject()
+                                           .value(QStringLiteral("header"))
+                                           .toObject()
+                                           .value(QStringLiteral("config"))
+                                           .toObject();
+            const QString p = config.value(QStringLiteral("provider")).toString();
+            const QString m = config.value(QStringLiteral("model")).toString();
+            if (!p.isEmpty() && !m.isEmpty()) {
+                lastHeaderModel = p + QLatin1Char('/') + m;
+                lastHeaderOrder = ++modelOrder;
+            }
+            continue;
+        }
+        if (type == QStringLiteral("model/selection")) {
+            const QJsonObject sel = obj.value(QStringLiteral("data")).toObject();
+            const QString p = sel.value(QStringLiteral("provider")).toString();
+            const QString m = sel.value(QStringLiteral("model")).toString();
+            if (!p.isEmpty() && !m.isEmpty()) {
+                lastSelectionModel = p + QLatin1Char('/') + m;
+                lastSelectionOrder = ++modelOrder;
             }
             continue;
         }
@@ -1945,6 +1986,13 @@ SessionTranscript::Result readDsh(const QString &root, const QString &sessionId,
             text += QStringLiteral(" · ") + hit->brief;
         }
         full.all.append(sysRow(text, hit->at));
+    }
+    // 模型：谁在日志里出现得更晚就是当前值（切完还没跑请求时 selection 更晚，
+    // 跑起来之后 header 更晚——与 DSH 自己 next = pending ?? lastUsed 同口径）。
+    if (lastHeaderOrder > lastSelectionOrder) {
+        full.model = lastHeaderModel;
+    } else {
+        full.model = lastSelectionModel;
     }
     full.realTotal = full.all.size();
     cachePut(key, full);

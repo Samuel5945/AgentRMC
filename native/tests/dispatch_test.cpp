@@ -1014,6 +1014,188 @@ process.stdin.on('end', () => process.exit(0));
         }
     }
 
+    // —— 会话级换模型（2026-11-21）：第三条独立队列 ——
+    // 派发＝新的一轮，控制＝动这一轮，换模型＝改「下一轮用谁」。这里验原生侧
+    // 队列语义；插件侧执行（agent.model.select）在 plugin.test.js 里验。
+    {
+        SessionDispatch mdl;
+        int doneCount = 0;
+        int failedCount = 0;
+        QString lastProvider;
+        QString lastModel;
+        QString lastFailReason;
+        QObject::connect(&mdl, &SessionDispatch::modelDone,
+                         [&](const QString &, const QString &, const QString &,
+                             const QString &provider, const QString &model) {
+                             ++doneCount;
+                             lastProvider = provider;
+                             lastModel = model;
+                         });
+        QObject::connect(&mdl, &SessionDispatch::modelFailed,
+                         [&](const QString &, const QString &, const QString &,
+                             const QString &, const QString &,
+                             const QString &reasonText) {
+                             ++failedCount;
+                             lastFailReason = reasonText;
+                         });
+        const QString dshExe = QStringLiteral("DeepSeek Harness.exe");
+        const QString mdlSid =
+            QStringLiteral("session-abcdef01-2345-4678-9abc-def012345678");
+        const QJsonObject sel{
+            {QStringLiteral("providerId"), QStringLiteral("tr")},
+            {QStringLiteral("modelId"), QStringLiteral("glm-5.3-flash")},
+            {QStringLiteral("options"),
+             QJsonObject{{QStringLiteral("reasoningLevel"),
+                          QStringLiteral("high")}}}};
+        QString reason;
+        QString modelId;
+        check("model: 非插件宿主拒绝",
+              !mdl.switchModel(QStringLiteral("WorkBuddy.exe"), mdlSid, sel,
+                               &reason, &modelId));
+        check("model: 缺 providerId/modelId 拒绝",
+              !mdl.switchModel(dshExe, mdlSid,
+                               QJsonObject{{QStringLiteral("providerId"),
+                                            QStringLiteral("tr")}},
+                               &reason, &modelId) &&
+                  reason.contains(QStringLiteral("缺字段")));
+        check("model: 空会话拒绝",
+              !mdl.switchModel(dshExe, QString(), sel, &reason, &modelId));
+        check("model: 入队并给 id",
+              mdl.switchModel(dshExe, mdlSid, sel, &reason, &modelId) &&
+                  !modelId.isEmpty());
+        {
+            QString again;
+            QString againId;
+            check("model: 同会话连点不重复排队",
+                  !mdl.switchModel(dshExe, mdlSid, sel, &again, &againId));
+        }
+        {
+            const QJsonArray taken = mdl.takeModels(dshExe);
+            const QJsonObject item =
+                taken.isEmpty() ? QJsonObject{} : taken.at(0).toObject();
+            check("model: 取件带 providerId/modelId/options",
+                  taken.size() == 1 &&
+                      item.value(QStringLiteral("providerId")).toString() ==
+                          QStringLiteral("tr") &&
+                      item.value(QStringLiteral("modelId")).toString() ==
+                          QStringLiteral("glm-5.3-flash") &&
+                      item.value(QStringLiteral("options"))
+                              .toObject()
+                              .value(QStringLiteral("reasoningLevel"))
+                              .toString() == QStringLiteral("high") &&
+                      item.value(QStringLiteral("session_id")).toString() ==
+                          mdlSid);
+            check("model: 取件一次，不重复下发",
+                  mdl.takeModels(dshExe).isEmpty());
+            check("model: 别的 exe 取不到别家的件",
+                  mdl.takeModels(QStringLiteral("OpenSquilla.exe")).isEmpty());
+            check("model: 与 control 队列互不串件",
+                  mdl.takeControls(dshExe).isEmpty());
+        }
+        check("model: 不认识的 id ack 回 false（要回 404）",
+              !mdl.modelAck(QStringLiteral("no-such-id"), true, QString()));
+        check("model: ack ok → modelDone 带 provider/model",
+              mdl.modelAck(modelId, true, QString()) && doneCount == 1 &&
+                  lastProvider == QStringLiteral("tr") &&
+                  lastModel == QStringLiteral("glm-5.3-flash"));
+        check("model: 重复 ack 不算成功",
+              !mdl.modelAck(modelId, true, QString()));
+        {
+            QString why;
+            QString secondId;
+            const QJsonObject other{
+                {QStringLiteral("providerId"), QStringLiteral("magpie")},
+                {QStringLiteral("modelId"),
+                 QStringLiteral("trae-cn/deepseek-v4.1-flash-max")}};
+            check("model: 第二条（无 options）入队",
+                  mdl.switchModel(dshExe, mdlSid, other, &why, &secondId));
+            const QJsonArray taken = mdl.takeModels(dshExe);
+            const QJsonObject item =
+                taken.isEmpty() ? QJsonObject{} : taken.at(0).toObject();
+            check("model: 无 options 时不带 options 键",
+                  taken.size() == 1 &&
+                      !item.contains(QStringLiteral("options")));
+            check("model: ack false → modelFailed 带原因",
+                  mdl.modelAck(secondId, false,
+                               QStringLiteral("会话没在 DSH 里打开")) &&
+                      failedCount == 1 &&
+                      lastFailReason == QStringLiteral("会话没在 DSH 里打开"));
+        }
+    }
+
+    // —— DSH 派发带 override（2026-11-21 修静默丢弃）——
+    // 以前只有 osq 分支存 override，DSH 的会被丢掉：页面选了模型、派发照发、
+    // 模型没换。现在同款预检 + 同款下发（插件侧「先切后注入」）。
+    {
+        SessionDispatch dd;
+        dd.setDshModelsProvider([] {
+            return QJsonArray{QJsonObject{
+                {QStringLiteral("providerId"), QStringLiteral("tr")},
+                {QStringLiteral("models"),
+                 QJsonArray{QStringLiteral("glm-5.3-flash")}}}};
+        });
+        const QString sid =
+            QStringLiteral("session-11111111-2222-4333-8444-555555555555");
+        QString why;
+        check("dsh model: 目录命中可派",
+              dd.dispatch(QStringLiteral("DeepSeek Harness.exe"), sid, QString(),
+                          QStringLiteral("换模型派"), &why, nullptr,
+                          QJsonObject{{QStringLiteral("providerId"),
+                                       QStringLiteral("tr")},
+                                      {QStringLiteral("modelId"),
+                                       QStringLiteral("glm-5.3-flash")}}));
+        const QJsonArray taken =
+            dd.takePluginDispatches(QStringLiteral("DeepSeek Harness.exe"));
+        check("dsh model: 取件带 model（不再静默丢弃）",
+              taken.size() == 1 &&
+                  taken.at(0).toObject()
+                          .value(QStringLiteral("model"))
+                          .toObject()
+                          .value(QStringLiteral("modelId"))
+                          .toString() == QStringLiteral("glm-5.3-flash"));
+        dd.pluginAck(taken.isEmpty() ? QString()
+                                     : taken.at(0).toObject()
+                                           .value(QStringLiteral("dispatch_id"))
+                                           .toString(),
+                     true, QString());
+        check("dsh model: 目录外的模型在派发口就拒",
+              !dd.dispatch(QStringLiteral("DeepSeek Harness.exe"),
+                           QStringLiteral(
+                               "session-22222222-3333-4444-8555-666666666666"),
+                           QString(), QStringLiteral("瞎选"), &why, nullptr,
+                           QJsonObject{{QStringLiteral("providerId"),
+                                        QStringLiteral("tr")},
+                                       {QStringLiteral("modelId"),
+                                        QStringLiteral("nope-xyz")}}) &&
+                  why.contains(QStringLiteral("不在")));
+        // 目录没推来（插件旧版/没连上）时不拦：交给插件取件后拒并带原因。
+        {
+            SessionDispatch blind;
+            check("dsh model: 没有目录时不拦（交给插件拒）",
+                  blind.dispatch(QStringLiteral("DeepSeek Harness.exe"),
+                                 sid, QString(), QStringLiteral("盲派"), &why,
+                                 nullptr,
+                                 QJsonObject{{QStringLiteral("providerId"),
+                                              QStringLiteral("tr")},
+                                             {QStringLiteral("modelId"),
+                                              QStringLiteral("whatever")}}));
+            const QJsonArray items =
+                blind.takePluginDispatches(QStringLiteral("DeepSeek Harness.exe"));
+            blind.pluginAck(items.isEmpty()
+                                ? QString()
+                                : items.at(0).toObject()
+                                      .value(QStringLiteral("dispatch_id"))
+                                      .toString(),
+                            true, QString());
+        }
+        check("dsh model: 不完整的选择直接拒",
+              !dd.dispatch(QStringLiteral("DeepSeek Harness.exe"), sid,
+                           QString(), QStringLiteral("半截"), &why, nullptr,
+                           QJsonObject{{QStringLiteral("providerId"),
+                                        QStringLiteral("tr")}}) &&
+                  why.contains(QStringLiteral("不完整")));
+    }
+
     // 活体 harness（默认不跑）：AGENTRMC_DISPATCH_LIVE=<session id> 时真派一条
     // 探针进该会话并等回执，用来把路由问题和 UI 探针问题分开。
     const QByteArray live = qgetenv("AGENTRMC_DISPATCH_LIVE");

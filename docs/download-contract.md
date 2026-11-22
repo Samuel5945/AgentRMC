@@ -60,6 +60,20 @@ a.onclick = (e) => { e.preventDefault(); saveFile(a.href); };
 `lanweb_test` 的用例是**矩阵式**的：换一种来源（inbox / project / abs）、
 换一种名字（中文、空格、带 1.4.7 这种点号）都加一条，而不是只补眼前那一例。
 
+## 图片是「看」不是「下」（用户 2026-11-22）
+
+对话里的图片（`.bubatt.img`）点一下**只弹查看浮层**（`#imgView`），不再直接落盘：
+手机上点图的本意几乎总是「放大看看」，直接下载既没看到内容、又多出一个文件。
+
+- 图片气泡**不带** `download` 属性，`onclick` 走 `openImgView(url, name)`——
+  长按/中键也不会绕过查看直接下载。
+- 浮层里给「保存到手机」，那才走 `saveFile(url)`；下载契约本身一字未改。
+- 图片加载失败（文件已删/移走）会退化成文件条，此时点击回到 `saveFile`。
+- 非图片附件不受影响：点击仍是下载，行尾照旧写「下载到手机」。
+
+探针断言：`rc_probe/mobile_page_probe.mjs flow` 里的「点图片不会触发下载 /
+弹出查看浮层 / 浮层里保存走同一下载契约 / 关闭后浮层隐藏」。
+
 ## 新增下载入口 checklist
 
 1. 链接由 `fpUrl` 生成，`onclick` 接 `saveFile`。

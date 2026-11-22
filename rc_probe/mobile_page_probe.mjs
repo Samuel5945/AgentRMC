@@ -215,6 +215,10 @@ let CURRENT_THEME = 'light';
 const ACK = new Set();
 const UPLOADS = [];  // /m/upload 收到的定位参数 + 文件名/字节数，附件断言用
 const FILES = [];    // /m/files、/m/file 收到的 query，电脑文件面板断言用
+// 1x1 透明 PNG：假服务给图片用，让 <img> 真正加载成功。
+const PNG_1PX = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+  'base64');
 
 function startServer() {
   return new Promise((resolve) => {
@@ -324,13 +328,32 @@ function startServer() {
           return res.end('{"ok":false,"error":"file_missing"}');
         }
         FILES.push({ file: url.search, method: req.method });
+        // 图片给真 PNG：否则 <img> 解不出来、onerror 把缩略图退化成
+        // 文件条，「点图查看」的断言就够不着了。下载字节断言用的是
+        // 非图片名（a.txt），不受影响。
+        // 图片可能走 name=（inbox）也可能走 rel=/abs=（对话里的图），
+        // 所以看整个 query 里的扩展名，不能只看 name。
+        // 真服务的名字取「解析后的真实文件」（name / rel / abs 的 basename），
+        // disposition 一律 attachment（图片也是）；<img src> 是子资源，
+        // 不受 disposition 影响，所以缩略图照样出得来。
+        const qName = url.searchParams.get('name') || '';
+        const qRel = url.searchParams.get('rel') || '';
+        const qAbs = url.searchParams.get('abs') || '';
+        const full = qName || qRel || qAbs || 'a.txt';
+        const fname = full.split(/[\\/]/).pop() || 'a.txt';
+        const isImg = /\.(png|jpe?g|gif|webp|bmp)$/i.test(fname);
+        // 真服务不把中文直接写进 header（非法字符）：
+        // ASCII 兜底 + filename*=UTF-8''percent（见 docs/download-contract.md）。
+        const asciiFallback = fname.replace(/[^\x20-\x7e]/g, '_');
+        const disp = 'attachment; filename="' + asciiFallback +
+          "\"; filename*=UTF-8''" + encodeURIComponent(fname);
         const headers = {
-          'Content-Type': 'application/octet-stream',
-          'Content-Disposition': 'attachment; filename="a.txt"',
+          'Content-Type': isImg ? 'image/png' : 'application/octet-stream',
+          'Content-Disposition': disp,
         };
         if (req.method === 'HEAD') { res.writeHead(200, headers); return res.end(); }
         res.writeHead(200, headers);
-        return res.end('DOWNLOAD');
+        return res.end(isImg ? PNG_1PX : 'DOWNLOAD');
       }
       if (url.pathname === '/m/action') {
         let body = '';
@@ -723,6 +746,34 @@ async function runFlow() {
   ok((await page.locator('.bubatt').count()) >= 1, '附件行折叠成缩略图/文件条');
   const uTxt = await page.locator('.bub.user').first().textContent();
   ok(!uTxt.includes('请查看文件'), '正文里不再露出「请查看文件：路径」', uTxt);
+  // 图片是「看」不是「下」（用户 2026-11-22）：点一下弹全屏查看器，
+  // 不能像改之前那样直接落盘。想存去浮层里点「保存到手机」。
+  {
+    const imgAtt = page.locator('.bubatt.img').first();
+    ok(await imgAtt.count() >= 1, '对话里的图片渲染成缩略图');
+    ok(await imgAtt.evaluate((el) => !el.hasAttribute('download')),
+      '图片气泡不带 download 属性（长按/中键也不会直接落盘）');
+    let imgDownload = false;
+    page.once('download', () => { imgDownload = true; });
+    await imgAtt.click();
+    await page.waitForTimeout(700);
+    ok(!imgDownload, '点图片不会触发下载');
+    ok(await page.locator('#imgView').evaluate((el) => !el.hidden),
+      '点图片弹出查看浮层');
+    ok((await page.locator('#ivStage img').count()) === 1, '浮层里有大图');
+    const ivName = await page.textContent('#ivName');
+    ok(ivName.includes('shot.jpg'), '浮层标题是文件名', ivName);
+    // 浮层里的保存才真下载（下载契约不变）。
+    const [ivDl] = await Promise.all([
+      page.waitForEvent('download', { timeout: 8000 }),
+      page.click('#ivSave'),
+    ]);
+    ok(ivDl.suggestedFilename() === '20261118-204924-965-shot.jpg',
+      '浮层里的保存走同一下载契约（服务端真实文件名）',
+      ivDl.suggestedFilename());
+    await page.click('#ivClose');
+    ok(await page.locator('#imgView').evaluate((el) => el.hidden), '关闭后浮层隐藏');
+  }
 
   // Agent 产物：回复里提到的文件要在气泡下方生效，链接指向工作区下载。
   ok((await page.locator('.bubfile').count()) >= 2, 'Agent 产物的文件条渲染出来');
@@ -780,8 +831,9 @@ async function runFlow() {
     page.waitForEvent('download', { timeout: 8000 }),
     page.locator('#chatFilePanel .frow').first().click(),
   ]);
-  ok(dl.suggestedFilename() === 'a.txt',
-    '下载文件名来自服务端（不是 file.txt）', dl.suggestedFilename());
+  ok(dl.suggestedFilename() === 'AgentRMC-Setup.exe',
+    '下载文件名来自服务端（不是 file.txt）',
+    dl.suggestedFilename());
   const dlPath = await dl.path();
   ok(dlPath && fs.readFileSync(dlPath).toString() === 'DOWNLOAD', '下载字节完整');
   // 项目外绝对路径：链接必须走 /m/file（以前漏了 abs 分支，拼成 /m/files 列表
@@ -794,7 +846,8 @@ async function runFlow() {
     page.waitForEvent('download', { timeout: 8000 }),
     page.evaluate((u) => saveFile(u), absUrl),
   ]);
-  ok(dlAbs.suggestedFilename() === 'a.txt', 'abs 下载也走同一出口', dlAbs.suggestedFilename());
+  ok(dlAbs.suggestedFilename() === 'LiquidDesk-1.4.7-B站封面-4x3.jpg',
+    'abs 下载也走同一出口（真实文件名）', dlAbs.suggestedFilename());
   // 失效链接兜底（2026-11-21）：原路径 404 但同目录有同名文件时，服务端
   // resolve 出真文件继续下，页面提示一下，不再直接说「取不到」。
   const [dlResolve] = await Promise.all([

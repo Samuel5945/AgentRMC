@@ -1538,6 +1538,28 @@ QString LanWebServer::mobileHtml() const {
  .bubatt b{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;
    white-space:nowrap;font-weight:500}
  .bubatt .dl{flex:0 0 auto;color:var(--accent);font-size:12px;font-weight:600}
+ /* 图片查看器（用户 2026-11-22）：对话里的图点一下是「看」，
+    不再直接落盘；下载收到浮层里的「保存到手机」。
+    黑底 + 居中缩放，点背景/叉关闭；层级高于聊天页面任何浮层。 */
+ .imgview{position:fixed;inset:0;z-index:90;background:rgba(8,11,16,.94);
+   display:flex;flex-direction:column;overscroll-behavior:contain}
+ .imgview[hidden]{display:none !important}
+ .imgview .ivbar{flex:0 0 auto;display:flex;align-items:center;gap:10px;
+   padding:calc(env(safe-area-inset-top,0px) + 12px) 14px 10px;
+   color:#eef2f8;font-size:13px}
+ .imgview .ivname{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;
+   white-space:nowrap;color:#eef2f8;opacity:.9}
+ .imgview .ivbtn{flex:0 0 auto;border:1px solid rgba(255,255,255,.26);
+   background:rgba(255,255,255,.10);color:#eef2f8;font-family:inherit;
+   font-size:13px;padding:7px 13px;border-radius:9px}
+ .imgview .ivbtn:active{background:rgba(255,255,255,.2)}
+ .imgview .ivstage{flex:1 1 auto;min-height:0;display:flex;align-items:center;
+   justify-content:center;padding:4px 10px calc(env(safe-area-inset-bottom,0px) + 18px);
+   overflow:auto}
+ .imgview .ivstage img{max-width:100%;max-height:100%;object-fit:contain;
+   border-radius:6px;display:block}
+ .imgview .iverr{color:#eef2f8;opacity:.8;font-size:13px;text-align:center;
+   line-height:1.7;padding:0 20px}
  .bub .bt{display:block;font-size:11px;color:var(--muted2);margin-top:4px}
  .reqcard{flex:0 0 auto;align-self:stretch;margin:6px 0;padding:10px 12px;
    border-radius:12px;background:var(--w8);border:1px solid var(--a64)}
@@ -1943,6 +1965,14 @@ QString LanWebServer::mobileHtml() const {
   <button class="tab" data-tab="2">状态</button>
  </div>
 </div>
+<div class="imgview" id="imgView" hidden>
+ <div class="ivbar">
+  <span class="ivname" id="ivName"></span>
+  <button class="ivbtn" id="ivSave">保存到手机</button>
+  <button class="ivbtn" id="ivClose" aria-label="关闭">关闭</button>
+ </div>
+ <div class="ivstage" id="ivStage"></div>
+</div>
 <div id="toast"></div>
 <script>
 )HTML") + QString::fromUtf8(R"HTML(let STATE=null,tab=0,timer=null,lastSig='';
@@ -2120,6 +2150,17 @@ function toast(msg,ms){
  if(toastTimer)clearTimeout(toastTimer);
  toastTimer=setTimeout(()=>el.classList.remove('on'),ms||1700);
 }
+// 图片查看器的三个出口：关闭按钮 / 点背景 / 保存到手机。
+// 保存走的还是 saveFile（HEAD 探活 → 服务端 disposition），
+// 下载契约不变，只是触发点从气泡换到浮层。
+function ivBind(){
+ const v=$('imgView');if(!v)return;
+ $('ivClose').onclick=closeImgView;
+ $('ivSave').onclick=()=>{if(ivUrl)saveFile(ivUrl);};
+ // 点背景关闭，点图本身不关（否则想看细节就被弹出了）。
+ v.onclick=e=>{if(e.target===v||e.target.id==='ivStage')closeImgView();};
+}
+ivBind();
 async function postResult(obj){
  try{
   const r=await fetch('/m/action',{method:'POST',
@@ -2475,13 +2516,22 @@ function bubble(m){
    const a=document.createElement('a');
    a.className=isImg?'bubatt img':'bubatt';
    if(rel||abs){a.href=fpUrl(null,rel||undefined,abs||undefined);
-    a.setAttribute('download','');
-    a.onclick=e=>{e.preventDefault();saveFile(a.href);};}
+    // 图片是「看」不是「下」（用户 2026-11-22）：点一下弹大图，
+    // 想存再从浮层里点「保存到手机」。下载属性也去掉，
+    // 否则长按/中键仍会跳过查看直接落盘。
+    if(isImg){a.onclick=e=>{e.preventDefault();openImgView(a.href,name);};}
+    else{a.setAttribute('download','');
+     a.onclick=e=>{e.preventDefault();saveFile(a.href);};}}
    else{a.href='#';a.onclick=e=>e.preventDefault();}
    if(isImg){
     const im=document.createElement('img');im.src=a.href;im.alt=name;
     // 图坏了（读不到/已删）退回文件条，别留个破图方块。
     im.onerror=()=>{a.className='bubatt';a.replaceChildren();
+     // 退化成文件行了：这时点一下就该是下载（看不了的图
+     // 再弹一个空查看器没意义）。
+     a.removeAttribute('download');
+     a.setAttribute('download','');
+     a.onclick=e=>{e.preventDefault();saveFile(a.href);};
      const ic=document.createElement('span');ic.className='ic';ic.innerHTML=ATT_ICON;
      const nm=document.createElement('b');nm.textContent=name;a.append(ic,nm);};
     a.append(im);
@@ -2973,6 +3023,25 @@ function fpUrl(name,rel,abs){
 // 那条 404 也存下来，叫 file.txt（用户 2026-11-20 第三次报同一个症状）。
 // 这里先 HEAD 探活：200 才跳转，文件名由服务端 Content-Disposition 给；
 // 探不到就在页面上说清楚。**新增下载入口也只准走这里**（见下载契约文档）。
+// 图片查看：点一下先看大图，不直接下载（用户 2026-11-22）。
+// 下载仍走 saveFile：浮层里的「保存到手机」才真落盘，
+// 这样下载契约（HEAD 探活 → 404 只 toast）一字不改。
+let ivUrl='';
+function openImgView(url,name){
+ if(!url||url==='#')return;
+ ivUrl=url;
+ $('ivName').textContent=name||'';
+ const st=$('ivStage');st.replaceChildren();
+ const im=document.createElement('img');im.src=url;im.alt=name||'';
+ // 图不在了（删了/移走了）：直接说清楚，不给破图。
+ im.onerror=()=>{st.replaceChildren();
+  const e=document.createElement('div');e.className='iverr';
+  e.textContent='这张图取不到了（可能已在电脑上删除或移走）';
+  st.append(e);};
+ st.append(im);
+ $('imgView').hidden=false;
+}
+function closeImgView(){$('imgView').hidden=true;$('ivStage').replaceChildren();ivUrl='';}
 async function saveFile(url){
  if(!url||url==='#')return;
  const downloadAt=(u)=>{const a=document.createElement('a');

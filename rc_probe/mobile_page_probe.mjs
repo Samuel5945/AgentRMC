@@ -242,9 +242,9 @@ function state(theme) {
   return {
     theme: theme === 'dark' ? DARK : LIGHT,
     work: { items: ITEMS().map((i) => ({ ...i, done: i.done || ACK.has(i.id) })), attention_count: Math.max(0, 3 - ACK.size) },
-    dispatch: { noticeId: 'a1', notice: '等你确认覆盖安装', noticeExe: 'WorkBuddyAI.exe', draftId: '', draftText: '' },
+        dispatch: { noticeId: '', notice: '', noticeExe: '', draftId: '', draftText: '' },
     health: { bridge: true, uptime_seconds: 5400, workers: [{ alive: true }, { alive: true }], spool_pending: 0, problems: [] },
-    meta: { version: '0.5.0', devices: 2, listening: true }
+    meta: { version: '0.6.0', devices: 2, listening: true }
   };
 }
 
@@ -580,12 +580,6 @@ async function runShots(names) {
       if (!SCENES[name]) { console.log('skip', name); continue; }
       const { ctx, page } = await openPage(browser, theme);
       await SCENES[name](page);
-      // 「待办」这一张要一眼看到七个 Agent：真机一屏只装 6 张卡，
-      // 第 7 张会露半截。这里把视口加高到能完整放下七张，其余场景保持真机尺寸。
-      if (name === 'list') {
-        await page.setViewportSize({ width: 780, height: 1560 });
-        await page.waitForTimeout(120);
-      }
       const file = path.join(SHOTS, `${name}-${theme}.png`);
       await page.screenshot({ path: file });
       console.log('shot', path.basename(file));

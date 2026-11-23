@@ -4104,6 +4104,10 @@ QString MainWindow::lanShellState() {
         // 手机页不再展示事件流：目录/聊天/派发都用独立路由，轮询体里别带它。
         {QStringLiteral("theme"), webThemeJson()},
         {QStringLiteral("dispatch"), dispatchStateJson()},
+        // 手机第三个页签是应用页（与电脑端同一份 AppPage::webState）：
+        // 图标用 data URL，随轮询一起下发，手机点卡即启动。
+        {QStringLiteral("apps"),
+         appPage_ != nullptr ? appPage_->webState() : QJsonObject()},
         {QStringLiteral("meta"),
          QJsonObject{
              {QStringLiteral("version"), appVersion()},

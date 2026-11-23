@@ -23,9 +23,20 @@
   PowerShell 里 `Start-Process "$env:LOCALAPPDATA\AgentRMC\AgentRMCNative.exe"`。
 - **`Start-Process` 起的 GUI 会随工具会话被回收**（2026-11-16 实测）：进程能活
   几秒到十几秒（`/state` 当时通），随后无声消失，**没有 crash dump、事件日志
-  也没有记录**——别当成新版崩溃去查代码。要让它长期跑，用 explorer 当父进程
-  `Start-Process explorer.exe -ArgumentList '"<安装目录>\AgentRMCNative.exe"'`，
-  起来后 `/state` 能连、`Get-Process` 连续几十秒都在才算真的活着。
+  也没有记录**——别当成新版崩溃去查代码。起来后 `/state` 能连、`Get-Process`
+  连续几十秒都在才算真的活着。
+- **`Start-Process explorer.exe -ArgumentList '<exe>'` 这条老办法在沙箱会话里会
+  弹系统错误框**（2026-11-23 实测）：explorer 在那个环境下 DLL 初始化失败
+  （`0xc0000142`），CSRSS 直接在桌面弹一个
+  「explorer.exe - 应用程序错误 / 应用程序无法正常启动(0xc0000142)」的 `#32770`
+  框。**它属于 csrss 进程，不是 explorer、更不是 AgentRMC**，所以别当成应用崩溃
+  去查代码；也**别用 `WM_CLOSE` 关**（跨线程消息被忽略，框会一直赖着）——要
+  `SetForegroundWindow(hwnd)` 后 `PostMessage(hwnd, WM_KEYDOWN, VK_RETURN, 0)`
+  触发它的默认「确定」，或干脆让用户自己点。
+  替代做法：用 ShellExecute 起、不继承工具会话的作业对象——
+  `$si=New-Object System.Diagnostics.ProcessStartInfo; $si.FileName='<安装目录>\AgentRMCNative.exe'; $si.UseShellExecute=$true; $si.WorkingDirectory='<安装目录>'; [System.Diagnostics.Process]::Start($si)`
+  （2026-11-23 实测：起完立刻 `/state`=200，`45916` 也正常 LISTEN）。最省事的
+  还是让用户自己双击安装目录里的 exe。
 - curl 验证要带 `--noproxy '*'`：本机开着代理，不带的话 127.0.0.1 也会被拦成
   `upstream connect failed`，看起来像应用没起来。
 - 可带参数 `lean`，但**它的真实语义是关闭 sherpa-onnx 编译**（build.bat 把

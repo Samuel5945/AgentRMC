@@ -286,6 +286,25 @@ int main(int argc, char **argv) {
         check(resp.contains("未分类任务"), "GET /m/ unclassified section", resp);
         check(!resp.contains(">事件流</button>"), "GET /m/ events tab removed",
               resp);
+        // 手机第三个页签是应用页（与电脑端同款图标瀑布流）：页签文案、容器、
+        // 卡片渲染与启动动作都要在页面里，别退回「状态」页。
+        check(resp.contains("data-tab=\"2\">应用</button>"),
+              "GET /m/ third tab is apps", resp);
+        check(resp.contains("id=\"papps\""), "GET /m/ apps page container", resp);
+        check(resp.contains("id=\"appsBody\""), "GET /m/ apps body", resp);
+        check(resp.contains("id=\"appsVoice\""), "GET /m/ apps voice switch",
+              resp);
+        check(resp.contains("id=\"appsSystem\""), "GET /m/ apps system switch",
+              resp);
+        check(resp.contains("function renderApps"), "GET /m/ apps renderer",
+              resp);
+        check(resp.contains("cmd:'appOpen'"), "GET /m/ apps launch wiring", resp);
+        // 应用页不能出现状态页的旧标记。
+        check(!resp.contains("id=\"pstatus\""), "GET /m/ status page removed",
+              resp);
+        check(!resp.contains("function renderStatus"), "GET /m/ status renderer removed",
+              resp);
+        check(!resp.contains(">状态</button>"), "GET /m/ status tab removed", resp);
         // 多选是低频操作，只放在手势提示行右侧；别再回到顶栏跟连接状态抢层级。
         check(resp.contains("<button id=\"multiSw\" aria-pressed=\"false\">多选</button>"),
               "GET /m/ subtle multi toggle", resp);
@@ -889,6 +908,51 @@ int main(int argc, char **argv) {
                     check(lastCmd == QStringLiteral("dispatchSession"),
                           "dispatchSession handler");
                     check(actionCalls == 2, "dispatchSession call count");
+                },
+                next);
+    });
+    // 17b. 应用页动作（appOpen / appVoice / appSystem）在 LAN 白名单内。
+    seq.add([&](std::function<void()> next) {
+        request(app, port,
+                post("/m/action", R"({"cmd":"appOpen","id":"browser"})",
+                     csrf() + cookieHeader(token)),
+                [&](const QByteArray &resp) {
+                    check(resp.startsWith("HTTP/1.1 200"), "appOpen 200", resp);
+                    check(lastCmd == QStringLiteral("appOpen"), "appOpen handler");
+                    check(actionCalls == 3, "appOpen call count");
+                },
+                next);
+    });
+    seq.add([&](std::function<void()> next) {
+        request(app, port,
+                post("/m/action", R"({"cmd":"appVoice","on":false})",
+                     csrf() + cookieHeader(token)),
+                [&](const QByteArray &resp) {
+                    check(resp.startsWith("HTTP/1.1 200"), "appVoice 200", resp);
+                    check(lastCmd == QStringLiteral("appVoice"), "appVoice handler");
+                    check(actionCalls == 4, "appVoice call count");
+                },
+                next);
+    });
+    seq.add([&](std::function<void()> next) {
+        request(app, port,
+                post("/m/action", R"({"cmd":"appSystem","on":false})",
+                     csrf() + cookieHeader(token)),
+                [&](const QByteArray &resp) {
+                    check(resp.startsWith("HTTP/1.1 200"), "appSystem 200", resp);
+                    check(lastCmd == QStringLiteral("appSystem"), "appSystem handler");
+                    check(actionCalls == 5, "appSystem call count");
+                },
+                next);
+    });
+    // 应用页的添加/移除会弹 Qt 对话框，绝不进白名单。
+    seq.add([&](std::function<void()> next) {
+        request(app, port,
+                post("/m/action", R"({"cmd":"appAdd"})",
+                     csrf() + cookieHeader(token)),
+                [&](const QByteArray &resp) {
+                    check(resp.startsWith("HTTP/1.1 403"), "appAdd 403", resp);
+                    check(actionCalls == 5, "appAdd blocked not executed");
                 },
                 next);
     });

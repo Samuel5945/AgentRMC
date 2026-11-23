@@ -244,8 +244,30 @@ function state(theme) {
     work: { items: ITEMS().map((i) => ({ ...i, done: i.done || ACK.has(i.id) })), attention_count: Math.max(0, 3 - ACK.size) },
         dispatch: { noticeId: '', notice: '', noticeExe: '', draftId: '', draftText: '' },
     health: { bridge: true, uptime_seconds: 5400, workers: [{ alive: true }, { alive: true }], spool_pending: 0, problems: [] },
-    meta: { version: '0.6.0', devices: 2, listening: true }
+    meta: { version: '0.6.0', devices: 2, listening: true },
+    // 第三个页签（应用页）：与 AppPage::webState() 同结构。图标用 1px PNG 占位，
+    // 真机上这里下发的是一张张真实 exe 图标的 data URL。
+    apps: {
+      summary: '本机找到 5 / 8 个 · 语音启动要用本地识别（SenseVoice / Qwen3）；'
+        + '转发热键时语音交给前台应用。想用手上的遥控器，'
+        + '可以在「按键映射」里把「打开 xx」设成某个键的单击 / 双击 / 长按。',
+      voiceLaunch: true,
+      systemControl: true,
+      rows: APPS().map((r) => ({ ...r, icon: 'data:image/png;base64,' + PNG_1PX.toString('base64') }))
+    }
   };
+}
+
+// 应用页行：名称/状态/是否可点，覆盖「能启动 / 没装 / 自定义」三种。
+function APPS() {
+  return [
+    { id: 'browser', name: '浏览器', state: '默认浏览器', stateTip: '系统默认浏览器 · chrome.exe', found: true, custom: false, customPath: '' },
+    { id: 'chrome', name: 'Chrome', state: '开始菜单', stateTip: '开始菜单 · Chrome.lnk', found: true, custom: false, customPath: '' },
+    { id: 'jianying', name: '剪映', state: 'Windows 应用', stateTip: 'Windows 应用', found: true, custom: false, customPath: '' },
+    { id: 'qoder', name: 'Qoder', state: '开始菜单', stateTip: '开始菜单 · Qoder.lnk', found: true, custom: false, customPath: '' },
+    { id: 'codex', name: 'Codex', state: '没装', stateTip: '开始菜单里没有这个应用的快捷方式', found: false, custom: false, customPath: '' },
+    { id: 'custom:opensquilla', name: 'OpenSquilla', state: '自定义', stateTip: 'D:\\apps\\OpenSquilla\\OpenSquilla.exe', found: true, custom: true, customPath: 'D:\\apps\\OpenSquilla\\OpenSquilla.exe' }
+  ];
 }
 
 let CURRENT_THEME = 'light';
@@ -702,6 +724,51 @@ async function runFlow() {
 
   ok((await page.textContent('#tabbar .tab[data-tab="1"]')).includes('派发'), '中间页签已改为派发');
   ok(!(await page.textContent('#tabbar .tab[data-tab="1"]')).includes('事件流'), '事件流不再出现在手机页');
+  // 第三个页签是应用页（2026-11-23 取代「状态」）：图标瀑布流 + 点卡启动 + 两个开关。
+  ok((await page.textContent('#tabbar .tab[data-tab="2"]')).includes('应用'),
+    '第三个页签是应用', await page.textContent('#tabbar .tab[data-tab="2"]'));
+  ok(!(await page.textContent('#tabbar .tab[data-tab="2"]')).includes('状态'),
+    '第三个页签不再叫状态');
+  posts.length = 0;
+  await page.click('#tabbar .tab[data-tab="2"]');
+  await page.waitForSelector('#papps:not([hidden]) .appcard');
+  ok(await page.isVisible('#papps'), '点页签切到应用页');
+  ok(!(await page.isVisible('#pwork')) && !(await page.isVisible('#pdispatch')),
+    '应用页时另两个页面都隐藏');
+  const appCards = page.locator('#papps .appcard');
+  ok(await appCards.count() === 6, '应用卡片按目录条数渲染', String(await appCards.count()));
+  ok((await appCards.nth(0).textContent()).includes('浏览器'), '卡片带应用名');
+  ok((await appCards.nth(0).textContent()).includes('默认浏览器'), '卡片带状态短文案');
+  ok(await page.locator('#papps .appcard img').count() >= 5, '卡片带图标');
+  ok(await page.locator('#papps .appcard.on').count() === 5, '只有装了的是可点态');
+  ok(await page.locator('#papps .appcard .astate.miss').count() === 1, '没装的标灰态');
+  // 瀑布流：CSS columns 生效，卡片按列排而不是单列。
+  const gridCols = await page.locator('#appsGrid').evaluate((el) => getComputedStyle(el).columnCount);
+  ok(gridCols !== 'auto' && Number(gridCols) >= 2, '应用页是瀑布流多列', gridCols);
+  // 点卡启动 → appOpen（只发动作，不跳页）。
+  await appCards.nth(0).click();
+  await page.waitForTimeout(260);
+  const appOpenPost = posts.filter((p) => p.cmd === 'appOpen');
+  ok(appOpenPost.length === 1, '点卡片发 appOpen', JSON.stringify(posts));
+  ok(appOpenPost[0] && appOpenPost[0].id === 'browser', 'appOpen 带应用 id', JSON.stringify(appOpenPost));
+  ok((await page.textContent('#toast')).includes('浏览器'), '点卡后有提示', await page.textContent('#toast'));
+  // 没装的那张点了不发请求。
+  posts.length = 0;
+  await page.locator('#papps .appcard').nth(4).click({ force: true });
+  await page.waitForTimeout(220);
+  ok(posts.filter((p) => p.cmd === 'appOpen').length === 0, '没装的应用点了不发启动');
+  // 两个开关：点一下翻面并回发 appVoice / appSystem。
+  posts.length = 0;
+  ok(await page.locator('#appsVoice').evaluate((el) => el.classList.contains('on')), '语音启动默认开');
+  await page.click('#appsVoice');
+  await page.waitForTimeout(220);
+  const vPost = posts.filter((p) => p.cmd === 'appVoice');
+  ok(vPost.length === 1 && vPost[0].on === false, '关语音启动发 appVoice(false)', JSON.stringify(vPost));
+  await page.click('#appsSystem');
+  await page.waitForTimeout(220);
+  const sPost = posts.filter((p) => p.cmd === 'appSystem');
+  ok(sPost.length === 1 && sPost[0].on === false, '关语音系统控制发 appSystem(false)', JSON.stringify(sPost));
+  ok((await page.textContent('#appsSummary')).includes('本机找到'), '底部有汇总文案');
   await page.click('#tabbar .tab[data-tab="1"]');
   await page.waitForSelector('#sessList .sescard');
   ok(await page.locator('#agentChips .chip').count() === 2, '会话目录按 Agent 列出');

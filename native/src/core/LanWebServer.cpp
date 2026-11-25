@@ -383,8 +383,9 @@ bool LanWebServer::revokeDevice(const QString &id) {
 bool LanWebServer::isAllowedAction(const QString &cmd) {
     // 白名单制：手机上点了会在 PC 弹 Qt 对话框或改本机配置的命令一律不进。
     // tts 会弹 TtsSettingsDialog，readLast 只是让 PC 念最近转写，可以进。
-    // 应用页（手机第三个页签）只放「点卡启动 / 两个开关」：appAdd 弹添加对话框、
-    // appRemove 弹移除对话框，都不进白名单。
+    // 应用页（手机第三个页签）只放「点卡启动」：appVoice / appSystem 两个开关
+    // 是电脑端应用页的东西，手机端已不画（用户 2026-11-25 定），不再进白名单；
+    // appAdd / appRemove 会弹添加/移除对话框，也不进。
     return cmd == QStringLiteral("ack") || cmd == QStringLiteral("dispatch") ||
            cmd == QStringLiteral("dispatchSession") ||
            cmd == QStringLiteral("control") ||
@@ -394,9 +395,7 @@ bool LanWebServer::isAllowedAction(const QString &cmd) {
            cmd == QStringLiteral("raiseZcode") ||
            cmd == QStringLiteral("restartZcode") ||
            cmd == QStringLiteral("readLast") ||
-           cmd == QStringLiteral("appOpen") ||
-           cmd == QStringLiteral("appVoice") ||
-           cmd == QStringLiteral("appSystem");
+           cmd == QStringLiteral("appOpen");
 }
 
 QStringList LanWebServer::lanUrls(quint16 port) {
@@ -1850,40 +1849,18 @@ QString LanWebServer::mobileHtml() const {
    border:2px solid var(--w18);border-top-color:var(--accent);
    animation:spin .8s linear infinite}
  @keyframes spin{to{transform:rotate(360deg)}}
- /* 应用页（与电脑端应用页同款图标瀑布流） */
- .apphead{padding:2px 2px 10px}
- .apphead h2{margin:0;font-size:16px;font-weight:700}
- .apphead p{margin:5px 0 0;font-size:12.5px;color:var(--muted);line-height:1.6}
- /* CSS columns 天然瀑布流，短列自动补位，不用 JS 摆位 */
+ /* 应用页：手机上只留图标瀑布流。标题/说明/卡片文字/底部汇总与开关
+   都只在电脑端有意义，手机端一概不画（用户 2026-11-25 定）。
+   CSS columns 天然瀑布流，短列自动补位，不用 JS 摆位。 */
  #appsGrid{column-gap:10px}
  .appcard{break-inside:avoid;display:flex;flex-direction:column;align-items:center;
-   gap:5px;padding:10px 6px;border-radius:12px;border:1px solid var(--w14);
+   justify-content:center;padding:12px 6px;border-radius:12px;border:1px solid var(--w14);
    background:var(--w6);cursor:default;margin:0 0 10px;min-width:0}
  .appcard.on{cursor:pointer}
  .appcard:active{background:var(--w10)}
  .appcard .aico{width:44px;height:44px;display:flex;align-items:center;
    justify-content:center}
  .appcard .aico img{width:44px;height:44px;display:block;border-radius:9px}
- .appcard .aname{font-size:12px;color:var(--text);font-weight:600;
-   text-align:center;line-height:1.3;word-break:break-word}
- .appcard .astate{font-size:10.5px;color:var(--muted);text-align:center;
-   line-height:1.3;word-break:break-word}
- .appcard .astate.miss{color:var(--warn)}
- /* 应用页底部：汇总 + 两个开关（与电脑端应用页同口径） */
- #appsFoot{flex:0 0 auto;padding:10px 14px 14px;
-   padding-bottom:calc(14px + env(safe-area-inset-bottom));
-   border-top:1px solid var(--w8);
-   background:linear-gradient(180deg,var(--surface),var(--surface2))}
- .swrow{display:flex;align-items:center;gap:8px;margin-top:9px}
- .swrow:first-child{margin-top:0}
- .swlabel{font-size:13px;color:var(--text-dim)}
- .sw{width:38px;height:20px;border-radius:11px;border:1px solid var(--w18);
-   background:var(--w10);position:relative;padding:0;cursor:pointer;flex:0 0 auto}
- .sw::after{content:"";position:absolute;left:2px;top:2px;width:14px;height:14px;
-   border-radius:50%;background:var(--muted);transition:left .12s ease}
- .sw.on{background:var(--a36);border-color:var(--a64)}
- .sw.on::after{left:20px;background:var(--accent)}
- .snote{font-size:12px;color:var(--muted);line-height:1.7}
  /* 底部页签 */
  #tabbar{flex:0 0 auto;display:flex;border-top:1px solid var(--w14);
    background:linear-gradient(180deg,var(--surface),var(--surface2));
@@ -1947,7 +1924,7 @@ QString LanWebServer::mobileHtml() const {
     <p>电脑上的 Agent 产生过会话后，这里会按项目列出来。<br>只读本地会话库，不会改动 PC 当前会话。</p>
    </div>
   </div>
-  <div id="papps" class="page" hidden><div id="appsBody" class="scroll"></div><div id="appsFoot"><div id="appsSummary" class="snote"></div><div class="swrow"><span class="swlabel">语音启动</span><button class="sw" id="appsVoice"></button></div><div class="swrow"><span class="swlabel">语音系统控制</span><button class="sw" id="appsSystem"></button></div></div></div>
+  <div id="papps" class="page" hidden><div id="appsBody" class="scroll"></div></div>
   <div id="pchat" class="page" hidden>
    <div class="chathead">
     <button class="cicobtn" id="chatBack" aria-label="返回待办"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5 8 12l7 7"/></svg></button>
@@ -4052,11 +4029,6 @@ function renderApps(){
  appsSig=sig;
  const keep=body.scrollTop;
  body.replaceChildren();
- const head=document.createElement('div');head.className='apphead';
- const h2=document.createElement('h2');h2.textContent='应用';head.append(h2);
- const p=document.createElement('p');
- p.textContent='说「打开剪映」「打开 Qoder」「打开浏览器」就启动，不用再打字；开始菜单里的其它应用按名字说也能开。';
- head.append(p);body.append(head);
  const grid=document.createElement('div');grid.id='appsGrid';
  // 列数按容器宽度算：卡片约 110px 宽 + 10px 间距，手机 2~4 列。
  const cw=body.clientWidth||body.parentElement.clientWidth||360;
@@ -4066,12 +4038,11 @@ function renderApps(){
   card.className='appcard'+(r.found?' on':'');
   const ico=document.createElement('div');ico.className='aico';
   if(r.icon){const im=document.createElement('img');im.src=r.icon;im.alt='';ico.append(im);}
-  const n=document.createElement('span');n.className='aname';n.textContent=r.name||'';
-  const s=document.createElement('span');s.className='astate'+(r.found?'':' miss');
-  s.textContent=r.state||'';s.title=r.stateTip||'';
-  card.append(ico,n,s);
+  // 卡片上不写应用名/状态——手机端只看图标，文字与开关只在电脑端有意义。
+  // 点击反馈靠 toast，tooltip 仍带名字（长按/悬停能认出点的是谁）。
+  card.title=(r.name||'')+(r.state?(' · '+r.state):'');
+  card.append(ico);
   if(r.found){
-   card.title='现在打开一次（语音说「打开 '+(r.name||'')+'」同样有效）';
    card.onclick=()=>{toast('正在打开 '+(r.name||'')+'…');
     act({cmd:'appOpen',id:r.id});};
   }
@@ -4079,11 +4050,6 @@ function renderApps(){
  });
  body.append(grid);
  body.scrollTop=keep;
- const sum=$('appsSummary');if(sum)sum.textContent=a.summary||'';
- const v=$('appsVoice');if(v){v.classList.toggle('on',!!a.voiceLaunch);
-  v.onclick=()=>act({cmd:'appVoice',on:!a.voiceLaunch});}
- const sy=$('appsSystem');if(sy){sy.classList.toggle('on',!!a.systemControl);
-  sy.onclick=()=>act({cmd:'appSystem',on:!a.systemControl});}
 }
 // 多选批量销账 + 左滑销账的暂存：MULTI.sel 存待办 id，ACKED 是刚点过销账、
 // 等 state 追认的那些（下一轮刷新前先别让它们回来）。

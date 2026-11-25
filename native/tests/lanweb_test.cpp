@@ -286,19 +286,29 @@ int main(int argc, char **argv) {
         check(resp.contains("未分类任务"), "GET /m/ unclassified section", resp);
         check(!resp.contains(">事件流</button>"), "GET /m/ events tab removed",
               resp);
-        // 手机第三个页签是应用页（与电脑端同款图标瀑布流）：页签文案、容器、
-        // 卡片渲染与启动动作都要在页面里，别退回「状态」页。
+        // 手机第三个页签是应用页：只留图标瀑布流。标题/说明/卡片文字/底部
+        // 汇总与开关都只在电脑端有意义，手机端一概不画（用户 2026-11-25 定）。
         check(resp.contains("data-tab=\"2\">应用</button>"),
               "GET /m/ third tab is apps", resp);
         check(resp.contains("id=\"papps\""), "GET /m/ apps page container", resp);
         check(resp.contains("id=\"appsBody\""), "GET /m/ apps body", resp);
-        check(resp.contains("id=\"appsVoice\""), "GET /m/ apps voice switch",
-              resp);
-        check(resp.contains("id=\"appsSystem\""), "GET /m/ apps system switch",
-              resp);
         check(resp.contains("function renderApps"), "GET /m/ apps renderer",
               resp);
         check(resp.contains("cmd:'appOpen'"), "GET /m/ apps launch wiring", resp);
+        // 手机端只留图标：页签/标题/说明/卡片文字/底部汇总/开关都不该出现。
+        check(!resp.contains("apphead"), "GET /m/ apps page has no heading text",
+              resp);
+        check(!resp.contains("id=\"appsFoot\""), "GET /m/ apps has no foot row",
+              resp);
+        check(!resp.contains("id=\"appsSummary\""),
+              "GET /m/ apps has no summary text", resp);
+        check(!resp.contains("id=\"appsVoice\""),
+              "GET /m/ apps has no voice switch", resp);
+        check(!resp.contains("id=\"appsSystem\""),
+              "GET /m/ apps has no system switch", resp);
+        check(!resp.contains("aname"), "GET /m/ app card has no name text", resp);
+        check(!resp.contains("astate"), "GET /m/ app card has no state text",
+              resp);
         // 应用页不能出现状态页的旧标记。
         check(!resp.contains("id=\"pstatus\""), "GET /m/ status page removed",
               resp);
@@ -911,7 +921,8 @@ int main(int argc, char **argv) {
                 },
                 next);
     });
-    // 17b. 应用页动作（appOpen / appVoice / appSystem）在 LAN 白名单内。
+    // 17b. 应用页动作：手机端只留「点卡启动」（appOpen）。appVoice / appSystem
+    // 两个开关只在电脑端应用页，手机端不画，因此不在 LAN 白名单内。
     seq.add([&](std::function<void()> next) {
         request(app, port,
                 post("/m/action", R"({"cmd":"appOpen","id":"browser"})",
@@ -928,9 +939,8 @@ int main(int argc, char **argv) {
                 post("/m/action", R"({"cmd":"appVoice","on":false})",
                      csrf() + cookieHeader(token)),
                 [&](const QByteArray &resp) {
-                    check(resp.startsWith("HTTP/1.1 200"), "appVoice 200", resp);
-                    check(lastCmd == QStringLiteral("appVoice"), "appVoice handler");
-                    check(actionCalls == 4, "appVoice call count");
+                    check(resp.startsWith("HTTP/1.1 403"), "appVoice 403", resp);
+                    check(actionCalls == 3, "appVoice blocked not executed");
                 },
                 next);
     });
@@ -939,9 +949,8 @@ int main(int argc, char **argv) {
                 post("/m/action", R"({"cmd":"appSystem","on":false})",
                      csrf() + cookieHeader(token)),
                 [&](const QByteArray &resp) {
-                    check(resp.startsWith("HTTP/1.1 200"), "appSystem 200", resp);
-                    check(lastCmd == QStringLiteral("appSystem"), "appSystem handler");
-                    check(actionCalls == 5, "appSystem call count");
+                    check(resp.startsWith("HTTP/1.1 403"), "appSystem 403", resp);
+                    check(actionCalls == 3, "appSystem blocked not executed");
                 },
                 next);
     });
@@ -952,7 +961,7 @@ int main(int argc, char **argv) {
                      csrf() + cookieHeader(token)),
                 [&](const QByteArray &resp) {
                     check(resp.startsWith("HTTP/1.1 403"), "appAdd 403", resp);
-                    check(actionCalls == 5, "appAdd blocked not executed");
+                    check(actionCalls == 3, "appAdd blocked not executed");
                 },
                 next);
     });

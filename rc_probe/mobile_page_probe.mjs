@@ -737,11 +737,18 @@ async function runFlow() {
     '应用页时另两个页面都隐藏');
   const appCards = page.locator('#papps .appcard');
   ok(await appCards.count() === 6, '应用卡片按目录条数渲染', String(await appCards.count()));
-  ok((await appCards.nth(0).textContent()).includes('浏览器'), '卡片带应用名');
-  ok((await appCards.nth(0).textContent()).includes('默认浏览器'), '卡片带状态短文案');
-  ok(await page.locator('#papps .appcard img').count() >= 5, '卡片带图标');
+  ok(await page.locator('#papps .appcard img').count() === 6, '卡片只画图标（无文字）');
+  ok(await page.locator('#papps .appcard .aico img').count() === 6, '图标在 .aico 里');
+  // 卡片上不写名字/状态——手机端只看图标，文字只在电脑端有意义。
+  ok(await page.locator('#papps .appcard .aname').count() === 0, '卡片上没有应用名');
+  ok(await page.locator('#papps .appcard .astate').count() === 0, '卡片上没有状态文案');
+  ok(await page.locator('#papps .appcard').first().textContent() === '', '卡片内无任何文字');
   ok(await page.locator('#papps .appcard.on').count() === 5, '只有装了的是可点态');
-  ok(await page.locator('#papps .appcard .astate.miss').count() === 1, '没装的标灰态');
+  // 没有标题/说明/底部汇总与开关。
+  ok(await page.locator('#papps .apphead').count() === 0, '应用页没有标题/说明');
+  ok(await page.locator('#papps #appsSummary').count() === 0, '应用页没有底部汇总');
+  ok(await page.locator('#appsVoice').count() === 0, '应用页没有语音启动开关');
+  ok(await page.locator('#appsSystem').count() === 0, '应用页没有语音系统控制开关');
   // 瀑布流：CSS columns 生效，卡片按列排而不是单列。
   const gridCols = await page.locator('#appsGrid').evaluate((el) => getComputedStyle(el).columnCount);
   ok(gridCols !== 'auto' && Number(gridCols) >= 2, '应用页是瀑布流多列', gridCols);
@@ -757,18 +764,6 @@ async function runFlow() {
   await page.locator('#papps .appcard').nth(4).click({ force: true });
   await page.waitForTimeout(220);
   ok(posts.filter((p) => p.cmd === 'appOpen').length === 0, '没装的应用点了不发启动');
-  // 两个开关：点一下翻面并回发 appVoice / appSystem。
-  posts.length = 0;
-  ok(await page.locator('#appsVoice').evaluate((el) => el.classList.contains('on')), '语音启动默认开');
-  await page.click('#appsVoice');
-  await page.waitForTimeout(220);
-  const vPost = posts.filter((p) => p.cmd === 'appVoice');
-  ok(vPost.length === 1 && vPost[0].on === false, '关语音启动发 appVoice(false)', JSON.stringify(vPost));
-  await page.click('#appsSystem');
-  await page.waitForTimeout(220);
-  const sPost = posts.filter((p) => p.cmd === 'appSystem');
-  ok(sPost.length === 1 && sPost[0].on === false, '关语音系统控制发 appSystem(false)', JSON.stringify(sPost));
-  ok((await page.textContent('#appsSummary')).includes('本机找到'), '底部有汇总文案');
   await page.click('#tabbar .tab[data-tab="1"]');
   await page.waitForSelector('#sessList .sescard');
   ok(await page.locator('#agentChips .chip').count() === 2, '会话目录按 Agent 列出');

@@ -232,7 +232,16 @@ function sessionTranscript(exe, session) {
       { id: 'sm4', role: 'assistant', at: iso(NOW - 400e3),
         text: '**已产出**：`产物/OS8成品/凝蓝_OS8.hwt`（43.25 MB）\n\n这个包只有 `.hwt`，没生成释放器 APK。',
         files: ['D:/githubrepos/Agentrmc/产物/OS8成品/凝蓝_OS8.hwt',
-                'D:/githubrepos/Agentrmc/产物/_hyperos4_inspect/os8_package_preview.jpg'] }
+                'D:/githubrepos/Agentrmc/产物/_hyperos4_inspect/os8_package_preview.jpg'] },
+      // Qoder / WorkBuddy 的产物链接是 file:/// URI，不是裸路径（2026-11-25
+      // 用户报「rmc 里 Qoder 会话不显示文件下载到手机」的真凶）。中文还可能是
+      // percent 编码——不解码就找不到磁盘上的文件。
+      { id: 'sm5', role: 'assistant', at: iso(NOW - 360e3),
+        text: '已产出：\n'
+          + '- [75 秒成片 · 4500 帧](file:///D:/ld-bili-v150/out/LiquidDesk-1.5.0-75s-4K60-r03.mp4)\n'
+          + '- [r03 验收报告](file:///D:/ld-bili-v150/out/verification-r03.json)\n'
+          + '- [快休封面](file:///C:/Users/PC/Desktop/%E5%BF%AB%E4%BC%91B%E7%AB%99%E5%B0%81%E9%9D%A2-1920x1080.jpg)',
+        files: [] }
     ],
     requests: []
   };
@@ -737,12 +746,15 @@ async function runFlow() {
     '应用页时另两个页面都隐藏');
   const appCards = page.locator('#papps .appcard');
   ok(await appCards.count() === 6, '应用卡片按目录条数渲染', String(await appCards.count()));
-  ok(await page.locator('#papps .appcard img').count() === 6, '卡片只画图标（无文字）');
+  ok(await page.locator('#papps .appcard img').count() === 6, '每张卡片都有图标');
   ok(await page.locator('#papps .appcard .aico img').count() === 6, '图标在 .aico 里');
-  // 卡片上不写名字/状态——手机端只看图标，文字只在电脑端有意义。
-  ok(await page.locator('#papps .appcard .aname').count() === 0, '卡片上没有应用名');
+  // 图标下方带应用名（只留图标会认不出谁是谁）；状态文案仍只在电脑端。
+  ok(await page.locator('#papps .appcard .aname').count() === 6, '每张卡片都有应用名');
+  ok((await appCards.nth(0).locator('.aname').textContent()) === '浏览器',
+    '卡片名就是应用名', await appCards.nth(0).locator('.aname').textContent());
+  ok((await appCards.nth(2).locator('.aname').textContent()) === '剪映',
+    '第三张是剪映', await appCards.nth(2).locator('.aname').textContent());
   ok(await page.locator('#papps .appcard .astate').count() === 0, '卡片上没有状态文案');
-  ok(await page.locator('#papps .appcard').first().textContent() === '', '卡片内无任何文字');
   ok(await page.locator('#papps .appcard.on').count() === 5, '只有装了的是可点态');
   // 没有标题/说明/底部汇总与开关。
   ok(await page.locator('#papps .apphead').count() === 0, '应用页没有标题/说明');
@@ -821,7 +833,7 @@ async function runFlow() {
     '会话聊天页返回派发');
   ok((await page.textContent('#chatTitle')).includes('手机页多选'), '会话聊天页标题正确');
   ok((await page.textContent('#chatSub')).includes('WorkBuddy AI'), '会话聊天页显示 Agent');
-  ok(await page.locator('#chatList .bub').count() === 5, '会话聊天记录已加载');
+  ok(await page.locator('#chatList .bub').count() === 6, '会话聊天记录已加载');
   // 系统信息行：工具调用耗时/后台任务，灰色一行，不算对话气泡
   ok(await page.locator('#chatList .bubsys:not(.bublive)').count() === 1, '系统信息行渲染出来');
   ok((await page.locator('#chatList .bubsys:not(.bublive)').first().textContent())
@@ -933,18 +945,41 @@ async function runFlow() {
   ok(bfTxt.includes('下载到手机'), '文件条带「下载到手机」', bfTxt);
 
   // present_files 的产物：正文里没有路径，也要有卡片（靠 messages[].files）。
-  const lastBub = page.locator('.bub.assistant').last();
-  const pfCard = lastBub.locator('.bubfile', { hasText: '凝蓝_OS8.hwt' });
+  // 注意定位到「含 .hwt 的那条气泡」而不是 last()：后面还有一条 file:/// URI 的
+  // 产物消息（sm5），last() 会指错气泡。
+  const pfBub = page.locator('.bub.assistant', { hasText: '凝蓝_OS8.hwt' }).first();
+  const pfCard = pfBub.locator('.bubfile', { hasText: '凝蓝_OS8.hwt' });
   ok(await pfCard.count() === 1, 'present_files 产物渲染成文件条');
   const pfHref = await pfCard.getAttribute('href');
   ok(pfHref && pfHref.includes('scope=project') && decodeURIComponent(pfHref).includes('凝蓝_OS8.hwt'),
     'present_files 文件条指向工作区下载', pfHref);
   // 正文里的中文相对路径：卡片名必须带扩展名，且不能跟 present_files 重复成两张。
-  const pfNames = await lastBub.locator('.bubfile b').allTextContents();
+  const pfNames = await pfBub.locator('.bubfile b').allTextContents();
   ok(pfNames.includes('凝蓝_OS8.hwt'), '文件条名字带扩展名（不是「凝蓝_OS8」）', pfNames);
   ok(pfNames.filter((n) => n.startsWith('凝蓝_OS8')).length === 1, '同一产物只出一张卡片', pfNames);
-  ok(await lastBub.locator('.bubfile').count() === 2, '气泡里正好两张产物卡片（hwt + 预览图）',
+  ok(await pfBub.locator('.bubfile').count() === 2, '气泡里正好两张产物卡片（hwt + 预览图）',
     pfNames);
+
+  // Qoder / WorkBuddy 的产物链接是 file:/// URI（2026-11-25 用户报「Qoder 会话
+  // 不显示文件下载到手机」的真凶）：必须同样长出「下载到手机」文件条，中文
+  // percent 编码要解码成真实文件名，且项目外路径走 scope=abs。
+  // 上面第三条 .json 不在下载白名单里（那是刻意的安全边界），所以只出两张卡。
+  {
+    const uriBub = page.locator('.bub.assistant', { hasText: '75 秒成片' }).first();
+    const uriCards = uriBub.locator('.bubfile');
+    ok(await uriCards.count() === 2, 'file:/// URI 的产物也渲染成文件条（非白名单扩展名不算）',
+      await uriCards.allTextContents());
+    const names = await uriBub.locator('.bubfile b').allTextContents();
+    ok(names.some((n) => n === 'LiquidDesk-1.5.0-75s-4K60-r03.mp4'),
+      'file:/// 产物卡片名带完整扩展名', names);
+    ok(names.some((n) => n === '快休B站封面-1920x1080.jpg'),
+      'percent 编码的中文文件名被解码', names);
+    const hrefs = await uriCards.evaluateAll((els) => els.map((e) => e.getAttribute('href')));
+    ok(hrefs.every((h) => h && h.includes('scope=abs') && h.includes('/m/file?')),
+      'file:/// 产物走项目外绝对路径下载（scope=abs）', hrefs);
+    const txt = await uriCards.first().textContent();
+    ok(txt.includes('下载到手机'), 'file:/// 产物文件条带「下载到手机」', txt);
+  }
 
   // 电脑文件面板：列出会话 inbox，行上带下载链接，× 能关。
   // 产物 = 工作区产物（rel）+ 正文提到的项目外产物（abs，2026-11-21 用户报

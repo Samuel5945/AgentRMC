@@ -1849,18 +1849,23 @@ QString LanWebServer::mobileHtml() const {
    border:2px solid var(--w18);border-top-color:var(--accent);
    animation:spin .8s linear infinite}
  @keyframes spin{to{transform:rotate(360deg)}}
- /* 应用页：手机上只留图标瀑布流。标题/说明/卡片文字/底部汇总与开关
-   都只在电脑端有意义，手机端一概不画（用户 2026-11-25 定）。
+ /* 应用页：手机上只留图标 + 应用名。标题/说明/卡片状态文案/底部汇总与开关
+   都只在电脑端有意义，手机端一概不画（用户 2026-11-25 定；名字要留，
+   否则一堆图标认不出谁是谁）。
    CSS columns 天然瀑布流，短列自动补位，不用 JS 摆位。 */
  #appsGrid{column-gap:10px}
  .appcard{break-inside:avoid;display:flex;flex-direction:column;align-items:center;
-   justify-content:center;padding:12px 6px;border-radius:12px;border:1px solid var(--w14);
+   gap:6px;padding:12px 6px;border-radius:12px;border:1px solid var(--w14);
    background:var(--w6);cursor:default;margin:0 0 10px;min-width:0}
  .appcard.on{cursor:pointer}
  .appcard:active{background:var(--w10)}
  .appcard .aico{width:44px;height:44px;display:flex;align-items:center;
    justify-content:center}
  .appcard .aico img{width:44px;height:44px;display:block;border-radius:9px}
+ .appcard .aname{font-size:12px;color:var(--text);font-weight:600;
+   text-align:center;line-height:1.3;word-break:break-word;
+   display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;
+   overflow:hidden}
  /* 底部页签 */
  #tabbar{flex:0 0 auto;display:flex;border-top:1px solid var(--w14);
    background:linear-gradient(180deg,var(--surface),var(--surface2));
@@ -2458,10 +2463,32 @@ const MSG_FILE_EXT=new Set(('png jpg jpeg gif webp bmp svg ico mp4 mov webm mkv 
 // 文件名里的 1.4.7 会被当成后缀（base 截到「…演示-1」、ext='4'），
 // 白名单一查就丢——2026-11-20 用户报「带路径的产物还是没有下载」的真凶。
 const MSG_FILE_RE=/(?:^|[\s"'`（(【\[、，。：:)\]】》])((?:[A-Za-z]:[\\/][^"'<>|`\r\n，。；：、！？)\]}】》]{0,180})|(?:(?:[^\s"'<>|`\r\n\/，。；：、！？)\]}】》]+\/){1,6}[^\s"'<>|`\r\n\/，。；：、！？)\]}】》]{1,80}))\.(png|jpg|jpeg|gif|webp|bmp|svg|ico|mp4|mov|webm|mkv|mp3|wav|m4a|pdf|md|txt|doc|docx|xls|xlsx|ppt|pptx|zip|7z|rar|exe|msi|apk|hwt|hap|hsp)\b/gi;
+// 宿主的产物链接大多是 file:/// URI，不是裸路径：
+//   `[成片](file:///D:/ld-bili/out/x.mp4)` / `![封面](file:///D:/…/x.jpg)`
+// 本机实测 Qoder 国际版 1005 处、Qoder CN 1289 处、WorkBuddy 885 处，几乎全是
+// 这种写法；而 MSG_FILE_RE 只认「盘符前面紧挨边界字符」，`file:///` 里盘符前面
+// 是 `/`，不在边界集合里 → 一条都提不出来，手机上就没有「下载到手机」文件条
+// （用户 2026-11-25 报「rmc 里 Qoder 会话不显示文件下载到手机」）。
+// URI 里的中文还可能是 percent 编码（%E5%BF%AB…），要先解码再当路径用。
+// 与 native 端 mentionedAbsPaths（产物面板）同一套口径，改一处就要改另一处。
+function fileUriToPath(text){
+ const uri=/file:\/\/\/([A-Za-z]:[^\s"'<>|`\r\n，。；：、！？)\]}】》]*)/g;
+ let out='',last=0,m;
+ // 按位置拼，不做整串替换：同一段文本里两条同名链接时 replace 会一起改掉。
+ while((m=uri.exec(text))){
+  out+=text.slice(last,m.index);
+  try{out+=decodeURIComponent(m[1]);}catch(_){out+=m[1];}
+  last=m.index+m[0].length;
+ }
+ out+=text.slice(last);
+ // 不支持 file://host/share（UNC）写法，但残留的 file:// 会让裸路径正则误判。
+ return out.replace(/file:\/\//g,'');
+}
 function msgFiles(text){
  if(!text||text.length<5)return [];
  const out=[],seen=new Set();
  const root=chatProjectPath().replace(/\\/g,'/').replace(/\/+$/,'').toLowerCase();
+ text=fileUriToPath(text);
  let m;
  MSG_FILE_RE.lastIndex=0;
  while((m=MSG_FILE_RE.exec(text))){
@@ -4038,10 +4065,11 @@ function renderApps(){
   card.className='appcard'+(r.found?' on':'');
   const ico=document.createElement('div');ico.className='aico';
   if(r.icon){const im=document.createElement('img');im.src=r.icon;im.alt='';ico.append(im);}
-  // 卡片上不写应用名/状态——手机端只看图标，文字与开关只在电脑端有意义。
-  // 点击反馈靠 toast，tooltip 仍带名字（长按/悬停能认出点的是谁）。
+  // 图标 + 应用名：名字要留，否则一排图标认不出谁是谁（用户 2026-11-25）。
+  // 状态文案/汇总/开关仍只在电脑端画；tooltip 带完整状态备查。
+  const n=document.createElement('span');n.className='aname';n.textContent=r.name||'';
   card.title=(r.name||'')+(r.state?(' · '+r.state):'');
-  card.append(ico);
+  card.append(ico,n);
   if(r.found){
    card.onclick=()=>{toast('正在打开 '+(r.name||'')+'…');
     act({cmd:'appOpen',id:r.id});};

@@ -286,7 +286,7 @@ int main(int argc, char **argv) {
         check(resp.contains("未分类任务"), "GET /m/ unclassified section", resp);
         check(!resp.contains(">事件流</button>"), "GET /m/ events tab removed",
               resp);
-        // 手机第三个页签是应用页：只留图标瀑布流。标题/说明/卡片文字/底部
+        // 手机第三个页签是应用页：图标 + 应用名。标题/说明/状态文案/底部
         // 汇总与开关都只在电脑端有意义，手机端一概不画（用户 2026-11-25 定）。
         check(resp.contains("data-tab=\"2\">应用</button>"),
               "GET /m/ third tab is apps", resp);
@@ -295,7 +295,9 @@ int main(int argc, char **argv) {
         check(resp.contains("function renderApps"), "GET /m/ apps renderer",
               resp);
         check(resp.contains("cmd:'appOpen'"), "GET /m/ apps launch wiring", resp);
-        // 手机端只留图标：页签/标题/说明/卡片文字/底部汇总/开关都不该出现。
+        // 图标下方要带应用名（只留图标会认不出谁是谁）。
+        check(resp.contains("aname"), "GET /m/ app card keeps the name", resp);
+        // 这些只在电脑端有意义，手机端不该出现。
         check(!resp.contains("apphead"), "GET /m/ apps page has no heading text",
               resp);
         check(!resp.contains("id=\"appsFoot\""), "GET /m/ apps has no foot row",
@@ -306,7 +308,6 @@ int main(int argc, char **argv) {
               "GET /m/ apps has no voice switch", resp);
         check(!resp.contains("id=\"appsSystem\""),
               "GET /m/ apps has no system switch", resp);
-        check(!resp.contains("aname"), "GET /m/ app card has no name text", resp);
         check(!resp.contains("astate"), "GET /m/ app card has no state text",
               resp);
         // 应用页不能出现状态页的旧标记。
